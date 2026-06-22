@@ -200,11 +200,12 @@ func (h *sessionHandler) run(ctx context.Context) error {
 	}()
 
 	var (
-		loops       sync.WaitGroup
-		reqErr      error
-		dataErr     error
-		datagramErr error
+		loops   sync.WaitGroup
+		reqErr  error
+		dataErr error
 	)
+	// The request and data loops are load-bearing: when either dies, the
+	// session is no longer usable, so each cancels runCtx to unwind the rest.
 	loops.Go(func() {
 		reqErr = h.runRequestLoop(runCtx)
 		cancel() // wake sibling loops if the request loop dies first
@@ -213,16 +214,26 @@ func (h *sessionHandler) run(ctx context.Context) error {
 		dataErr = h.runDataLoop(runCtx)
 		cancel() // wake sibling loops if the data loop dies first
 	})
+	// Datagrams are OPTIONAL (§11.6): a transport or peer without DATAGRAM
+	// support makes ReceiveDatagram fail on the very first call. That must not
+	// take down SUBSCRIBE/PUBLISH handling, so the datagram loop neither
+	// cancels its siblings nor promotes its error as a session fault — it just
+	// stops. Session death is still observed: the request/data loops cancel on
+	// real transport errors, and a datagram-level PROTOCOL_VIOLATION closes the
+	// session, which the runCtx watcher above turns into a cancel.
 	loops.Go(func() {
-		datagramErr = h.runDatagramLoop(runCtx)
-		cancel() // wake sibling loops if the datagram loop dies first
+		if err := h.runDatagramLoop(runCtx); err != nil && !isShutdownErr(err) {
+			h.log.LogAttrs(ctx, slog.LevelDebug,
+				"relay datagram loop ended; datagrams unavailable on this session",
+				slog.String("err", err.Error()))
+		}
 	})
 
 	loops.Wait()
 	h.wg.Wait()
 
-	// Promote the first non-shutdown error (request > data > datagram on
-	// ties) to the caller. All errors are logged at Debug for postmortem.
+	// Promote the first non-shutdown error (request > data) to the caller. All
+	// errors are logged at Debug for postmortem.
 	if reqErr != nil && !isShutdownErr(reqErr) {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "relay request loop ended", slog.String("err", reqErr.Error()))
 		return reqErr
@@ -230,10 +241,6 @@ func (h *sessionHandler) run(ctx context.Context) error {
 	if dataErr != nil && !isShutdownErr(dataErr) {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "relay data loop ended", slog.String("err", dataErr.Error()))
 		return dataErr
-	}
-	if datagramErr != nil && !isShutdownErr(datagramErr) {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "relay datagram loop ended", slog.String("err", datagramErr.Error()))
-		return datagramErr
 	}
 	return nil
 }
