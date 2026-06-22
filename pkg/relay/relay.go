@@ -26,7 +26,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/floatdrop/moq-go/internal/logctx"
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
@@ -77,7 +76,7 @@ type Config struct {
 
 	// Logger is used for relay-level events (accept loop start/stop,
 	// session setup failures, GOAWAY broadcast). If nil, slog.Default() is
-	// used. Per-session loggers are derived via internal/logctx.
+	// used. Per-session loggers are derived via Logger.With(...).
 	Logger *slog.Logger
 
 	// Authorizer gates every incoming request before the relay performs
@@ -341,11 +340,7 @@ func (r *Relay) Start(ctx context.Context) error {
 func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
 	defer r.handlers.Done()
 
-	// Per-session logger: attaches session ID / peer info via logctx so
-	// the chain stays consistent with the session package.
-	sessCtx := logctx.With(ctx, r.log)
-
-	sess, err := session.Server(sessCtx, conn, r.cfg.SessionOptions...)
+	sess, err := session.Server(ctx, conn, r.cfg.SessionOptions...)
 	if err != nil {
 		r.log.LogAttrs(ctx, slog.LevelWarn, "relay SETUP failed",
 			slog.String("err", err.Error()))
@@ -413,7 +408,7 @@ func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
 		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,
 	)
-	if err := handler.run(sessCtx); err != nil {
+	if err := handler.run(ctx); err != nil {
 		r.log.LogAttrs(ctx, slog.LevelDebug, "relay session handler returned",
 			slog.String("err", err.Error()))
 	}
