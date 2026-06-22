@@ -96,6 +96,14 @@ type TrackEntry struct {
 	// Downstream is the set of subscriber subscriptions to fan out to.
 	Downstream []*DownstreamSub
 
+	// downstreamGen counts appends to Downstream. The per-object fanout
+	// (updateLargestAndDetectNew) snapshots it alongside its initial
+	// CopyDownstream and skips the O(len(Downstream)) joiner scan on every
+	// object whose generation is unchanged — joiners are rare, so the common
+	// case becomes a watermark bump with no scan. Bumped only on append
+	// (removals introduce no joiner to detect). Guarded by mu.
+	downstreamGen uint64
+
 	// Cache is the per-track [cache.ObjectCache] the fanout writes every
 	// forwarded object into. It is constructed eagerly when the entry is
 	// created (via [TrackRegistry.getOrCreateLocked]) so the fanout
@@ -403,6 +411,7 @@ func (r *TrackRegistry) AddDownstream(fullName track.FullTrackName, sub *Downstr
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	entry.Downstream = append(entry.Downstream, sub)
+	entry.downstreamGen++
 	return entry
 }
 
@@ -440,6 +449,7 @@ func (r *TrackRegistry) AddDownstreamSnapshotLargest(
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
 	entry.Downstream = append(entry.Downstream, sub)
+	entry.downstreamGen++
 	return entry, entry.LargestObject, entry.HasLargestObject
 }
 
@@ -682,9 +692,11 @@ func (e *TrackEntry) UpdateLargest(loc message.Location) bool {
 	return false
 }
 
-// GetLargest returns the current largest-object watermark and a bool
-// that is true iff at least one object has been observed on this
-// track. See [ObjectCache.GetLargest] for why the bool is necessary.
+// GetLargest returns the current largest-object watermark and a bool that is
+// true iff at least one object has been observed on this track. The bool
+// distinguishes "no objects observed yet" from "first object was published at
+// Location {0, 0}" — §10.2.11 reserves wire-level omission of LARGEST_OBJECT
+// for the former, so the in-memory mirror needs the same distinction.
 func (e *TrackEntry) GetLargest() (message.Location, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -754,23 +766,30 @@ func (e *TrackEntry) ConsiderNewGroupRequest(value uint64, dynamicGroups bool) b
 // either snapshots the pre-update LargestObject AND appears in newSubs
 // (delivered live), or snapshots the post-update LargestObject (covered
 // by its Joining FETCH). The lock pair guarantees no in-between.
+// lastGen is the downstreamGen the caller observed on its previous call (or
+// at its initial CopyDownstreamWithGen snapshot). When the generation is
+// unchanged no sub has joined since, so the joiner scan is skipped entirely;
+// gen (returned) should be fed back as lastGen on the next call.
 func (e *TrackEntry) updateLargestAndDetectNew(
 	loc message.Location,
 	seen map[*DownstreamSub]*subgroupWriter,
-) []*DownstreamSub {
+	lastGen uint64,
+) (newSubs []*DownstreamSub, gen uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if !e.HasLargestObject || e.LargestObject.Less(loc) {
 		e.LargestObject = loc
 		e.HasLargestObject = true
 	}
-	var newSubs []*DownstreamSub
+	if e.downstreamGen == lastGen {
+		return nil, e.downstreamGen
+	}
 	for _, sub := range e.Downstream {
 		if _, ok := seen[sub]; !ok {
 			newSubs = append(newSubs, sub)
 		}
 	}
-	return newSubs
+	return newSubs, e.downstreamGen
 }
 
 // SetProperties stores the Track Properties learned from the upstream. The
@@ -811,4 +830,17 @@ func (e *TrackEntry) CopyDownstream() []*DownstreamSub {
 	out := make([]*DownstreamSub, len(e.Downstream))
 	copy(out, e.Downstream)
 	return out
+}
+
+// CopyDownstreamWithGen is [TrackEntry.CopyDownstream] plus the matching
+// downstreamGen, captured under the same lock so the fanout can seed its
+// joiner-scan skip with a generation that is exactly consistent with the
+// snapshot (a sub joining after this returns bumps the generation and so is
+// still detected on the next per-object call).
+func (e *TrackEntry) CopyDownstreamWithGen() ([]*DownstreamSub, uint64) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	out := make([]*DownstreamSub, len(e.Downstream))
+	copy(out, e.Downstream)
+	return out, e.downstreamGen
 }
