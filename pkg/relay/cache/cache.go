@@ -71,7 +71,7 @@ type CachedObject struct {
 // PutDatagram on every forwarded object; the per-track [TrackEntry.Cache]
 // is the production implementation.
 //
-// Reads (Get / GetRange / GetLargest) are NOT on this interface —
+// Reads (Get / GetRange / OldestRetained) are NOT on this interface —
 // callers that need them go through *[ObjectCache] directly. The reason
 // is that the cache is intentionally always local and in-memory (storing
 // object payloads in NATS / Redis is neither performant nor
@@ -112,12 +112,17 @@ type cacheKey struct {
 // ObjectCache is a per-track, fixed-capacity, FIFO ring-buffer object
 // cache. Each [TrackEntry] holds one.
 //
-// Concurrency: a single mutex serialises Put / Get / GetRange / Delete. The ring is small (default 1024 objects)
-// and operations are short — fanout writes are O(1), FETCH reads are
-// O(capacity) — so a coarse lock is the right tradeoff over a more
-// elaborate lock-free design.
+// Concurrency: an RWMutex guards the ring. Writes (Put / Delete) take the
+// write lock and are O(1); reads (Get / GetRange / OldestRetained / Len)
+// take the read lock. FETCH reads are
+// O(capacity) (default 1024), so the read lock lets concurrent FETCHes — the
+// flash-crowd-of-joining-subscribers case the relay is built for — scan in
+// parallel and contend only with the short live-ingest Put rather than
+// serialising behind one another. Stored structs are never mutated in place
+// (see [ObjectCache.insertLocked]), so readers may dereference the pointers
+// they collect without holding the lock.
 type ObjectCache struct {
-	mu sync.Mutex
+	mu sync.RWMutex
 
 	// ring is a fixed-length slice of pointers; nil means "empty slot".
 	// head is the next write position (mod len(ring)).
@@ -131,12 +136,6 @@ type ObjectCache struct {
 
 	// maxAge is the read-side TTL filter. Zero disables filtering.
 	maxAge time.Duration
-
-	// largest is the §10.2.11 LARGEST_OBJECT watermark; hasLargest
-	// distinguishes "no objects observed" from "first object was at
-	// Location {0, 0}". The watermark is monotonic.
-	largest    message.Location
-	hasLargest bool
 }
 
 // effectiveMaxSize returns a non-zero capacity. Callers that pass 0
@@ -182,20 +181,15 @@ var _ Cache = (*ObjectCache)(nil)
 // the ring head — the new entry inherits the existing slot. If the ring is
 // full and the key is new, the oldest entry (the one currently at the head
 // position) is evicted to make room.
-//
-// Put also advances [ObjectCache.GetLargest] when the object's Location
-// is greater than the current watermark.
 func (c *ObjectCache) Put(obj *CachedObject) {
 	if obj == nil {
 		return
 	}
-	loc := message.Location{Group: obj.GroupID, Object: obj.ObjectID}
+	// Stamp the arrival time before taking the lock so time.Now() stays out
+	// of the write critical section that contends with FETCH range scans.
+	obj.ReceivedAt = time.Now()
 	c.mu.Lock()
 	c.insertLocked(obj)
-	if !c.hasLargest || c.largest.Less(loc) {
-		c.largest = loc
-		c.hasLargest = true
-	}
 	c.mu.Unlock()
 }
 
@@ -233,7 +227,6 @@ func (c *ObjectCache) insertLocked(src *CachedObject) {
 
 	if idx, ok := c.index[key]; ok {
 		c.ring[idx] = src
-		c.ring[idx].ReceivedAt = time.Now()
 		return
 	}
 
@@ -245,7 +238,6 @@ func (c *ObjectCache) insertLocked(src *CachedObject) {
 		c.size--
 	}
 	c.ring[c.head] = src
-	c.ring[c.head].ReceivedAt = time.Now()
 	c.index[key] = c.head
 	c.head = (c.head + 1) % len(c.ring)
 	c.size++
@@ -275,8 +267,8 @@ func (c *ObjectCache) notExpiredLocked(obj *CachedObject) bool {
 // Note: this method is O(1) and copy-free. It is not used on the relay hot
 // path, but the test suite exercises it heavily.
 func (c *ObjectCache) Get(group, object uint64) (*CachedObject, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	idx, ok := c.index[cacheKey{Group: group, Object: object}]
 	if !ok {
 		return nil, false
@@ -288,57 +280,14 @@ func (c *ObjectCache) Get(group, object uint64) (*CachedObject, bool) {
 	return obj, true
 }
 
-// UpdateLargest moves the watermark forward. The very first call sets
-// the watermark (and flips the "has any object been observed" bit)
-// regardless of value, so that a publisher whose first Object is at
-// Location {0, 0} is still distinguishable from "no objects observed
-// yet". Subsequent calls advance the watermark only when loc is
-// strictly greater than the current value.
-//
-// Returns true when the watermark changed (advanced or first-set).
-//
-// Useful when the relay wants to record a §10.2.11 LARGEST_OBJECT value
-// learned from an upstream control message (PUBLISH, SUBSCRIBE_OK,
-// REQUEST_UPDATE_OK) without storing an actual object.
-func (c *ObjectCache) UpdateLargest(loc message.Location) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if !c.hasLargest || c.largest.Less(loc) {
-		c.largest = loc
-		c.hasLargest = true
-		return true
-	}
-	return false
-}
-
-// GetLargest returns the current §10.2.11 watermark and a bool that is
-// true iff the cache has observed at least one object on this track.
-//
-// The two-return shape mirrors map indexing and replaces the prior
-// "zero-Location means unset" sentinel, which conflated Location
-// {0, 0} (a perfectly valid published object) with "no objects yet".
-// §10.2.11 explicitly reserves wire-level omission for the
-// "no objects observed" signal; the in-memory mirror needs the same
-// distinction.
-//
-// The watermark is monotonic; evicted / expired objects do NOT cause
-// it to roll back, so a subscriber that uses it as the start anchor
-// for a LargestObject / NextGroupStart filter always sees a valid
-// lower bound.
-func (c *ObjectCache) GetLargest() (message.Location, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.largest, c.hasLargest
-}
-
 // Len returns the number of currently-stored objects (including
 // non-existence markers and including TTL-expired entries that have
 // not yet been overwritten). The Len is exactly the count of live ring
 // slots; with TTL enabled, callers should remember that a non-zero Len
 // does not guarantee a Get will return anything.
 func (c *ObjectCache) Len() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	return c.size
 }
 
@@ -372,7 +321,7 @@ func (c *ObjectCache) GetRange(start, end message.Location, order message.GroupO
 	if end.Less(start) {
 		return nil
 	}
-	c.mu.Lock()
+	c.mu.RLock()
 	out := make([]*CachedObject, 0)
 	for _, obj := range c.ring {
 		if obj == nil {
@@ -393,7 +342,7 @@ func (c *ObjectCache) GetRange(start, end message.Location, order message.GroupO
 		// Put could overwrite.
 		out = append(out, obj)
 	}
-	c.mu.Unlock()
+	c.mu.RUnlock()
 	sortObjects(out, order)
 	return out
 }
@@ -414,8 +363,8 @@ func (c *ObjectCache) GetRange(start, end message.Location, order message.GroupO
 // Like [ObjectCache.GetRange], this is an O(capacity) scan; FETCH is not the
 // hot path.
 func (c *ObjectCache) OldestRetained() (message.Location, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.mu.RLock()
+	defer c.mu.RUnlock()
 	var (
 		oldest message.Location
 		found  bool

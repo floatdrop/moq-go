@@ -469,6 +469,37 @@ func (d *DownstreamSub) PassesFilter(group, object uint64) bool {
 	return f.Matches(group, object, largest.Group, largest.Object, has)
 }
 
+// ForwardDecision folds the §9.2 Forward-State gate and the §5.1.2 filter
+// test the fanout applies to every object into a single lock acquisition.
+// The per-object × per-subscriber loop would otherwise call ForwardState,
+// PassesFilter, and (on a miss) GetFilter separately — three RLock round-trips
+// on the same mutex per object per subscriber.
+//
+// forward is true when the object at {group, object} should be enqueued.
+// When forward is false, groupExhausted reports whether the subscription has
+// narrowed so this whole group is permanently out of range (§11.4.3), so the
+// caller can reset the stream promptly instead of leaving it open. A paused
+// subscription (Forward State 0) is never groupExhausted — it may resume.
+func (d *DownstreamSub) ForwardDecision(group, object uint64) (forward, groupExhausted bool) {
+	d.mu.RLock()
+	paused := d.forwardState == 0
+	f := d.Filter
+	largest := d.LargestAtSubscribe
+	has := d.HasLargestAtSubscribe
+	d.mu.RUnlock()
+
+	if paused {
+		return false, false
+	}
+	if f == nil {
+		return true, false
+	}
+	if f.Matches(group, object, largest.Group, largest.Object, has) {
+		return true, false
+	}
+	return false, groupOutOfRange(group, f)
+}
+
 // TerminateWithPublishDone gracefully ends this downstream subscription
 // per §10.11: the relay writes a PUBLISH_DONE message on the
 // subscriber's request stream and FINs the send side. The

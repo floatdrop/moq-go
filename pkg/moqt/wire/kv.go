@@ -47,6 +47,31 @@ func (w *Writer) KVPairs(pairs []KVPair) {
 	}
 }
 
+// KVPairsLengthPrefixed appends a varint byte-length prefix followed by the
+// delta-encoded pairs (sorted by Type, like [Writer.KVPairs]). It computes the
+// encoded length up front from the sorted deltas, so it writes straight into w
+// without the throwaway buffer + copy a "encode to a temp Writer, measure,
+// then copy" approach needs — which matters on per-object property paths.
+func (w *Writer) KVPairsLengthPrefixed(pairs []KVPair) {
+	slices.SortFunc(pairs, func(a, b KVPair) int { return cmp.Compare(a.Type, b.Type) })
+	n := 0
+	var prev uint64
+	for _, p := range pairs {
+		n += VarintLen(p.Type - prev)
+		if p.IsBytes() {
+			n += VarintLen(uint64(len(p.ByteVal))) + len(p.ByteVal)
+		} else {
+			n += VarintLen(p.IntVal)
+		}
+		prev = p.Type
+	}
+	w.Varint(uint64(n))
+	prev = 0
+	for _, p := range pairs {
+		prev = w.KVPair(p, prev)
+	}
+}
+
 // KVPair reads a single KVPair using prev as the running previous Type, and
 // returns the pair plus the new previous Type.
 func (r *Reader) KVPair(prev uint64) (KVPair, uint64, error) {

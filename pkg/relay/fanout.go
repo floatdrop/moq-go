@@ -107,8 +107,11 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	writers := make(map[*DownstreamSub]*subgroupWriter)
 
 	// Open initial writers from the current Downstream snapshot. Done
-	// outside any lock — OpenSubgroup is I/O.
-	for _, sub := range entry.CopyDownstream() {
+	// outside any lock — OpenSubgroup is I/O. downstreamGen is captured with
+	// the snapshot so the per-object joiner scan below can be skipped while
+	// membership is unchanged.
+	initialSubs, downstreamGen := entry.CopyDownstreamWithGen()
+	for _, sub := range initialSubs {
 		h.openWriterForSub(ctx, hdr, sub, writers, false /* replaying */)
 	}
 	// Per §9.7 we still drain the inbound stream even with zero
@@ -212,7 +215,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// object via live), or it snapshots the post-update Largest (so
 		// its Joining FETCH covers this object). Either way, no gap.
 		loc := message.Location{Group: hdr.GroupID, Object: objectID}
-		newSubs := entry.updateLargestAndDetectNew(loc, writers)
+		var newSubs []*DownstreamSub
+		newSubs, downstreamGen = entry.updateLargestAndDetectNew(loc, writers, downstreamGen)
 
 		// Cache the object AFTER UpdateLargest+newSubs detection so
 		// that the LARGEST_OBJECT a concurrent
@@ -245,21 +249,18 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			if w == nil {
 				continue
 			}
-			// §9.2: a subscription with Forward State 0 is paused — the
-			// publisher does not send Objects until the subscriber sets
-			// Forward State back to 1 (via REQUEST_UPDATE). Control
-			// messages on the request stream still flow regardless.
-			if w.sub.ForwardState() == 0 {
-				continue
-			}
-			if !w.sub.PassesFilter(hdr.GroupID, objectID) {
+			// One lock acquisition folds the §9.2 Forward-State gate and the
+			// §5.1.2 filter test. A paused subscription (Forward State 0) takes
+			// no queue slot; control messages on its request stream still flow.
+			forward, groupExhausted := w.sub.ForwardDecision(hdr.GroupID, objectID)
+			if !forward {
 				// §11.4.3: if the subscription has narrowed so this whole
 				// group is now out of range, the stream will never carry
 				// another object — reset it promptly (not FIN) rather than
 				// leaving it open until the inbound subgroup ends. close is
 				// idempotent, so repeating it on later filtered objects is a
 				// no-op; the deferred cleanup still waits on w.done.
-				if groupOutOfRange(hdr.GroupID, w.sub.GetFilter()) {
+				if groupExhausted {
 					w.close(true, moqt.StreamResetCancelled)
 				}
 				continue

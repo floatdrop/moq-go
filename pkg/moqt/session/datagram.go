@@ -65,9 +65,15 @@ func (s *Session) SendDatagram(d *message.ObjectDatagram) error {
 	if err := d.Validate(); err != nil {
 		return fmt.Errorf("moqt/session: SendDatagram: %w", err)
 	}
-	w := wire.NewWriter(nil)
+	// Reuse a pooled writer rather than allocating one per datagram. The
+	// transport copies the bytes before SendDatagram returns (quic-go and the
+	// in-process pipe both make a copy), so the buffer is free to recycle.
+	w, _ := writerPool.Get().(*wire.Writer)
+	w.Reset()
 	d.Append(w)
-	return s.conn.SendDatagram(w.Bytes())
+	err := s.conn.SendDatagram(w.Bytes())
+	writerPool.Put(w)
+	return err
 }
 
 // closeProtocolViolation closes the session with PROTOCOL_VIOLATION and

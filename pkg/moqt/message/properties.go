@@ -116,12 +116,7 @@ type ObjectProperties struct {
 // Append serialises the ObjectProperties structure to w, including the
 // Properties Length varint prefix.
 func (p *ObjectProperties) Append(w *wire.Writer) {
-	// Encode the KV pairs into a temporary buffer to measure their byte length.
-	var tmp wire.Writer
-	tmp.KVPairs(p.Pairs)
-	encoded := tmp.Bytes()
-	w.Varint(uint64(len(encoded)))
-	w.FixedBytes(encoded)
+	w.KVPairsLengthPrefixed(p.Pairs)
 }
 
 // Parse deserialises an ObjectProperties structure from r.  It reads the

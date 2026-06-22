@@ -332,7 +332,7 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 		}
 		up.SetForwardState(1)
 		if p, ok := resp.Parameters.Find(message.ParamLargestObject); ok {
-			entry.Cache.UpdateLargest(message.Location{Group: p.Group, Object: p.Object})
+			entry.UpdateLargest(message.Location{Group: p.Group, Object: p.Object})
 		}
 	}
 }
