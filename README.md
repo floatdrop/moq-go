@@ -92,6 +92,17 @@ hand-rolled accept loop: register a handler per track by its Track Alias (and pe
 FETCH by Request ID), then call `Demux.Run`.
 
 ```go
+// sess here is the subscriber's session (from session.Client/Server).
+sub, err := sess.Subscribe(ctx, &message.Subscribe{
+	Namespace:  wire.Namespace("moq-example"),
+	Name:       []byte("clock"),
+	Parameters: message.Parameters{message.LargestObjectFilter()},
+})
+if err != nil {
+	return err
+}
+defer sub.Close()
+
 demux := session.NewDemux()
 demux.HandleTrack(sub.TrackAlias(), func(s *session.IncomingSubgroupStream) {
 	for {
