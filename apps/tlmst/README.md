@@ -58,7 +58,8 @@ repo root does **not** build or test this app — it has its own CI job (see
   `go install github.com/wailsapp/wails/v3/cmd/wails3@latest`
 - Platform GUI toolkits required by Wails3:
   - **macOS** — Xcode command-line tools.
-  - **Linux** — `libgtk-3-dev` and `libwebkit2gtk-4.1-dev`.
+  - **Linux** — `libgtk-4-dev` and `libwebkitgtk-6.0-dev` (Wails3 defaults to
+    GTK4 + WebKitGTK 6.0).
 - A running relay to connect to:
 
   ```sh

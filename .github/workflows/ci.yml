@@ -37,11 +37,12 @@ jobs:
         working-directory: apps/tlmst
     steps:
       - uses: actions/checkout@v7
-      # Wails3 links against GTK + WebKit on Linux via CGO.
+      # Wails3 links against GTK4 + WebKitGTK 6.0 on Linux via CGO (its default;
+      # pkg-config resolves gtk4 and webkitgtk-6.0).
       - name: Install GUI toolkits
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y libgtk-4-dev libwebkitgtk-6.0-dev
       - uses: actions/setup-go@v6
         with:
           go-version-file: apps/tlmst/go.mod
