@@ -185,6 +185,7 @@ func drain(s *session.IncomingSubgroupStream, label string) {
 			if err != nil {
 				return // io.EOF on clean FIN
 			}
+			//nolint:forbidigo // doc-example helper prints like the Example* bodies it backs
 			fmt.Printf("%s group=%d object=%d payload=%q\n",
 				label, obj.GroupID, obj.ObjectID, obj.Payload)
 		}
