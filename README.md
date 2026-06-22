@@ -160,10 +160,6 @@ cmd/
 
 apps/
 └── tlmst/                Wails3 desktop app (separate Go module, isolated deps)
-
-docs/
-├── IETF/                 Tracked drafts (transport, LOC, MSF, RFC 9000)
-└── plan/                 Implementation plans (stage-2, msf-loc)
 ```
 
 The root module (`github.com/floatdrop/moq-go`) holds the protocol libraries and the
