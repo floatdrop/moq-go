@@ -11,7 +11,6 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/wailsapp/wails/v3/pkg/application"
 
-	"github.com/floatdrop/moq-go/internal/logctx"
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/quicconn"
@@ -94,12 +93,11 @@ func (s *SessionService) Leave() error {
 func (s *SessionService) Join(addr string) error {
 	// Route this establishment's logs to the frontend.
 	logger := slog.New(newEventHandler(slog.LevelDebug))
-	ctx := logctx.With(s.appCtx, logger)
 
 	// Bound the handshake so an unreachable relay doesn't hang the UI forever.
 	// The session does not retain this context past Client(), so cancelling it
 	// once Join returns is safe.
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(s.appCtx, 30*time.Second)
 	defer cancel()
 
 	logger.Info("joining relay", "addr", addr)
@@ -141,7 +139,7 @@ func (s *SessionService) Join(addr string) error {
 	// later in StartPublishing; both must outlive Join, so the publisher runs on
 	// the app-scoped context (not the handshake timeout) while keeping the same
 	// frontend-proxying logger.
-	pub := newPublisher(logctx.With(s.appCtx, logger), sess, logger)
+	pub := newPublisher(s.appCtx, sess, logger)
 
 	// Swap in the new session, closing any previous one outside the lock.
 	s.mu.Lock()
@@ -178,7 +176,7 @@ func (s *SessionService) StartSubscribing() error {
 		s.mu.Unlock()
 		return nil
 	}
-	sub := newSubscriber(logctx.With(s.appCtx, logger), s.sess, logger, s.userID)
+	sub := newSubscriber(s.appCtx, s.sess, logger, s.userID)
 	s.sub = sub
 	s.mu.Unlock()
 

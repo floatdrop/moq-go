@@ -1,6 +1,6 @@
 module github.com/floatdrop/moq-go/apps/tlmst
 
-go 1.26.4
+go 1.26
 
 // The parent module is developed in-tree; resolve it locally. The go.work
 // file already does this for workspace builds, but the replace keeps plain
