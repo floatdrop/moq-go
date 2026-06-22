@@ -237,7 +237,8 @@ load-bearing they are:
 - **LOC encryption / SecureObjects** (LOC §3) and **Private Properties** —
   intentionally out of scope pending a chosen SecureObjects revision. Property
   IDs are draft-tentative (`PropAudioLevel = 0x0A` deviates from the draft's
-  suggested `6` to avoid colliding with `PropTimestamp`).
+  *unassigned* suggested `6`, which collides with the registered
+  `PropTimestamp` (`0x06`); pending IANA assignment).
 - **MSF** — no timeline GZIP compression, content protection (§4.3), token
   authorization, or logs/analytics (each is a TODO or unspecified in the
   draft). There is no built-in ABR helper: the library surfaces every catalog
