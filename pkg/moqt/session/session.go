@@ -178,8 +178,11 @@ type Session struct {
 
 	// Outgoing Track Alias allocator. §11.1: aliases are scoped to the
 	// publisher → subscriber direction of one session, so each end keeps an
-	// independent counter for tracks it advertises to the peer. Starts at 0;
-	// the spec does not constrain parity the way it does for Request IDs.
+	// independent counter for tracks it advertises to the peer. The first
+	// allocation is 1, not 0: AllocOutboundTrackAlias reserves 0 as the
+	// "unset, auto-allocate" sentinel used by Publish/OpenPublish/Reply (see
+	// AllocOutboundTrackAlias). The spec does not constrain parity the way it
+	// does for Request IDs.
 	nextOutboundTrackAlias atomic.Uint64
 
 	// Serialized writes onto the control stream. Producers send through
@@ -300,8 +303,17 @@ func (s *Session) AllocRequestID() uint64 {
 // AllocOutboundTrackAlias returns the next Track Alias to use when this side
 // advertises a new track to the peer (§11.1). Aliases are independent across
 // sessions, so callers must remap when forwarding between two sessions.
+//
+// Allocation starts at 1, never 0: [Session.Publish], [Session.OpenPublish],
+// and the SUBSCRIBE_OK reply path treat a zero TrackAlias as "unset, allocate
+// one for me". If this allocator returned 0, a caller that did the natural
+// "alias := AllocOutboundTrackAlias(); Publish(&Publish{TrackAlias: alias})"
+// would have its 0 silently re-allocated to a different value — and any data
+// stream the caller then opened under the original 0 would carry an alias the
+// peer never bound to the track (the relay drops it as an unknown alias). So 0
+// is reserved as the sentinel and never handed out.
 func (s *Session) AllocOutboundTrackAlias() uint64 {
-	return s.nextOutboundTrackAlias.Add(1) - 1
+	return s.nextOutboundTrackAlias.Add(1)
 }
 
 // ErrDuplicateTrackAlias is returned by RegisterInboundTrackAlias when the
