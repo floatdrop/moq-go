@@ -52,8 +52,7 @@ const (
 // CachedObject is the unified record stored by [ObjectCache]. It covers both
 // subgroup objects (where SubgroupID + an absolute ObjectID arrive on a
 // stream header + per-object delta) and datagrams (which carry their own
-// absolute ObjectID and no subgroup notion). Non-existence markers use the
-// Exists field to record "we know there's no object here".
+// absolute ObjectID and no subgroup notion).
 type CachedObject struct {
 	GroupID           uint64
 	ObjectID          uint64 // absolute, decoded
@@ -238,8 +237,8 @@ func (c *ObjectCache) insertLocked(src *CachedObject) {
 		return
 	}
 
-	// New key: recycle whatever currently occupies the head slot (evicting
-	// it from the index), then store into that same struct and advance head.
+	// New key: evict whatever currently occupies the head slot (removing it
+	// from the index), overwrite the slot with src, and advance head.
 	prev := c.ring[c.head]
 	if prev != nil {
 		delete(c.index, cacheKey{Group: prev.GroupID, Object: prev.ObjectID})

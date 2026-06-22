@@ -75,7 +75,7 @@ defer pub.Close()
 // pub.OpenSubgroup fills it in for you. To manage aliases yourself, set
 // Publish's TrackAlias (via sess.AllocOutboundTrackAlias) and use
 // sess.OpenSubgroup directly.
-sg, _ := pub.OpenSubgroup(ctx, message.SubgroupHeader{
+sg, _ := pub.OpenSubgroup(message.SubgroupHeader{
 	SubgroupIDMode: message.SubgroupIDImplicitZero,
 	GroupID:        0,
 })

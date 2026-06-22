@@ -27,7 +27,7 @@ func TestSubgroupObjectReadRejectsInvalidStatus(t *testing.T) {
 
 	writeErr := make(chan error, 1)
 	go func() {
-		out, err := cli.OpenSubgroup(ctx, hdr)
+		out, err := cli.OpenSubgroup(hdr)
 		if err != nil {
 			writeErr <- err
 			return
@@ -79,7 +79,7 @@ func TestSubgroupObjectRoundTrip(t *testing.T) {
 	// Write blocks until the reader consumes the bytes.
 	writeErr := make(chan error, 1)
 	go func() {
-		outStream, err := cli.OpenSubgroup(ctx, hdr)
+		outStream, err := cli.OpenSubgroup(hdr)
 		if err != nil {
 			writeErr <- err
 			return
@@ -153,7 +153,7 @@ func TestSubgroupObjectWithProperties(t *testing.T) {
 
 	writeErr := make(chan error, 1)
 	go func() {
-		outStream, err := cli.OpenSubgroup(ctx, hdr)
+		outStream, err := cli.OpenSubgroup(hdr)
 		if err != nil {
 			writeErr <- err
 			return
@@ -205,7 +205,7 @@ func TestFetchObjectRoundTrip(t *testing.T) {
 
 	writeErr := make(chan error, 1)
 	go func() {
-		outStream, err := cli.OpenFetchStream(ctx, hdr)
+		outStream, err := cli.OpenFetchStream(hdr)
 		if err != nil {
 			writeErr <- err
 			return
@@ -269,7 +269,7 @@ func TestWriteObjectWrongType(t *testing.T) {
 	// Open a subgroup stream and write a zero-value SubgroupObject (nil payload).
 	// This exercises the WriteObject path without a type mismatch.
 	hdr := message.SubgroupHeader{TrackAlias: 1, GroupID: 0}
-	outStream, err := cli.OpenSubgroup(ctx, hdr)
+	outStream, err := cli.OpenSubgroup(hdr)
 	if err != nil {
 		t.Fatalf("OpenSubgroup: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestWriteObjectAt(t *testing.T) {
 
 	writeErr := make(chan error, 1)
 	go func() {
-		out, err := cli.OpenSubgroup(ctx, hdr)
+		out, err := cli.OpenSubgroup(hdr)
 		if err != nil {
 			writeErr <- err
 			return
@@ -360,7 +360,7 @@ func TestWriteObjectAtRejectsNonIncreasing(t *testing.T) {
 
 	writeErr := make(chan error, 1)
 	go func() {
-		out, err := cli.OpenSubgroup(ctx, hdr)
+		out, err := cli.OpenSubgroup(hdr)
 		if err != nil {
 			writeErr <- err
 			return
@@ -472,7 +472,7 @@ func TestIncomingSubgroupStream_ReadDecoded(t *testing.T) {
 
 			writeErr := make(chan error, 1)
 			go func() {
-				outStream, err := cli.OpenSubgroup(ctx, hdr)
+				outStream, err := cli.OpenSubgroup(hdr)
 				if err != nil {
 					writeErr <- err
 					return
@@ -583,7 +583,7 @@ func TestIncomingFetchStream_ReadDecoded_Ascending(t *testing.T) {
 
 	writeErr := make(chan error, 1)
 	go func() {
-		outStream, err := cli.OpenFetchStream(ctx, hdr)
+		outStream, err := cli.OpenFetchStream(hdr)
 		if err != nil {
 			writeErr <- err
 			return
@@ -675,7 +675,7 @@ func TestIncomingFetchStream_ReadDecoded_Descending(t *testing.T) {
 
 	writeErr := make(chan error, 1)
 	go func() {
-		outStream, err := cli.OpenFetchStream(ctx, hdr)
+		outStream, err := cli.OpenFetchStream(hdr)
 		if err != nil {
 			writeErr <- err
 			return
@@ -754,7 +754,7 @@ func TestIncomingFetchStream_ReadDecoded_EndOfRange(t *testing.T) {
 
 	writeErr := make(chan error, 1)
 	go func() {
-		outStream, err := cli.OpenFetchStream(ctx, hdr)
+		outStream, err := cli.OpenFetchStream(hdr)
 		if err != nil {
 			writeErr <- err
 			return
@@ -849,7 +849,7 @@ func TestIncomingFetchStream_ReadDecoded_FirstObjectViolations(t *testing.T) {
 			hdr := message.FetchHeader{RequestID: 0}
 			writeErr := make(chan error, 1)
 			go func() {
-				outStream, err := cli.OpenFetchStream(ctx, hdr)
+				outStream, err := cli.OpenFetchStream(hdr)
 				if err != nil {
 					writeErr <- err
 					return

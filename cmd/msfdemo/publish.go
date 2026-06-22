@@ -65,7 +65,8 @@ func publish(ctx context.Context, addr string) error {
 	slog.InfoContext(ctx, "catalog PUBLISH_OK", "alias", catAlias)
 	go drainRequestStream("catalog", catStream)
 
-	if err := emitCatalogObject(ctx, sess, catAlias, 0, catalogBytes); err != nil {
+	// The catalog track is single-object-per-group: one Object at group 0, no Properties.
+	if err := emitSubgroup(sess, catAlias, 0, nil, catalogBytes); err != nil {
 		return fmt.Errorf("emit catalog object: %w", err)
 	}
 
@@ -107,7 +108,7 @@ func publish(ctx context.Context, addr string) error {
 				Payload: fmt.Appendf(nil, "synthetic-frame-%d", groupID),
 			}
 			props, payload := obj.Encode()
-			if err := emitSubgroup(ctx, sess, vidAlias, groupID, props, payload); err != nil {
+			if err := emitSubgroup(sess, vidAlias, groupID, props, payload); err != nil {
 				return fmt.Errorf("emit video: %w", err)
 			}
 			slog.InfoContext(ctx, "sent video object", "group", groupID, "ts", t.UnixMilli())
@@ -115,15 +116,11 @@ func publish(ctx context.Context, addr string) error {
 	}
 }
 
-func emitCatalogObject(ctx context.Context, sess *session.Session, alias, groupID uint64, payload []byte) error {
-	return emitSubgroup(ctx, sess, alias, groupID, nil, payload)
-}
-
 // emitSubgroup opens one subgroup stream carrying a single Object.
 // LOC-packaged tracks always produce one Object per chunk, and the
 // catalog track is single-object-per-group too (§7.3 / §5).
-func emitSubgroup(ctx context.Context, sess *session.Session, alias, groupID uint64, props, payload []byte) error {
-	sg, err := sess.OpenSubgroup(ctx, message.SubgroupHeader{
+func emitSubgroup(sess *session.Session, alias, groupID uint64, props, payload []byte) error {
+	sg, err := sess.OpenSubgroup(message.SubgroupHeader{
 		Properties:     len(props) > 0,
 		SubgroupIDMode: message.SubgroupIDImplicitZero,
 		TrackAlias:     alias,

@@ -38,7 +38,7 @@ func TestObjectDeliveryTimeoutWrite(t *testing.T) {
 	})
 
 	wg.Go(func() {
-		out, err := client.OpenSubgroup(t.Context(), message.SubgroupHeader{TrackAlias: 1})
+		out, err := client.OpenSubgroup(message.SubgroupHeader{TrackAlias: 1})
 		if err != nil {
 			sendErr = err
 			return
@@ -84,7 +84,7 @@ func TestObjectDeliveryTimeoutNoTimeout(t *testing.T) {
 	})
 
 	wg.Go(func() {
-		out, err := client.OpenSubgroup(t.Context(), message.SubgroupHeader{TrackAlias: 2})
+		out, err := client.OpenSubgroup(message.SubgroupHeader{TrackAlias: 2})
 		if err != nil {
 			sendErr = err
 			return
@@ -127,7 +127,7 @@ func TestObjectDeliveryTimeoutDisabled(t *testing.T) {
 	})
 
 	wg.Go(func() {
-		out, err := client.OpenSubgroup(t.Context(), message.SubgroupHeader{TrackAlias: 3})
+		out, err := client.OpenSubgroup(message.SubgroupHeader{TrackAlias: 3})
 		if err != nil {
 			sendErr = err
 			return
@@ -284,7 +284,7 @@ func TestOutgoingDataStreamRoundTripWithTimeouts(t *testing.T) {
 	})
 
 	wg.Go(func() {
-		out, err := client.OpenSubgroup(t.Context(), want)
+		out, err := client.OpenSubgroup(want)
 		if err != nil {
 			sendErr = err
 			return

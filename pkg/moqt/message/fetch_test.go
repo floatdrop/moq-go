@@ -189,15 +189,9 @@ func TestFetchUnknownType(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown fetch type")
 	}
-	if !IsErrUnknownFetchType(err) {
+	if !errors.Is(err, ErrUnknownFetchType) {
 		t.Errorf("expected ErrUnknownFetchType, got %T", err)
 	}
-}
-
-func IsErrUnknownFetchType(err error) bool {
-	errUnknownFetchType := &errUnknownFetchType{}
-	ok := errors.As(err, &errUnknownFetchType)
-	return ok
 }
 
 func TestFetchOKRoundTrip(t *testing.T) {

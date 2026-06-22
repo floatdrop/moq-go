@@ -109,7 +109,7 @@ func BenchmarkSubgroupThroughput(b *testing.B) {
 		}
 	}()
 
-	sg, err := client.OpenSubgroup(ctx, message.SubgroupHeader{
+	sg, err := client.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDImplicitZero,
 		TrackAlias:     1,
 		GroupID:        0,

@@ -108,15 +108,7 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 		return
 	}
 
-	// Apply FILL_TIMEOUT to the stream-setup phase.
-	openCtx := ctx
-	var openCancel context.CancelFunc
-	if fillTimeout > 0 {
-		openCtx, openCancel = context.WithTimeout(ctx, fillTimeout)
-		defer openCancel()
-	}
-
-	out, err := h.sess.OpenFetchStream(openCtx, message.FetchHeader{RequestID: msg.RequestID})
+	out, err := h.sess.OpenFetchStream(message.FetchHeader{RequestID: msg.RequestID})
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH OpenFetchStream failed",
 			slog.String("err", err.Error()))
@@ -309,7 +301,7 @@ func (h *sessionHandler) handleJoiningFetch(ctx context.Context, req *session.Re
 		return
 	}
 
-	out, err := h.sess.OpenFetchStream(ctx, message.FetchHeader{RequestID: msg.RequestID})
+	out, err := h.sess.OpenFetchStream(message.FetchHeader{RequestID: msg.RequestID})
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "joining FETCH OpenFetchStream failed",
 			slog.String("err", err.Error()))

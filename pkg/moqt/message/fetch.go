@@ -22,7 +22,7 @@ type Fetch struct {
 	RequestID  uint64
 	FetchType  FetchType
 	Standalone *StandaloneFetch // Present when FetchType == FetchTypeStandalone
-	Joining    *JoiningFetch    // Present when FetchType == FetchTypeRelativeJoining or FetchType ==AbsoluteJoining
+	Joining    *JoiningFetch    // Present when FetchType == FetchTypeRelativeJoining or FetchTypeAbsoluteJoining
 	Parameters Parameters
 }
 
@@ -227,9 +227,9 @@ func WriteFetchHeader(w io.Writer, h FetchHeader) error {
 // ReadFetchHeader reads a FETCH_HEADER from r. The caller must have already
 // read the stream type (0x05) via ReadDataStreamType.
 func ReadFetchHeader(r io.Reader) (FetchHeader, error) {
-	requestID, err := ReadTrackAlias(r)
+	requestID, err := wire.ReadVarint(wire.NewByteReader(r))
 	if err != nil {
-		return FetchHeader{}, err
+		return FetchHeader{}, fmt.Errorf("moqt/message: read FETCH_HEADER Request ID: %w", err)
 	}
 	return FetchHeader{RequestID: requestID}, nil
 }
@@ -240,16 +240,4 @@ func IsFetchHeaderType(typ uint64) bool {
 }
 
 // ErrUnknownFetchType is returned for an unknown FETCH type.
-var ErrUnknownFetchType = &errUnknownFetchType{}
-
-type errUnknownFetchType struct{}
-
-func (e *errUnknownFetchType) Error() string {
-	return "moqt/message: unknown FETCH type"
-}
-
-// Is implements error comparison for unknown fetch type errors.
-func (e *errUnknownFetchType) Is(target error) bool {
-	_, ok := target.(*errUnknownFetchType)
-	return ok
-}
+var ErrUnknownFetchType = errors.New("moqt/message: unknown FETCH type")

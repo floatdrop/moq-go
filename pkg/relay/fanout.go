@@ -302,7 +302,7 @@ func (h *sessionHandler) openWriterForSub(
 	if replaying {
 		subHdr.ReplayingSubgroup = true
 	}
-	os, err := sub.Session.OpenSubgroup(ctx, subHdr)
+	os, err := sub.Session.OpenSubgroup(subHdr)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fanout: OpenSubgroup failed",
 			slog.Uint64("sub_id", sub.ID),
@@ -451,7 +451,7 @@ func (w *subgroupWriter) run() {
 		if w.out != nil {
 			w.out.Cancel(moqt.StreamResetCancelled)
 		}
-		fresh, err := w.sub.Session.OpenSubgroup(w.ctx, w.hdr)
+		fresh, err := w.sub.Session.OpenSubgroup(w.hdr)
 		if err != nil {
 			w.log.Debug("fanout: OpenSubgroup (reopen) failed",
 				"sub_id", w.sub.ID, "err", err.Error())

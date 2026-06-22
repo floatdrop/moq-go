@@ -136,7 +136,7 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 // PUBLISH stream, so it tells the subscriber on its SUBSCRIBE_TRACKS response
 // stream and MUST NOT forward a PUBLISH for that track again until the
 // subscriber issues a SUBSCRIBE (see [sessionHandler.handleSubscribe], which
-// calls [NamespaceRegistry.ClearBlocked]).
+// calls [NamespaceRegistry.ClearBlockedForSession]).
 //
 // Per §10.20 the message carries only the namespace suffix beyond the
 // subscriber's SUBSCRIBE_TRACKS prefix; we strip the prefix the same way

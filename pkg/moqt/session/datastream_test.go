@@ -41,7 +41,7 @@ func TestAcceptDataStreamSubgroupRoundTrip(t *testing.T) {
 		gotBody, recvErr = io.ReadAll(ds)
 	})
 	wg.Go(func() {
-		out, err := client.OpenSubgroup(t.Context(), want)
+		out, err := client.OpenSubgroup(want)
 		if err != nil {
 			sendErr = err
 			return

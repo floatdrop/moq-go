@@ -93,8 +93,8 @@ func (e *ErrInvalidSubTransition) Error() string {
 //   - The Session and Stream references are set once at construction and
 //     are read-only thereafter; they are not protected.
 //   - Callers that read multiple fields together (e.g. State + Filter
-//     during fanout) should use [Subscription.Snapshot] or hold the lock
-//     themselves rather than reading fields individually.
+//     during fanout) should hold the lock themselves rather than reading
+//     fields individually.
 type Subscription struct {
 	mu sync.RWMutex
 

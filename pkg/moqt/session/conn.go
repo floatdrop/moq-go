@@ -160,14 +160,11 @@ type Stream interface {
 // independent of any specific QUIC implementation and makes them testable
 // with in-process pipe-backed streams.
 type Conn interface {
-	// OpenUniStream opens a new outbound unidirectional stream, widthou
-	// blocking. until the transport accepts it or ctx is cancelled.
+	// OpenUniStream opens a new outbound unidirectional stream without blocking.
 	OpenUniStream() (SendStream, error)
 
 	// AcceptUniStream blocks until the peer opens a unidirectional stream,
-	// or ctx is cancelled. If the peer's stream limit is currently exhausted
-	// it returns [ErrNoStreamCredit] immediately rather than waiting for
-	// the limit to be raised.
+	// or ctx is cancelled.
 	AcceptUniStream(ctx context.Context) (ReceiveStream, error)
 
 	// OpenStream opens a new outbound bidirectional stream without blocking.

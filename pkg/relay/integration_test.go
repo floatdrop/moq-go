@@ -107,7 +107,7 @@ func TestPublishSubscribeE2E(t *testing.T) {
 	}()
 
 	// Publisher sends a 5-object subgroup.
-	pubSg, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	pubSg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        0,

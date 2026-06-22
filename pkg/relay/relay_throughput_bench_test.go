@@ -305,7 +305,7 @@ func benchFanoutOver(b *testing.B, t benchTransport, subCount, payloadSize int) 
 
 	payload := benchObjPayload(payloadSize)
 	obj := &message.SubgroupObject{ObjectIDDelta: 0, Payload: payload}
-	pubSg, err := pubSess.OpenSubgroup(ctx, message.SubgroupHeader{
+	pubSg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDImplicitZero,
 		TrackAlias:     benchPubAlias,
 		GroupID:        0,

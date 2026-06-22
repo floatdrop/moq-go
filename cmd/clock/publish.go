@@ -58,7 +58,7 @@ func publish(ctx context.Context, addr string) error {
 			payload := []byte(t.UTC().Format(time.RFC3339))
 			slog.DebugContext(ctx, "opening subgroup", "group", groupID)
 
-			sg, err := pub.OpenSubgroup(ctx, message.SubgroupHeader{
+			sg, err := pub.OpenSubgroup(message.SubgroupHeader{
 				SubgroupIDMode: message.SubgroupIDImplicitZero,
 				GroupID:        groupID,
 			})
