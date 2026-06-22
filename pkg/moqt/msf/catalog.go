@@ -151,7 +151,7 @@ type Track struct {
 
 // knownCatalogFields lists every JSON key produced by Catalog's typed
 // fields. Used during UnmarshalJSON to separate known fields from
-// Extras. Sorted only for readability.
+// Extras.
 var knownCatalogFields = map[string]struct{}{
 	"version":       {},
 	"generatedAt":   {},

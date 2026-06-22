@@ -78,7 +78,7 @@ func TestFanout_ObjectAfterEndOfGroupResetsStream(t *testing.T) {
 		}
 	}
 
-	sg, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     alias,
 		GroupID:        0,

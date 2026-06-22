@@ -135,7 +135,7 @@ func publishObjects(
 	count int,
 ) {
 	t.Helper()
-	sg, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     trackAlias,
 		GroupID:        group,

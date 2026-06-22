@@ -205,7 +205,7 @@ func publishTrackOnce(ctx context.Context, sess *session.Session) error {
 	}); err != nil {
 		return err
 	}
-	sg, err := sess.OpenSubgroup(ctx, message.SubgroupHeader{
+	sg, err := sess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDImplicitZero,
 		TrackAlias:     alias,
 		GroupID:        0,

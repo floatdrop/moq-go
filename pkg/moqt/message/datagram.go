@@ -102,48 +102,25 @@ func (d *ObjectDatagram) Validate() error {
 		return errors.New("invalid datagram: PROPERTIES bit set with zero-length Properties")
 	}
 
-	// Per §11.3.1: if STATUS bit set and PROPERTIES bit set and status is non-Normal,
-	// PROTOCOL_VIOLATION. (STATUS+PROPERTIES with Normal status is allowed.)
-	// Note: IsValidDatagramType already rejects STATUS+PROPERTIES entirely, so this
-	// branch is unreachable for well-formed Type values, but kept for defence-in-depth
-	// when Type is set manually.
-	if d.HasProperties() && d.HasStatus() && d.ObjectStatus != 0 {
-		return fmt.Errorf(
-			"invalid datagram: PROPERTIES not allowed with non-Normal STATUS (status: 0x%02X)",
-			d.ObjectStatus,
-		)
-	}
-
 	return nil
 }
 
 // Append serializes the datagram to a wire.Writer.
 func (d *ObjectDatagram) Append(w *wire.Writer) {
-	// Write Type field
 	w.Varint(d.Type)
-
-	// Write TrackAlias
 	w.Varint(d.TrackAlias)
-
-	// Write GroupID
 	w.Varint(d.GroupID)
 
-	// Write ObjectID if not ZERO_OBJECT_ID
 	if !d.HasZeroObjectID() {
 		w.Varint(d.ObjectID)
 	}
-
-	// Write PublisherPriority if not DEFAULT_PRIORITY
 	if !d.HasDefaultPriority() {
 		w.UInt8(d.PublisherPriority)
 	}
-
-	// Write Properties if PROPERTIES bit is set
 	if d.HasProperties() {
 		w.VarintBytes(d.Properties)
 	}
 
-	// Write ObjectStatus or ObjectPayload based on STATUS bit
 	if d.HasStatus() {
 		w.Varint(d.ObjectStatus)
 	} else {
@@ -153,7 +130,6 @@ func (d *ObjectDatagram) Append(w *wire.Writer) {
 
 // Parse deserializes a datagram from a wire.Reader into d.
 func (d *ObjectDatagram) Parse(r *wire.Reader) error {
-	// Read Type field
 	typ, err := r.Varint()
 	if err != nil {
 		return fmt.Errorf("failed to read datagram type: %w", err)
@@ -165,29 +141,25 @@ func (d *ObjectDatagram) Parse(r *wire.Reader) error {
 		return fmt.Errorf("invalid datagram type: 0x%02X", d.Type)
 	}
 
-	// Read TrackAlias
 	d.TrackAlias, err = r.Varint()
 	if err != nil {
 		return fmt.Errorf("failed to read track alias: %w", err)
 	}
 
-	// Read GroupID
 	d.GroupID, err = r.Varint()
 	if err != nil {
 		return fmt.Errorf("failed to read group ID: %w", err)
 	}
 
-	// Read ObjectID if not ZERO_OBJECT_ID
 	if !d.HasZeroObjectID() {
 		d.ObjectID, err = r.Varint()
 		if err != nil {
 			return fmt.Errorf("failed to read object ID: %w", err)
 		}
 	} else {
-		d.ObjectID = 0 // Explicitly set to 0
+		d.ObjectID = 0
 	}
 
-	// Read PublisherPriority if not DEFAULT_PRIORITY
 	if !d.HasDefaultPriority() {
 		d.PublisherPriority, err = r.UInt8()
 		if err != nil {
@@ -195,7 +167,6 @@ func (d *ObjectDatagram) Parse(r *wire.Reader) error {
 		}
 	}
 
-	// Read Properties if PROPERTIES bit is set
 	if d.HasProperties() {
 		d.Properties, err = r.VarintBytes()
 		if err != nil {
@@ -213,13 +184,6 @@ func (d *ObjectDatagram) Parse(r *wire.Reader) error {
 		d.ObjectStatus, err = r.Varint()
 		if err != nil {
 			return fmt.Errorf("failed to read object status: %w", err)
-		}
-		// Per §11.3.1: PROTOCOL_VIOLATION when STATUS bit set AND status is non-Normal AND PROPERTIES bit set
-		if d.HasProperties() && d.ObjectStatus != 0 {
-			return fmt.Errorf(
-				"invalid datagram: PROPERTIES not allowed with non-Normal STATUS (status: 0x%02X)",
-				d.ObjectStatus,
-			)
 		}
 	} else {
 		d.ObjectPayload = r.RemainingBytes()

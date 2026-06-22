@@ -185,7 +185,7 @@ func TestPublicationDone(t *testing.T) {
 			return
 		}
 		for g := range uint64(2) {
-			sg, err := pub.OpenSubgroup(ctx, message.SubgroupHeader{
+			sg, err := pub.OpenSubgroup(message.SubgroupHeader{
 				SubgroupIDMode: message.SubgroupIDImplicitZero,
 				GroupID:        g,
 			})
@@ -571,7 +571,7 @@ func TestRequestAcceptSubscribe(t *testing.T) {
 			return
 		}
 		serverAlias = pub.TrackAlias()
-		sg, err := pub.OpenSubgroup(ctx, message.SubgroupHeader{
+		sg, err := pub.OpenSubgroup(message.SubgroupHeader{
 			SubgroupIDMode: message.SubgroupIDImplicitZero,
 			GroupID:        3,
 		})
@@ -754,7 +754,7 @@ func TestIncomingSubgroupStreamTrackKey(t *testing.T) {
 				serverErr = err
 				return
 			}
-			sg, err := pub.OpenSubgroup(ctx, message.SubgroupHeader{
+			sg, err := pub.OpenSubgroup(message.SubgroupHeader{
 				SubgroupIDMode: message.SubgroupIDImplicitZero,
 				GroupID:        0,
 			})
@@ -815,7 +815,7 @@ func TestIncomingSubgroupStreamTrackKey(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Go(func() {
 			// Push a subgroup on an alias the client never subscribed to.
-			sg, err := srv.OpenSubgroup(ctx, message.SubgroupHeader{
+			sg, err := srv.OpenSubgroup(message.SubgroupHeader{
 				SubgroupIDMode: message.SubgroupIDImplicitZero,
 				TrackAlias:     99,
 				GroupID:        0,

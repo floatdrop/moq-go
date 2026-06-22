@@ -170,7 +170,7 @@ func TestFanout_AppliesEffectivePriorityOnStreamOpen(t *testing.T) {
 	// can complete its OpenSubgroup synchronously.
 	go drainAllStreams(t.Context(), subSess)
 
-	pubSubgroup, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	pubSubgroup, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        0,

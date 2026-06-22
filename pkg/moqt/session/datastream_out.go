@@ -1,7 +1,6 @@
 package session
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -259,7 +258,7 @@ func (s *OutgoingFetchStream) Cancel(code moqt.StreamResetCode) {
 // optional Publisher Priority), and returns the body writer. The caller MUST
 // Close to FIN the stream once all objects have been written, or Cancel to
 // reset.
-func (s *Session) OpenSubgroup(ctx context.Context, h message.SubgroupHeader) (*OutgoingSubgroupStream, error) {
+func (s *Session) OpenSubgroup(h message.SubgroupHeader) (*OutgoingSubgroupStream, error) {
 	dst, err := s.conn.OpenUniStream()
 	if err != nil {
 		return nil, err

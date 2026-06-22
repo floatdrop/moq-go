@@ -269,7 +269,7 @@ func (p *publisher) publishVideo(data []byte, timestampMicros uint64, keyframe b
 			_ = p.videoSG.Close()
 		}
 		groupID := p.videoSeq.Next()
-		sg, err := p.sess.OpenSubgroup(p.ctx, message.SubgroupHeader{
+		sg, err := p.sess.OpenSubgroup(message.SubgroupHeader{
 			Properties:     true,
 			SubgroupIDMode: message.SubgroupIDImplicitZero,
 			TrackAlias:     p.videoAlias,
@@ -304,7 +304,7 @@ func (p *publisher) publishAudio(data []byte, timestampMicros uint64) error {
 			_ = p.audioSG.Close()
 		}
 		groupID := p.audioSeq.Next()
-		sg, err := p.sess.OpenSubgroup(p.ctx, message.SubgroupHeader{
+		sg, err := p.sess.OpenSubgroup(message.SubgroupHeader{
 			Properties:     true,
 			SubgroupIDMode: message.SubgroupIDImplicitZero,
 			TrackAlias:     p.audioAlias,
@@ -353,7 +353,7 @@ func (p *publisher) close() {
 
 // emitObject opens a single-object subgroup (used for the catalog).
 func (p *publisher) emitObject(alias, groupID uint64, props, payload []byte) error {
-	sg, err := p.sess.OpenSubgroup(p.ctx, message.SubgroupHeader{
+	sg, err := p.sess.OpenSubgroup(message.SubgroupHeader{
 		Properties:     len(props) > 0,
 		SubgroupIDMode: message.SubgroupIDImplicitZero,
 		TrackAlias:     alias,

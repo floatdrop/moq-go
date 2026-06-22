@@ -44,9 +44,9 @@ func (p *Publication) TrackAlias() uint64 { return p.alias }
 // is ignored and overwritten. It is otherwise identical to
 // [Session.OpenSubgroup]: the caller MUST Close the returned stream to FIN it
 // once all objects are written, or Cancel to reset.
-func (p *Publication) OpenSubgroup(ctx context.Context, h message.SubgroupHeader) (*OutgoingSubgroupStream, error) {
+func (p *Publication) OpenSubgroup(h message.SubgroupHeader) (*OutgoingSubgroupStream, error) {
 	h.TrackAlias = p.alias
-	sg, err := p.s.OpenSubgroup(ctx, h)
+	sg, err := p.s.OpenSubgroup(h)
 	if err != nil {
 		return nil, err
 	}

@@ -276,10 +276,10 @@ func (h *sessionHandler) runRequestLoop(ctx context.Context) error {
 // runDataLoop accepts inbound data streams and routes each to the
 // appropriate fanout entry point. Subgroup streams go to
 // [sessionHandler.runFanout]; fetch response streams (the body side of
-// a FETCH the relay issued upstream) are currently dropped until the
-// relay's own upstream FETCH responder is wired in. Unknown stream
-// types are logged and the stream is reset to keep the publisher's
-// flow control unblocked.
+// a FETCH the relay issued upstream) are handed to the downstream handler
+// waiting on the matching (session, RequestID) via the fetch router, and
+// reset when no reader is registered. Unknown stream types are logged and
+// the stream is reset to keep the publisher's flow control unblocked.
 //
 // Per-stream errors do not terminate the loop: §9.5 forbids "one bad data
 // stream kills the session" semantics. Transport-level errors from

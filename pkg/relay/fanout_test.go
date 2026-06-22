@@ -48,7 +48,7 @@ func TestFanout_PublisherToSubscriberSingleObject(t *testing.T) {
 	}
 	defer subReqStream.Close()
 
-	pubSubgroup, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	pubSubgroup, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        5,
@@ -167,7 +167,7 @@ func TestFanout_SlowSubscriberGetsResetWithoutBlockingFastOne(t *testing.T) {
 	}
 	defer slowReq.Close()
 
-	pubSubgroup, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	pubSubgroup, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        1,
@@ -283,7 +283,7 @@ func TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart(t *testing.T) {
 	}
 	defer subReq.Close()
 
-	pubSubgroup, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	pubSubgroup, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        0,
@@ -446,7 +446,7 @@ func TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange(t *testing.T) {
 		}
 	}()
 
-	sg0, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	sg0, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        0,
@@ -600,7 +600,7 @@ func TestFanout_GapInForwardedObjectIDsOpensNewStream(t *testing.T) {
 		}
 	}()
 
-	pubSubgroup, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	pubSubgroup, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        0,
@@ -725,7 +725,7 @@ func TestFanout_InboundResetCancelsDownstream(t *testing.T) {
 		}
 	}()
 
-	pubSubgroup, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	pubSubgroup, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        0,
@@ -801,7 +801,7 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 	// Phase 1: publish three objects (absIDs 0, 1, 2) on group 4. After
 	// this the relay's TrackEntry.LargestObject must be {Group: 4,
 	// Object: 2}.
-	sg, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        4,
@@ -897,7 +897,7 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 	// and pass the above-watermark one. We send them on a fresh subgroup
 	// so the relay opens new streams (avoids interaction with subgroup 0
 	// which already FIN'd).
-	sg2, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	sg2, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        4,

@@ -179,7 +179,7 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 	// Publish while paused. The relay opens the outbound subgroup (so the
 	// reader's AcceptDataStream returns) but MUST NOT forward the object —
 	// ReadObject on that stream blocks.
-	sgPaused, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	sgPaused, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        0,
@@ -209,7 +209,7 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 	}
 
 	// Publish after resume on a fresh subgroup. This MUST be delivered.
-	sgResumed, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	sgResumed, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
 		GroupID:        1,

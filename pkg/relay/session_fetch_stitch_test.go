@@ -55,7 +55,7 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 					return
 				}
 				for g := liveLo; g <= liveHi; g++ {
-					sg, err := upSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+					sg, err := upSess.OpenSubgroup(message.SubgroupHeader{
 						SubgroupIDMode: message.SubgroupIDImplicitZero,
 						TrackAlias:     upstreamAlias,
 						GroupID:        g,
@@ -77,7 +77,7 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 				if err := req.Reply(&message.FetchOK{EndLocation: sf.EndLocation}); err != nil {
 					return
 				}
-				out, err := upSess.OpenFetchStream(t.Context(), message.FetchHeader{RequestID: m.RequestID})
+				out, err := upSess.OpenFetchStream(message.FetchHeader{RequestID: m.RequestID})
 				if err != nil {
 					return
 				}

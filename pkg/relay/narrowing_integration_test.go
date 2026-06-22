@@ -85,7 +85,7 @@ func TestFanout_NarrowingUpdateResetsOutOfRangeStream(t *testing.T) {
 	}
 
 	// A subgroup in group 2 (within the initial range): object 0 is delivered.
-	sg, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     alias,
 		GroupID:        2,

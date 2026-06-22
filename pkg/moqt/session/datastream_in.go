@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -445,8 +444,8 @@ func (s *Session) AcceptDataStream(ctx context.Context) (DataStream, error) {
 		}
 		return &IncomingFetchStream{Header: hdr, src: src, br: br, rd: wire.NewStreamReader(br)}, nil
 	case typ == message.PaddingStreamType:
-		// §11.6: padding streams MUST be silently discarded.
-		go io.Copy(io.Discard, br) //nolint:errcheck // discarding a §11.6 padding stream; copy errors are irrelevant.
+		// §11.6: padding streams MUST be silently discarded. CancelRead
+		// (STOP_SENDING) abandons the stream and frees its flow control.
 		src.CancelRead(uint64(moqt.StreamResetInternalError))
 		return nil, ErrPaddingStream
 	case message.IsReservedSubgroupHeaderType(typ):

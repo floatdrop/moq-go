@@ -100,7 +100,7 @@ func TestMetricsHooks(t *testing.T) {
 	}()
 
 	const sgCount = 5
-	pubSg, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+	pubSg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     alias,
 		GroupID:        0,

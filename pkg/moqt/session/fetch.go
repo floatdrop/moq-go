@@ -81,7 +81,7 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 // writes the header (Type + Request ID), and returns the body writer. The
 // caller MUST Close to FIN the stream once all fetch objects have been
 // written, or Cancel to reset.
-func (s *Session) OpenFetchStream(ctx context.Context, h message.FetchHeader) (*OutgoingFetchStream, error) {
+func (s *Session) OpenFetchStream(h message.FetchHeader) (*OutgoingFetchStream, error) {
 	dst, err := s.conn.OpenUniStream()
 	if err != nil {
 		return nil, err

@@ -50,7 +50,7 @@ func TestFanout_LagWindowResetsSlowSubscriber(t *testing.T) {
 	// Publish several objects on one subgroup. The first blocks in the relay's
 	// WriteObject (subscriber not reading yet); the rest queue and age.
 	go func() {
-		sg, err := pubSess.OpenSubgroup(t.Context(), message.SubgroupHeader{
+		sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 			SubgroupIDMode: message.SubgroupIDExplicit,
 			TrackAlias:     alias,
 			GroupID:        0,

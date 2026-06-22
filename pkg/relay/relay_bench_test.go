@@ -140,7 +140,7 @@ func benchFanout(b *testing.B, subCount, payloadSize int) {
 	// first-object snapshot already includes every downstream sub. All
 	// Object IDs are consecutive (delta 0), so the relay keeps a single
 	// outbound subgroup per subscriber (no §11.4.3 reopen).
-	pubSg, err := pubSess.OpenSubgroup(ctx, message.SubgroupHeader{
+	pubSg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDImplicitZero,
 		TrackAlias:     benchPubAlias,
 		GroupID:        0,
@@ -253,7 +253,7 @@ func BenchmarkFetchFromCache(b *testing.B) {
 	warmDone := make(chan struct{}, 1)
 	go benchSubscriberReader(ctx, warmSub, rangeObjs, warmDone, nil)
 
-	pubSg, err := pubSess.OpenSubgroup(ctx, message.SubgroupHeader{
+	pubSg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDImplicitZero,
 		TrackAlias:     benchPubAlias,
 		GroupID:        0,

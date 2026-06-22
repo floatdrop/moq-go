@@ -64,7 +64,7 @@ func ExampleSession_Publish() {
 	}
 	defer pub.Close() // stays open for follow-ups / PUBLISH_DONE
 
-	sg, err := pub.OpenSubgroup(ctx, message.SubgroupHeader{
+	sg, err := pub.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDImplicitZero,
 		GroupID:        0,
 	})

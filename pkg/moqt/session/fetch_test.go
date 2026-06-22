@@ -77,7 +77,7 @@ func TestFetchRoundTrip(t *testing.T) {
 
 		// Open a FETCH_HEADER uni-stream carrying the response objects.
 		// The RequestID in the FetchHeader must match the FETCH request.
-		outStream, err := srv.OpenFetchStream(ctx, message.FetchHeader{RequestID: fetch.RequestID})
+		outStream, err := srv.OpenFetchStream(message.FetchHeader{RequestID: fetch.RequestID})
 		if err != nil {
 			serverErr = err
 			return

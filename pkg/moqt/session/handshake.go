@@ -19,9 +19,9 @@ import (
 // waiting for a stream the peer will never send.
 //
 // Per §3.3, until SETUP is exchanged a peer may also open uni-streams for
-// objects or bidi-streams for requests, but for M2 we assume the peer is
+// objects or bidi-streams for requests, we assume the peer is
 // well-behaved and the first unidirectional stream it opens is the control
-// stream beginning with SETUP. Out-of-order stream handling lands in M3.
+// stream beginning with SETUP. Out-of-order stream handling is not yet implemented.
 func (s *Session) handshake(ctx context.Context, options []wire.KVPair) error {
 	g, gctx := errgroup.WithContext(ctx)
 

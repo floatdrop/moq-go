@@ -60,7 +60,7 @@ func TestDemuxRoutesStreams(t *testing.T) {
 	openSubgroup(t, pub, 43)
 
 	// 3. A FETCH stream answering Request ID 7.
-	fs, err := pub.OpenFetchStream(ctx, message.FetchHeader{RequestID: 7})
+	fs, err := pub.OpenFetchStream(message.FetchHeader{RequestID: 7})
 	if err != nil {
 		t.Fatalf("OpenFetchStream: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestIncomingSubgroupTrackKeyResolvesLive(t *testing.T) {
 // openSubgroup opens a header-only subgroup stream for alias and FINs it.
 func openSubgroup(t *testing.T, s *session.Session, alias uint64) {
 	t.Helper()
-	out, err := s.OpenSubgroup(t.Context(), message.SubgroupHeader{TrackAlias: alias})
+	out, err := s.OpenSubgroup(message.SubgroupHeader{TrackAlias: alias})
 	if err != nil {
 		t.Fatalf("OpenSubgroup(alias=%d): %v", alias, err)
 	}

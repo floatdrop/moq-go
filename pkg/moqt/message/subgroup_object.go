@@ -47,14 +47,12 @@ func (o *SubgroupObject) Append(w *wire.Writer, hasProperties bool) {
 		w.VarintBytes(o.Properties)
 	}
 
-	// Object Payload Length is always present
 	w.Varint(uint64(len(o.Payload)))
 
 	// Object Status is present only when Payload Length == 0
 	if len(o.Payload) == 0 {
 		w.Varint(o.ObjectStatus)
 	} else {
-		// Object Payload follows the length
 		w.FixedBytes(o.Payload)
 	}
 }
@@ -64,7 +62,6 @@ func (o *SubgroupObject) Append(w *wire.Writer, hasProperties bool) {
 // The hasProperties parameter indicates whether the parent SubgroupHeader
 // had the Properties bit set, which determines if Properties are included.
 func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
-	// Object ID Delta is always present
 	delta, err := r.Varint()
 	if err != nil {
 		return fmt.Errorf("moqt/message: object ID delta: %w", err)
@@ -82,7 +79,6 @@ func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
 		o.Properties = nil
 	}
 
-	// Object Payload Length is always present
 	payloadLength, err := r.Varint()
 	if err != nil {
 		return fmt.Errorf("moqt/message: payload length: %w", err)
@@ -97,7 +93,6 @@ func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
 		o.ObjectStatus = status
 		o.Payload = nil
 	} else {
-		// Read the payload
 		//nolint:gosec // G115: payloadLength is a QUIC varint; StreamReader.FixedBytes enforces MaxStreamFieldSize, Reader is buffer-bounded.
 		payload, err := r.FixedBytes(int(payloadLength))
 		if err != nil {
@@ -121,9 +116,6 @@ func (o *SubgroupObject) Validate() error {
 			return fmt.Errorf("moqt/message: invalid object status 0x%X", o.ObjectStatus)
 		}
 	}
-
-	// Properties should be non-nil only when needed, but this is enforced by the caller
-	// via the hasProperties parameter during Append/Parse
 
 	return nil
 }
