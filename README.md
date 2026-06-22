@@ -149,7 +149,7 @@ pkg/moqt/                 MOQT protocol implementation
 └── errors.go             Session / request / publish-done / stream-reset codes
 
 pkg/relay/                Single-instance MOQT relay
-├── cache/                Per-track object cache (W-TinyLFU via maypok86/otter)
+├── cache/                Per-track object cache
 └── discovery/            Cross-instance discovery interface + in-memory impl
 
 cmd/
