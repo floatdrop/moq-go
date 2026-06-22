@@ -1,0 +1,49 @@
+# Local interop harness: run a third-party MoQT test client against the relay
+# built from this repository. Driven by the root Makefile (`make interop`), but
+# usable directly:
+#
+#   MOQT_TRANSPORT=webtransport RELAY_URL=https://relay:4443/moq \
+#     docker compose -f interop/docker-compose.yml up --build --abort-on-container-exit
+#
+# Both services run on a Compose bridge network, so the client reaches the relay
+# by its service name (`relay`) — this works the same on Linux and Docker
+# Desktop for macOS, unlike host networking.
+services:
+  relay:
+    image: ${RELAY_IMAGE:-moq-relay:latest}
+    build:
+      context: ..
+      dockerfile: cmd/relay/Dockerfile
+    ports:
+      - "4443:4443/udp"
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      - MOQT_ROLE=relay
+      - MOQT_PORT=4443
+      - MOQT_TRANSPORT=${MOQT_TRANSPORT:-quic}
+      - MOQT_WEBTRANSPORT_PATH=${MOQT_WEBTRANSPORT_PATH:-/moq}
+    healthcheck:
+      test: ["CMD", "sh", "-c", "ss -uln | grep -q ':4443' || exit 1"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+
+  test-client:
+    image: ${CLIENT_IMAGE:-ghcr.io/englishm/moq-interop-runner-moq-dev-rs-client:latest}
+    depends_on:
+      relay:
+        condition: service_healthy
+    environment:
+      # Default to raw QUIC; the Makefile overrides scheme + transport together.
+      - RELAY_URL=${RELAY_URL:-moqt://relay:4443}
+      # Self-signed dev certs — the client must not verify the chain.
+      - TLS_DISABLE_VERIFY=1
+      # Bare keys: passed through only when set in the environment. (Clients like
+      # moq-dev-rs reject an empty --verbose/--testcase value.)
+      - TESTCASE
+      - VERBOSE
+    volumes:
+      # Some WebTransport clients pin the relay's self-signed cert by hash.
+      - ./certs:/certs:ro

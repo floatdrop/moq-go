@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref (e.g. new push to a PR).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test ./...
+
+  race:
+    name: Test (race)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.12.2
+
+  modernize:
+    name: Modernize (errorsastype)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # golangci-lint v2.12.2 bundles a modernize snapshot that predates the
+      # errorsastype analyzer, so run that check standalone. See CLAUDE.md.
+      - run: |
+          go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest \
+            -errorsastype ./...
+
+  govulncheck:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # Interop is gated on independent implementations: the unit tests round-trip
+  # through this codebase's own codec, so a wire-encoding regression (e.g. QUIC
+  # varints instead of the §1.4.1 leading-ones encoding) passes every unit test
+  # yet breaks interop. Both jobs use Docker (preinstalled on the runner). The
+  # advisory `make interop-matrix` is intentionally not gated — it has known
+  # cross-implementation divergences (see STATUS.md).
+  interop:
+    name: Interop (relay ← third-party client)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # Our relay vs the moq-dev-rs draft-18 client over raw QUIC + WebTransport.
+      - run: make interop
+
+  interop-client:
+    name: Interop (our client → our relay)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      # Loopback regression guard: our client and relay agree on all six cases.
+      - run: make interop-client

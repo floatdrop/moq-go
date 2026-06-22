@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+#
+# Test-client image for the moq-interop-runner. Runs the six interop scenarios
+# against a relay, driving this repository's session library from the client
+# side. The binary reads the runner's standard environment directly
+# (RELAY_URL, TESTCASE, TLS_DISABLE_VERIFY, VERBOSE) and emits TAP v14 on
+# stdout, so no entrypoint shim is needed.
+#
+# Build from the repository root:
+#   docker build -f cmd/interop-client/Dockerfile.client -t moq-interop-client:latest .
+
+FROM golang:1.26-bookworm AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/interop-client ./cmd/interop-client
+
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY --from=builder /out/interop-client /app/interop-client
+
+# Defaults follow the runner conventions; override at run time.
+ENV RELAY_URL=https://localhost:4443
+
+RUN useradd -r -u 1000 -g nogroup moq
+USER moq
+
+ENTRYPOINT ["/app/interop-client"]

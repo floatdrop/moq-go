@@ -1,0 +1,13 @@
+# Wails v3 Specifics
+bin/
+build/bin/
+build/devmode.config.yaml
+
+# Frontend dependencies and builds
+frontend/node_modules/
+frontend/dist/
+frontend/.build/
+
+.svelte-kit/
+.task/
+bin/

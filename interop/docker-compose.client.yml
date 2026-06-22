@@ -1,0 +1,43 @@
+# Client-direction interop: run OUR test client (built from this repo) against a
+# third-party relay image, the inverse of docker-compose.yml. Driven by the root
+# Makefile (`make interop-client`), but usable directly:
+#
+#   RELAY_IMAGE=ghcr.io/englishm/moq-interop-runner-moq-relay-ietf-draft-18:latest \
+#     RELAY_URL=moqt://relay:4443 \
+#     docker compose -f interop/docker-compose.client.yml up --build --abort-on-container-exit
+#
+# Both services share a Compose bridge network, so the client reaches the relay
+# by its service name (`relay`).
+services:
+  relay:
+    # A third-party relay image (pulled). No build stanza — this is not our relay.
+    image: ${RELAY_IMAGE:?set RELAY_IMAGE to a third-party relay image}
+    ports:
+      - "4443:4443/udp"
+    volumes:
+      - ./certs:/certs:ro
+    environment:
+      - MOQT_ROLE=relay
+      - MOQT_PORT=4443
+    # No healthcheck override here: third-party relay images ship their own
+    # (e.g. moq-rs uses `ss`, the moq-dev adapter greps /proc/net/udp6), and
+    # some are shell-less so a `sh -c` override would never pass. We rely on the
+    # image's HEALTHCHECK to drive `depends_on: condition: service_healthy`.
+
+  test-client:
+    image: ${CLIENT_IMAGE:-moq-interop-client:latest}
+    build:
+      context: ..
+      dockerfile: cmd/interop-client/Dockerfile.client
+    depends_on:
+      relay:
+        # service_started (not service_healthy): some minimal relay images can't
+        # run a healthcheck exec at all on every Docker/runc setup. The client
+        # retries its initial connect (see dialOnce) to cover relay startup.
+        condition: service_started
+    environment:
+      - RELAY_URL=${RELAY_URL:-moqt://relay:4443}
+      - TLS_DISABLE_VERIFY=1
+      # Bare keys: forwarded only when set (our client tolerates either way).
+      - TESTCASE
+      - VERBOSE

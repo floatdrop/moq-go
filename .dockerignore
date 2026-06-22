@@ -1,0 +1,8 @@
+# Keep the relay image build context small. The relay only needs the root
+# module sources; everything below is irrelevant to `go build ./cmd/relay`.
+.git
+.github
+docs
+interop/certs
+apps/tlmst
+**/.DS_Store

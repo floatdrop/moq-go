@@ -1,0 +1,556 @@
+// Package relay implements an MOQT relay (§9 of draft-ietf-moq-transport-18):
+// an entity that is both a Publisher and a Subscriber, terminates Transport
+// Sessions, caches Objects, aggregates subscriptions, and forwards data
+// between upstream publishers and downstream subscribers.
+//
+// The relay is transport-agnostic. It operates on the
+// [github.com/floatdrop/moq-go/pkg/moqt/session.Conn] abstraction and does
+// not own a QUIC listener directly. Callers wire up the desired transport
+// (QUIC via quicconn, WebTransport via wtconn, or an in-process sessiontest
+// adapter) and hand the relay a [Listener] that yields ready-to-use
+// session.Conn instances with TLS/ALPN already negotiated.
+//
+// This file holds the relay's lifecycle scaffold: the transport-agnostic
+// Listener interface, the Relay struct, and Start/Stop. The remaining
+// components (Track Registry, Namespace Registry, Subscription Fanout,
+// Object Cache, Discovery Store) live in sibling files and plug into
+// this scaffold.
+package relay
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/floatdrop/moq-go/internal/logctx"
+	"github.com/floatdrop/moq-go/pkg/moqt"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/relay/discovery"
+)
+
+// Listener yields ready-to-use MOQT transport connections. The caller is
+// responsible for TLS, ALPN ("moq-00"), and — for WebTransport — the HTTP/3
+// CONNECT upgrade before returning a Conn. The relay never binds sockets or
+// terminates TLS itself.
+//
+// Implementations of this interface live in the transport adapter packages:
+//
+//   - quicconn.NewListener wraps a *quic.Listener.
+//   - wtconn.NewListener wraps a webtransport.Server mounted on an
+//     http.Handler.
+//   - sessiontest provides an in-memory pipe listener for tests.
+type Listener interface {
+	// Accept blocks until the next MOQT-ready Conn is available, or ctx is
+	// cancelled, or the listener is closed. The returned Conn has TLS and
+	// ALPN already negotiated; the relay only needs to drive the MOQT
+	// SETUP handshake on top.
+	Accept(ctx context.Context) (session.Conn, error)
+
+	// Addr returns the network address the listener is bound to. May be nil
+	// for purely in-process listeners.
+	Addr() net.Addr
+
+	// Close stops the listener. After Close returns, Accept must return
+	// promptly with an error. Close is safe to call from any goroutine and
+	// may be invoked more than once.
+	Close() error
+}
+
+// Config carries all relay knobs. It bundles transport-agnostic
+// scheduling parameters (queue sizes, reset thresholds, cache bounds),
+// pluggable hooks (Authorizer, Discovery), the GOAWAY grace period,
+// and SETUP-time SessionOptions.
+type Config struct {
+	// GoawayTimeout is the grace period the relay grants downstream
+	// sessions to migrate after Stop sends GOAWAY before forcibly closing
+	// them. Zero means "do not send GOAWAY, just close" — useful in tests.
+	GoawayTimeout time.Duration
+
+	// SessionOptions are forwarded to session.Server() for every accepted
+	// connection. Use this to advertise implementation name, GREASE,
+	// MAX_AUTH_TOKEN_CACHE_SIZE, etc. Optional.
+	SessionOptions []session.Option
+
+	// Logger is used for relay-level events (accept loop start/stop,
+	// session setup failures, GOAWAY broadcast). If nil, slog.Default() is
+	// used. Per-session loggers are derived via internal/logctx.
+	Logger *slog.Logger
+
+	// Authorizer gates every incoming request before the relay performs
+	// any state mutation. If nil, [AllowAllAuthorizer] is used, which is
+	// appropriate for tests and trusted in-process deployments.
+	// Production should supply a token- or session-attestation-aware
+	// implementation. See [Authorizer] for the full contract.
+	Authorizer Authorizer
+
+	// Metrics receives relay lifecycle and hot-path event notifications for
+	// telemetry. nil (the default) installs [NopMetrics]. See [Metrics] for
+	// the contract; implementations MUST be non-blocking and safe for
+	// concurrent use.
+	Metrics Metrics
+
+	// MaxCacheSize bounds the per-track Object Cache by object count.
+	// Zero means: use [defaultCacheMaxSize]. The bound is applied
+	// independently to every track the relay observes; a noisy track
+	// cannot evict a quiet one's entries.
+	MaxCacheSize int
+
+	// MaxCacheDuration bounds the per-track Object Cache by object age.
+	// Zero means: use [defaultCacheMaxDuration]. Objects older than this
+	// are eligible for time-based eviction on the next Put.
+	MaxCacheDuration time.Duration
+
+	// CacheTTLPolicy, when non-nil, may override [MaxCacheDuration] on
+	// a per-track basis. See [CacheTTLPolicy] for the contract; the
+	// function is invoked once per [TrackEntry] at creation time and
+	// never on the fanout hot path. Use this to give well-known tracks
+	// (e.g. an MSF catalog track) infinite retention without changing
+	// the default for everything else. [pkg/relay] does not own the
+	// rule; the binary supplies it.
+	CacheTTLPolicy CacheTTLPolicy
+
+	// SendQueueSize is the per-downstream-subscriber bounded channel
+	// size used by the fanout writer. Each subscriber's writer goroutine
+	// consumes from this queue; the fanout publishes to all queues with
+	// a non-blocking send and drops the object on overflow. A larger
+	// queue absorbs more transient burst but lets a slow reader keep
+	// more memory locked up.
+	// Zero means: use the default of 64.
+	SendQueueSize int
+
+	// MaxFanoutLag bounds how far behind the live edge a downstream
+	// subscriber may fall before the relay resets its outbound subgroup
+	// streams and terminates the subscription. The fanout writer measures
+	// the time each forwarded object spends queued before it is written; an
+	// object that waited longer than MaxFanoutLag means the subscriber has
+	// been unable to keep up for that long, so it is dropped. This is a
+	// latency window, not a drop count: a subscriber that loses the
+	// occasional object but stays current is left alone, while one that
+	// steadily falls behind is shed. Zero means: use the default of 2s.
+	MaxFanoutLag time.Duration
+
+	// MaxDropsBeforeReset is an OPTIONAL hard cap on the cumulative number of
+	// objects dropped to one subscriber's overflowing send queue, after which
+	// the relay resets and terminates the subscription. It is a coarse
+	// backstop to [MaxFanoutLag] (e.g. to bound memory for a peer that
+	// accepts a stream but never reads it); the time window is the primary
+	// slow-reader signal. Zero (the default) disables the cap.
+	MaxDropsBeforeReset int
+
+	// MaxSubscriptionsPerSession bounds the number of concurrently-active
+	// SUBSCRIBE requests a single session may hold (§13.1, subscription
+	// amplification). Excess SUBSCRIBEs are rejected with REQUEST_ERROR
+	// EXCESSIVE_LOAD before any state is mutated. Zero (the default) means
+	// unlimited — limits are a deployment policy the operator opts into.
+	MaxSubscriptionsPerSession int
+
+	// MaxNamespaceRequestsPerSession bounds the number of concurrently-active
+	// namespace-state requests (PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE,
+	// SUBSCRIBE_TRACKS) a single session may hold (§13.7.1, relay state
+	// maintenance). Excess requests are rejected with REQUEST_ERROR
+	// EXCESSIVE_LOAD. Zero (the default) means unlimited.
+	MaxNamespaceRequestsPerSession int
+
+	// Discovery is the cross-instance track + namespace advertisement
+	// fabric. nil means "no discovery" — the relay still works as a
+	// single-instance setup with no cross-relay routing. Single-process
+	// tests typically leave this nil; multi-instance deployments inject
+	// a [discovery.MemoryStore] (local-only) or a distributed backend
+	// (NATS / Redis).
+	Discovery discovery.DiscoveryStore
+
+	// RelayAddr is the address this relay registers itself as in
+	// Discovery entries. Empty for single-instance deployments
+	// (Discovery still works, RelayAddr just stays empty). NATS / Redis
+	// backends use this to route upstream connections to the right
+	// peer.
+	RelayAddr string
+}
+
+// resolved Config defaults; kept as constants so tests can reference them
+// without poking at private fields.
+const (
+	defaultSendQueueSize = 64
+	defaultMaxFanoutLag  = 2 * time.Second
+)
+
+// Relay is a single MOQT relay instance. It owns one Listener, accepts
+// session.Conn values from it, drives the MOQT SETUP handshake, and dispatches
+// each established Session to a handler goroutine.
+//
+// A Relay is created with New and started with Start. Start blocks until the
+// context is cancelled or Stop is called. Stop is safe to call concurrently
+// with Start and may be invoked at most once meaningfully — subsequent calls
+// are no-ops.
+type Relay struct {
+	listener Listener
+	cfg      Config
+	log      *slog.Logger
+
+	// tracks and names are the relay-wide registries shared across every
+	// session handler.
+	tracks *TrackRegistry
+	names  *NamespaceRegistry
+
+	// fetch rendezvouses upstream FETCH response streams (dispatched by the
+	// upstream session's data loop) with the downstream handler that issued
+	// the FETCH. Shared across every session handler.
+	fetch *fetchRouter
+
+	// sessions tracks every Session that has completed SETUP and not yet
+	// been torn down. Stop iterates it under sessionsMu to broadcast GOAWAY
+	// and to wait for drain.
+	sessionsMu sync.Mutex
+	sessions   map[*session.Session]struct{}
+
+	// stopOnce guards Stop so the second caller short-circuits. stopCh is
+	// closed by Stop to signal the accept loop to exit and to release any
+	// per-session handlers blocked waiting on shutdown.
+	stopOnce sync.Once
+	stopCh   chan struct{}
+
+	// handlers tracks per-session handler goroutines so Stop can wait for
+	// them to finish before returning.
+	handlers sync.WaitGroup
+}
+
+// New constructs a Relay backed by listener and configured by cfg. listener
+// must be non-nil; New panics otherwise, because a relay without a transport
+// source is never useful and the misconfiguration would otherwise surface as
+// a confusing nil-pointer panic deep inside Start.
+func New(listener Listener, cfg Config) *Relay {
+	if listener == nil {
+		panic("relay.New: listener is required")
+	}
+	log := cfg.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	if cfg.Authorizer == nil {
+		cfg.Authorizer = AllowAllAuthorizer{}
+	}
+	if cfg.Metrics == nil {
+		cfg.Metrics = NopMetrics{}
+	}
+	if cfg.SendQueueSize <= 0 {
+		cfg.SendQueueSize = defaultSendQueueSize
+	}
+	if cfg.MaxFanoutLag <= 0 {
+		cfg.MaxFanoutLag = defaultMaxFanoutLag
+	}
+	// MaxDropsBeforeReset is an opt-in hard cap: 0 means "disabled", so no
+	// default is applied.
+	if cfg.MaxCacheSize <= 0 {
+		cfg.MaxCacheSize = defaultCacheMaxSize
+	}
+	if cfg.MaxCacheDuration <= 0 {
+		cfg.MaxCacheDuration = defaultCacheMaxDuration
+	}
+	trackOpts := []TrackRegistryOption{
+		WithCacheConfig(cfg.MaxCacheSize, cfg.MaxCacheDuration),
+		WithTrackRegistryLogger(log),
+	}
+	if cfg.CacheTTLPolicy != nil {
+		trackOpts = append(trackOpts, WithCacheTTLPolicy(cfg.CacheTTLPolicy))
+	}
+	var nameOpts []NamespaceRegistryOption
+	nameOpts = append(nameOpts, WithNamespaceRegistryLogger(log))
+	if cfg.Discovery != nil {
+		trackOpts = append(trackOpts, WithTrackDiscovery(cfg.Discovery, cfg.RelayAddr))
+		nameOpts = append(nameOpts, WithNamespaceDiscovery(cfg.Discovery, cfg.RelayAddr))
+	}
+
+	return &Relay{
+		listener: listener,
+		cfg:      cfg,
+		log:      log.With("component", "relay"),
+		tracks:   NewTrackRegistry(trackOpts...),
+		names:    NewNamespaceRegistry(nameOpts...),
+		fetch:    newFetchRouter(),
+		sessions: make(map[*session.Session]struct{}),
+		stopCh:   make(chan struct{}),
+	}
+}
+
+// Addr returns the address the underlying Listener is bound to. Convenience
+// wrapper; useful for tests that need to dial back into the relay.
+func (r *Relay) Addr() net.Addr { return r.listener.Addr() }
+
+// Authorizer returns the authorization hook the relay is currently using.
+// Guaranteed non-nil after [New]: a nil [Config.Authorizer] is replaced with
+// [AllowAllAuthorizer]. Primarily useful for tests; production code injects
+// its policy through Config.
+func (r *Relay) Authorizer() Authorizer { return r.cfg.Authorizer }
+
+// Start runs the relay accept loop until ctx is cancelled, Stop is called, or
+// the Listener returns a fatal error. The returned error reports the cause:
+//
+//   - nil when shutdown was initiated cleanly via ctx cancellation or Stop.
+//   - the Listener's Accept error otherwise.
+//
+// Start is intended to be called exactly once per Relay. Calling it twice
+// concurrently is undefined.
+func (r *Relay) Start(ctx context.Context) error {
+	r.log.LogAttrs(ctx, slog.LevelInfo, "relay accept loop starting",
+		slog.Any("addr", r.listener.Addr()))
+
+	// Tie ctx to stopCh so a Stop call from another goroutine unblocks
+	// Accept the same way a cancelled context would.
+	acceptCtx, cancelAccept := context.WithCancel(ctx)
+	defer cancelAccept()
+	go func() {
+		select {
+		case <-r.stopCh:
+			cancelAccept()
+		case <-acceptCtx.Done():
+		}
+	}()
+
+	for {
+		conn, err := r.listener.Accept(acceptCtx)
+		if err != nil {
+			// Shutdown paths look like context cancellation or
+			// net.ErrClosed; surface them as a clean nil so callers
+			// can distinguish "I asked to stop" from real listener
+			// failures.
+			if isShutdownErr(err) || acceptCtx.Err() != nil {
+				r.log.LogAttrs(ctx, slog.LevelInfo, "relay accept loop stopped")
+				return nil
+			}
+			r.log.LogAttrs(ctx, slog.LevelError, "relay listener accept failed",
+				slog.String("err", err.Error()))
+			return fmt.Errorf("relay: listener accept: %w", err)
+		}
+
+		r.handlers.Add(1)
+		go r.handleConn(ctx, conn)
+	}
+}
+
+// handleConn performs the MOQT SETUP handshake on conn and, on success, runs
+// the per-session handler loops. SETUP failures close the underlying conn and
+// log the cause; they do not propagate up to Start because one bad client
+// must not take the relay down.
+//
+// This method owns the lifecycle: register the Session, run the
+// per-session request / data / datagram loops, and unregister on exit.
+func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
+	defer r.handlers.Done()
+
+	// Per-session logger: attaches session ID / peer info via logctx so
+	// the chain stays consistent with the session package.
+	sessCtx := logctx.With(ctx, r.log)
+
+	sess, err := session.Server(sessCtx, conn, r.cfg.SessionOptions...)
+	if err != nil {
+		r.log.LogAttrs(ctx, slog.LevelWarn, "relay SETUP failed",
+			slog.String("err", err.Error()))
+		// session.Server already closed conn on failure; nothing more
+		// to do here.
+		return
+	}
+
+	r.addSession(sess)
+	defer func() {
+		r.removeSession(sess)
+		// Belt-and-suspenders cleanup: per-request handler defers
+		// remove their own registrations on a clean shutdown, but if a
+		// handler raced past Stop or wedged on a stale stream, the
+		// registries can hold dangling refs to a Session that is no
+		// longer reachable. Sweep both registries unconditionally so
+		// the post-condition "handleConn returned ⇒ no registry entry
+		// references sess" holds.
+		r.tracks.RemoveSession(sess)
+		r.names.RemoveSession(sess)
+	}()
+
+	// Watch for Stop: if it fires while this handler is running, we send
+	// GOAWAY and then either wait for the session to drain or close it
+	// when GoawayTimeout elapses. This is BOTH the failsafe for the race
+	// where Stop snapshots the live-session set BEFORE addSession
+	// registers us AND the normal per-session drain path — Stop's
+	// broadcast loop above sends GOAWAY too, but SendGoaway is idempotent,
+	// so the second call from here is a silent no-op when we won the
+	// race. The wait-and-close logic in this goroutine is what gives the
+	// peer a real chance to migrate before we tear the conn down.
+	stopWatchDone := make(chan struct{})
+	defer func() {
+		close(stopWatchDone)
+	}()
+	go func() {
+		select {
+		case <-r.stopCh:
+		case <-sess.Done():
+			return
+		case <-stopWatchDone:
+			return
+		}
+		// Send GOAWAY (idempotent — Stop's broadcast may have done
+		// it already). Then wait for either the peer to drain or
+		// the configured timeout.
+		if r.cfg.GoawayTimeout > 0 {
+			_ = sess.SendGoaway(r.cfg.GoawayTimeout, "")
+			timer := time.NewTimer(r.cfg.GoawayTimeout)
+			defer timer.Stop()
+			select {
+			case <-timer.C:
+			case <-sess.Done():
+				return // peer drained cleanly, nothing else to do
+			case <-stopWatchDone:
+				return
+			}
+		}
+		_ = sess.Close(moqt.SessionGoawayTimeout, "relay shutdown")
+	}()
+
+	handler := newSessionHandler(
+		sess, r.log, r.tracks, r.names,
+		r.cfg.Authorizer, r.cfg.Metrics, r.fetch,
+		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
+		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,
+	)
+	if err := handler.run(sessCtx); err != nil {
+		r.log.LogAttrs(ctx, slog.LevelDebug, "relay session handler returned",
+			slog.String("err", err.Error()))
+	}
+}
+
+// Stop initiates graceful shutdown:
+//
+//  1. Close the Listener so no new sessions are accepted.
+//  2. Broadcast GOAWAY to every live session with the configured timeout.
+//  3. Wait up to GoawayTimeout for sessions to drain on their own.
+//  4. Forcibly close any remaining sessions with SessionNoError.
+//  5. Wait for all handler goroutines to finish.
+//
+// Stop is idempotent. Concurrent calls share the same shutdown sequence; only
+// the first call performs work, later calls return immediately.
+func (r *Relay) Stop(ctx context.Context) error {
+	var firstErr error
+	r.stopOnce.Do(func() {
+		r.log.LogAttrs(ctx, slog.LevelInfo, "relay stopping")
+		close(r.stopCh)
+
+		// 1. Close the listener; this unblocks the Accept loop.
+		if err := r.listener.Close(); err != nil && !isShutdownErr(err) {
+			firstErr = fmt.Errorf("relay: listener close: %w", err)
+		}
+
+		// 2. Snapshot the session set so we can iterate without holding
+		//    the lock while doing potentially-blocking session work.
+		sessions := r.snapshotSessions()
+
+		// 3. Send GOAWAY to each session if a grace period is set. A
+		//    zero timeout means "don't bother with GOAWAY"; close
+		//    everything immediately. A relay-to-relay deployment may
+		//    want to include a New Session URI here — extend
+		//    SessionOptions or Config when that arrives.
+		if r.cfg.GoawayTimeout > 0 {
+			for _, sess := range sessions {
+				if err := sess.SendGoaway(r.cfg.GoawayTimeout, ""); err != nil {
+					// A session that has already sent GOAWAY
+					// or is closed is fine to skip.
+					r.log.LogAttrs(ctx, slog.LevelDebug, "relay GOAWAY send skipped",
+						slog.String("err", err.Error()))
+				}
+			}
+		}
+
+		// 4. Wait up to GoawayTimeout for sessions to drain. Whichever
+		//    finishes first — drain or timeout — wins.
+		drained := make(chan struct{})
+		go func() {
+			for _, sess := range sessions {
+				<-sess.Done()
+			}
+			close(drained)
+		}()
+
+		select {
+		case <-drained:
+		case <-time.After(r.cfg.GoawayTimeout):
+			r.log.LogAttrs(ctx, slog.LevelWarn, "relay GOAWAY drain timed out, force-closing sessions")
+		case <-ctx.Done():
+			r.log.LogAttrs(ctx, slog.LevelWarn, "relay Stop ctx cancelled, force-closing sessions")
+		}
+
+		// 5. Force-close anything still standing. We use
+		//    SessionGoawayTimeout (§10.4 / IANA §15.10.3): the
+		//    relay sent GOAWAY and the peer didn't drain within
+		//    GoawayTimeout. Closing an already-closed session is a
+		//    no-op via Session's internal closeOnce.
+		for _, sess := range sessions {
+			_ = sess.Close(moqt.SessionGoawayTimeout, "relay shutdown")
+		}
+
+		// 6. Wait for all handler goroutines to exit. This is
+		//    important: returning while handlers are still running
+		//    would race with anything the caller does next (e.g.
+		//    closing a test's fake transport).
+		r.handlers.Wait()
+		r.log.LogAttrs(ctx, slog.LevelInfo, "relay stopped")
+	})
+	return firstErr
+}
+
+func (r *Relay) addSession(s *session.Session) {
+	r.sessionsMu.Lock()
+	r.sessions[s] = struct{}{}
+	r.sessionsMu.Unlock()
+	r.cfg.Metrics.SessionOpened()
+
+	// Race-window cover: if Stop already closed stopCh BEFORE we got here,
+	// Stop's broadcast loop missed us (it snapshotted the session set
+	// before we registered). Send our own GOAWAY so the peer still sees
+	// notification before the per-handler failsafe forcibly closes us.
+	// SendGoaway is idempotent — calling it twice (once here, once from
+	// Stop) just returns "already sent" on the second call.
+	select {
+	case <-r.stopCh:
+		if r.cfg.GoawayTimeout > 0 {
+			_ = s.SendGoaway(r.cfg.GoawayTimeout, "")
+		}
+	default:
+	}
+}
+
+func (r *Relay) removeSession(s *session.Session) {
+	r.sessionsMu.Lock()
+	delete(r.sessions, s)
+	r.sessionsMu.Unlock()
+	r.cfg.Metrics.SessionClosed()
+}
+
+func (r *Relay) snapshotSessions() []*session.Session {
+	r.sessionsMu.Lock()
+	defer r.sessionsMu.Unlock()
+	out := make([]*session.Session, 0, len(r.sessions))
+	for s := range r.sessions {
+		out = append(out, s)
+	}
+	return out
+}
+
+// isShutdownErr reports whether err is one of the "the world is going away"
+// signals that should be treated as a clean shutdown rather than a failure.
+// Most transports (quic-go, webtransport-go, net.Listener) return one of
+// net.ErrClosed, context.Canceled, or io.EOF on Close; we accept all three.
+func isShutdownErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return false
+}
