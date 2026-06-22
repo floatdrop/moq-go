@@ -120,25 +120,42 @@ go demux.Run(ctx, sess) // HandleTrack is safe to call after Run starts
 
 Worked, compile-checked examples for each part of the API live as Go example
 functions — browse them on
-[pkg.go.dev](https://pkg.go.dev/github.com/floatdrop/moq-go) or read the source in the
-linked files:
+[pkg.go.dev](https://pkg.go.dev/github.com/floatdrop/moq-go) or read the source,
+grouped here by the file they live in:
 
-| Topic | Example function(s) | Source |
-|---|---|---|
-| Open a session | `ExampleClient` | [session](pkg/moqt/session/example_test.go) |
-| Publish a track | `ExampleSession_Publish` | " |
-| Subscribe to a track | `ExampleSession_Subscribe` | " |
-| Route many tracks' data streams | `ExampleDemux` | " |
-| Joining / standalone FETCH | `ExampleSession_Fetch`, `ExampleSession_Fetch_standalone`, `ExampleIncomingFetchStream` | " |
-| Update a live request | `ExampleSession_UpdateRequest` | " |
-| End a publication | `Example_endingAPublication` | " |
-| Stream exhaustion (PUBLISH_BLOCKED) | `ExampleSession_OpenPublish`, `ExampleSession_ReadPublishBlocked` | " |
-| Announce / discover namespaces | `ExampleSession_PublishNamespace`, `ExampleSession_SubscribeNamespace` | " |
-| Accept requests (server side) | `ExampleSession_AcceptRequest` | " |
-| Graceful shutdown (GOAWAY) | `ExampleSession_SendGoaway`, `ExampleSession_OnGoaway` | " |
-| Run / authorize the relay | `ExampleNew`, `ExampleNew_authorizer` | [relay](pkg/relay/example_test.go) |
-| LOC media packaging | `ExampleObject_Encode` | [loc](pkg/moqt/loc/example_test.go) |
-| MSF catalogs (build / parse / delta) | `ExampleBeginBroadcast`, `Example_subscribeCatalog`, `ExampleApply` | [msf](pkg/moqt/msf/example_test.go) |
+**[`session`](pkg/moqt/session/example_test.go)**
+
+| Topic | Example function(s) |
+|---|---|
+| Open a session | `ExampleClient` |
+| Publish a track | `ExampleSession_Publish` |
+| Subscribe to a track | `ExampleSession_Subscribe` |
+| Route many tracks' data streams | `ExampleDemux` |
+| Joining / standalone FETCH | `ExampleSession_Fetch`, `ExampleSession_Fetch_standalone`, `ExampleIncomingFetchStream` |
+| Update a live request | `ExampleSession_UpdateRequest` |
+| End a publication | `Example_endingAPublication` |
+| Stream exhaustion (PUBLISH_BLOCKED) | `ExampleSession_OpenPublish`, `ExampleSession_ReadPublishBlocked` |
+| Announce / discover namespaces | `ExampleSession_PublishNamespace`, `ExampleSession_SubscribeNamespace` |
+| Accept requests (server side) | `ExampleSession_AcceptRequest` |
+| Graceful shutdown (GOAWAY) | `ExampleSession_SendGoaway`, `ExampleSession_OnGoaway` |
+
+**[`relay`](pkg/relay/example_test.go)**
+
+| Topic | Example function(s) |
+|---|---|
+| Run / authorize the relay | `ExampleNew`, `ExampleNew_authorizer` |
+
+**[`loc`](pkg/moqt/loc/example_test.go)**
+
+| Topic | Example function(s) |
+|---|---|
+| LOC media packaging | `ExampleObject_Encode` |
+
+**[`msf`](pkg/moqt/msf/example_test.go)**
+
+| Topic | Example function(s) |
+|---|---|
+| MSF catalogs (build / parse / delta) | `ExampleBeginBroadcast`, `Example_subscribeCatalog`, `ExampleApply` |
 
 The two demo commands — [`cmd/clock`](cmd/clock) and
 [`cmd/msfdemo`](cmd/msfdemo) — are complete, runnable versions of these patterns
