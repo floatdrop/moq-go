@@ -216,9 +216,8 @@ workspace (there is no committed `go.work`).
 
 This is a **single-instance** reference relay. The multi-instance work
 (relay-to-relay sessions, an upstream pool, production `DiscoveryStore`
-backends, cross-relay subscribe routing, loop detection, and GOAWAY cascading)
-is tracked separately in [`docs/plan/stage-2.md`](docs/plan/stage-2.md) and is
-out of scope here. Known gaps in the current code, roughly ordered by how
+backends, cross-relay subscribe routing, loop detection, and GOAWAY cascading) 
+is out of scope here. Known gaps in the current code, roughly ordered by how
 load-bearing they are:
 
 - **Multiple publishers per track** (§9.5) — the relay keeps exactly one
