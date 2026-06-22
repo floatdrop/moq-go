@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [draft-18]
 
 # Cancel superseded runs on the same ref (e.g. new push to a PR).
 concurrency:
