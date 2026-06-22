@@ -222,3 +222,35 @@ func TestReproRelayMutualConference(t *testing.T) {
 		}
 	}
 }
+
+// TestRelayServesWithoutDatagrams guards the datagram-loop hardening: when the
+// transport has no DATAGRAM support, the relay's ReceiveDatagram fails on the
+// first call. That must NOT tear down request/data handling — a PUBLISH must
+// still get its REQUEST_OK. Before the fix this PUBLISH hung forever, because
+// the datagram loop's failure cancelled the request and data loops too.
+func TestRelayServesWithoutDatagrams(t *testing.T) {
+	addr, quicCfg := startRelayOverQUIC(t, false /* no datagrams */)
+	sess := dialRelayClient(t, addr, quicCfg)
+
+	done := make(chan error, 1)
+	go func() {
+		req, err := sess.Publish(t.Context(), &message.Publish{
+			Namespace:  wire.Namespace("room", "peerA"),
+			Name:       []byte("catalog"),
+			TrackAlias: sess.AllocOutboundTrackAlias(),
+		})
+		if req != nil {
+			t.Cleanup(func() { req.Close() })
+		}
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Publish without datagrams: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Publish hung — datagram loop failure tore down the request loop")
+	}
+}
