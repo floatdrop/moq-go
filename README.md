@@ -200,8 +200,8 @@ workspace (there is no committed `go.work`).
   §5.2 invariants.
 - **`relay`** — accepts publisher and subscriber sessions, routes objects
   through a track registry with per-subscription live fanout under a §7.3
-  latency-window slow-reader policy, serves FETCHes from a per-track LRU+TTL
-  object cache (otter) and stitches the evicted part of a range from an upstream
+  latency-window slow-reader policy, serves FETCHes from a per-track 
+  object cache and stitches the evicted part of a range from an upstream
   FETCH, issues on-demand upstream SUBSCRIBEs via a `DiscoveryStore`, forwards
   namespace interest, gates each request through an `Authorizer` hook, emits
   telemetry through a `Metrics` hook, and drains sessions with GOAWAY.
