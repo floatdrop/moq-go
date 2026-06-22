@@ -1,59 +1,109 @@
-# Welcome to Your New Wails3 Project!
+# tlmst — Media-over-QUIC video conferencing demo
 
-Congratulations on generating your Wails3 application! This README will guide you through the next steps to get your project up and running.
+`tlmst` is a small [Wails3](https://v3.wails.io/) desktop application that
+demonstrates the relay's **multi-party video-conferencing** capabilities. It is a
+test / demo client for the parent [`moq-go`](../../README.md) library, not a
+production app: each participant joins a room on a relay, publishes their camera
+and microphone, and subscribes to everyone else in the room — all carried over
+Media over QUIC Transport (MOQT).
 
-## Getting Started
+It exists to exercise the library end-to-end the way a real client would —
+SETUP, publish, subscribe, subgroup data streams, and live teardown — against a
+running [`cmd/relay`](../../cmd/relay).
 
-1. Navigate to your project directory in the terminal.
+## What it does
 
-2. To run your application in development mode, use the following command:
+- **Join a room.** Establishes a QUIC + MOQT session against a relay address and
+  announces the local participant.
+- **Publish local media.** Captures camera/microphone in the webview frontend,
+  encodes it, and publishes it as MOQT tracks through the relay.
+- **Subscribe to peers.** Discovers other participants in the room and subscribes
+  to their tracks; remote frames are decoded and rendered in the UI. One
+  goroutine per subgroup means frames from adjacent GOPs can arrive concurrently.
+- **Show live stats.** A debug panel surfaces connection stats and a stream of
+  backend log records (proxied to the frontend via Wails events).
 
-   ```
-   wails3 dev
-   ```
+### How it maps to the library
 
-   This will start your application and enable hot-reloading for both frontend and backend changes.
+The Go backend is the interesting part for library users:
 
-3. To build your application for production, use:
+- `sessionservice.go` — the Wails service bound to the frontend. Opens the
+  `session.Session` (`pkg/moqt/session`) over `quicconn`, and owns join/leave.
+- `publisher.go` — publishes local media tracks to the relay.
+- `subscriber.go` — subscribes to remote participants and forwards decoded
+  `MediaChunk`s to the UI.
+- `stats.go` — collects per-connection statistics for the debug panel.
+- `main.go` — Wails app wiring; registers the typed events (`moq:log`,
+  `moq:participant-joined`, `moq:participant-left`, `moq:media-chunk`).
 
-   ```
-   wails3 build
-   ```
+The frontend (`frontend/`, SvelteKit) has two screens: a join screen (`/`) and
+the call screen (`/call`). It talks to the backend exclusively through the
+generated bindings in `frontend/bindings/`.
 
-   This will create a production-ready executable in the `build` directory.
+## Why it is a separate module
 
-## Exploring Wails3 Features
+`apps/tlmst` is a **deliberately separate Go module** (see `CLAUDE.md` at the
+repo root) so that its CGO/WebKit/Wails dependencies stay out of the parent
+module's hermetic, pure-Go build and test suite. It resolves the parent library
+via a `replace github.com/floatdrop/moq-go => ../..` directive, so plain `go`
+commands work without a `go.work` file. Consequently `go test ./...` from the
+repo root does **not** build or test this app — it has its own CI job (see
+[Continuous integration](#continuous-integration) below).
 
-Now that you have your project set up, it's time to explore the features that Wails3 offers:
+## Prerequisites
 
-1. **Check out the examples**: The best way to learn is by example. Visit the `examples` directory in the `v3/examples` directory to see various sample applications.
+- Go (matching the version in `go.mod`).
+- Node.js + npm (for the SvelteKit frontend).
+- The [Wails3 CLI](https://v3.wails.io/getting-started/installation/):
+  `go install github.com/wailsapp/wails/v3/cmd/wails3@latest`
+- Platform GUI toolkits required by Wails3:
+  - **macOS** — Xcode command-line tools.
+  - **Linux** — `libgtk-3-dev` and `libwebkit2gtk-4.1-dev`.
+- A running relay to connect to:
 
-2. **Run an example**: To run any of the examples, navigate to the example's directory and use:
+  ```sh
+  go run ./cmd/relay      # from the repo root; self-signed cert on :4433
+  ```
 
-   ```
-   go run .
-   ```
+## Running
 
-   Note: Some examples may be under development during the alpha phase.
+From this directory (`apps/tlmst`):
 
-3. **Explore the documentation**: Visit the [Wails3 documentation](https://v3.wails.io/) for in-depth guides and API references.
+```sh
+wails3 dev      # development mode with hot-reload (frontend + backend)
+wails3 build    # production build into ./bin
+```
 
-4. **Join the community**: Have questions or want to share your progress? Join the [Wails Discord](https://discord.gg/JDdSxwjhGf) or visit the [Wails discussions on GitHub](https://github.com/wailsapp/wails/discussions).
+Then point the app at your relay address (default `localhost:4433`) on the join
+screen. Launch a second instance to see two participants in the same room.
 
-## Project Structure
+## Building manually
 
-Take a moment to familiarize yourself with your project structure:
+The Go binary embeds `frontend/dist` via `//go:embed`, so the frontend must be
+built before the Go build:
 
-- `frontend/`: Contains your frontend code (HTML, CSS, JavaScript/TypeScript)
-- `main.go`: The entry point of your Go backend
-- `app.go`: Define your application structure and methods here
-- `wails.json`: Configuration file for your Wails project
+```sh
+cd frontend && npm ci && npm run build && cd ..
+go build .      # builds the desktop binary (the root package)
+```
 
-## Next Steps
+> Note: `go build ./...` will fail in `build/ios/` — that directory is Wails iOS
+> scaffolding that only compiles under the `ios` build tag (via Xcode /
+> `build/ios/build.sh`). Build the root package (`go build .`) instead.
 
-1. Modify the frontend in the `frontend/` directory to create your desired UI.
-2. Add backend functionality in `main.go`.
-3. Use `wails3 dev` to see your changes in real-time.
-4. When ready, build your application with `wails3 build`.
+## Continuous integration
 
-Happy coding with Wails3! If you encounter any issues or have questions, don't hesitate to consult the documentation or reach out to the Wails community.
+Because this module is excluded from the root suite, the repository's CI has a
+dedicated `tlmst` job that guards against breakage (e.g. a stale module path in
+the regenerated frontend bindings). It builds the frontend and then compiles the
+Go binary, which is enough to catch import/binding regressions. See
+`.github/workflows/ci.yml`.
+
+## Project structure
+
+- `main.go`, `sessionservice.go`, `publisher.go`, `subscriber.go`, `stats.go` —
+  the Go backend (`package main`).
+- `frontend/` — SvelteKit frontend (`src/`), generated Wails bindings
+  (`frontend/bindings/`), and the built assets (`frontend/dist/`, gitignored).
+- `build/` — per-platform Wails build scaffolding and `Taskfile.yml` includes.
+- `Taskfile.yml` — Task targets (`build`, `dev`, `run`, server/Docker modes).

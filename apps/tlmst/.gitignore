@@ -11,3 +11,5 @@ frontend/.build/
 .svelte-kit/
 .task/
 bin/
+
+tlmst

@@ -24,6 +24,42 @@ jobs:
           go-version-file: go.mod
       - run: go build ./...
 
+  # apps/tlmst is a deliberately separate module (CGO/WebKit/Wails deps kept out
+  # of the root build), so the jobs above never touch it. This job guards it
+  # against breakage — e.g. a stale module path in the regenerated frontend
+  # bindings after a rename. It builds the SvelteKit frontend (the Go binary
+  # embeds frontend/dist) and then compiles the desktop binary.
+  tlmst:
+    name: Build (apps/tlmst)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/tlmst
+    steps:
+      - uses: actions/checkout@v7
+      # Wails3 links against GTK + WebKit on Linux via CGO.
+      - name: Install GUI toolkits
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/tlmst/go.mod
+          cache-dependency-path: apps/tlmst/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: apps/tlmst/frontend/package-lock.json
+      - name: Build frontend
+        working-directory: apps/tlmst/frontend
+        run: |
+          npm ci
+          npm run build
+      # `go build ./...` fails in build/ios (iOS scaffolding, ios-tag only), so
+      # build the root package, which covers the whole backend.
+      - run: go build .
+
   test:
     name: Test
     runs-on: ubuntu-latest
