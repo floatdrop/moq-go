@@ -108,29 +108,28 @@ func TestFanout_PublisherToSubscriberSingleObject(t *testing.T) {
 	}
 }
 
-// TestFanout_SlowSubscriberGetsResetWithoutBlockingFastOne pins the
-// slow-reader escalation assertion: when the publisher floods objects
-// faster than a slow subscriber can read, the slow one is dropped and
-// eventually reset, but a concurrent fast subscriber keeps receiving
-// normally.
+// TestFanout_StalledSubscriberDoesNotBlockFastOne pins the per-subscriber
+// isolation guarantee: a subscriber that stops reading overflows its own
+// bounded send queue (the relay drops objects for it) but does NOT stall a
+// concurrent fast subscriber, which still receives every object.
 //
-// Method: connect two subscribers; one (the "slow" one) never reads from
-// its outbound stream after the initial Accept, so its writer's inbox
-// overflows. The other reads everything. We send enough objects to trigger
-// the escalation threshold, then verify the fast subscriber received them
-// all and the slow subscriber's outbound stream got reset.
-func TestFanout_SlowSubscriberGetsResetWithoutBlockingFastOne(t *testing.T) {
-	// Not t.Parallel(): the test depends on relative scheduling between
-	// the publisher write loop and the fast subscriber's read goroutine.
-	// Running it in parallel with other heavyweight tests destabilises
-	// the timing enough that the fast subscriber occasionally drops an
-	// object under -race + -cpu=1,2,4,8 stress.
-
-	// Generous queue + threshold so the fast subscriber, which might
-	// briefly lag the publisher under scheduler pressure, doesn't itself
-	// trip the escalation. The slow subscriber, which never reads, will
-	// fill any queue we set.
-	pubSess, teardown := connectRelay(t, relay.Config{SendQueueSize: 256, MaxDropsBeforeReset: 512})
+// Method: connect two subscribers; one (the "stalled" one) never reads from
+// its outbound stream after the initial Accept, so the relay's per-subscriber
+// writer inbox fills and the relay starts dropping objects for it. The other
+// reads everything. The publisher paces itself to the fast subscriber's reads
+// (see fastRead) so the fast inbox can never overflow — without this the
+// publisher's non-blocking flood would, at GOMAXPROCS=1, run to completion
+// before the fast writer goroutine is ever scheduled and the fast subscriber
+// would itself drop objects. We then assert the fast subscriber received every
+// object and that the stalled subscriber genuinely overflowed (dropped > 0).
+func TestFanout_StalledSubscriberDoesNotBlockFastOne(t *testing.T) {
+	// Small queue so the stalled subscriber overflows; MaxDropsBeforeReset
+	// left disabled — a fully-stalled subscriber blocks inside WriteObject on
+	// its first object, so closing its inbox can't unblock it and the
+	// drop-cap reset path isn't reachable here (the lag-window reset is
+	// covered by TestFanout_LagWindowResetsSlowSubscriber).
+	m := &recordingMetrics{}
+	pubSess, teardown := connectRelay(t, relay.Config{SendQueueSize: 256, Metrics: m})
 	defer teardown()
 
 	const publisherAlias = uint64(7)
@@ -177,10 +176,12 @@ func TestFanout_SlowSubscriberGetsResetWithoutBlockingFastOne(t *testing.T) {
 		t.Fatalf("OpenSubgroup: %v", err)
 	}
 
-	// Slow subscriber: accept but never call ReadObject — its outbound
-	// stream stays unread, the relay's QUIC send window will fill, the
-	// relay's writer inbox will overflow, and after MaxDropsBeforeReset
-	// drops the relay resets the slow outbound stream.
+	const sendCount = 600
+
+	// Stalled subscriber: accept but never call ReadObject — its outbound
+	// stream stays unread, the relay's send window fills, and the relay's
+	// per-subscriber writer inbox overflows and starts dropping objects for
+	// it. This must not affect the fast subscriber below.
 	slowAcceptDone := make(chan session.DataStream, 1)
 	go func() {
 		ds, err := slowSess.AcceptDataStream(t.Context())
@@ -191,7 +192,9 @@ func TestFanout_SlowSubscriberGetsResetWithoutBlockingFastOne(t *testing.T) {
 		slowAcceptDone <- ds
 	}()
 
-	// Fast subscriber: drain everything.
+	// Fast subscriber: drain everything, signalling each read on fastRead so
+	// the publisher can pace itself and never overflow the fast inbox.
+	fastRead := make(chan struct{}, sendCount)
 	fastReceived := make(chan int, 1)
 	go func() {
 		ds, err := fastSess.AcceptDataStream(t.Context())
@@ -211,16 +214,26 @@ func TestFanout_SlowSubscriberGetsResetWithoutBlockingFastOne(t *testing.T) {
 				return
 			}
 			count++
+			fastRead <- struct{}{}
 		}
 	}()
 
 	// Wait for both to have accepted their streams before we flood.
 	<-slowAcceptDone
 
-	// Default queue=64, escalation=128; fire 600 objects so we clearly
-	// overflow and trigger escalation even with timing jitter.
-	const sendCount = 600
+	// Flood, but stay at most `window` objects ahead of the fast subscriber's
+	// reads so the fast inbox (SendQueueSize) can never overflow regardless of
+	// goroutine scheduling. The stalled subscriber, which never reads,
+	// overflows and drops regardless of pacing.
+	const window = 64
 	for i := range sendCount {
+		if i >= window {
+			select {
+			case <-fastRead:
+			case <-time.After(5 * time.Second):
+				t.Fatalf("publisher stalled waiting for fast subscriber at #%d", i)
+			}
+		}
 		if err := pubSubgroup.WriteObject(&message.SubgroupObject{
 			ObjectIDDelta: 0,
 			Payload:       []byte("x"),
@@ -232,7 +245,8 @@ func TestFanout_SlowSubscriberGetsResetWithoutBlockingFastOne(t *testing.T) {
 		t.Fatalf("pubSubgroup.Close: %v", err)
 	}
 
-	// Fast subscriber should have received them all.
+	// Fast subscriber should have received them all, unaffected by the
+	// stalled peer.
 	select {
 	case got := <-fastReceived:
 		if got != sendCount {
@@ -240,6 +254,13 @@ func TestFanout_SlowSubscriberGetsResetWithoutBlockingFastOne(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("fast subscriber did not drain within deadline")
+	}
+
+	// The scenario only proves isolation if the stalled subscriber actually
+	// overflowed — otherwise the queue absorbed everything and nothing was
+	// stressed.
+	if got := m.dropped.Load(); got == 0 {
+		t.Fatal("stalled subscriber did not overflow (dropped == 0); test no longer exercises isolation")
 	}
 }
 

@@ -10,8 +10,8 @@ package relay_test
 //   - TestFanout_PublisherToSubscriberSingleObject — single-object E2E.
 //     The richer multi-object/datagram variant lives below as
 //     TestPublishSubscribeE2E.
-//   - TestFanout_SlowSubscriberGetsResetWithoutBlockingFastOne — the
-//     slow-reader drop-and-reset path.
+//   - TestFanout_StalledSubscriberDoesNotBlockFastOne — per-subscriber
+//     isolation: a stalled subscriber overflows without blocking a fast one.
 //   - TestFetch_FromCacheAscending / Descending — FETCH from cache.
 //   - TestFetch_CacheEvictionUnderLoad — cache eviction.
 //   - TestRelay_StopBroadcastsGoaway / _StopReturnsEarlyOnCleanDrain /
