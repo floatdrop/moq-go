@@ -23,7 +23,7 @@ import (
 type fwdObject struct {
 	obj        *message.SubgroupObject
 	absID      uint64
-	enqueuedAt time.Time // stamped in publish; used for the §7.3 lag window
+	enqueuedAt time.Time // stamped in publish; used for the §8 lag window
 }
 
 // groupOutOfRange reports whether a Subgroup belonging to group is entirely
@@ -347,9 +347,10 @@ func (h *sessionHandler) openWriterForSub(
 //     send window drains), the publish path drops the object. Each object
 //     records its enqueue time; if the writer later dequeues one that waited
 //     longer than maxLag, the subscriber has fallen too far behind the live
-//     edge (§7.3) and the writer resets its outbound stream, transitions the
-//     [DownstreamSub] to [SubTerminated], and exits. The optional
-//     maxDropsBeforeReset cap is a coarse backstop on cumulative drops.
+//     edge (§8 Delivery Timeouts) and the writer resets its outbound stream
+//     with TOO_FAR_BEHIND (§3.3.3), transitions the [DownstreamSub] to
+//     [SubTerminated], and exits. The optional maxDropsBeforeReset cap is a
+//     coarse backstop on cumulative drops, reset with EXCESSIVE_LOAD instead.
 type subgroupWriter struct {
 	sub                 *DownstreamSub
 	ctx                 context.Context
@@ -372,7 +373,7 @@ type subgroupWriter struct {
 
 // publish does a non-blocking send onto the inbox, stamping the enqueue time
 // so the writer goroutine can measure how long the object waited before it was
-// written (the §7.3 lag window — see [subgroupWriter.run]). On overflow the
+// written (the §8 lag window — see [subgroupWriter.run]). On overflow the
 // object is dropped; if the optional MaxDropsBeforeReset cap is enabled and
 // exceeded, the writer is closed in reset mode so its goroutine terminates the
 // subscription.
@@ -469,7 +470,7 @@ func (w *subgroupWriter) run() {
 
 	var lagExceeded bool
 	for fwd := range w.inbox {
-		// §7.3 lag window: how long this object waited in the queue is how far
+		// §8 lag window: how long this object waited in the queue is how far
 		// behind the live edge the subscriber is. Once that exceeds maxLag the
 		// subscriber has been unable to keep up for too long — stop draining
 		// and escalate to a reset below.
@@ -529,14 +530,23 @@ func (w *subgroupWriter) run() {
 	w.dropsMu.Unlock()
 
 	if lagExceeded || dropCapped {
-		// §7.3 slow-reader escalation: the subscriber fell too far behind the
+		// §8 slow-reader escalation: the subscriber fell too far behind the
 		// live edge (lag window) or hit the optional drop cap. Reset the
 		// outbound subgroup stream and terminate the subscription; the
 		// subscriber must re-subscribe (likely with a more selective filter or
 		// lower priority) to resume forwarding.
+		//
+		// §3.3.3 reset code: a lag-window breach is precisely TOO_FAR_BEHIND
+		// (the subscriber can't keep up with the live edge). The cumulative
+		// drop-cap backstop is server-side resource pressure, so it uses
+		// EXCESSIVE_LOAD. A lag breach wins if both fired.
+		resetCode := moqt.StreamResetTooFarBehind
+		if dropCapped && !lagExceeded {
+			resetCode = moqt.StreamResetExcessiveLoad
+		}
 		w.metrics.SubscriptionResetSlowReader()
 		if w.out != nil {
-			w.out.Cancel(moqt.StreamResetExcessiveLoad)
+			w.out.Cancel(resetCode)
 		}
 		_ = w.sub.SetState(SubTerminated)
 
@@ -548,8 +558,8 @@ func (w *subgroupWriter) run() {
 		// dies — runFanout would skip it (because !IsEstablished()),
 		// but the registry entry would stay around.
 		if w.sub.Stream != nil {
-			w.sub.Stream.CancelRead(uint64(moqt.StreamResetExcessiveLoad))
-			w.sub.Stream.CancelWrite(uint64(moqt.StreamResetExcessiveLoad))
+			w.sub.Stream.CancelRead(uint64(resetCode))
+			w.sub.Stream.CancelWrite(uint64(resetCode))
 		}
 		return
 	}

@@ -34,7 +34,7 @@ type Metrics interface {
 	ObjectForwarded()
 
 	// ObjectDropped is called when a downstream subscriber's bounded send
-	// queue overflows and the object is dropped (§7.3 slow-reader pressure).
+	// queue overflows and the object is dropped (§8 slow-reader pressure).
 	ObjectDropped()
 
 	// SubscriptionResetSlowReader is called when a subscriber exceeds
