@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
@@ -192,6 +193,130 @@ func TestCrossRelay_OnDemandSubscribe(t *testing.T) {
 	_ = pubSess.Close(0, "done")
 	relayA.stop(t)
 	relayB.stop(t)
+}
+
+// TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery pins that a local
+// publisher whose upstream SUBSCRIBE fails does not abort the search: the relay
+// still falls back to a remote relay via Discovery. Without that, a transiently
+// failing local publisher would reject the downstream SUBSCRIBE even though a
+// healthy remote serves the track.
+func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
+	t.Parallel()
+
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+
+	ctx := t.Context()
+
+	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
+	relayA := startTestRelay(ctx, relay.Config{
+		Discovery: store,
+		RelayAddr: "relay-A",
+		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
+			if addr == "relay-B" {
+				return relayB.l.Dial()
+			}
+			return nil, fmt.Errorf("no relay at %q", addr)
+		},
+	})
+
+	// Healthy publisher on B serves video/cam1.
+	pubB := dialClient(t, relayB)
+	pnsB, err := pubB.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()})
+	if err != nil {
+		t.Fatalf("B PublishNamespace: %v", err)
+	}
+	const pubAlias = uint64(9)
+	pubReqB, err := pubB.Publish(
+		ctx,
+		&message.Publish{Namespace: videoNS(), Name: []byte("cam1"), TrackAlias: pubAlias},
+	)
+	if err != nil {
+		t.Fatalf("B Publish: %v", err)
+	}
+
+	// A local publisher on A advertises the same namespace but REJECTS every
+	// upstream SUBSCRIBE — the relay must try it, fail, then fall back to B.
+	pLocal := dialClient(t, relayA)
+	pnsLocal, err := pLocal.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()})
+	if err != nil {
+		t.Fatalf("local PublishNamespace: %v", err)
+	}
+	rejectDone := make(chan struct{})
+	go func() {
+		defer close(rejectDone)
+		for {
+			req, err := pLocal.AcceptRequest(ctx)
+			if err != nil {
+				return
+			}
+			_ = req.RejectError(moqt.RequestDoesNotExist, "local publisher declines")
+		}
+	}()
+
+	// Subscriber on A: the local publisher rejects, so A must reach B.
+	subSess := dialClient(t, relayA)
+	subReq, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	if err != nil {
+		t.Fatalf("Subscribe should have fallen back to Discovery, got: %v", err)
+	}
+
+	objects := make(chan int, 1)
+	go func() {
+		ds, err := subSess.AcceptDataStream(ctx)
+		if err != nil {
+			return
+		}
+		sg, ok := ds.(*session.IncomingSubgroupStream)
+		if !ok {
+			return
+		}
+		n := 0
+		for {
+			if _, err := sg.ReadObject(); err != nil {
+				objects <- n
+				return
+			}
+			n++
+		}
+	}()
+
+	sgB, err := pubB.OpenSubgroup(message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDExplicit,
+		TrackAlias:     pubAlias,
+		GroupID:        0,
+		SubgroupID:     0,
+	})
+	if err != nil {
+		t.Fatalf("OpenSubgroup: %v", err)
+	}
+	const sgCount = 3
+	for i := range sgCount {
+		if err := sgB.WriteObject(&message.SubgroupObject{Payload: []byte{byte('A' + i)}}); err != nil {
+			t.Fatalf("WriteObject #%d: %v", i, err)
+		}
+	}
+	_ = sgB.Close()
+
+	select {
+	case n := <-objects:
+		if n != sgCount {
+			t.Fatalf("received %d objects via Discovery fallback, want %d", n, sgCount)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no objects after the local publisher failed and Discovery fallback should have served")
+	}
+
+	_ = subReq.Close()
+	_ = pnsLocal.Close()
+	_ = pnsB.Close()
+	_ = pubReqB.Close()
+	_ = subSess.Close(0, "done")
+	_ = pLocal.Close(0, "done")
+	_ = pubB.Close(0, "done")
+	relayA.stop(t)
+	relayB.stop(t)
+	<-rejectDone
 }
 
 // TestCrossRelay_SelfExclusion pins the loop guard: a FindNamespace result that

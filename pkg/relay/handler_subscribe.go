@@ -337,12 +337,14 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 	}
 }
 
-// subscribeUpstream establishes an upstream SUBSCRIBE for fullName. It tries a
-// local publisher first (§9.5 prefix match) and, when none is usable, follows
-// Discovery to a remote relay (§9.4 cross-relay aggregation). Returns
-// (entry, true, nil) on success, (nil, false, nil) when no upstream is
-// available anywhere, and (nil, false, err) on a hard failure (e.g. the chosen
-// upstream session died mid-subscribe, or Discovery lookup failed).
+// subscribeUpstream establishes an upstream SUBSCRIBE for fullName. It tries
+// each matching local publisher first (§9.5 prefix match) and, when none is
+// usable, follows Discovery to a remote relay (§9.4 cross-relay aggregation).
+// A local publisher whose SUBSCRIBE fails does not abort the search — the next
+// publisher and then Discovery are still tried. Returns (entry, true, nil) on
+// success, (nil, false, nil) when no upstream is available anywhere, and
+// (nil, false, err) only when every candidate failed and the last failure was
+// a hard error (e.g. a publisher session died mid-subscribe).
 //
 // extra carries additional parameters to fold into the upstream SUBSCRIBE
 // alongside the mandatory §9.4 Largest Object filter — currently the
@@ -359,6 +361,7 @@ func (h *sessionHandler) subscribeUpstream(
 	h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: namespace registry lookup",
 		slog.String("namespace", fmt.Sprintf("%v", fullName.Namespace)),
 		slog.Int("publishers_found", len(publishers)))
+	var localErr error
 	for _, pub := range publishers {
 		// Don't subscribe to ourselves. A publisher's session also owns its
 		// PUBLISH_NAMESPACE — issuing SUBSCRIBE on the same session would
@@ -369,7 +372,18 @@ func (h *sessionHandler) subscribeUpstream(
 			continue
 		}
 		h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: issuing upstream SUBSCRIBE to local publisher")
-		return h.subscribeUpstreamOnSession(ctx, pub.Session, fullName, extra)
+		entry, established, err := h.subscribeUpstreamOnSession(ctx, pub.Session, fullName, extra)
+		if err != nil {
+			// A local publisher that fails its upstream SUBSCRIBE (e.g. its
+			// session is dying, or it rejects) must not mask the other matching
+			// publishers or the Discovery fallback. Remember the error and keep
+			// looking; surface it only if nothing else works out.
+			localErr = err
+			h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: local publisher failed, trying next/Discovery",
+				slog.String("err", err.Error()))
+			continue
+		}
+		return entry, established, nil
 	}
 
 	// 2. No usable local publisher — follow Discovery to a remote relay that
@@ -384,7 +398,10 @@ func (h *sessionHandler) subscribeUpstream(
 		)
 		return h.subscribeUpstreamOnSession(ctx, remote, fullName, extra)
 	}
-	return nil, false, nil
+	// No upstream anywhere. Surface a local publisher's failure if one occurred
+	// (a better diagnostic than a bare "no publisher"); otherwise (nil,false,nil)
+	// drives the §9.4 "does not exist" rejection.
+	return nil, false, localErr
 }
 
 // subscribeUpstreamOnSession issues the upstream SUBSCRIBE on sess and registers
