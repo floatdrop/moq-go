@@ -10,7 +10,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestFanout_LagWindowResetsSlowSubscriber pins §7.3 latency-window
+// TestFanout_LagWindowResetsSlowSubscriber pins §8 latency-window
 // backpressure. A subscriber that accepts its stream but then stalls lets the
 // relay's send queue back up; once a queued object has waited longer than
 // MaxFanoutLag the relay resets the outbound stream and terminates the

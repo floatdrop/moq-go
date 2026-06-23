@@ -227,7 +227,7 @@ workspace (there is no committed `go.work`).
   `EndBroadcast*` workflow helpers, and `Catalog.Validate` enforcing the §5.1/
   §5.2 invariants.
 - **`relay`** — accepts publisher and subscriber sessions, routes objects
-  through a track registry with per-subscription live fanout under a §7.3
+  through a track registry with per-subscription live fanout under a §8
   latency-window slow-reader policy, serves FETCHes from a per-track 
   object cache and stitches the evicted part of a range from an upstream
   FETCH, issues on-demand upstream SUBSCRIBEs via a `DiscoveryStore`, forwards
