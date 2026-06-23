@@ -168,6 +168,24 @@ type Config struct {
 	// backends use this to route upstream connections to the right
 	// peer.
 	RelayAddr string
+
+	// Dialer establishes an outbound transport connection to another relay
+	// instance, given the RelayAddr that instance advertised in Discovery.
+	// It is the outbound counterpart of [Listener]: the relay stays
+	// transport-agnostic, so the caller owns TLS, ALPN ("moq-00"), and — for
+	// WebTransport — the HTTP/3 CONNECT upgrade, returning a ready
+	// [session.Conn] on which the relay drives the MOQT SETUP handshake as a
+	// client.
+	//
+	// nil (the default) disables cross-relay dialing: the relay serves only
+	// from locally-connected publishers and never follows a Discovery
+	// [discovery.FindNamespace] result to a remote peer. Set this together
+	// with Discovery to enable on-demand cross-relay upstream SUBSCRIBE.
+	//
+	// The relay pools and reuses one session per RelayAddr; the Dialer is
+	// invoked at most once per address while a session to it is live, and
+	// again only after that session ends.
+	Dialer func(ctx context.Context, relayAddr string) (session.Conn, error)
 }
 
 // resolved Config defaults; kept as constants so tests can reference them
@@ -199,6 +217,16 @@ type Relay struct {
 	// upstream session's data loop) with the downstream handler that issued
 	// the FETCH. Shared across every session handler.
 	fetch *fetchRouter
+
+	// upstreams dials and pools relay-to-relay sessions for Discovery-driven
+	// cross-relay upstream SUBSCRIBE. nil when Config.Dialer is unset (the
+	// single-instance case); session handlers treat a nil pool as "no
+	// cross-relay routing available".
+	upstreams *upstreamPool
+
+	// watchWG tracks the optional Discovery WatchNamespaces consumer
+	// goroutine started in Start, so Stop joins it before returning.
+	watchWG sync.WaitGroup
 
 	// sessions tracks every Session that has completed SETUP and not yet
 	// been torn down. Stop iterates it under sessionsMu to broadcast GOAWAY
@@ -263,7 +291,7 @@ func New(listener Listener, cfg Config) *Relay {
 		nameOpts = append(nameOpts, WithNamespaceDiscovery(cfg.Discovery, cfg.RelayAddr))
 	}
 
-	return &Relay{
+	r := &Relay{
 		listener: listener,
 		cfg:      cfg,
 		log:      log.With("component", "relay"),
@@ -273,6 +301,38 @@ func New(listener Listener, cfg Config) *Relay {
 		sessions: make(map[*session.Session]struct{}),
 		stopCh:   make(chan struct{}),
 	}
+
+	// When a Dialer is configured, the relay can follow Discovery
+	// FindNamespace results to a remote peer. The pool dials and reuses one
+	// session per RelayAddr and runs the relay's normal per-session loops on
+	// each dialled session (via serveSession) so its inbound data streams fan
+	// out and its FETCH responses route through the fetch router exactly as an
+	// accepted session's do.
+	if cfg.Dialer != nil {
+		r.upstreams = newUpstreamPool(upstreamPoolConfig{
+			dialer:       cfg.Dialer,
+			discovery:    cfg.Discovery,
+			relayAddr:    cfg.RelayAddr,
+			sessionOpts:  cfg.SessionOptions,
+			log:          r.log,
+			serveSession: r.serveUpstreamSession,
+		})
+	}
+
+	return r
+}
+
+// serveUpstreamSession starts the relay's per-session loops on a dialled
+// upstream session in a tracked goroutine and invokes onClose when the session
+// ends. It mirrors the accept-path bookkeeping ([Relay.handleConn]): the
+// handler goroutine is registered with r.handlers so [Relay.Stop] joins it.
+// The Add happens synchronously (before the goroutine) so it cannot race
+// Stop's handlers.Wait. Called only by the upstream pool.
+func (r *Relay) serveUpstreamSession(sess *session.Session, onClose func()) {
+	r.handlers.Go(func() {
+		defer onClose()
+		r.serveSession(r.upstreams.baseCtx, sess)
+	})
 }
 
 // Addr returns the address the underlying Listener is bound to. Convenience
@@ -308,6 +368,18 @@ func (r *Relay) Start(ctx context.Context) error {
 		case <-acceptCtx.Done():
 		}
 	}()
+
+	// Consume Discovery namespace events: forward namespaces advertised by
+	// *other* relays to this relay's local SUBSCRIBE_NAMESPACE holders, so a
+	// downstream subscriber learns about a namespace served elsewhere and can
+	// then SUBSCRIBE (which the on-demand cross-relay path resolves via
+	// FindNamespace). acceptCtx is cancelled by Stop (stopCh) or ctx, so the
+	// watcher unwinds with the accept loop. Skipped without Discovery.
+	if r.cfg.Discovery != nil {
+		r.watchWG.Go(func() {
+			r.runNamespaceWatch(acceptCtx)
+		})
+	}
 
 	for {
 		conn, err := r.listener.Accept(acceptCtx)
@@ -349,6 +421,21 @@ func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
 		return
 	}
 
+	r.serveSession(ctx, sess)
+}
+
+// serveSession runs the per-session lifecycle for a Session that has already
+// completed SETUP — whether accepted inbound by [Relay.handleConn] or dialled
+// outbound by the [upstreamPool]. It registers the session, watches for Stop /
+// GOAWAY, runs the per-session protocol loops, and sweeps the registries on
+// exit. It blocks until the session ends.
+//
+// Both directions share this body so a dialled upstream relay session behaves
+// identically to an accepted one: it lands in r.sessions (covered by Stop's
+// GOAWAY/drain) and its handler fans out inbound data + routes FETCH responses.
+// The only difference is the SETUP role (Server vs Client), handled by the
+// caller before calling this.
+func (r *Relay) serveSession(ctx context.Context, sess *session.Session) {
 	r.addSession(sess)
 	defer func() {
 		r.removeSession(sess)
@@ -404,7 +491,7 @@ func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
 
 	handler := newSessionHandler(
 		sess, r.log, r.tracks, r.names,
-		r.cfg.Authorizer, r.cfg.Metrics, r.fetch,
+		r.cfg.Authorizer, r.cfg.Metrics, r.fetch, r.upstreams,
 		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,
 	)
@@ -430,9 +517,17 @@ func (r *Relay) Stop(ctx context.Context) error {
 		r.log.LogAttrs(ctx, slog.LevelInfo, "relay stopping")
 		close(r.stopCh)
 
-		// 1. Close the listener; this unblocks the Accept loop.
+		// 1. Close the listener; this unblocks the Accept loop. Close the
+		//    upstream pool too: no new cross-relay dials succeed during
+		//    shutdown, and its base context is cancelled so any in-flight
+		//    dial / dialled-session handler unwinds. The dialled sessions are
+		//    also in the snapshot below and get GOAWAY'd / force-closed like
+		//    accepted ones.
 		if err := r.listener.Close(); err != nil && !isShutdownErr(err) {
 			firstErr = fmt.Errorf("relay: listener close: %w", err)
+		}
+		if r.upstreams != nil {
+			r.upstreams.close()
 		}
 
 		// 2. Snapshot the session set so we can iterate without holding
@@ -487,6 +582,10 @@ func (r *Relay) Stop(ctx context.Context) error {
 		//    would race with anything the caller does next (e.g.
 		//    closing a test's fake transport).
 		r.handlers.Wait()
+
+		// 7. Join the Discovery namespace watcher (if started). acceptCtx
+		//    was cancelled via stopCh above, so it is already unwinding.
+		r.watchWG.Wait()
 		r.log.LogAttrs(ctx, slog.LevelInfo, "relay stopped")
 	})
 	return firstErr

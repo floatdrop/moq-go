@@ -230,18 +230,27 @@ workspace (there is no committed `go.work`).
   through a track registry with per-subscription live fanout under a §8
   latency-window slow-reader policy, serves FETCHes from a per-track 
   object cache and stitches the evicted part of a range from an upstream
-  FETCH, issues on-demand upstream SUBSCRIBEs via a `DiscoveryStore`, forwards
-  namespace interest, gates each request through an `Authorizer` hook, emits
-  telemetry through a `Metrics` hook, and drains sessions with GOAWAY.
+  FETCH, issues on-demand upstream SUBSCRIBEs (to a local publisher or, via a
+  `DiscoveryStore` `FindNamespace` lookup + a pluggable `Dialer`, across relay
+  instances), reflects namespaces other relays advertise to local subscribers
+  by consuming `WatchNamespaces`, forwards namespace interest, gates each
+  request through an `Authorizer` hook, emits telemetry through a `Metrics`
+  hook, and drains sessions with GOAWAY.
 - **CLIs** — `cmd/relay` (with cert flags + self-signed fallback), `cmd/clock`
   (raw subgroup demo), and `cmd/msfdemo` (the LOC + MSF stack end to end).
 
 ## Limitations
 
-This is a **single-instance** reference relay. The multi-instance work
-(relay-to-relay sessions, an upstream pool, production `DiscoveryStore`
-backends, cross-relay subscribe routing, loop detection, and GOAWAY cascading) 
-is out of scope here. Known gaps in the current code, roughly ordered by how
+This is a **single-instance** reference relay, though cross-relay routing works
+when wired up: set `Config.Discovery` + `Config.Dialer` and the relay follows a
+`FindNamespace` lookup to dial and subscribe upstream on another instance (and
+reflects remote namespaces to local subscribers via `WatchNamespaces`). What
+remains out of scope: multi-hop **loop detection** (the only guard is skipping
+the relay's own `RelayAddr`), an upstream **connection-health / redial policy**
+beyond dial-on-demand, production `DiscoveryStore` backends (only the in-process
+`MemoryStore` ships), GOAWAY **cascading**, and a `Dialer` for `cmd/relay`
+itself (the binary stays single-instance; cross-relay is library-level). Known
+gaps in the current code, roughly ordered by how
 load-bearing they are:
 
 - **Multiple publishers per track** (§9.5) — the relay keeps exactly one

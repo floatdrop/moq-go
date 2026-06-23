@@ -337,22 +337,13 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 	}
 }
 
-// subscribeUpstream attempts to establish an upstream SUBSCRIBE against a
-// local publisher that has advertised a namespace covering fullName. Returns
-// (entry, true, nil) on success, (nil, false, nil) when no publisher is
-// available, and (nil, false, err) on a hard failure (e.g. publisher session
-// died mid-subscribe).
+// subscribeUpstream establishes an upstream SUBSCRIBE for fullName. It tries a
+// local publisher first (§9.5 prefix match) and, when none is usable, follows
+// Discovery to a remote relay (§9.4 cross-relay aggregation). Returns
+// (entry, true, nil) on success, (nil, false, nil) when no upstream is
+// available anywhere, and (nil, false, err) on a hard failure (e.g. the chosen
+// upstream session died mid-subscribe, or Discovery lookup failed).
 //
-// The §9.4 aggregation rule applies: the upstream SUBSCRIBE always uses the
-// Largest Object filter so the upstream subscription's lifetime is decoupled
-// from any specific downstream subscriber's filter. The relay can then serve
-// many disparate downstream filters from one upstream stream — the fanout
-// enforces each downstream filter on the wire.
-//
-// We deliberately try only the first matching publisher. §9.5 permits the
-// relay to subscribe to *each* matching publisher (for fault-tolerance) but
-// the relay currently keeps one upstream per track; multi-publisher
-// fan-in is a future concern.
 // extra carries additional parameters to fold into the upstream SUBSCRIBE
 // alongside the mandatory §9.4 Largest Object filter — currently the
 // NEW_GROUP_REQUEST a downstream SUBSCRIBE arrived with (§10.2.13 rule 1: a
@@ -363,25 +354,59 @@ func (h *sessionHandler) subscribeUpstream(
 	fullName track.FullTrackName,
 	extra message.Parameters,
 ) (*TrackEntry, bool, error) {
+	// 1. Local publisher that advertised a namespace covering fullName.
 	publishers := h.names.MatchPublishers(fullName.Namespace)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: namespace registry lookup",
 		slog.String("namespace", fmt.Sprintf("%v", fullName.Namespace)),
 		slog.Int("publishers_found", len(publishers)))
-	if len(publishers) == 0 {
-		return nil, false, nil
+	for _, pub := range publishers {
+		// Don't subscribe to ourselves. A publisher's session also owns its
+		// PUBLISH_NAMESPACE — issuing SUBSCRIBE on the same session would
+		// create a self-loop. Skip self and try the next local publisher;
+		// if none qualifies we fall through to Discovery below.
+		if pub.Session == h.sess {
+			h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: skipping self-loop publisher")
+			continue
+		}
+		h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: issuing upstream SUBSCRIBE to local publisher")
+		return h.subscribeUpstreamOnSession(ctx, pub.Session, fullName, extra)
 	}
-	pub := publishers[0]
 
-	// Don't try to subscribe to ourselves. A publisher's session also owns
-	// its PUBLISH_NAMESPACE — issuing SUBSCRIBE on the same session would
-	// create a self-loop. (Real cross-session loops are the topology-
-	// awareness layer's job, not handled here.)
-	if pub.Session == h.sess {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: skipping self-loop publisher")
-		return nil, false, nil
+	// 2. No usable local publisher — follow Discovery to a remote relay that
+	//    advertised this namespace and issue the upstream SUBSCRIBE there. The
+	//    pool dials + reuses one session per relay; resolve returns nil when no
+	//    other relay (besides ourselves) serves the namespace.
+	if remote := h.upstreams.resolve(ctx, fullName.Namespace); remote != nil {
+		h.log.LogAttrs(
+			ctx,
+			slog.LevelDebug,
+			"subscribeUpstream: issuing upstream SUBSCRIBE to remote relay (Discovery)",
+		)
+		return h.subscribeUpstreamOnSession(ctx, remote, fullName, extra)
 	}
-	h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: issuing upstream SUBSCRIBE")
+	return nil, false, nil
+}
 
+// subscribeUpstreamOnSession issues the upstream SUBSCRIBE on sess and registers
+// the resulting [UpstreamSub] on the track entry. sess is either a local
+// publisher's session or a Discovery-resolved remote relay's session — the body
+// is identical, only the source differs.
+//
+// The §9.4 aggregation rule applies: the upstream SUBSCRIBE always uses the
+// Largest Object filter so the upstream subscription's lifetime is decoupled
+// from any specific downstream subscriber's filter. The relay can then serve
+// many disparate downstream filters from one upstream stream — the fanout
+// enforces each downstream filter on the wire.
+//
+// We deliberately keep one upstream per track. §9.5 permits subscribing to
+// *each* matching publisher (for fault-tolerance) but multi-publisher fan-in
+// is a future concern.
+func (h *sessionHandler) subscribeUpstreamOnSession(
+	ctx context.Context,
+	sess *session.Session,
+	fullName track.FullTrackName,
+	extra message.Parameters,
+) (*TrackEntry, bool, error) {
 	// §9.4 Largest Object filter — keeps the upstream subscription stable
 	// as downstream subscribers come and go with varying filters.
 	filter := &message.SubscriptionFilter{Type: message.FilterLargestObject}
@@ -397,16 +422,15 @@ func (h *sessionHandler) subscribeUpstream(
 		Name:       fullName.Name,
 		Parameters: params,
 	}
-	upstreamStream, err := pub.Session.Subscribe(ctx, subMsg)
+	upstreamStream, err := sess.Subscribe(ctx, subMsg)
 	if err != nil {
 		return nil, false, err
 	}
 
-	// Register the upstream subscription on the publisher's session as an
-	// UpstreamSub. The publisher's TrackAlias is the alias the upstream
-	// peer assigned in SUBSCRIBE_OK; we use it for the fanout's alias
-	// remapping.
-	upstreamSub := NewUpstreamSub(h.allocSubID(), pub.Session, upstreamStream, upstreamStream.OK.TrackAlias)
+	// Register the upstream subscription on the upstream session as an
+	// UpstreamSub. The upstream's TrackAlias is the alias the upstream peer
+	// assigned in SUBSCRIBE_OK; we use it for the fanout's alias remapping.
+	upstreamSub := NewUpstreamSub(h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias)
 	upstreamSub.RequestID = subMsg.RequestID
 	upstreamSub.SetFilter(filter)
 	// This upstream is a relay/origin we SUBSCRIBE'd on demand, so it is

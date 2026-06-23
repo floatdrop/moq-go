@@ -55,7 +55,7 @@ func (h *sessionHandler) handlePublishNamespace(
 			// here; handlePublish handles their PUBLISH forwarding.
 			continue
 		}
-		if err := message.Marshal(sub.Stream, namespaceMessageFor(msg.Namespace, sub.Prefix)); err != nil {
+		if err := sub.WriteMessage(namespaceMessageFor(msg.Namespace, sub.Prefix)); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "NAMESPACE forward failed",
 				slog.String("err", err.Error()))
 			continue
@@ -81,7 +81,7 @@ func (h *sessionHandler) handlePublishNamespace(
 		if _, ok := stillAlive[sub]; !ok {
 			continue
 		}
-		if err := message.Marshal(sub.Stream, namespaceDoneMessageFor(msg.Namespace, sub.Prefix)); err != nil {
+		if err := sub.WriteMessage(namespaceDoneMessageFor(msg.Namespace, sub.Prefix)); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "NAMESPACE_DONE forward failed",
 				slog.String("err", err.Error()))
 		}
@@ -110,26 +110,30 @@ func (h *sessionHandler) handleSubscribeNamespace(
 		return
 	}
 
-	entry := h.names.RegisterSubscriber(msg.TrackNamespacePrefix, h.sess, req.Stream, false /* wantsTracks */)
-	defer h.names.UnregisterSubscriber(entry)
-
+	// Reply REQUEST_OK before registering. Registration makes the entry
+	// visible to MatchSubscribers, after which a concurrent publisher's
+	// PUBLISH_NAMESPACE handler (or the Discovery watcher) may write NAMESPACE
+	// to this stream; sending the OK first keeps it from racing those writes
+	// (and §6.1 requires the OK to precede any NAMESPACE). The backlog scan
+	// below still runs after registration, so no advertisement is missed.
 	if err := req.Reply(&message.RequestOK{}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "SubscribeNamespace REQUEST_OK write failed",
 			slog.String("err", err.Error()))
 		return
 	}
 
+	entry := h.names.RegisterSubscriber(msg.TrackNamespacePrefix, h.sess, req.Stream, false /* wantsTracks */)
+	defer h.names.UnregisterSubscriber(entry)
+
 	// Emit NAMESPACE for every currently-known publisher whose namespace
 	// matches this prefix. We snapshot the publishers list so we don't
-	// hold the registry lock across stream writes.
+	// hold the registry lock across stream writes. Writes go through
+	// entry.WriteMessage so they serialise with concurrent forwards.
 	for _, pub := range h.names.CopyPublishers() {
 		if !pub.Namespace.HasPrefix(msg.TrackNamespacePrefix) {
 			continue
 		}
-		if err := message.Marshal(
-			req.Stream,
-			namespaceMessageFor(pub.Namespace, msg.TrackNamespacePrefix),
-		); err != nil {
+		if err := entry.WriteMessage(namespaceMessageFor(pub.Namespace, msg.TrackNamespacePrefix)); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "initial NAMESPACE write failed",
 				slog.String("err", err.Error()))
 			return
@@ -160,14 +164,17 @@ func (h *sessionHandler) handleSubscribeTracks(
 		return
 	}
 
-	entry := h.names.RegisterSubscriber(msg.TrackNamespacePrefix, h.sess, req.Stream, true /* wantsTracks */)
-	defer h.names.UnregisterSubscriber(entry)
-
+	// Reply REQUEST_OK before registering, so the OK cannot race a
+	// PUBLISH_BLOCKED that a concurrent publisher's PUBLISH handler
+	// (emitPublishBlocked) may write to this stream once the entry is visible.
 	if err := req.Reply(&message.RequestOK{}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "SubscribeTracks REQUEST_OK write failed",
 			slog.String("err", err.Error()))
 		return
 	}
+
+	entry := h.names.RegisterSubscriber(msg.TrackNamespacePrefix, h.sess, req.Stream, true /* wantsTracks */)
+	defer h.names.UnregisterSubscriber(entry)
 
 	session.DrainAndWait(ctx, req.Stream)
 }

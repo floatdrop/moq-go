@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
@@ -47,8 +48,19 @@ type SubscriberEntry struct {
 	// Stream is the bidi request stream the subscription arrived on. The
 	// session handler writes NAMESPACE / NAMESPACE_DONE / PUBLISH
 	// messages back through this stream when matching publishers appear
-	// or vanish.
+	// or vanish. All such writes MUST go through [SubscriberEntry.WriteMessage]
+	// (guarded by writeMu) — the stream is written from several goroutines
+	// (every publisher's PUBLISH_NAMESPACE / PUBLISH handler and the
+	// relay-level Discovery namespace watcher), and the underlying
+	// session.Stream does not serialise concurrent Writes.
 	Stream session.Stream
+
+	// writeMu serialises concurrent control-message writes to Stream. A
+	// single control message is several stream Writes (frame header + body),
+	// so without this two interleaving Marshal calls would corrupt the wire
+	// framing (and race the underlying QUIC stream). It guards only writes —
+	// it is independent of the owning [NamespaceRegistry]'s mutex.
+	writeMu sync.Mutex
 
 	// WantsTracks distinguishes SUBSCRIBE_TRACKS (true: forward PUBLISH
 	// messages for matching tracks) from SUBSCRIBE_NAMESPACE (false: only
@@ -65,6 +77,18 @@ type SubscriberEntry struct {
 	// owning [NamespaceRegistry]'s mutex, accessed only via MarkBlocked /
 	// IsBlocked / ClearBlocked. nil until the first MarkBlocked.
 	blocked map[track.Key]struct{}
+}
+
+// WriteMessage serialises one control message onto the subscriber's request
+// stream. NAMESPACE / NAMESPACE_DONE / PUBLISH_BLOCKED are written to a single
+// SubscriberEntry from multiple goroutines — the subscriber's own session
+// handler, every publisher's PUBLISH_NAMESPACE / PUBLISH handler, and the
+// relay-level Discovery namespace watcher — so the write is taken under writeMu
+// to keep one message's frames contiguous on the wire.
+func (e *SubscriberEntry) WriteMessage(m message.Message) error {
+	e.writeMu.Lock()
+	defer e.writeMu.Unlock()
+	return message.Marshal(e.Stream, m)
 }
 
 // NamespaceRegistry maintains the relay's view of who advertises which
