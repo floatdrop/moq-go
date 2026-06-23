@@ -190,12 +190,6 @@ apps/
 └── tlmst/                Wails3 desktop app (separate Go module, isolated deps)
 ```
 
-The root module (`github.com/floatdrop/moq-go`) holds the protocol libraries and the
-relay. `apps/tlmst` is a separate Go module so its desktop-app dependencies
-(Wails3, CGO, WebKit) don't leak into the root build; it resolves the parent
-module via a `replace` directive, so plain `go` commands work without a
-workspace (there is no committed `go.work`).
-
 ## What's implemented
 
 - **`wire`** — byte-level codec: MoQT leading-ones varints (§1.4.1, distinct
