@@ -1,9 +1,12 @@
 package relay_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -567,6 +570,41 @@ func TestCrossRelay_ConcurrentSubscriberWrites(t *testing.T) {
 	_ = pubSess.Close(0, "done")
 	relayA.stop(t)
 	<-drained
+}
+
+// TestCrossRelay_DialerWithoutRelayAddrWarns pins the misconfiguration
+// diagnostic for #4: a Dialer set with an empty RelayAddr disables cross-relay
+// routing silently (self/remote Discovery entries become indistinguishable), so
+// New must emit a warning. A RelayAddr-set relay must NOT warn.
+func TestCrossRelay_DialerWithoutRelayAddrWarns(t *testing.T) {
+	t.Parallel()
+
+	dialer := func(_ context.Context, _ string) (session.Conn, error) {
+		return nil, errors.New("unused")
+	}
+
+	newWith := func(relayAddr string) string {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+		store := discovery.NewMemoryStore()
+		defer store.Close()
+		// New logs synchronously and starts no goroutines, so the buffer is
+		// fully written by the time New returns.
+		_ = relay.New(newPipeListener(), relay.Config{
+			Discovery: store,
+			RelayAddr: relayAddr,
+			Dialer:    dialer,
+			Logger:    logger,
+		})
+		return buf.String()
+	}
+
+	if out := newWith(""); !strings.Contains(out, "RelayAddr") {
+		t.Errorf("empty RelayAddr + Dialer should warn about RelayAddr; got %q", out)
+	}
+	if out := newWith("relay-A"); strings.Contains(out, "RelayAddr") {
+		t.Errorf("RelayAddr set should not warn; got %q", out)
+	}
 }
 
 // TestCrossRelay_NoDialerNoop pins back-compat: with Discovery but no Dialer, a

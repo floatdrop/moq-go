@@ -309,6 +309,17 @@ func New(listener Listener, cfg Config) *Relay {
 	// out and its FETCH responses route through the fetch router exactly as an
 	// accepted session's do.
 	if cfg.Dialer != nil {
+		// Cross-relay routing keys on RelayAddr: it identifies this instance in
+		// Discovery (so peers can dial it) and is the self-exclusion key that
+		// keeps the relay from dialing or reflecting its own advertisements. An
+		// empty RelayAddr breaks both — every Discovery entry looks unaddressable
+		// / "ours", so FindNamespace dials nothing and the namespace watcher
+		// reflects nothing. Warn loudly rather than fail silently.
+		if cfg.RelayAddr == "" {
+			r.log.Warn("relay: Config.Dialer is set but Config.RelayAddr is empty; " +
+				"cross-relay routing is disabled (Discovery entries are indistinguishable " +
+				"from this relay's own and the relay is unaddressable). Set a unique RelayAddr.")
+		}
 		r.upstreams = newUpstreamPool(upstreamPoolConfig{
 			dialer:       cfg.Dialer,
 			discovery:    cfg.Discovery,
