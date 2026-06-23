@@ -42,6 +42,7 @@ type sessionHandler struct {
 	auth                Authorizer
 	metrics             Metrics
 	fetch               *fetchRouter
+	upstreams           *upstreamPool
 	sendQueueSize       int
 	maxDropsBeforeReset int
 	maxFanoutLag        time.Duration
@@ -89,6 +90,7 @@ func newSessionHandler(
 	auth Authorizer,
 	metrics Metrics,
 	fetch *fetchRouter,
+	upstreams *upstreamPool,
 	sendQueueSize int,
 	maxDropsBeforeReset int,
 	maxFanoutLag time.Duration,
@@ -103,6 +105,7 @@ func newSessionHandler(
 		auth:                auth,
 		metrics:             metrics,
 		fetch:               fetch,
+		upstreams:           upstreams,
 		sendQueueSize:       sendQueueSize,
 		maxDropsBeforeReset: maxDropsBeforeReset,
 		maxFanoutLag:        maxFanoutLag,

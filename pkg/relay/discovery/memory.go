@@ -118,10 +118,13 @@ func (s *MemoryStore) PublishTrack(_ context.Context, info TrackInfo) error {
 		info.PublishedAt = nowFunc()
 	}
 	s.tracks[trackEntryKey{key: info.Key, addr: info.RelayAddr}] = info
-	watchers := append([]chan TrackEvent(nil), s.trackWatch...)
+	// Send under the lock (non-blocking) so a send can't race a watcher
+	// channel close (lifecycle / Close, which close under the same lock).
+	// Count the drops and log AFTER unlocking — a slow logger must not stall
+	// other store operations while s.mu is held.
+	dropped := fanout(s.trackWatch, TrackEvent{Op: OpPublish, Info: info})
 	s.mu.Unlock()
-
-	s.fanoutTrack(TrackEvent{Op: OpPublish, Info: info}, watchers)
+	s.warnDropped(dropped, OpPublish, "key", info.Key)
 	return nil
 }
 
@@ -140,10 +143,10 @@ func (s *MemoryStore) UnpublishTrack(_ context.Context, key track.Key, relayAddr
 		return nil
 	}
 	delete(s.tracks, idx)
-	watchers := append([]chan TrackEvent(nil), s.trackWatch...)
+	// Send under the lock, log after — see [MemoryStore.PublishTrack].
+	dropped := fanout(s.trackWatch, TrackEvent{Op: OpUnpublish, Info: info})
 	s.mu.Unlock()
-
-	s.fanoutTrack(TrackEvent{Op: OpUnpublish, Info: info}, watchers)
+	s.warnDropped(dropped, OpUnpublish, "key", key)
 	return nil
 }
 
@@ -174,10 +177,10 @@ func (s *MemoryStore) PublishNamespace(_ context.Context, info NamespaceInfo) er
 		info.PublishedAt = nowFunc()
 	}
 	s.namespaces[namespaceEntryKey{prefix: namespaceWireKey(info.Prefix), addr: info.RelayAddr}] = info
-	watchers := append([]chan NamespaceEvent(nil), s.nsWatch...)
+	// Send under the lock, log after — see [MemoryStore.PublishTrack].
+	dropped := fanout(s.nsWatch, NamespaceEvent{Op: OpPublish, Info: info})
 	s.mu.Unlock()
-
-	s.fanoutNamespace(NamespaceEvent{Op: OpPublish, Info: info}, watchers)
+	s.warnDropped(dropped, OpPublish, "prefix", info.Prefix)
 	return nil
 }
 
@@ -195,10 +198,10 @@ func (s *MemoryStore) UnpublishNamespace(_ context.Context, prefix wire.TrackNam
 		return nil
 	}
 	delete(s.namespaces, idx)
-	watchers := append([]chan NamespaceEvent(nil), s.nsWatch...)
+	// Send under the lock, log after — see [MemoryStore.PublishTrack].
+	dropped := fanout(s.nsWatch, NamespaceEvent{Op: OpUnpublish, Info: info})
 	s.mu.Unlock()
-
-	s.fanoutNamespace(NamespaceEvent{Op: OpUnpublish, Info: info}, watchers)
+	s.warnDropped(dropped, OpUnpublish, "prefix", prefix)
 	return nil
 }
 
@@ -257,49 +260,54 @@ func (s *MemoryStore) WatchNamespaces(ctx context.Context) (<-chan NamespaceEven
 // operations with [ErrClosed].
 func (s *MemoryStore) Close() error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
-		s.mu.Unlock()
 		return nil
 	}
 	s.closed = true
-	trackWatchers := s.trackWatch
-	nsWatchers := s.nsWatch
+	// Close under the lock so closes cannot race a concurrent fanout send
+	// (which also holds s.mu). A lifecycle goroutine that wakes after this
+	// sees s.closed and does not double-close.
+	for _, ch := range s.trackWatch {
+		close(ch)
+	}
+	for _, ch := range s.nsWatch {
+		close(ch)
+	}
 	s.trackWatch = nil
 	s.nsWatch = nil
-	s.mu.Unlock()
-
-	for _, ch := range trackWatchers {
-		close(ch)
-	}
-	for _, ch := range nsWatchers {
-		close(ch)
-	}
 	return nil
 }
 
-// fanoutTrack delivers an event to each watcher with a non-blocking
-// send. Watchers whose channels are full miss the event and a warn
-// log is emitted. The publish path never blocks on a slow watcher.
-func (s *MemoryStore) fanoutTrack(ev TrackEvent, watchers []chan TrackEvent) {
+// fanout delivers ev to each watcher with a non-blocking send and returns the
+// number of watchers whose buffer was full (so the event was dropped). It MUST
+// be called with s.mu held: the sends are then mutually exclusive with watcher
+// channel closes (lifecycle / Close), which would otherwise race a send and
+// panic. The publish path still never blocks on a slow watcher (sends are
+// non-blocking); the caller logs the returned drop count AFTER releasing s.mu
+// so a slow log sink cannot stall other store operations under the lock.
+func fanout[T any](watchers []chan T, ev T) int {
+	dropped := 0
 	for _, ch := range watchers {
 		select {
 		case ch <- ev:
 		default:
-			s.log.Warn("discovery: dropped track event on slow watcher",
-				"op", ev.Op.String(), "key", ev.Info.Key)
+			dropped++
 		}
 	}
+	return dropped
 }
 
-func (s *MemoryStore) fanoutNamespace(ev NamespaceEvent, watchers []chan NamespaceEvent) {
-	for _, ch := range watchers {
-		select {
-		case ch <- ev:
-		default:
-			s.log.Warn("discovery: dropped namespace event on slow watcher",
-				"op", ev.Op.String(), "prefix", ev.Info.Prefix)
-		}
+// warnDropped logs that n events were dropped to slow watchers, if any. Called
+// after s.mu is released so the (potentially blocking) log sink never contends
+// the store lock. keyAttr/keyVal carry the identifying field of the dropped
+// event (e.g. "key"/track.Key or "prefix"/wire.TrackNamespace).
+func (s *MemoryStore) warnDropped(n int, op Op, keyAttr string, keyVal any) {
+	if n == 0 {
+		return
 	}
+	s.log.Warn("discovery: dropped events on slow watcher(s)",
+		"op", op.String(), keyAttr, keyVal, "dropped", n)
 }
 
 // watchTrackLifecycle removes ch from the watch list when ctx is
@@ -307,9 +315,9 @@ func (s *MemoryStore) fanoutNamespace(ev NamespaceEvent, watchers []chan Namespa
 func (s *MemoryStore) watchTrackLifecycle(ctx context.Context, ch chan TrackEvent) {
 	<-ctx.Done()
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		// Close already shut us down; channel already closed.
-		s.mu.Unlock()
 		return
 	}
 	for i, w := range s.trackWatch {
@@ -318,15 +326,17 @@ func (s *MemoryStore) watchTrackLifecycle(ctx context.Context, ch chan TrackEven
 			break
 		}
 	}
-	s.mu.Unlock()
+	// Close under the lock so it cannot race a concurrent fanout send (which
+	// also holds s.mu). Once removed from s.trackWatch above, no later fanout
+	// will reference ch.
 	close(ch)
 }
 
 func (s *MemoryStore) watchNamespaceLifecycle(ctx context.Context, ch chan NamespaceEvent) {
 	<-ctx.Done()
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
-		s.mu.Unlock()
 		return
 	}
 	for i, w := range s.nsWatch {
@@ -335,7 +345,7 @@ func (s *MemoryStore) watchNamespaceLifecycle(ctx context.Context, ch chan Names
 			break
 		}
 	}
-	s.mu.Unlock()
+	// Close under the lock — see [MemoryStore.watchTrackLifecycle].
 	close(ch)
 }
 

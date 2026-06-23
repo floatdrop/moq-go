@@ -147,7 +147,7 @@ func (h *sessionHandler) emitPublishBlocked(ctx context.Context, sub *Subscriber
 		TrackNamespaceSuffix: append(wire.TrackNamespace(nil), suffix...),
 		TrackName:            fullName.Name,
 	}
-	if err := message.Marshal(sub.Stream, blocked); err != nil {
+	if err := sub.WriteMessage(blocked); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH_BLOCKED write failed",
 			slog.String("err", err.Error()))
 		return
