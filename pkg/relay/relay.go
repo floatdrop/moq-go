@@ -1,20 +1,8 @@
-// Package relay implements an MOQT relay (§9 of draft-ietf-moq-transport-18):
-// an entity that is both a Publisher and a Subscriber, terminates Transport
-// Sessions, caches Objects, aggregates subscriptions, and forwards data
-// between upstream publishers and downstream subscribers.
-//
-// The relay is transport-agnostic. It operates on the
-// [github.com/floatdrop/moq-go/pkg/moqt/session.Conn] abstraction and does
-// not own a QUIC listener directly. Callers wire up the desired transport
-// (QUIC via quicconn, WebTransport via wtconn, or an in-process sessiontest
-// adapter) and hand the relay a [Listener] that yields ready-to-use
-// session.Conn instances with TLS/ALPN already negotiated.
-//
 // This file holds the relay's lifecycle scaffold: the transport-agnostic
 // Listener interface, the Relay struct, and Start/Stop. The remaining
 // components (Track Registry, Namespace Registry, Subscription Fanout,
-// Object Cache, Discovery Store) live in sibling files and plug into
-// this scaffold.
+// Object Cache, Discovery Store) live in sibling files and plug into this
+// scaffold. See doc.go for the package overview and the file-layer map.
 package relay
 
 import (
