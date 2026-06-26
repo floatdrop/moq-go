@@ -338,16 +338,21 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 	}
 }
 
-// subscribeUpstream establishes an upstream SUBSCRIBE for fullName. It tries
-// each matching local publisher first (§9.5 prefix match) and, when none is
-// usable, follows Discovery to a remote relay (§9.4 cross-relay aggregation).
-// A local publisher whose SUBSCRIBE fails does not abort the search — the next
-// publisher and then Discovery are still tried. Returns (entry, true, nil) on
-// success, (nil, false, nil) when no upstream is available anywhere, and
-// (nil, false, err) only when every candidate failed and the last failure was
-// a hard error (e.g. a publisher session died mid-subscribe).
+// subscribeUpstream establishes upstream SUBSCRIBEs for fullName. Per §9.5 it
+// subscribes to EVERY matching publisher for fault tolerance — all local
+// publishers that advertised a covering namespace (§9.5 prefix match) AND all
+// remote relays Discovery resolves (§9.4 cross-relay aggregation) — fanning them
+// into one track via [runFanout]'s dedup so losing one origin doesn't interrupt
+// delivery. A candidate whose SUBSCRIBE fails does not abort the rest. Returns
+// (entry, true, nil) when at least one upstream was established, (nil, false,
+// nil) when no upstream is available anywhere, and (nil, false, err) only when
+// every candidate failed and the last failure was a hard error (e.g. a publisher
+// session died mid-subscribe).
 //
-// extra carries additional parameters to fold into the upstream SUBSCRIBE
+// Already-subscribed sessions are skipped (source dedup) so a track that already
+// has an upstream on a given session is never double-subscribed.
+//
+// extra carries additional parameters to fold into each upstream SUBSCRIBE
 // alongside the mandatory §9.4 Largest Object filter — currently the
 // NEW_GROUP_REQUEST a downstream SUBSCRIBE arrived with (§10.2.13 rule 1: a
 // relay with no Established upstream MUST include NEW_GROUP_REQUEST when
@@ -357,52 +362,69 @@ func (h *sessionHandler) subscribeUpstream(
 	fullName track.FullTrackName,
 	extra message.Parameters,
 ) (*registry.TrackEntry, bool, error) {
-	// 1. Local publisher that advertised a namespace covering fullName.
+	// Source dedup: never open a second upstream to a session this track is
+	// already subscribed on (or to ourselves — a publisher session also owns its
+	// PUBLISH_NAMESPACE, so subscribing on it would self-loop).
+	subscribed := map[*session.Session]bool{h.sess: true}
+	if entry, ok := h.tracks.Get(fullName.Key()); ok {
+		for _, u := range entry.CopyUpstream() {
+			subscribed[u.Session] = true
+		}
+	}
+
+	var (
+		resultEntry *registry.TrackEntry
+		anyEstab    bool
+		lastErr     error
+	)
+	establish := func(sess *session.Session, src string) {
+		if subscribed[sess] {
+			return
+		}
+		subscribed[sess] = true // even on failure: don't retry the same source here
+		h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: issuing upstream SUBSCRIBE",
+			slog.String("source", src))
+		entry, established, err := h.subscribeUpstreamOnSession(ctx, sess, fullName, extra)
+		if err != nil {
+			// A candidate that fails (session dying, rejection) must not mask the
+			// other publishers or the Discovery fallback. Remember the error and
+			// keep going; surface it only if nothing else works out.
+			lastErr = err
+			h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: candidate failed, continuing",
+				slog.String("source", src), slog.String("err", err.Error()))
+			return
+		}
+		if established {
+			anyEstab = true
+			if resultEntry == nil {
+				resultEntry = entry
+			}
+		}
+	}
+
+	// 1. Every local publisher that advertised a namespace covering fullName.
 	publishers := h.names.MatchPublishers(fullName.Namespace)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: namespace registry lookup",
 		slog.String("namespace", fmt.Sprintf("%v", fullName.Namespace)),
 		slog.Int("publishers_found", len(publishers)))
-	var localErr error
 	for _, pub := range publishers {
-		// Don't subscribe to ourselves. A publisher's session also owns its
-		// PUBLISH_NAMESPACE — issuing SUBSCRIBE on the same session would
-		// create a self-loop. Skip self and try the next local publisher;
-		// if none qualifies we fall through to Discovery below.
-		if pub.Session == h.sess {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: skipping self-loop publisher")
-			continue
-		}
-		h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: issuing upstream SUBSCRIBE to local publisher")
-		entry, established, err := h.subscribeUpstreamOnSession(ctx, pub.Session, fullName, extra)
-		if err != nil {
-			// A local publisher that fails its upstream SUBSCRIBE (e.g. its
-			// session is dying, or it rejects) must not mask the other matching
-			// publishers or the Discovery fallback. Remember the error and keep
-			// looking; surface it only if nothing else works out.
-			localErr = err
-			h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: local publisher failed, trying next/Discovery",
-				slog.String("err", err.Error()))
-			continue
-		}
-		return entry, established, nil
+		establish(pub.Session, "local-publisher")
 	}
 
-	// 2. No usable local publisher — follow Discovery to a remote relay that
-	//    advertised this namespace and issue the upstream SUBSCRIBE there. The
-	//    pool dials + reuses one session per relay; resolve returns nil when no
+	// 2. Every remote relay Discovery resolves for this namespace. The pool
+	//    dials + reuses one session per RelayAddr; resolveAll returns nil when no
 	//    other relay (besides ourselves) serves the namespace.
-	if remote := h.upstreams.resolve(ctx, fullName.Namespace); remote != nil {
-		h.log.LogAttrs(
-			ctx,
-			slog.LevelDebug,
-			"subscribeUpstream: issuing upstream SUBSCRIBE to remote relay (Discovery)",
-		)
-		return h.subscribeUpstreamOnSession(ctx, remote, fullName, extra)
+	for _, remote := range h.upstreams.resolveAll(ctx, fullName.Namespace) {
+		establish(remote, "discovery-remote")
 	}
-	// No upstream anywhere. Surface a local publisher's failure if one occurred
+
+	if anyEstab {
+		return resultEntry, true, nil
+	}
+	// No upstream anywhere. Surface a candidate's failure if one occurred
 	// (a better diagnostic than a bare "no publisher"); otherwise (nil,false,nil)
 	// drives the §9.4 "does not exist" rejection.
-	return nil, false, localErr
+	return nil, false, lastErr
 }
 
 // subscribeUpstreamOnSession issues the upstream SUBSCRIBE on sess and registers

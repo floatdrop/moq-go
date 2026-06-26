@@ -27,18 +27,59 @@ type fwdObject struct {
 	enqueuedAt time.Time // stamped in publish; used for the §8 lag window
 }
 
+// subgroupWriterSet is the parent-managed payload of a
+// [registry.SharedSubgroup]: the one outbound writer per downstream subscriber
+// for a single (GroupID, SubgroupID), shared across every inbound runFanout
+// goroutine producing that Subgroup (including redundant upstream publishers).
+// All access is serialised by the [registry.SharedSubgroup.Mu] the registry
+// hands back, so two contributors never double-open a writer or race the
+// joiner scan.
+//
+// The map key is the *registry.DownstreamSub pointer rather than sub.ID because
+// IDs are allocated per-session-handler (allocSubID), so subs from different
+// sessions can collide on ID. A nil value records "tried to open and failed" so
+// we don't retry.
+type subgroupWriterSet struct {
+	writers map[*registry.DownstreamSub]*subgroupWriter
+	// hdr is the canonical SUBGROUP_HEADER (the first contributor's), reused for
+	// every writer open so joiners added by a redundant contributor get the same
+	// Group/Subgroup framing. TrackAlias is overwritten per subscriber.
+	hdr message.SubgroupHeader
+	// gen is the entry.downstreamGen observed on the last joiner scan, so the
+	// O(len(Downstream)) scan is skipped while membership is unchanged.
+	gen uint64
+
+	// sawClean records that at least one contributor ended its inbound stream
+	// cleanly (io.EOF). With redundant upstreams a clean completion of the
+	// Subgroup is authoritative: the merged outbound stream then FINs even if a
+	// peer upstream reset. resetCode is the §3.3.3 code used only when NO
+	// contributor ended cleanly (every upstream reset). These are written by each
+	// contributor at release under the SharedSubgroup mutex.
+	sawClean  bool
+	resetCode moqt.StreamResetCode
+}
+
 // runFanout is the subgroup-stream fanout entry point. One inbound
 // SUBGROUP_HEADER stream produces one or more outbound SUBGROUP_HEADER
 // streams per downstream subscriber, with the publisher's Track Alias
 // remapped to the subscriber's per-session outbound alias.
+//
+// §9.5 multiple publishers: many inbound streams may carry the same
+// (GroupID, SubgroupID) — independent publishers, a switchover overlap, or
+// redundant origins. They share ONE outbound writer per subscriber (§2.2 forbids
+// splitting a Subgroup across streams) via the entry's [registry.SharedSubgroup],
+// and the §2.1 dedup ledger ([registry.TrackEntry.ClaimDelivered]) drops the
+// second and later copy of each {GroupID, ObjectID} so the subscriber sees each
+// object exactly once. A single publisher is just the one-contributor case.
 //
 // The per-subscriber forward path runs in a dedicated writer goroutine
 // fed by a bounded send queue. §5.1.2 filters are evaluated pre-enqueue
 // and ObjectIDDelta is re-encoded on the outbound side so filter drops
 // don't shift the subscriber's decoded absolute IDs. §11.4.3 gap-driven
 // reset/reopen is implemented; the inbound FIN-vs-reset distinction is
-// propagated to the outbound streams; [registry.TrackEntry.LargestObject] (§10.2.11)
-// is bumped on every forwarded object.
+// propagated to the outbound streams when the LAST contributor leaves;
+// [registry.TrackEntry.LargestObject] (§10.2.11) is bumped on every forwarded
+// object.
 func (h *sessionHandler) runFanout(ctx context.Context, stream *session.IncomingSubgroupStream) {
 	hdr := stream.Header
 
@@ -65,62 +106,81 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		return
 	}
 
-	// writers maps a downstream sub to its outbound writer. The key is
-	// the *registry.DownstreamSub pointer itself rather than sub.ID because IDs
-	// are allocated per-session-handler (allocSubID), so two subs from
-	// different sessions can collide on ID. A nil value means we tried
-	// to open a writer for that sub and failed — the entry keeps us
-	// from retrying.
-	//
-	// Using a map (rather than the previous slice + parallel snapshot)
-	// lets us cheaply detect "subs in entry.Downstream that we don't
-	// have a writer for yet" on every object, which is how we close the
-	// race against subs that join the entry after our initial snapshot.
-	writers := make(map[*registry.DownstreamSub]*subgroupWriter)
+	// Join (or create) the shared fan-out state for this (group, subgroup). The
+	// first contributor opens writers for the current Downstream snapshot;
+	// redundant contributors reuse the existing set and only add joiners /
+	// deliver deduped objects.
+	sgKey := registry.SubgroupKey{Group: hdr.GroupID, Subgroup: hdr.SubgroupID}
+	sg, created := entry.AcquireSubgroup(sgKey, func() any {
+		return &subgroupWriterSet{
+			writers: make(map[*registry.DownstreamSub]*subgroupWriter),
+			hdr:     hdr,
+		}
+	})
+	set, _ := sg.Set.(*subgroupWriterSet)
 
-	// Open initial writers from the current Downstream snapshot. Done
-	// outside any lock — OpenSubgroup is I/O. downstreamGen is captured with
-	// the snapshot so the per-object joiner scan below can be skipped while
-	// membership is unchanged.
-	initialSubs, downstreamGen := entry.CopyDownstreamWithGen()
-	for _, sub := range initialSubs {
-		h.openWriterForSub(ctx, hdr, sub, writers, false /* replaying */)
+	if created {
+		// Open initial writers from the current Downstream snapshot, under
+		// sg.Mu so a concurrent contributor's joiner scan can't double-open.
+		// Per §9.7 we drain even with zero subscribers (publisher flow control);
+		// the per-object joiner scan picks up subs that join mid-stream.
+		initialSubs, gen := entry.CopyDownstreamWithGen()
+		sg.Mu.Lock()
+		set.gen = gen
+		for _, sub := range initialSubs {
+			h.openWriterForSub(ctx, set.hdr, sub, set.writers, false /* replaying */)
+		}
+		sg.Mu.Unlock()
 	}
-	// Per §9.7 we still drain the inbound stream even with zero
-	// subscribers so the publisher's flow control doesn't stall; the
-	// per-object syncWriters loop below will pick up any sub that joins
-	// mid-stream and open a (ReplayingSubgroup=true) writer for it, so
-	// even a "no subscribers at first object" subgroup correctly delivers
-	// to a sub that joins later.
 
-	// inboundReset records the inbound termination mode for the writers:
-	// false on clean io.EOF, true on any other read error. inboundResetCode is
-	// the §3.3.3 code the outbound streams are reset with when inboundReset is
-	// true. The deferred cleanup propagates both to the outbound streams per
-	// §11.4.3 (FIN when the upstream FINs, reset when the upstream resets).
+	// inboundReset records THIS contributor's termination mode: false on clean
+	// io.EOF, true on any other read error. inboundResetCode is the §3.3.3 code.
+	// They are applied to the outbound streams only when this is the LAST
+	// contributor to leave the Subgroup — a single publisher dropping out (clean
+	// or reset) while others still feed the Subgroup must not disturb the
+	// subscribers' streams (§9.5 fault tolerance).
 	var (
 		inboundReset     bool
 		inboundResetCode = moqt.StreamResetCancelled
 	)
 	defer func() {
-		for _, w := range writers {
+		// Record this contributor's outcome into the shared set before we drop
+		// our reference, so the last contributor can decide FIN vs reset over ALL
+		// contributors (§11.4.3 redundancy: a clean completion by any upstream
+		// FINs the merged stream even if a peer reset).
+		sg.Mu.Lock()
+		if inboundReset {
+			set.resetCode = inboundResetCode
+		} else {
+			set.sawClean = true
+		}
+		last := entry.ReleaseSubgroup(sgKey)
+		if !last {
+			sg.Mu.Unlock()
+			return // other upstreams still feed this Subgroup — leave writers up.
+		}
+		// Last contributor: close and drain every downstream writer. FIN if any
+		// upstream completed cleanly; otherwise reset with the recorded code.
+		reset := !set.sawClean
+		code := set.resetCode
+		ws := make([]*subgroupWriter, 0, len(set.writers))
+		for _, w := range set.writers {
 			if w == nil {
 				continue
 			}
-			reset, code := inboundReset, inboundResetCode
+			wReset, wCode := reset, code
 			// §11.4.3: a Subgroup whose group has fallen outside the
 			// subscription's range (e.g. a REQUEST_UPDATE narrowed it) MUST
 			// be reset, not FIN'd, even on a clean inbound EOF — a FIN would
 			// falsely signal the group was fully delivered.
-			if !reset && registry.GroupOutOfRange(hdr.GroupID, w.sub.GetFilter()) {
-				reset, code = true, moqt.StreamResetCancelled
+			if !wReset && registry.GroupOutOfRange(hdr.GroupID, w.sub.GetFilter()) {
+				wReset, wCode = true, moqt.StreamResetCancelled
 			}
-			w.close(reset, code)
+			w.close(wReset, wCode)
+			ws = append(ws, w)
 		}
-		for _, w := range writers {
-			if w == nil {
-				continue
-			}
+		sg.Mu.Unlock()
+		for _, w := range ws {
 			<-w.done
 		}
 	}()
@@ -133,9 +193,10 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		objectID uint64
 		firstObj = true
 		// terminalSeen records that a terminal-status object (EndOfGroup /
-		// EndOfTrack) has been forwarded on this Subgroup stream. Per §11.4.3
+		// EndOfTrack) has been seen on this Subgroup stream. Per §11.4.3
 		// no further objects may follow it; one that does makes the track
-		// malformed (§2.4.2).
+		// malformed (§2.4.2). Tracked per inbound stream so a redundant
+		// upstream's own terminal accounting is independent.
 		terminalSeen bool
 	)
 
@@ -143,7 +204,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		obj, err := stream.ReadObject()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return // clean end of stream — writers will FIN.
+				return // clean end of stream — last contributor will FIN.
 			}
 			if errors.Is(err, context.Canceled) {
 				// ctx cancellation is treated as a reset — the
@@ -160,7 +221,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 
 		// §11.4.3 / §2.4.2: an object after a terminal-status object on the
 		// same Subgroup stream is a protocol violation. Reset the inbound and
-		// outbound streams with MALFORMED_TRACK rather than forwarding it.
+		// (if last) outbound streams with MALFORMED_TRACK rather than forwarding.
 		if terminalSeen {
 			h.log.LogAttrs(ctx, slog.LevelDebug,
 				"fanout: object after EndOfGroup/EndOfTrack — malformed track",
@@ -178,23 +239,33 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			objectID += obj.ObjectIDDelta + 1
 		}
 
-		// Atomically bump §10.2.11 LARGEST_OBJECT and snapshot any
-		// Downstream subs that joined between the previous syncWriters
-		// pass and this one. Doing both under one entry.mu acquisition
-		// serialises with handleSubscribe's AddDownstreamSnapshotLargest:
-		// a new sub either snapshots the pre-update Largest AND appears
-		// in newSubs (so we open a writer for it below and deliver this
-		// object via live), or it snapshots the post-update Largest (so
-		// its Joining FETCH covers this object). Either way, no gap.
-		loc := message.Location{Group: hdr.GroupID, Object: objectID}
-		var newSubs []*registry.DownstreamSub
-		newSubs, downstreamGen = entry.UpdateLargestAndDetectNew(loc,
-			func(s *registry.DownstreamSub) bool { _, ok := writers[s]; return ok }, downstreamGen)
+		// §11.4.3: terminal status is tracked per inbound stream regardless of
+		// whether this copy wins the dedup claim below, so a post-terminal object
+		// on THIS stream is still caught at the top of the next iteration.
+		terminal := obj.IsTerminal()
 
-		// Cache the object AFTER UpdateLargest+newSubs detection so
-		// that the LARGEST_OBJECT a concurrent
-		// handleSubscribe-then-FETCH may snapshot is always backed by
-		// a cached object the FETCH can serve.
+		// §2.1 dedup across redundant upstreams: claim {GroupID, ObjectID} on the
+		// entry's persistent, group-windowed ledger. The first upstream to reach an
+		// object forwards it; a later copy from a peer — even one that is lagging,
+		// or that arrives on a fresh stream after the first upstream's stream has
+		// already FIN'd — is dropped here so the subscriber sees each object once.
+		// Done outside sg.Mu (its own lock) so dedup losers never touch the writer
+		// set.
+		if !entry.ClaimDelivered(hdr.GroupID, objectID) {
+			if terminal {
+				terminalSeen = true
+			}
+			continue // redundant copy already forwarded by a peer upstream.
+		}
+
+		// Deliver to the shared writer set under sg.Mu so joiner detection, writer
+		// open, and the publish loop are atomic against a concurrent contributor
+		// and the last-contributor teardown.
+		sg.Mu.Lock()
+
+		// Cache the object (for joining FETCHes) before bumping LARGEST_OBJECT so
+		// a concurrent handleSubscribe-then-FETCH that snapshots the new watermark
+		// always finds it cached.
 		entry.Cache.Put(&cache.CachedObject{
 			GroupID:           hdr.GroupID,
 			ObjectID:          objectID,
@@ -206,19 +277,24 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			Payload:           obj.Payload,
 		})
 
-		// Open writers for newly-joined subs outside the lock — I/O.
-		// Mark ReplayingSubgroup since they're starting mid-stream.
+		// Atomically bump §10.2.11 LARGEST_OBJECT and snapshot any Downstream
+		// subs that joined since the last scan. The entry.mu acquisition inside
+		// serialises with handleSubscribe's AddDownstreamSnapshotLargest: a new
+		// sub either snapshots the pre-update Largest AND appears in newSubs
+		// (delivered live below), or snapshots the post-update Largest (its
+		// Joining FETCH covers this object — already cached above).
+		loc := message.Location{Group: hdr.GroupID, Object: objectID}
+		var newSubs []*registry.DownstreamSub
+		newSubs, set.gen = entry.UpdateLargestAndDetectNew(loc,
+			func(s *registry.DownstreamSub) bool { _, ok := set.writers[s]; return ok }, set.gen)
 		for _, sub := range newSubs {
-			h.openWriterForSub(ctx, hdr, sub, writers, true /* replaying */)
+			h.openWriterForSub(ctx, set.hdr, sub, set.writers, true /* replaying */)
 		}
 
-		// §5.1.2 filter evaluation per-subscriber, pre-enqueue. A
-		// filter miss means we don't take a queue slot — slow-reader
-		// escalation should be driven by objects the subscriber asked
-		// for, not by ones it never wanted in the first place. Per
-		// §9.7 the relay does not modify the object as part of this
-		// decision; it is purely a forwarding gate.
-		for _, w := range writers {
+		// §5.1.2 filter evaluation per-subscriber, pre-enqueue. A filter miss
+		// means we don't take a queue slot. Per §9.7 the relay does not modify
+		// the object; it is purely a forwarding gate.
+		for _, w := range set.writers {
 			if w == nil {
 				continue
 			}
@@ -229,10 +305,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			if !forward {
 				// §11.4.3: if the subscription has narrowed so this whole
 				// group is now out of range, the stream will never carry
-				// another object — reset it promptly (not FIN) rather than
-				// leaving it open until the inbound subgroup ends. close is
-				// idempotent, so repeating it on later filtered objects is a
-				// no-op; the deferred cleanup still waits on w.done.
+				// another object — reset it promptly (not FIN). close is
+				// idempotent; the teardown still waits on w.done.
 				if groupExhausted {
 					w.close(true, moqt.StreamResetCancelled)
 				}
@@ -240,11 +314,9 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			}
 			w.publish(fwdObject{obj: obj, absID: objectID})
 		}
+		sg.Mu.Unlock()
 
-		// §11.4.3: after a terminal-status object the Subgroup is complete;
-		// any further object on this stream is a malformed-track violation,
-		// caught at the top of the next iteration.
-		if obj.IsTerminal() {
+		if terminal {
 			terminalSeen = true
 		}
 	}

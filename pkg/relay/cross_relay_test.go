@@ -322,6 +322,134 @@ func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
 	<-rejectDone
 }
 
+// TestCrossRelay_MultiRemoteFanIn pins §9.5 cross-relay fault tolerance: when
+// two remote relays both advertise a namespace, relay A subscribes to BOTH (not
+// just the first) and fans them into one track. The Dialer must fire for each
+// remote, and the subscriber must receive each object exactly once even though
+// both remotes push the same {GroupID, ObjectID} stream (the §2.1 dedup gate
+// drops the redundant copy).
+func TestCrossRelay_MultiRemoteFanIn(t *testing.T) {
+	t.Parallel()
+
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+
+	ctx := t.Context()
+
+	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
+	relayC := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-C"})
+
+	var dialsB, dialsC atomic.Int64
+	relayA := startTestRelay(ctx, relay.Config{
+		Discovery: store,
+		RelayAddr: "relay-A",
+		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
+			switch addr {
+			case "relay-B":
+				dialsB.Add(1)
+				return relayB.l.Dial()
+			case "relay-C":
+				dialsC.Add(1)
+				return relayC.l.Dial()
+			default:
+				return nil, fmt.Errorf("no relay at %q", addr)
+			}
+		},
+	})
+
+	// A redundant publisher on each of B and C: same track, same namespace.
+	startPub := func(tr *testRelay) (*session.Session, *session.Publication) {
+		ps := dialClient(t, tr)
+		if _, err := ps.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()}); err != nil {
+			t.Fatalf("PublishNamespace: %v", err)
+		}
+		p, err := ps.Publish(ctx, &message.Publish{Namespace: videoNS(), Name: []byte("cam1"), TrackAlias: 7})
+		if err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+		return ps, p
+	}
+	pubBSess, pubB := startPub(relayB)
+	pubCSess, pubC := startPub(relayC)
+
+	// Subscriber on A. Subscribe returns only after A has established BOTH
+	// upstreams (to B and C), so both Dialer calls have happened by here.
+	subSess := dialClient(t, relayA)
+	subReq, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	if err != nil {
+		t.Fatalf("cross-relay Subscribe: %v", err)
+	}
+
+	if got := dialsB.Load(); got != 1 {
+		t.Errorf("Dialer fired %d times for relay-B; want 1 (dial-all)", got)
+	}
+	if got := dialsC.Load(); got != 1 {
+		t.Errorf("Dialer fired %d times for relay-C; want 1 (dial-all)", got)
+	}
+
+	events := make(chan objEvent, 64)
+	go readSubgroups(ctx, subSess, events)
+
+	// Both remotes push the same objects 0,1,2 on the same (group, subgroup).
+	push := func(p *session.Publication) {
+		sg, err := p.OpenSubgroup(message.SubgroupHeader{
+			SubgroupIDMode: message.SubgroupIDExplicit, TrackAlias: 7, GroupID: 0, SubgroupID: 0,
+		})
+		if err != nil {
+			t.Errorf("OpenSubgroup: %v", err)
+			return
+		}
+		for i := range 3 {
+			if err := sg.WriteObject(&message.SubgroupObject{
+				ObjectIDDelta: 0,
+				Payload:       []byte{byte('A' + i)},
+			}); err != nil {
+				t.Errorf("WriteObject #%d: %v", i, err)
+				return
+			}
+		}
+		_ = sg.Close()
+	}
+	push(pubB)
+	push(pubC)
+
+	// Collect with a quiet-period idle timeout: each of 0,1,2 must arrive exactly
+	// once across however many outbound streams the merge produced.
+	seen := map[uint64]int{}
+	hard := time.After(3 * time.Second)
+collect:
+	for {
+		select {
+		case ev := <-events:
+			if ev.err == nil {
+				seen[ev.absID]++
+			}
+		case <-time.After(500 * time.Millisecond):
+			break collect
+		case <-hard:
+			break collect
+		}
+	}
+	for _, id := range []uint64{0, 1, 2} {
+		if seen[id] != 1 {
+			t.Fatalf("object %d delivered %d times across two remotes, want exactly 1 (dedup): %v", id, seen[id], seen)
+		}
+	}
+	if len(seen) != 3 {
+		t.Fatalf("delivered set = %v, want {0,1,2}", seen)
+	}
+
+	_ = subReq.Close()
+	_ = pubB.Close()
+	_ = pubC.Close()
+	_ = subSess.Close(0, "done")
+	_ = pubBSess.Close(0, "done")
+	_ = pubCSess.Close(0, "done")
+	relayA.stop(t)
+	relayB.stop(t)
+	relayC.stop(t)
+}
+
 // TestCrossRelay_SelfExclusion pins the loop guard: a FindNamespace result that
 // names this relay's own RelayAddr must never trigger a dial or a self-loop
 // SUBSCRIBE. The store is seeded with a namespace owned by "relay-A" itself;
