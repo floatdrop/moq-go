@@ -65,7 +65,7 @@ func TestPublishBlocked_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 			t.Fatalf("ReadPublishBlocked: %v", r.err)
 		}
 		if len(r.pb.TrackNamespaceSuffix) != 1 || string(r.pb.TrackNamespaceSuffix[0]) != "cam7" {
-			t.Fatalf("PublishBlocked suffix = %v, want [cam7]", formatNamespace(r.pb.TrackNamespaceSuffix))
+			t.Fatalf("PublishBlocked suffix = %v, want [cam7]", relaytest.FormatNamespace(r.pb.TrackNamespaceSuffix))
 		}
 		if string(r.pb.TrackName) != "rtp" {
 			t.Fatalf("PublishBlocked TrackName = %q, want %q", r.pb.TrackName, "rtp")

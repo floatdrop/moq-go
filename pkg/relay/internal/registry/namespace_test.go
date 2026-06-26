@@ -9,6 +9,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
 // ns is a tiny constructor for namespaces from string components, used to
@@ -91,7 +92,7 @@ func TestNamespaceRegistry_MatchPublishers(t *testing.T) {
 			got := r.MatchPublishers(c.q)
 			if !sameSet(got, c.want) {
 				t.Fatalf("MatchPublishers(%v) = %v, want %v",
-					formatNamespace(c.q),
+					relaytest.FormatNamespace(c.q),
 					formatPublishers(got),
 					formatPublishers(c.want),
 				)
@@ -129,7 +130,7 @@ func TestNamespaceRegistry_MatchSubscribers(t *testing.T) {
 			got := r.MatchSubscribers(c.q)
 			if !sameSet(got, c.want) {
 				t.Fatalf("MatchSubscribers(%v) = %v, want %v",
-					formatNamespace(c.q),
+					relaytest.FormatNamespace(c.q),
 					formatSubscribers(got),
 					formatSubscribers(c.want),
 				)
@@ -250,20 +251,6 @@ func sameSet[T comparable](a, b []T) bool {
 	return true
 }
 
-func formatNamespace(ns wire.TrackNamespace) string {
-	if len(ns) == 0 {
-		return "<root>"
-	}
-	var out strings.Builder
-	for i, f := range ns {
-		if i > 0 {
-			out.WriteString("/")
-		}
-		out.Write(f)
-	}
-	return out.String()
-}
-
 func formatPublishers(s []*registry.PublisherEntry) string {
 	var out strings.Builder
 	out.WriteString("[")
@@ -271,7 +258,7 @@ func formatPublishers(s []*registry.PublisherEntry) string {
 		if i > 0 {
 			out.WriteString(", ")
 		}
-		out.WriteString(formatNamespace(e.Namespace))
+		out.WriteString(relaytest.FormatNamespace(e.Namespace))
 	}
 	return out.String() + "]"
 }
@@ -283,7 +270,7 @@ func formatSubscribers(s []*registry.SubscriberEntry) string {
 		if i > 0 {
 			out.WriteString(", ")
 		}
-		out.WriteString(formatNamespace(e.Prefix))
+		out.WriteString(relaytest.FormatNamespace(e.Prefix))
 	}
 	return out.String() + "]"
 }

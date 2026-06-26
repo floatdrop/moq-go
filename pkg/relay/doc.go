@@ -12,7 +12,7 @@
 //
 // # Source layout
 //
-// The relay is split into three layers along a one-way dependency edge —
+// The relay is split into two layers along a one-way dependency edge —
 // handler → registry — so each layer can be read on its own:
 //
 //	pkg/relay (this package)

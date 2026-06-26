@@ -75,7 +75,7 @@ func TestSubscribeNamespace_AcceptedAndDeliversInitialNamespaces(t *testing.T) {
 		t.Fatalf("first message = %T, want *message.Namespace", got)
 	}
 	if len(ns.TrackNamespaceSuffix) != 1 || string(ns.TrackNamespaceSuffix[0]) != "cam1" {
-		t.Fatalf("suffix = %v, want [cam1]", formatNamespace(ns.TrackNamespaceSuffix))
+		t.Fatalf("suffix = %v, want [cam1]", relaytest.FormatNamespace(ns.TrackNamespaceSuffix))
 	}
 }
 
@@ -111,7 +111,7 @@ func TestPublishNamespace_FanoutsToMatchingSubscriber(t *testing.T) {
 		t.Fatalf("got %T, want *message.Namespace", got)
 	}
 	if len(ns.TrackNamespaceSuffix) != 1 || string(ns.TrackNamespaceSuffix[0]) != "cam2" {
-		t.Fatalf("suffix = %v, want [cam2]", formatNamespace(ns.TrackNamespaceSuffix))
+		t.Fatalf("suffix = %v, want [cam2]", relaytest.FormatNamespace(ns.TrackNamespaceSuffix))
 	}
 
 	// Closing the publisher's request stream must produce a NAMESPACE_DONE
@@ -126,7 +126,7 @@ func TestPublishNamespace_FanoutsToMatchingSubscriber(t *testing.T) {
 		t.Fatalf("after pub close: got %T, want *message.NamespaceDone", got)
 	}
 	if len(done.TrackNamespaceSuffix) != 1 || string(done.TrackNamespaceSuffix[0]) != "cam2" {
-		t.Fatalf("done suffix = %v, want [cam2]", formatNamespace(done.TrackNamespaceSuffix))
+		t.Fatalf("done suffix = %v, want [cam2]", relaytest.FormatNamespace(done.TrackNamespaceSuffix))
 	}
 }
 
