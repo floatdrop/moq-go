@@ -311,38 +311,16 @@ func (e *TrackEntry) ReleaseSubgroup(key SubgroupKey) (last bool) {
 // All entry mutation happens under TrackEntry.mu, which the helpers below
 // acquire in the appropriate mode. This keeps the registry-level critical
 // sections O(1) and lets per-track work proceed in parallel.
-// CacheTTLPolicy lets the embedder override the per-track Object Cache
-// TTL based on the track's Full Track Name. The function is invoked once
-// per [TrackEntry] at creation time inside [TrackRegistry.getOrCreateLocked];
-// it is NOT consulted on the fanout hot path.
-//
-// Semantics:
-//
-//   - Return a positive duration to use that TTL for the matching track.
-//   - Return [CacheTTLInfinite] to disable time-based eviction entirely
-//     for the matching track (FIFO size cap still applies).
-//   - Return 0 (the zero value) to fall through to the registry's default
-//     ([WithCacheConfig]'s maxDuration).
-//
-// The policy MUST be safe for concurrent invocation, MUST NOT block, and
-// SHOULD be free of side effects — it runs inside the registry's write
-// lock. Implementations are typically small predicates on Name (e.g. for
-// an MSF catalog track).
-//
-// The registry deliberately exposes only a function-shaped hook rather
-// than coupling [pkg/relay] to any specific Track-Name vocabulary; the
-// binary that builds the policy (cmd/relay, an embedded app, etc.) is
-// the right place to encode protocol-specific rules.
-type CacheTTLPolicy func(name track.FullTrackName) time.Duration
 
-// CacheTTLInfinite is the sentinel a [CacheTTLPolicy] returns to request
-// "no time-based eviction" for the matching track. The underlying
-// [cache.ObjectCache] treats any non-positive duration as "TTL disabled",
-// so the value is translated to 0 when the cache is constructed; the
-// sentinel exists at this layer so policy authors don't have to know
-// about the cache's internal convention and so a return value of 0 can
-// keep its natural meaning ("use the default").
-const CacheTTLInfinite = time.Duration(-1)
+// CacheTTLPolicy is the registry's view of the per-track Object Cache TTL
+// override: given a track's Full Track Name, return the TTL to use. It is
+// the structural twin of the public relay.CacheTTLPolicy; relay converts
+// its exported type to this one at the registry boundary, which keeps the
+// dependency pointing one way (registry never imports its parent) while
+// still giving each layer a named, self-documenting type rather than a
+// bare function signature. [resolveCacheTTL] documents the return-value
+// contract (negative disables eviction, 0 falls through to the default).
+type CacheTTLPolicy func(name track.FullTrackName) time.Duration
 
 type TrackRegistry struct {
 	mu     sync.RWMutex
@@ -354,7 +332,8 @@ type TrackRegistry struct {
 	cacheMaxDuration time.Duration
 
 	// cacheTTLPolicy, when non-nil, may override cacheMaxDuration on a
-	// per-track basis. See [CacheTTLPolicy] for the contract.
+	// per-track basis. See [CacheTTLPolicy] for the contract and
+	// [resolveCacheTTL] for how its result is interpreted.
 	cacheTTLPolicy CacheTTLPolicy
 
 	// discovery is the cross-instance track advertisement fabric. nil
@@ -395,14 +374,15 @@ func WithCacheConfig(maxSize int, maxDuration time.Duration) TrackRegistryOption
 }
 
 // WithCacheTTLPolicy installs a per-track TTL override hook. See
-// [CacheTTLPolicy] for the contract. Passing a nil policy is allowed
-// and equivalent to not calling this option — every track uses the
-// default TTL from [WithCacheConfig].
+// [CacheTTLPolicy] for the contract and [resolveCacheTTL] for how the
+// returned duration is interpreted. Passing a nil policy is allowed and
+// equivalent to not calling this option — every track uses the default
+// TTL from [WithCacheConfig].
 //
 // Typical use is to give one well-known track (e.g. an MSF catalog
 // track) infinite retention while every other track keeps the default
 // 30-second bound — the operator wires the rule into the policy at the
-// binary layer so [pkg/relay] stays protocol-agnostic.
+// binary layer so the relay stays protocol-agnostic.
 func WithCacheTTLPolicy(policy CacheTTLPolicy) TrackRegistryOption {
 	return func(r *TrackRegistry) {
 		r.cacheTTLPolicy = policy
@@ -488,19 +468,24 @@ func (r *TrackRegistry) getOrCreateLocked(fullName track.FullTrackName) *TrackEn
 }
 
 // resolveCacheTTL picks the per-track Object Cache TTL for fullName,
-// consulting [TrackRegistry.cacheTTLPolicy] if one was installed. The
-// fallback when no policy is set or the policy returns 0 is the
-// registry-wide default from [WithCacheConfig]. A policy-returned
-// [CacheTTLInfinite] is translated to 0 here so the underlying
-// [cache.ObjectCache] sees its own "TTL disabled" convention — keeping
-// that translation inside the registry means policy authors only ever
-// deal with the [CacheTTLPolicy] vocabulary.
+// consulting [TrackRegistry.cacheTTLPolicy] if one was installed. It
+// maps the policy's return value onto the [cache.ObjectCache]
+// convention (where a non-positive TTL means "no time-based eviction"):
+//
+//   - a negative duration (the public relay.CacheTTLInfinite sentinel)
+//     becomes 0, disabling time-based eviction for the track;
+//   - a positive duration is used as-is;
+//   - 0, or no policy at all, falls through to the registry-wide
+//     default from [WithCacheConfig].
+//
+// Keeping this translation inside the registry means policy authors only
+// ever deal with the public relay.CacheTTLPolicy vocabulary.
 func (r *TrackRegistry) resolveCacheTTL(fullName track.FullTrackName) time.Duration {
 	if r.cacheTTLPolicy == nil {
 		return r.cacheMaxDuration
 	}
 	switch d := r.cacheTTLPolicy(fullName); {
-	case d == CacheTTLInfinite:
+	case d < 0:
 		return 0 // cache.ObjectCache: <=0 means "no TTL filtering"
 	case d > 0:
 		return d

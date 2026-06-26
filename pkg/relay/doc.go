@@ -54,6 +54,7 @@
 // …) deliberately live in internal/registry so they are compiler-fenced out of
 // the public API: they are exported within that package only so its own
 // white-box tests can assert on them, not for external consumption.
-// [CacheTTLPolicy] and [CacheTTLInfinite] are thin re-export aliases of the
-// registry types because an embedder genuinely needs them to build a policy.
+// [CacheTTLPolicy] and [CacheTTLInfinite] are defined natively here (see
+// cachettl.go); the registry consumes the policy through a bare structural
+// function type, so the public vocabulary lives entirely in this package.
 package relay

@@ -462,7 +462,7 @@ func TestTrackRegistry_CacheTTLPolicy_OverridesDefault(t *testing.T) {
 
 	policy := func(n track.FullTrackName) time.Duration {
 		if string(n.Name) == "catalog" {
-			return registry.CacheTTLInfinite
+			return -1 // negative disables TTL; see relay.CacheTTLInfinite
 		}
 		return 0 // fall through to default
 	}
