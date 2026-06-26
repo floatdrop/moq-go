@@ -1,4 +1,4 @@
-package relay
+package registry_test
 
 import (
 	"testing"
@@ -15,34 +15,52 @@ func dynamicGroupsProps(t *testing.T, value uint64) []byte {
 	})
 }
 
-func TestTrackSupportsDynamicGroups(t *testing.T) {
+// TestTrackEntry_DynamicGroups pins the §12.6 DYNAMIC_GROUPS decode that
+// SetProperties performs once and caches: an absent property and value 0 are
+// false, value 1 is true, and value > 1 is a PROTOCOL_VIOLATION surfaced as an
+// error.
+func TestTrackEntry_DynamicGroups(t *testing.T) {
 	t.Parallel()
+
+	setProps := func(props []byte) *registry.TrackEntry {
+		e := &registry.TrackEntry{}
+		e.SetProperties(props)
+		return e
+	}
 
 	t.Run("absent is false", func(t *testing.T) {
 		t.Parallel()
-		got, err := trackSupportsDynamicGroups(nil)
+		got, err := setProps(nil).DynamicGroups()
 		if err != nil || got {
 			t.Fatalf("got (%v, %v), want (false, nil)", got, err)
 		}
 	})
 	t.Run("value 0 is false", func(t *testing.T) {
 		t.Parallel()
-		got, err := trackSupportsDynamicGroups(dynamicGroupsProps(t, 0))
+		got, err := setProps(dynamicGroupsProps(t, 0)).DynamicGroups()
 		if err != nil || got {
 			t.Fatalf("got (%v, %v), want (false, nil)", got, err)
 		}
 	})
 	t.Run("value 1 is true", func(t *testing.T) {
 		t.Parallel()
-		got, err := trackSupportsDynamicGroups(dynamicGroupsProps(t, 1))
+		got, err := setProps(dynamicGroupsProps(t, 1)).DynamicGroups()
 		if err != nil || !got {
 			t.Fatalf("got (%v, %v), want (true, nil)", got, err)
 		}
 	})
 	t.Run("value > 1 is an error (§12.6)", func(t *testing.T) {
 		t.Parallel()
-		if _, err := trackSupportsDynamicGroups(dynamicGroupsProps(t, 2)); err == nil {
+		if _, err := setProps(dynamicGroupsProps(t, 2)).DynamicGroups(); err == nil {
 			t.Fatal("got nil error, want §12.6 protocol-violation error")
+		}
+	})
+	t.Run("malformed block is an error", func(t *testing.T) {
+		t.Parallel()
+		// 0x40 is the first byte of a 2-byte varint with no second byte, so
+		// the Properties block fails to parse structurally.
+		if _, err := setProps([]byte{0x40}).DynamicGroups(); err == nil {
+			t.Fatal("got nil error, want a structural parse error")
 		}
 	})
 }

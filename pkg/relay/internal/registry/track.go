@@ -87,6 +87,14 @@ type TrackEntry struct {
 	// block; the relay treats them opaquely.
 	Properties []byte
 
+	// decoded holds the Track Properties the relay acts on, extracted once
+	// from the raw Properties block (which is otherwise forwarded opaquely
+	// per §9.6). Properties are immutable for the entry's lifetime (§9.6,
+	// first-setter-wins), so decoding happens once when Properties is set —
+	// see [decodeTrackProperties] for how to add a field. Set together with
+	// Properties by setPropertiesLocked.
+	decoded decodedProperties
+
 	// LargestObject is the (Group, Object) high-water mark observed for
 	// this track, updated by the fanout path on every incoming object and
 	// by upstream control messages that carry a LARGEST_OBJECT value. §10.2.11
@@ -547,7 +555,7 @@ func (r *TrackRegistry) AddUpstream(
 		// captured by a prior caller — §9.6 expects them to be
 		// stable for the lifetime of the track entry, so the first
 		// setter wins.
-		entry.Properties = conf.properties
+		entry.setPropertiesLocked(conf.properties)
 	}
 	if becameNonEmpty {
 		r.publishTrackToDiscovery(entry)
@@ -978,8 +986,16 @@ func (e *TrackEntry) UpdateLargestAndDetectNew(
 // be replayed verbatim.)
 func (e *TrackEntry) SetProperties(props []byte) {
 	e.mu.Lock()
-	e.Properties = props
+	e.setPropertiesLocked(props)
 	e.mu.Unlock()
+}
+
+// setPropertiesLocked stores the raw Properties bytes and decodes the fields
+// the relay acts on in the same step, so the decoded values never drift from
+// the raw bytes. Callers must hold e.mu.
+func (e *TrackEntry) setPropertiesLocked(raw []byte) {
+	e.Properties = raw
+	e.decoded = decodeTrackProperties(raw)
 }
 
 // GetProperties returns the raw Track Properties captured from the upstream
