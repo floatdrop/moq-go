@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -125,7 +125,10 @@ func TestFanout_MultiPublisher_DeduplicatesObjects(t *testing.T) {
 	// wins every dedup claim before B writes anything.
 	var got []uint64
 	for i := range 3 {
-		if err := aSg.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Payload: []byte{byte('A' + i)}}); err != nil {
+		if err := aSg.WriteObject(&message.SubgroupObject{
+			ObjectIDDelta: 0,
+			Payload:       []byte{byte('A' + i)},
+		}); err != nil {
 			t.Fatalf("A WriteObject #%d: %v", i, err)
 		}
 		got = append(got, awaitObject(t, events))
@@ -137,7 +140,10 @@ func TestFanout_MultiPublisher_DeduplicatesObjects(t *testing.T) {
 		t.Fatalf("B OpenSubgroup: %v", err)
 	}
 	for i := range 3 {
-		if err := bSg.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Payload: []byte{byte('a' + i)}}); err != nil {
+		if err := bSg.WriteObject(&message.SubgroupObject{
+			ObjectIDDelta: 0,
+			Payload:       []byte{byte('a' + i)},
+		}); err != nil {
 			t.Fatalf("B WriteObject #%d: %v", i, err)
 		}
 	}
@@ -207,7 +213,10 @@ func TestFanout_MultiPublisher_DedupSurvivesCacheEviction(t *testing.T) {
 	// object and the cache (cap 4) evicts the earliest ones as it advances.
 	var got []uint64
 	for i := range n {
-		if err := aSg.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Payload: []byte{byte('A' + i)}}); err != nil {
+		if err := aSg.WriteObject(&message.SubgroupObject{
+			ObjectIDDelta: 0,
+			Payload:       []byte{byte('A' + i)},
+		}); err != nil {
 			t.Fatalf("A WriteObject #%d: %v", i, err)
 		}
 		got = append(got, awaitObject(t, events))
@@ -220,7 +229,10 @@ func TestFanout_MultiPublisher_DedupSurvivesCacheEviction(t *testing.T) {
 		t.Fatalf("B OpenSubgroup: %v", err)
 	}
 	for i := range n {
-		if err := bSg.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Payload: []byte{byte('a' + i)}}); err != nil {
+		if err := bSg.WriteObject(&message.SubgroupObject{
+			ObjectIDDelta: 0,
+			Payload:       []byte{byte('a' + i)},
+		}); err != nil {
 			t.Fatalf("B WriteObject #%d: %v", i, err)
 		}
 	}
@@ -462,6 +474,6 @@ func sortedKeys(m map[uint64]int) []uint64 {
 	for k := range m {
 		out = append(out, k)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out
 }

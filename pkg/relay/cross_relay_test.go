@@ -400,7 +400,10 @@ func TestCrossRelay_MultiRemoteFanIn(t *testing.T) {
 			return
 		}
 		for i := range 3 {
-			if err := sg.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Payload: []byte{byte('A' + i)}}); err != nil {
+			if err := sg.WriteObject(&message.SubgroupObject{
+				ObjectIDDelta: 0,
+				Payload:       []byte{byte('A' + i)},
+			}); err != nil {
 				t.Errorf("WriteObject #%d: %v", i, err)
 				return
 			}
