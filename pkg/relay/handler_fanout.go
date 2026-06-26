@@ -593,7 +593,7 @@ func (w *subgroupWriter) run() {
 		if w.out != nil {
 			w.out.Cancel(resetCode)
 		}
-		_ = w.sub.SetState(registry.SubTerminated)
+		w.sub.Terminate()
 
 		// Also cancel the subscriber's request stream so the
 		// handleSubscribe goroutine's DrainAndWait returns and its

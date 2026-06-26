@@ -105,8 +105,6 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
 		return
 	}
-	_ = sub.SetState(registry.SubPending)
-	_ = sub.SetState(registry.SubEstablished)
 
 	// Atomically append sub to the entry's Downstream AND snapshot the
 	// current LargestObject under one entry.mu acquisition. The atomic
@@ -472,8 +470,6 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// This upstream is a relay/origin we SUBSCRIBE'd on demand, so it is
 	// expected to answer FETCH — eligible for §9.4 stitch backfill.
 	upstreamSub.FetchCapable = true
-	_ = upstreamSub.SetState(registry.SubPending)
-	_ = upstreamSub.SetState(registry.SubEstablished)
 	entry, _ := h.tracks.AddUpstream(fullName, upstreamSub, registry.WithProperties(upstreamStream.OK.TrackProperties))
 
 	// Watcher: keep the upstream stream alive until the publisher cancels

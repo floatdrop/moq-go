@@ -10,18 +10,18 @@ import (
 )
 
 // SubState is the lifecycle phase of an upstream or downstream subscription
-// as managed by the relay. The four-state model is a deliberate
-// simplification of the more granular spec text in §10.7 / §10.10 / §10.4 —
-// the relay only needs to distinguish:
+// as managed by the relay. The relay only ever observes two phases, so the
+// model is deliberately just those two:
 //
-//   - SubIdle:        constructed, not yet sent on the wire.
-//   - SubPending:     SUBSCRIBE / PUBLISH issued, waiting for *_OK or *_ERROR.
 //   - SubEstablished: peer accepted; objects may flow.
 //   - SubTerminated:  closed cleanly or by error; no further transitions.
 //
-// Transitions are linear and one-way: Idle → Pending → Established →
-// Terminated. The state machine refuses to go backwards or to Established
-// without passing through Pending; see [Subscription.Transition].
+// The relay constructs an UpstreamSub / DownstreamSub only once the peer has
+// already accepted (it sends SUBSCRIBE_OK for a downstream sub; an upstream
+// sub is built from the SUBSCRIBE_OK it received), so there is no observable
+// "constructed but not yet established" phase to model — subs are born
+// Established and the only transition is the one-way move to Terminated (see
+// [Subscription.Terminate]).
 //
 // The state intentionally does NOT track per-object forwarding decisions.
 // Those are fanout concerns expressed via the [message.SubscriptionFilter]
@@ -30,38 +30,24 @@ import (
 type SubState int
 
 const (
-	// SubIdle is the initial state. Set when the subscription struct is
-	// constructed but no SUBSCRIBE / PUBLISH has been sent yet. The
-	// session handler advances it to SubPending the moment it writes
-	// the SUBSCRIBE / PUBLISH onto the request stream.
-	SubIdle SubState = iota
-
-	// SubPending means the request has been written on the wire and the
-	// relay is awaiting the peer's SUBSCRIBE_OK / SUBSCRIBE_ERROR /
-	// PUBLISH_OK / PUBLISH_ERROR. The subscription is reachable through
-	// the registries but objects are NOT yet forwarded.
-	SubPending
-
-	// SubEstablished means the peer has acknowledged the subscription.
-	// Objects can be forwarded; REQUEST_UPDATE / UNSUBSCRIBE can be sent.
-	SubEstablished
-
 	// SubTerminated is the absorbing state. Either the peer ended the
 	// subscription (UNSUBSCRIBE / SUBSCRIBE_DONE / PUBLISH_DONE /
 	// SUBSCRIBE_ERROR / PUBLISH_ERROR), the underlying request stream
 	// died, or the relay tore the subscription down (auth failure,
 	// session close, Stop). Once here, the registry slot can be removed
-	// safely by the owning goroutine.
-	SubTerminated
+	// safely by the owning goroutine. It is the zero value so a
+	// bare-struct subscription is never mistaken for live; the
+	// constructors set SubEstablished explicitly.
+	SubTerminated SubState = iota
+
+	// SubEstablished means the subscription is live: objects can be
+	// forwarded and REQUEST_UPDATE / UNSUBSCRIBE can be sent.
+	SubEstablished
 )
 
-// String returns "Idle", "Pending", "Established", or "Terminated".
+// String returns "Established" or "Terminated".
 func (s SubState) String() string {
 	switch s {
-	case SubIdle:
-		return "Idle"
-	case SubPending:
-		return "Pending"
 	case SubEstablished:
 		return "Established"
 	case SubTerminated:
@@ -71,20 +57,9 @@ func (s SubState) String() string {
 	}
 }
 
-// ErrInvalidSubTransition is returned by [Subscription.Transition] when the
-// requested state move is not allowed by the linear lifecycle (e.g. going
-// Established → Pending, or anything → Idle, or anything out of Terminated).
-type ErrInvalidSubTransition struct {
-	From, To SubState
-}
-
-func (e *ErrInvalidSubTransition) Error() string {
-	return fmt.Sprintf("relay: invalid subscription transition %s → %s", e.From, e.To)
-}
-
 // Subscription is the embedded common state for [UpstreamSub] and
 // [DownstreamSub]. It centralises the mutex, the state field, and the
-// transition rules so the two concrete types only have to add their
+// terminate latch so the two concrete types only have to add their
 // direction-specific fields.
 //
 // Locking discipline:
@@ -98,8 +73,8 @@ func (e *ErrInvalidSubTransition) Error() string {
 type Subscription struct {
 	mu sync.RWMutex
 
-	// state is the current lifecycle phase. Mutate only through
-	// Transition so the invariant "linear, one-way" is enforced.
+	// state is the current lifecycle phase. Set to SubEstablished by the
+	// constructors and moved one-way to SubTerminated via Terminate.
 	state SubState
 
 	// ID is unique within the relay process. It serves as the stable
@@ -141,22 +116,19 @@ type Subscription struct {
 	forwardState int
 }
 
-// SetState atomically replaces the state with next when the transition is
-// allowed by the linear lifecycle (Idle → Pending → Established →
-// Terminated, plus any state → Terminated). Returns an
-// *ErrInvalidSubTransition on a disallowed move.
-//
-// The "any state → Terminated" escape hatch exists so a session-level
-// shutdown can mark every subscription terminated without needing to know
-// its current phase.
-func (s *Subscription) SetState(next SubState) error {
+// Terminate moves the subscription to [SubTerminated], returning true on the
+// first call and false on every subsequent call. The one-shot latch lets a
+// caller run teardown that must happen exactly once (e.g. emitting a single
+// PUBLISH_DONE) without coordinating with other goroutines; it is safe to
+// call concurrently from any goroutine.
+func (s *Subscription) Terminate() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !canTransition(s.state, next) {
-		return &ErrInvalidSubTransition{From: s.state, To: next}
+	if s.state == SubTerminated {
+		return false
 	}
-	s.state = next
-	return nil
+	s.state = SubTerminated
+	return true
 }
 
 // State returns the current lifecycle phase.
@@ -196,25 +168,6 @@ func (s *Subscription) ForwardState() int {
 	return s.forwardState
 }
 
-// canTransition encodes the §10 lifecycle: linear forward progress, with the
-// "any state → Terminated" escape hatch for session-level shutdown.
-//
-// Self-transitions are allowed (state → state) so callers that want
-// idempotent set operations don't have to special-case them.
-func canTransition(from, to SubState) bool {
-	if to == SubTerminated {
-		return from != SubTerminated // can't escape Terminated
-	}
-	if from == SubTerminated {
-		return false
-	}
-	if from == to {
-		return true
-	}
-	// Strictly forward.
-	return int(to) == int(from)+1
-}
-
 // ---------------------------------------------------------------------------
 // UpstreamSub / DownstreamSub
 // ---------------------------------------------------------------------------
@@ -248,12 +201,14 @@ type UpstreamSub struct {
 	FetchCapable bool
 }
 
-// NewUpstreamSub constructs an UpstreamSub in [SubIdle] with the given
-// identity fields. Callers transition it to SubPending after writing the
-// SUBSCRIBE to the upstream session's request stream.
+// NewUpstreamSub constructs an UpstreamSub in [SubEstablished] with the given
+// identity fields. The relay only builds an UpstreamSub once the upstream
+// SUBSCRIBE_OK has arrived (the TrackAlias comes from it), so the
+// subscription is live from construction.
 func NewUpstreamSub(id uint64, sess *session.Session, stream session.Stream, trackAlias uint64) *UpstreamSub {
 	return &UpstreamSub{
 		Subscription: Subscription{
+			state:      SubEstablished,
 			ID:         id,
 			Session:    sess,
 			Stream:     stream,
@@ -321,7 +276,9 @@ type DownstreamSub struct {
 	GroupOrder uint8
 }
 
-// NewDownstreamSub constructs a DownstreamSub in [SubIdle].
+// NewDownstreamSub constructs a DownstreamSub in [SubEstablished]: the relay
+// accepts the subscriber's SUBSCRIBE (replying SUBSCRIBE_OK) before building
+// the sub, so it is live from construction.
 //
 // Forward State defaults to 1: §10.7 specifies that when the FORWARD
 // parameter is omitted from SUBSCRIBE the subscription forwards objects.
@@ -330,6 +287,7 @@ type DownstreamSub struct {
 func NewDownstreamSub(id uint64, sess *session.Session, stream session.Stream, trackAlias uint64) *DownstreamSub {
 	return &DownstreamSub{
 		Subscription: Subscription{
+			state:        SubEstablished,
 			ID:           id,
 			Session:      sess,
 			Stream:       stream,
@@ -536,10 +494,9 @@ func GroupOutOfRange(group uint64, f *message.SubscriptionFilter) bool {
 // [session.DrainAndWait] on the same stream, sees EOF and exits; its
 // defer evicts the [DownstreamSub] from the [TrackRegistry].
 //
-// The state machine prevents double-termination: the first caller
-// transitions to [SubTerminated] and writes the message; subsequent
-// calls return without I/O. Safe to call concurrently from any
-// goroutine.
+// The Terminate latch prevents double-termination: the first caller
+// flips the state and writes the message; subsequent calls return
+// without I/O. Safe to call concurrently from any goroutine.
 //
 // streamCount is the §10.11 "Stream Count" field — the number of
 // subgroup streams the relay opened for this subscription. Pass 0
@@ -549,8 +506,8 @@ func GroupOutOfRange(group uint64, f *message.SubscriptionFilter) bool {
 // Used by [TrackRegistry] when the last upstream feeding a track
 // disappears, so dependent subscribers stop waiting silently.
 func (d *DownstreamSub) TerminateWithPublishDone(code moqt.PublishDoneCode, reason string, streamCount uint64) {
-	if err := d.SetState(SubTerminated); err != nil {
-		return // already terminated, or transition refused
+	if !d.Terminate() {
+		return // already terminated
 	}
 	if d.Stream == nil {
 		return

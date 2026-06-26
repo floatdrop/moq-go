@@ -17,8 +17,8 @@ import (
 // handlePublish implements PUBLISH (§9.5, §10.10):
 //
 //  1. Authorize.
-//  2. Register an [registry.UpstreamSub] in the registry.TrackRegistry; transition through
-//     [registry.SubPending] → [registry.SubEstablished].
+//  2. Register an [registry.UpstreamSub] in the registry.TrackRegistry (born
+//     [registry.SubEstablished]).
 //  3. Capture the publisher's Track Properties on the entry (§9.6).
 //  4. Reply REQUEST_OK.
 //  5. Forward the PUBLISH to every downstream SUBSCRIBE_TRACKS holder
@@ -54,8 +54,6 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	}
 
 	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias)
-	_ = sub.SetState(registry.SubPending)
-	_ = sub.SetState(registry.SubEstablished)
 	h.tracks.AddUpstream(fullName, sub, registry.WithProperties(msg.TrackProperties))
 	defer func() {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH stream ended, removing upstream",

@@ -1,8 +1,8 @@
 package registry_test
 
 import (
-	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -18,8 +18,6 @@ func TestSubState_String(t *testing.T) {
 		s    registry.SubState
 		want string
 	}{
-		{registry.SubIdle, "Idle"},
-		{registry.SubPending, "Pending"},
 		{registry.SubEstablished, "Established"},
 		{registry.SubTerminated, "Terminated"},
 		{registry.SubState(99), "SubState(99)"},
@@ -31,110 +29,42 @@ func TestSubState_String(t *testing.T) {
 	}
 }
 
-// TestSubscription_LinearLifecycle walks every legal transition in
-// Idle → Pending → Established → Terminated, asserting that intermediate
-// state queries are consistent.
-func TestSubscription_LinearLifecycle(t *testing.T) {
+// TestSubscription_BornEstablished pins that a constructed subscription is
+// live immediately: the relay only builds one after the peer has accepted.
+func TestSubscription_BornEstablished(t *testing.T) {
+	t.Parallel()
+	for _, sub := range []interface {
+		IsEstablished() bool
+		IsTerminated() bool
+	}{
+		registry.NewUpstreamSub(1, nil, nil, 0),
+		registry.NewDownstreamSub(1, nil, nil, 0),
+	} {
+		if !sub.IsEstablished() || sub.IsTerminated() {
+			t.Fatalf("constructed sub: IsEstablished=%v IsTerminated=%v, want true/false",
+				sub.IsEstablished(), sub.IsTerminated())
+		}
+	}
+}
+
+// TestSubscription_TerminateLatch pins the one-shot termination latch: the
+// first Terminate wins and flips the state, every later call is a no-op that
+// reports false.
+func TestSubscription_TerminateLatch(t *testing.T) {
 	t.Parallel()
 	sub := registry.NewUpstreamSub(1, nil, nil, 0)
 
-	if got := sub.State(); got != registry.SubIdle {
-		t.Fatalf("initial state = %s, want Idle", got)
+	if !sub.Terminate() {
+		t.Fatal("first Terminate returned false, want true")
 	}
-	if sub.IsEstablished() || sub.IsTerminated() {
-		t.Fatal("Idle reported as Established or Terminated")
+	if got := sub.State(); got != registry.SubTerminated {
+		t.Fatalf("after Terminate: State() = %s, want Terminated", got)
 	}
-
-	for _, next := range []registry.SubState{registry.SubPending, registry.SubEstablished, registry.SubTerminated} {
-		if err := sub.SetState(next); err != nil {
-			t.Fatalf("SetState(%s) = %v", next, err)
-		}
-		if got := sub.State(); got != next {
-			t.Fatalf("after SetState(%s): State() = %s", next, got)
-		}
+	if !sub.IsTerminated() || sub.IsEstablished() {
+		t.Fatal("terminated sub still reports Established")
 	}
-	if !sub.IsTerminated() {
-		t.Fatal("IsTerminated returned false at the end of the lifecycle")
-	}
-}
-
-// TestSubscription_SelfTransitionsAllowed verifies idempotent SetState
-// calls: setting the same state twice in a row is a no-op, not an error.
-// Handler code that "ensures" a state benefits from this.
-func TestSubscription_SelfTransitionsAllowed(t *testing.T) {
-	t.Parallel()
-	sub := registry.NewDownstreamSub(1, nil, nil, 0)
-	if err := sub.SetState(registry.SubIdle); err != nil {
-		t.Fatalf("Idle → Idle should be allowed: %v", err)
-	}
-	_ = sub.SetState(registry.SubPending)
-	if err := sub.SetState(registry.SubPending); err != nil {
-		t.Fatalf("Pending → Pending should be allowed: %v", err)
-	}
-}
-
-// TestSubscription_AnyStateToTerminated covers the §10 shutdown escape
-// hatch: a session tearing down has the right to mark a subscription
-// Terminated regardless of its current phase.
-func TestSubscription_AnyStateToTerminated(t *testing.T) {
-	t.Parallel()
-	for _, from := range []registry.SubState{registry.SubIdle, registry.SubPending, registry.SubEstablished} {
-		t.Run(from.String(), func(t *testing.T) {
-			sub := registry.NewUpstreamSub(1, nil, nil, 0)
-			// drive into the desired starting state
-			for s := range from {
-				if err := sub.SetState(s + 1); err != nil {
-					t.Fatalf("setup: %v", err)
-				}
-			}
-			if err := sub.SetState(registry.SubTerminated); err != nil {
-				t.Fatalf("%s → Terminated: %v", from, err)
-			}
-		})
-	}
-}
-
-// TestSubscription_RejectsBackwardsTransitions enforces the linear-forward
-// invariant: anything that would go backwards or skip a phase must return
-// *ErrInvalidSubTransition.
-func TestSubscription_RejectsBackwardsTransitions(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		seq  []registry.SubState // states to drive through; last move is expected to fail
-	}{
-		{"Idle → Established skips Pending", []registry.SubState{registry.SubEstablished}},
-		{"Pending → Idle backwards", []registry.SubState{registry.SubPending, registry.SubIdle}},
-		{
-			"Established → Pending backwards",
-			[]registry.SubState{registry.SubPending, registry.SubEstablished, registry.SubPending},
-		},
-		{
-			"Terminated is absorbing",
-			[]registry.SubState{registry.SubPending, registry.SubTerminated, registry.SubPending},
-		},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			sub := registry.NewDownstreamSub(1, nil, nil, 0)
-			lastIdx := len(c.seq) - 1
-			for i, next := range c.seq {
-				err := sub.SetState(next)
-				if i < lastIdx {
-					if err != nil {
-						t.Fatalf("setup step %d (%s): %v", i, next, err)
-					}
-					continue
-				}
-				if err == nil {
-					t.Fatalf("expected failure on final %s, got nil", next)
-				}
-				var terr *registry.ErrInvalidSubTransition
-				if !errors.As(err, &terr) {
-					t.Fatalf("error type = %T (%v), want *ErrInvalidSubTransition", err, err)
-				}
-			}
-		})
+	if sub.Terminate() {
+		t.Fatal("second Terminate returned true, want false (latch)")
 	}
 }
 
@@ -277,34 +207,31 @@ func TestDownstreamSub_EffectiveStreamPriority(t *testing.T) {
 	}
 }
 
-// TestSubscription_ConcurrentTransitions is a small soak run: many
-// goroutines race to advance the state. The invariants are:
+// TestSubscription_ConcurrentTerminate is a small soak run: many goroutines
+// race to terminate the same subscription. The invariants are:
 //
-//   - exactly one SetState call per legal transition succeeds (others return
-//     ErrInvalidSubTransition because they'd be backwards),
-//   - the final state is Terminated,
-//   - State() never returns a value outside the enum.
-func TestSubscription_ConcurrentTransitions(t *testing.T) {
+//   - exactly one Terminate call returns true (the latch winner),
+//   - the final state is Terminated.
+func TestSubscription_ConcurrentTerminate(t *testing.T) {
 	t.Parallel()
 	sub := registry.NewUpstreamSub(1, nil, nil, 0)
 
 	const goroutines = 32
-	moves := []registry.SubState{registry.SubPending, registry.SubEstablished, registry.SubTerminated}
+	var winners atomic.Int32
 
 	var wg sync.WaitGroup
 	for range goroutines {
 		wg.Go(func() {
-			for _, m := range moves {
-				// Best-effort: only one goroutine will succeed
-				// per legal transition; the rest get
-				// ErrInvalidSubTransition once the state has
-				// already advanced past their attempt.
-				_ = sub.SetState(m)
+			if sub.Terminate() {
+				winners.Add(1)
 			}
 		})
 	}
 	wg.Wait()
 
+	if got := winners.Load(); got != 1 {
+		t.Fatalf("Terminate returned true %d times, want exactly 1", got)
+	}
 	if got := sub.State(); got != registry.SubTerminated {
 		t.Fatalf("final state = %s, want Terminated", got)
 	}
