@@ -271,7 +271,7 @@ func New(listener Listener, cfg Config) *Relay {
 		registry.WithTrackRegistryLogger(log),
 	}
 	if cfg.CacheTTLPolicy != nil {
-		trackOpts = append(trackOpts, registry.WithCacheTTLPolicy(cfg.CacheTTLPolicy))
+		trackOpts = append(trackOpts, registry.WithCacheTTLPolicy(registry.CacheTTLPolicy(cfg.CacheTTLPolicy)))
 	}
 	var nameOpts []registry.NamespaceRegistryOption
 	nameOpts = append(nameOpts, registry.WithNamespaceRegistryLogger(log))
