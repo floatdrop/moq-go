@@ -644,10 +644,14 @@ func (w *subgroupWriter) run() {
 // [session.PrioritizedSendStream]; adapters that don't (currently all of
 // them — see the interface docs) silently no-op.
 //
-// applyPriority is called on stream open and on §11.4.3 reopen so the
-// priority is always in sync with the latest subscriber + publisher
-// values. Future REQUEST_UPDATE handling will call it again when the
-// peer changes SUBSCRIBER_PRIORITY.
+// applyPriority is called on stream open and on §11.4.3 reopen, so a writer
+// always picks up the latest subscriber + publisher values when it (re)opens
+// its stream. A REQUEST_UPDATE that changes SUBSCRIBER_PRIORITY mid-stream
+// updates the stored DownstreamSub priority (see handleSubscribeUpdate ->
+// installSubscribeParams) but is NOT re-pushed to already-open writers — the
+// new key takes effect on the next open/reopen, not in-flight. Live re-push is
+// a follow-up that only matters once a transport honors the knob (§10.2.7;
+// quic-go#437).
 //
 // The publisher-priority byte, Group ID and Subgroup ID all come from the
 // inbound SubgroupHeader; the subscriber-priority and group-order halves come

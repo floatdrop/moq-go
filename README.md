@@ -256,9 +256,17 @@ load-bearing they are:
   advertising *after* a track's upstream set is established is not retroactively
   pulled in until that set drains and a fresh SUBSCRIBE re-establishes it;
   publishers that PUBLISH proactively are always merged regardless.
-- **Subscriber-priority scheduling** (§10.2.7) — `SUBSCRIBER_PRIORITY` is
-  parsed and stored but currently advisory; subgroup streams expose no
-  per-stream priority knob.
+- **Subscriber-priority scheduling** (§10.2.7) — fully plumbed but not yet
+  enforced on the wire. `SUBSCRIBER_PRIORITY` is parsed and stored, the §7.2
+  four-rule composite key is computed (`EffectiveStreamPriority`) and pushed
+  through the `session.PrioritizedSendStream` interface on every stream
+  open/reopen (propagation is end-to-end test-covered). The missing piece is a
+  transport adapter that honors the knob: quic-go and webtransport-go expose no
+  per-stream priority API today, so the bundled adapters silently absorb it and
+  quic-go round-robins instead. Lights up with a one-line adapter change once
+  [quic-go#437](https://github.com/quic-go/quic-go/issues/437) lands. A
+  REQUEST_UPDATE that changes the priority mid-stream applies to *subsequently
+  opened* subgroup streams, not in-flight ones.
 - **LOC encryption / SecureObjects** (LOC §3) and **Private Properties** —
   intentionally out of scope pending a chosen SecureObjects revision. Property
   IDs are draft-tentative (`PropAudioLevel = 0x0A` deviates from the draft's

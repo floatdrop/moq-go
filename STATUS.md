@@ -144,7 +144,7 @@ announce model, moq-rs's `MAX_REQUEST_ID`), not client bugs.
 | §     | Feature                    | Status  | Notes |
 |-------|----------------------------|---------|-------|
 | 7.1   | Definitions                | DONE    | Subscriber/publisher priority + group order modeled. |
-| 7.2   | Scheduling algorithm       | DONE    | `EffectiveStreamPriority` builds the composite `session.StreamPriority` (subscriber→publisher→group-order key→subgroup), covering rules 1–4; FETCH ordering is group-order + Object-ID per §10.12.3. Transport knob is currently a no-op (quic-go exposes no per-stream priority API), so the order is computed and pushed but not yet enforced on the wire. |
+| 7.2   | Scheduling algorithm       | DONE    | `EffectiveStreamPriority` builds the composite `session.StreamPriority` (subscriber→publisher→group-order key→subgroup), covering rules 1–4; FETCH ordering is group-order + Object-ID per §10.12.3. Transport knob is currently a no-op (quic-go exposes no per-stream priority API — [quic-go#437](https://github.com/quic-go/quic-go/issues/437)), so the order is computed and pushed through `session.PrioritizedSendStream` (propagation is test-covered) but not yet enforced on the wire. |
 | 7.3   | Considerations for setting | DONE    | Relay honours subscriber/publisher priority on fanout. |
 
 ## §8 Delivery timeouts and data reliability

@@ -102,10 +102,11 @@ func (p StreamPriority) Less(q StreamPriority) bool {
 // silently fall back to whatever scheduling the transport offers by
 // default. None of the bundled adapters (quicconn, wtconn, sessiontest)
 // currently implement this interface — quic-go does not expose a public
-// per-stream priority API yet, and webtransport-go's HTTP/3 layer follows
-// suit. The relay still pushes the full §7.2 priority through this interface
-// so the day the transports add the knob, it lights up without further
-// changes.
+// per-stream priority API yet (tracked upstream at
+// https://github.com/quic-go/quic-go/issues/437), and webtransport-go's
+// HTTP/3 layer follows suit. The relay still pushes the full §7.2 priority
+// through this interface so the day the transports add the knob, it lights up
+// without further changes.
 type PrioritizedSendStream interface {
 	// SetSendPriority sets the transport-level scheduling priority for
 	// this stream. It is safe to call repeatedly during the stream's
