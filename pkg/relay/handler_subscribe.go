@@ -437,7 +437,6 @@ func (h *sessionHandler) subscribeUpstream(
 // from any specific downstream subscriber's filter. The relay can then serve
 // many disparate downstream filters from one upstream stream — the fanout
 // enforces each downstream filter on the wire.
-//
 func (h *sessionHandler) subscribeUpstreamOnSession(
 	ctx context.Context,
 	sess *session.Session,
