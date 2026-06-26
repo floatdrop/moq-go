@@ -501,14 +501,7 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session) {
 	}
 }
 
-// Stop initiates graceful shutdown:
-//
-//  1. Close the Listener so no new sessions are accepted.
-//  2. Broadcast GOAWAY to every live session with the configured timeout.
-//  3. Wait up to GoawayTimeout for sessions to drain on their own.
-//  4. Forcibly close any remaining sessions with SessionNoError.
-//  5. Wait for all handler goroutines to finish.
-//
+// Stop initiates graceful shutdown.
 // Stop is idempotent. Concurrent calls share the same shutdown sequence; only
 // the first call performs work, later calls return immediately.
 func (r *Relay) Stop(ctx context.Context) error {
