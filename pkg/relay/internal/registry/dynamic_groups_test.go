@@ -55,6 +55,14 @@ func TestTrackEntry_DynamicGroups(t *testing.T) {
 			t.Fatal("got nil error, want §12.6 protocol-violation error")
 		}
 	})
+	t.Run("malformed block is an error", func(t *testing.T) {
+		t.Parallel()
+		// 0x40 is the first byte of a 2-byte varint with no second byte, so
+		// the Properties block fails to parse structurally.
+		if _, err := setProps([]byte{0x40}).DynamicGroups(); err == nil {
+			t.Fatal("got nil error, want a structural parse error")
+		}
+	})
 }
 
 // TestConsiderNewGroupRequest pins the §10.2.13 relay decision and its
