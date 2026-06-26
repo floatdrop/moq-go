@@ -1,4 +1,4 @@
-package relay_test
+package registry_test
 
 import (
 	"strings"
@@ -8,7 +8,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
-	"github.com/floatdrop/moq-go/pkg/relay"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 // ns is a tiny constructor for namespaces from string components, used to
@@ -25,7 +25,7 @@ func ns(parts ...string) wire.TrackNamespace {
 // happy path: register, snapshot, unregister, observe empty.
 func TestNamespaceRegistry_RegisterUnregisterPublisher(t *testing.T) {
 	t.Parallel()
-	r := relay.NewNamespaceRegistry()
+	r := registry.NewNamespaceRegistry()
 	entry := r.RegisterPublisher(ns("video"), nil, nil)
 
 	if got := len(r.CopyPublishers()); got != 1 {
@@ -46,7 +46,7 @@ func TestNamespaceRegistry_RegisterUnregisterPublisher(t *testing.T) {
 // test for SubscriberEntry.
 func TestNamespaceRegistry_RegisterUnregisterSubscriber(t *testing.T) {
 	t.Parallel()
-	r := relay.NewNamespaceRegistry()
+	r := registry.NewNamespaceRegistry()
 	entry := r.RegisterSubscriber(ns("chat"), nil, nil, false)
 
 	subs := r.CopySubscribers()
@@ -66,7 +66,7 @@ func TestNamespaceRegistry_RegisterUnregisterSubscriber(t *testing.T) {
 // namespace OR an extension of it.
 func TestNamespaceRegistry_MatchPublishers(t *testing.T) {
 	t.Parallel()
-	r := relay.NewNamespaceRegistry()
+	r := registry.NewNamespaceRegistry()
 
 	// Three publishers at different depths.
 	pRoot := r.RegisterPublisher(ns(), nil, nil)                     // matches everything
@@ -76,14 +76,14 @@ func TestNamespaceRegistry_MatchPublishers(t *testing.T) {
 	cases := []struct {
 		name string
 		q    wire.TrackNamespace
-		want []*relay.PublisherEntry
+		want []*registry.PublisherEntry
 	}{
-		{"exact root", ns(), []*relay.PublisherEntry{pRoot}},
-		{"video only", ns("video"), []*relay.PublisherEntry{pRoot, pVideo}},
-		{"video/cam1", ns("video", "cam1"), []*relay.PublisherEntry{pRoot, pVideo, pVideoCam1}},
-		{"video/cam2", ns("video", "cam2"), []*relay.PublisherEntry{pRoot, pVideo}},
-		{"audio", ns("audio"), []*relay.PublisherEntry{pRoot}},
-		{"chat/room1", ns("chat", "room1"), []*relay.PublisherEntry{pRoot}},
+		{"exact root", ns(), []*registry.PublisherEntry{pRoot}},
+		{"video only", ns("video"), []*registry.PublisherEntry{pRoot, pVideo}},
+		{"video/cam1", ns("video", "cam1"), []*registry.PublisherEntry{pRoot, pVideo, pVideoCam1}},
+		{"video/cam2", ns("video", "cam2"), []*registry.PublisherEntry{pRoot, pVideo}},
+		{"audio", ns("audio"), []*registry.PublisherEntry{pRoot}},
+		{"chat/room1", ns("chat", "room1"), []*registry.PublisherEntry{pRoot}},
 	}
 
 	for _, c := range cases {
@@ -105,7 +105,7 @@ func TestNamespaceRegistry_MatchPublishers(t *testing.T) {
 // prefix of the namespace.
 func TestNamespaceRegistry_MatchSubscribers(t *testing.T) {
 	t.Parallel()
-	r := relay.NewNamespaceRegistry()
+	r := registry.NewNamespaceRegistry()
 
 	sAll := r.RegisterSubscriber(ns(), nil, nil, false)          // "all namespaces"
 	sVideo := r.RegisterSubscriber(ns("video"), nil, nil, false) // wants video/*
@@ -114,14 +114,14 @@ func TestNamespaceRegistry_MatchSubscribers(t *testing.T) {
 	cases := []struct {
 		name string
 		q    wire.TrackNamespace
-		want []*relay.SubscriberEntry
+		want []*registry.SubscriberEntry
 	}{
-		{"root advertisement", ns(), []*relay.SubscriberEntry{sAll}},
-		{"video advertisement", ns("video"), []*relay.SubscriberEntry{sAll, sVideo}},
-		{"video/cam1 advertisement", ns("video", "cam1"), []*relay.SubscriberEntry{sAll, sVideo}},
-		{"chat advertisement", ns("chat"), []*relay.SubscriberEntry{sAll, sChatTracks}},
-		{"chat/room1 advertisement", ns("chat", "room1"), []*relay.SubscriberEntry{sAll, sChatTracks}},
-		{"audio advertisement", ns("audio"), []*relay.SubscriberEntry{sAll}},
+		{"root advertisement", ns(), []*registry.SubscriberEntry{sAll}},
+		{"video advertisement", ns("video"), []*registry.SubscriberEntry{sAll, sVideo}},
+		{"video/cam1 advertisement", ns("video", "cam1"), []*registry.SubscriberEntry{sAll, sVideo}},
+		{"chat advertisement", ns("chat"), []*registry.SubscriberEntry{sAll, sChatTracks}},
+		{"chat/room1 advertisement", ns("chat", "room1"), []*registry.SubscriberEntry{sAll, sChatTracks}},
+		{"audio advertisement", ns("audio"), []*registry.SubscriberEntry{sAll}},
 	}
 
 	for _, c := range cases {
@@ -143,7 +143,7 @@ func TestNamespaceRegistry_MatchSubscribers(t *testing.T) {
 // session, on either side, must be evicted in one call.
 func TestNamespaceRegistry_RemoveSession(t *testing.T) {
 	t.Parallel()
-	r := relay.NewNamespaceRegistry()
+	r := registry.NewNamespaceRegistry()
 
 	sessA := &session.Session{}
 	sessB := &session.Session{}
@@ -180,7 +180,7 @@ func TestNamespaceRegistry_RemoveSession(t *testing.T) {
 // individually. The registry does not deduplicate.
 func TestNamespaceRegistry_DuplicateRegistrationsAreSeparate(t *testing.T) {
 	t.Parallel()
-	r := relay.NewNamespaceRegistry()
+	r := registry.NewNamespaceRegistry()
 
 	e1 := r.RegisterPublisher(ns("video"), nil, nil)
 	e2 := r.RegisterPublisher(ns("video"), nil, nil)
@@ -206,7 +206,7 @@ func TestNamespaceRegistry_DuplicateRegistrationsAreSeparate(t *testing.T) {
 // the writers' Unregisters must always succeed.
 func TestNamespaceRegistry_ConcurrentRegisterMatch(t *testing.T) {
 	t.Parallel()
-	r := relay.NewNamespaceRegistry()
+	r := registry.NewNamespaceRegistry()
 	const goroutines = 8
 	const opsPerG = 200
 
@@ -264,7 +264,7 @@ func formatNamespace(ns wire.TrackNamespace) string {
 	return out.String()
 }
 
-func formatPublishers(s []*relay.PublisherEntry) string {
+func formatPublishers(s []*registry.PublisherEntry) string {
 	var out strings.Builder
 	out.WriteString("[")
 	for i, e := range s {
@@ -276,7 +276,7 @@ func formatPublishers(s []*relay.PublisherEntry) string {
 	return out.String() + "]"
 }
 
-func formatSubscribers(s []*relay.SubscriberEntry) string {
+func formatSubscribers(s []*registry.SubscriberEntry) string {
 	var out strings.Builder
 	out.WriteString("[")
 	for i, e := range s {
@@ -293,7 +293,7 @@ func formatSubscribers(s []*relay.SubscriberEntry) string {
 // reports it, and both ClearBlocked and ClearBlockedForSession lift it.
 func TestNamespaceRegistry_BlockedSet(t *testing.T) {
 	t.Parallel()
-	r := relay.NewNamespaceRegistry()
+	r := registry.NewNamespaceRegistry()
 	entry := r.RegisterSubscriber(ns("video"), nil, nil, true /*wantsTracks*/)
 
 	key := track.NewKey(ns("video", "cam7"), []byte("rtp"))

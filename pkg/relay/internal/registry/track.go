@@ -1,4 +1,16 @@
-package relay
+// Package registry holds the relay's process-wide shared state: the track
+// registry (object routing + per-track cache), the namespace registry
+// (PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE bookkeeping), the fetch router
+// (rendezvous for upstream FETCH response streams), and the subscription
+// state machine (UpstreamSub / DownstreamSub).
+//
+// It is the bottom layer of the relay: the parent pkg/relay session handlers
+// depend on it, but it never imports the parent — the dependency edge only
+// ever points handler → registry. Living under internal/ also keeps these
+// types out of pkg/relay's public API; they are exported for the package's own
+// white-box tests, not for external consumers. See the pkg/relay package doc
+// for the full layer map.
+package registry
 
 import (
 	"context"
@@ -16,12 +28,12 @@ import (
 )
 
 // Default per-track object-cache bounds. Used by [NewTrackRegistry] when
-// the caller does not supply [WithCacheConfig]. The relay's [Config]
-// overrides these; tests that construct registries directly inherit the
-// defaults.
+// the caller does not supply [WithCacheConfig]. The relay's Config overrides
+// these (relay.New reads them to fill unset Config fields); tests that
+// construct registries directly inherit the defaults.
 const (
-	defaultCacheMaxSize     = 1024
-	defaultCacheMaxDuration = 30 * time.Second
+	DefaultCacheMaxSize     = 1024
+	DefaultCacheMaxDuration = 30 * time.Second
 )
 
 // discoveryCallTimeout bounds each best-effort call into the DiscoveryStore
@@ -97,7 +109,7 @@ type TrackEntry struct {
 	Downstream []*DownstreamSub
 
 	// downstreamGen counts appends to Downstream. The per-object fanout
-	// (updateLargestAndDetectNew) snapshots it alongside its initial
+	// (UpdateLargestAndDetectNew) snapshots it alongside its initial
 	// CopyDownstream and skips the O(len(Downstream)) joiner scan on every
 	// object whose generation is unchanged — joiners are rare, so the common
 	// case becomes a watermark bump with no scan. Bumped only on append
@@ -199,7 +211,7 @@ type TrackRegistryOption func(*TrackRegistry)
 // new entry the registry constructs. maxSize is the per-track upper bound
 // on stored objects; maxDuration is the maximum age before time-based
 // eviction. Values <= 0 fall back to the package defaults
-// ([defaultCacheMaxSize], [defaultCacheMaxDuration]).
+// ([DefaultCacheMaxSize], [DefaultCacheMaxDuration]).
 func WithCacheConfig(maxSize int, maxDuration time.Duration) TrackRegistryOption {
 	return func(r *TrackRegistry) {
 		if maxSize > 0 {
@@ -242,13 +254,13 @@ func WithTrackRegistryLogger(l *slog.Logger) TrackRegistryOption {
 }
 
 // NewTrackRegistry constructs an empty registry. Default per-track cache
-// bounds are [defaultCacheMaxSize] / [defaultCacheMaxDuration]; callers
+// bounds are [DefaultCacheMaxSize] / [DefaultCacheMaxDuration]; callers
 // override them with [WithCacheConfig].
 func NewTrackRegistry(opts ...TrackRegistryOption) *TrackRegistry {
 	r := &TrackRegistry{
 		tracks:           make(map[track.Key]*TrackEntry),
-		cacheMaxSize:     defaultCacheMaxSize,
-		cacheMaxDuration: defaultCacheMaxDuration,
+		cacheMaxSize:     DefaultCacheMaxSize,
+		cacheMaxDuration: DefaultCacheMaxDuration,
 		log:              slog.Default(),
 	}
 	for _, opt := range opts {
@@ -754,9 +766,10 @@ func (e *TrackEntry) ConsiderNewGroupRequest(value uint64, dynamicGroups bool) b
 	return true
 }
 
-// updateLargestAndDetectNew advances LargestObject and, under the same
-// e.mu acquisition, returns any Downstream subs whose IDs are not in
-// the seen map. The seen map is consulted (not mutated). Used by
+// UpdateLargestAndDetectNew advances LargestObject and, under the same
+// e.mu acquisition, returns any Downstream subs for which seen reports
+// false. seen is consulted (the fanout passes a membership test over the
+// writers it has already opened); the entry never mutates it. Used by
 // runFanout per-object so a downstream sub that joined the entry's
 // Downstream after the initial CopyDownstream is detected and given a
 // writer for the current (and subsequent) objects on the in-flight
@@ -770,9 +783,13 @@ func (e *TrackEntry) ConsiderNewGroupRequest(value uint64, dynamicGroups bool) b
 // at its initial CopyDownstreamWithGen snapshot). When the generation is
 // unchanged no sub has joined since, so the joiner scan is skipped entirely;
 // gen (returned) should be fed back as lastGen on the next call.
-func (e *TrackEntry) updateLargestAndDetectNew(
+//
+// seen is a predicate rather than a concrete map so this (registry) layer
+// need not know the fanout's writer type, keeping the dependency edge
+// pointing one way (fanout → registry).
+func (e *TrackEntry) UpdateLargestAndDetectNew(
 	loc message.Location,
-	seen map[*DownstreamSub]*subgroupWriter,
+	seen func(*DownstreamSub) bool,
 	lastGen uint64,
 ) (newSubs []*DownstreamSub, gen uint64) {
 	e.mu.Lock()
@@ -785,7 +802,7 @@ func (e *TrackEntry) updateLargestAndDetectNew(
 		return nil, e.downstreamGen
 	}
 	for _, sub := range e.Downstream {
-		if _, ok := seen[sub]; !ok {
+		if !seen(sub) {
 			newSubs = append(newSubs, sub)
 		}
 	}

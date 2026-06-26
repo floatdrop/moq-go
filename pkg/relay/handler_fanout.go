@@ -12,6 +12,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay/cache"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 // fwdObject pairs a SubgroupObject with its absolute Object ID on the
@@ -26,35 +27,6 @@ type fwdObject struct {
 	enqueuedAt time.Time // stamped in publish; used for the §8 lag window
 }
 
-// groupOutOfRange reports whether a Subgroup belonging to group is entirely
-// outside the subscription's filter range — i.e. no object in that group can
-// ever pass — which makes its in-flight stream eligible for a §11.4.3 reset
-// (e.g. after a REQUEST_UPDATE narrowed the End Group or raised the Start
-// Location to a higher group). Only the absolute filters carry a fixed range;
-// the dynamic (LargestObject / NextGroupStart) and unset filters never put a
-// whole group permanently out of range, so they return false.
-//
-// A group equal to the Start Location's group is NOT out of range even when
-// the Start Location's Object rose — objects at or above it still pass, so the
-// stream stays relevant and object-level filtering handles the boundary.
-func groupOutOfRange(group uint64, f *message.SubscriptionFilter) bool {
-	if f == nil {
-		return false
-	}
-	switch f.Type {
-	case message.FilterAbsoluteStart:
-		return group < f.StartLocation.Group
-	case message.FilterAbsoluteRange:
-		return group < f.StartLocation.Group || group > f.EndGroup()
-	case message.FilterNextGroupStart, message.FilterLargestObject:
-		// Dynamic start derived from the largest object; no fixed range that
-		// puts a whole group permanently out of range.
-		return false
-	default:
-		return false
-	}
-}
-
 // runFanout is the subgroup-stream fanout entry point. One inbound
 // SUBGROUP_HEADER stream produces one or more outbound SUBGROUP_HEADER
 // streams per downstream subscriber, with the publisher's Track Alias
@@ -65,7 +37,7 @@ func groupOutOfRange(group uint64, f *message.SubscriptionFilter) bool {
 // and ObjectIDDelta is re-encoded on the outbound side so filter drops
 // don't shift the subscriber's decoded absolute IDs. §11.4.3 gap-driven
 // reset/reopen is implemented; the inbound FIN-vs-reset distinction is
-// propagated to the outbound streams; [TrackEntry.LargestObject] (§10.2.11)
+// propagated to the outbound streams; [registry.TrackEntry.LargestObject] (§10.2.11)
 // is bumped on every forwarded object.
 func (h *sessionHandler) runFanout(ctx context.Context, stream *session.IncomingSubgroupStream) {
 	hdr := stream.Header
@@ -94,7 +66,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	}
 
 	// writers maps a downstream sub to its outbound writer. The key is
-	// the *DownstreamSub pointer itself rather than sub.ID because IDs
+	// the *registry.DownstreamSub pointer itself rather than sub.ID because IDs
 	// are allocated per-session-handler (allocSubID), so two subs from
 	// different sessions can collide on ID. A nil value means we tried
 	// to open a writer for that sub and failed — the entry keeps us
@@ -104,7 +76,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	// lets us cheaply detect "subs in entry.Downstream that we don't
 	// have a writer for yet" on every object, which is how we close the
 	// race against subs that join the entry after our initial snapshot.
-	writers := make(map[*DownstreamSub]*subgroupWriter)
+	writers := make(map[*registry.DownstreamSub]*subgroupWriter)
 
 	// Open initial writers from the current Downstream snapshot. Done
 	// outside any lock — OpenSubgroup is I/O. downstreamGen is captured with
@@ -140,7 +112,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			// subscription's range (e.g. a REQUEST_UPDATE narrowed it) MUST
 			// be reset, not FIN'd, even on a clean inbound EOF — a FIN would
 			// falsely signal the group was fully delivered.
-			if !reset && groupOutOfRange(hdr.GroupID, w.sub.GetFilter()) {
+			if !reset && registry.GroupOutOfRange(hdr.GroupID, w.sub.GetFilter()) {
 				reset, code = true, moqt.StreamResetCancelled
 			}
 			w.close(reset, code)
@@ -215,8 +187,9 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// object via live), or it snapshots the post-update Largest (so
 		// its Joining FETCH covers this object). Either way, no gap.
 		loc := message.Location{Group: hdr.GroupID, Object: objectID}
-		var newSubs []*DownstreamSub
-		newSubs, downstreamGen = entry.updateLargestAndDetectNew(loc, writers, downstreamGen)
+		var newSubs []*registry.DownstreamSub
+		newSubs, downstreamGen = entry.UpdateLargestAndDetectNew(loc,
+			func(s *registry.DownstreamSub) bool { _, ok := writers[s]; return ok }, downstreamGen)
 
 		// Cache the object AFTER UpdateLargest+newSubs detection so
 		// that the LARGEST_OBJECT a concurrent
@@ -278,7 +251,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 }
 
 // openWriterForSub opens an outbound subgroup stream for sub, builds a
-// subgroupWriter, and records it in writers keyed by the *DownstreamSub
+// subgroupWriter, and records it in writers keyed by the *registry.DownstreamSub
 // pointer. On any failure (sub not Established, OpenSubgroup error)
 // writers[sub] is set to nil so we don't retry. If replaying is true, the outbound
 // stream's header sets §11.4.2 ReplayingSubgroup — per the spec, "when
@@ -287,8 +260,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 func (h *sessionHandler) openWriterForSub(
 	ctx context.Context,
 	hdr message.SubgroupHeader,
-	sub *DownstreamSub,
-	writers map[*DownstreamSub]*subgroupWriter,
+	sub *registry.DownstreamSub,
+	writers map[*registry.DownstreamSub]*subgroupWriter,
 	replaying bool,
 ) {
 	if _, already := writers[sub]; already {
@@ -348,11 +321,11 @@ func (h *sessionHandler) openWriterForSub(
 //     records its enqueue time; if the writer later dequeues one that waited
 //     longer than maxLag, the subscriber has fallen too far behind the live
 //     edge (§8 Delivery Timeouts) and the writer resets its outbound stream
-//     with TOO_FAR_BEHIND (§3.3.3), transitions the [DownstreamSub] to
-//     [SubTerminated], and exits. The optional maxDropsBeforeReset cap is a
+//     with TOO_FAR_BEHIND (§3.3.3), transitions the [registry.DownstreamSub] to
+//     [registry.SubTerminated], and exits. The optional maxDropsBeforeReset cap is a
 //     coarse backstop on cumulative drops, reset with EXCESSIVE_LOAD instead.
 type subgroupWriter struct {
-	sub                 *DownstreamSub
+	sub                 *registry.DownstreamSub
 	ctx                 context.Context
 	hdr                 message.SubgroupHeader // template; TrackAlias already remapped
 	out                 *session.OutgoingSubgroupStream
@@ -548,12 +521,12 @@ func (w *subgroupWriter) run() {
 		if w.out != nil {
 			w.out.Cancel(resetCode)
 		}
-		_ = w.sub.SetState(SubTerminated)
+		_ = w.sub.SetState(registry.SubTerminated)
 
 		// Also cancel the subscriber's request stream so the
 		// handleSubscribe goroutine's DrainAndWait returns and its
-		// defer removes this DownstreamSub from the TrackRegistry.
-		// Without this the sub would linger in SubTerminated state in
+		// defer removes this registry.DownstreamSub from the registry.TrackRegistry.
+		// Without this the sub would linger in registry.SubTerminated state in
 		// entry.Downstream until the subscriber's session itself
 		// dies — runFanout would skip it (because !IsEstablished()),
 		// but the registry entry would stay around.

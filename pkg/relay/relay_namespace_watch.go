@@ -10,7 +10,7 @@ import (
 // runNamespaceWatch consumes [discovery.DiscoveryStore.WatchNamespaces] and
 // forwards namespaces advertised by *other* relays to this relay's local
 // SUBSCRIBE_NAMESPACE holders. It is the consume-side mirror of the advertise
-// side in [NamespaceRegistry]: that publishes local PUBLISH_NAMESPACE into the
+// side in [registry.NamespaceRegistry]: that publishes local PUBLISH_NAMESPACE into the
 // store; this reflects remote advertisements back out as NAMESPACE /
 // NAMESPACE_DONE so a downstream subscriber discovers namespaces served
 // elsewhere in the deployment — and can then SUBSCRIBE, which the on-demand

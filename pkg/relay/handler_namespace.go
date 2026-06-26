@@ -7,18 +7,19 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 // handlePublishNamespace implements the PUBLISH_NAMESPACE flow (§6.2, §10.15):
 //
 //  1. Authorize.
-//  2. Register the namespace in [NamespaceRegistry].
+//  2. Register the namespace in [registry.NamespaceRegistry].
 //  3. Reply REQUEST_OK on the request stream.
 //  4. Forward to every matching downstream SUBSCRIBE_NAMESPACE holder as a
 //     NAMESPACE message (§9.5).
 //  5. Block reading the request stream until the publisher cancels it
 //     (FIN / RESET_STREAM, §6.2). On exit, unregister from the
-//     NamespaceRegistry and emit NAMESPACE_DONE to the same subscribers.
+//     registry.NamespaceRegistry and emit NAMESPACE_DONE to the same subscribers.
 //
 // The §9.5 "issue upstream SUBSCRIBE for matching downstream subs"
 // optimisation is handled by the SUBSCRIBE handler's on-demand
@@ -47,7 +48,7 @@ func (h *sessionHandler) handlePublishNamespace(
 	// Per §6.2 the relay MUST send NAMESPACE to subscribers whose
 	// prefix matches OR is a prefix of the advertised namespace.
 	subscribers := h.names.MatchSubscribers(msg.Namespace)
-	notified := make([]*SubscriberEntry, 0, len(subscribers))
+	notified := make([]*registry.SubscriberEntry, 0, len(subscribers))
 	for _, sub := range subscribers {
 		if sub.WantsTracks {
 			// SUBSCRIBE_TRACKS holders get PUBLISH messages, not
@@ -73,7 +74,7 @@ func (h *sessionHandler) handlePublishNamespace(
 	// that unregistered while we were running), then intersect with
 	// `notified` so we don't notify subscribers that never saw the
 	// initial NAMESPACE.
-	stillAlive := make(map[*SubscriberEntry]struct{})
+	stillAlive := make(map[*registry.SubscriberEntry]struct{})
 	for _, s := range h.names.CopySubscribers() {
 		stillAlive[s] = struct{}{}
 	}
@@ -91,7 +92,7 @@ func (h *sessionHandler) handlePublishNamespace(
 // handleSubscribeNamespace implements SUBSCRIBE_NAMESPACE (§6.1, §10.18):
 //
 //  1. Authorize.
-//  2. Register in [NamespaceRegistry] with WantsTracks=false.
+//  2. Register in [registry.NamespaceRegistry] with WantsTracks=false.
 //  3. Reply REQUEST_OK.
 //  4. Emit one NAMESPACE for every currently-known publisher whose
 //     advertised namespace extends our prefix (§6.1: the publisher MUST send
@@ -146,13 +147,13 @@ func (h *sessionHandler) handleSubscribeNamespace(
 // handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.19):
 //
 //  1. Authorize.
-//  2. Register in [NamespaceRegistry] with WantsTracks=true.
+//  2. Register in [registry.NamespaceRegistry] with WantsTracks=true.
 //  3. Reply REQUEST_OK.
 //  4. Block reading the request stream until the subscriber cancels it.
 //
 // PUBLISH forwarding (the actual reason SUBSCRIBE_TRACKS exists) is the
 // responsibility of `handlePublish` — it queries
-// [NamespaceRegistry.MatchSubscribers] on every inbound PUBLISH and routes
+// [registry.NamespaceRegistry.MatchSubscribers] on every inbound PUBLISH and routes
 // to each WantsTracks=true entry whose prefix matches.
 func (h *sessionHandler) handleSubscribeTracks(
 	ctx context.Context,

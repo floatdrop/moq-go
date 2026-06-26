@@ -12,6 +12,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 // sessionHandler owns the per-session request and data-stream loops. One
@@ -19,7 +20,7 @@ import (
 // and torn down when the session terminates.
 //
 // The handler is purely a façade over the relay's shared state — it does not
-// own the [TrackRegistry], [NamespaceRegistry], or [Authorizer]. They are
+// own the [registry.TrackRegistry], [registry.NamespaceRegistry], or [Authorizer]. They are
 // injected by [Relay.handleConn] and referenced read-only on the handler.
 //
 // Concurrency model:
@@ -37,11 +38,11 @@ import (
 type sessionHandler struct {
 	sess                *session.Session
 	log                 *slog.Logger
-	tracks              *TrackRegistry
-	names               *NamespaceRegistry
+	tracks              *registry.TrackRegistry
+	names               *registry.NamespaceRegistry
 	auth                Authorizer
 	metrics             Metrics
-	fetch               *fetchRouter
+	fetch               *registry.FetchRouter
 	upstreams           *upstreamPool
 	sendQueueSize       int
 	maxDropsBeforeReset int
@@ -51,9 +52,9 @@ type sessionHandler struct {
 	limiter sessionLimiter
 
 	// nextSubID allocates relay-internal subscription IDs for the
-	// UpstreamSub / DownstreamSub records this handler installs into the
-	// TrackRegistry. The counter is per-handler because IDs only have to
-	// be unique within a TrackEntry's slices — there is no global
+	// registry.UpstreamSub / registry.DownstreamSub records this handler installs into the
+	// registry.TrackRegistry. The counter is per-handler because IDs only have to
+	// be unique within a registry.TrackEntry's slices — there is no global
 	// requirement — and a per-handler counter avoids contention.
 	subIDMu sync.Mutex
 	subID   uint64
@@ -85,11 +86,11 @@ type joiningLocation struct {
 func newSessionHandler(
 	sess *session.Session,
 	log *slog.Logger,
-	tracks *TrackRegistry,
-	names *NamespaceRegistry,
+	tracks *registry.TrackRegistry,
+	names *registry.NamespaceRegistry,
 	auth Authorizer,
 	metrics Metrics,
-	fetch *fetchRouter,
+	fetch *registry.FetchRouter,
 	upstreams *upstreamPool,
 	sendQueueSize int,
 	maxDropsBeforeReset int,
@@ -164,7 +165,7 @@ func (h *sessionHandler) handleInboundGoaway(ctx context.Context) {
 }
 
 // allocSubID returns a fresh subscription ID for this handler. Used when
-// instantiating UpstreamSub / DownstreamSub from inside the request handlers.
+// instantiating registry.UpstreamSub / registry.DownstreamSub from inside the request handlers.
 func (h *sessionHandler) allocSubID() uint64 {
 	h.subIDMu.Lock()
 	defer h.subIDMu.Unlock()
@@ -314,7 +315,7 @@ func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 			// matching (session, RequestID) via the fetch router; if none
 			// is registered (no stitch in flight, or a duplicate/late
 			// response), reset it to keep the upstream's flow control free.
-			if !h.fetch.deliver(h.sess, s.Header.RequestID, s) {
+			if !h.fetch.Deliver(h.sess, s.Header.RequestID, s) {
 				h.log.LogAttrs(ctx, slog.LevelDebug, "relay dropped unmatched IncomingFetchStream",
 					slog.Uint64("request_id", s.Header.RequestID))
 				s.Cancel(moqt.StreamResetInternalError)
@@ -333,7 +334,7 @@ func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 //  2. Reply with either *_OK or REQUEST_ERROR.
 //  3. Keep the bidi stream open for as long as the subscription's lifetime
 //     warrants (or close it cleanly on rejection).
-//  4. Update [TrackRegistry] / [NamespaceRegistry] as appropriate.
+//  4. Update [registry.TrackRegistry] / [registry.NamespaceRegistry] as appropriate.
 //
 // Unknown message types are treated as protocol violations per §3.3.2: we
 // reset the bidi stream and log. We do NOT close the session — §9.5 ("If a

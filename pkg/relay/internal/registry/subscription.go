@@ -1,4 +1,4 @@
-package relay
+package registry
 
 import (
 	"fmt"
@@ -497,7 +497,36 @@ func (d *DownstreamSub) ForwardDecision(group, object uint64) (forward, groupExh
 	if f.Matches(group, object, largest.Group, largest.Object, has) {
 		return true, false
 	}
-	return false, groupOutOfRange(group, f)
+	return false, GroupOutOfRange(group, f)
+}
+
+// GroupOutOfRange reports whether a Subgroup belonging to group is entirely
+// outside the subscription's filter range — i.e. no object in that group can
+// ever pass — which makes its in-flight stream eligible for a §11.4.3 reset
+// (e.g. after a REQUEST_UPDATE narrowed the End Group or raised the Start
+// Location to a higher group). Only the absolute filters carry a fixed range;
+// the dynamic (LargestObject / NextGroupStart) and unset filters never put a
+// whole group permanently out of range, so they return false.
+//
+// A group equal to the Start Location's group is NOT out of range even when
+// the Start Location's Object rose — objects at or above it still pass, so the
+// stream stays relevant and object-level filtering handles the boundary.
+func GroupOutOfRange(group uint64, f *message.SubscriptionFilter) bool {
+	if f == nil {
+		return false
+	}
+	switch f.Type {
+	case message.FilterAbsoluteStart:
+		return group < f.StartLocation.Group
+	case message.FilterAbsoluteRange:
+		return group < f.StartLocation.Group || group > f.EndGroup()
+	case message.FilterNextGroupStart, message.FilterLargestObject:
+		// Dynamic start derived from the largest object; no fixed range that
+		// puts a whole group permanently out of range.
+		return false
+	default:
+		return false
+	}
 }
 
 // TerminateWithPublishDone gracefully ends this downstream subscription
