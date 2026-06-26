@@ -1,18 +1,37 @@
-// Package relaytest holds helpers shared across the relay tests
-// (package relay_test). Keeping them here avoids duplicating the same
-// helper across the test files that cannot otherwise share unexported
-// code.
+// Package relaytest holds helpers shared across the relay tests (the
+// relay_test and registry_test packages). Keeping them here avoids
+// duplicating the same helper across test files that cannot otherwise share
+// unexported code.
 package relaytest
 
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
+
+// FormatNamespace renders a Track Namespace as a readable slash-joined string
+// for test failure messages. Shared by the relay_test and registry_test
+// packages.
+func FormatNamespace(ns wire.TrackNamespace) string {
+	if len(ns) == 0 {
+		return "<root>"
+	}
+	var out strings.Builder
+	for i, f := range ns {
+		if i > 0 {
+			out.WriteString("/")
+		}
+		out.Write(f)
+	}
+	return out.String()
+}
 
 // ReadNextMessage parses one full MoQT control message off stream, failing
 // the test if reading takes longer than the deadline allows. A context

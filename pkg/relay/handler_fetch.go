@@ -12,6 +12,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/relay/cache"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 // defaultUpstreamFetchTimeout bounds an upstream stitch FETCH when the
@@ -386,7 +387,7 @@ func capFetchEndLocation(requested, largest message.Location) message.Location {
 // backfill would evict live objects.
 func (h *sessionHandler) stitchedFetchObjects(
 	ctx context.Context,
-	entry *TrackEntry,
+	entry *registry.TrackEntry,
 	fullName track.FullTrackName,
 	requestStart message.Location,
 	requestWireEnd message.Location,
@@ -434,7 +435,7 @@ func (h *sessionHandler) stitchedFetchObjects(
 // leaf publisher pushes live objects and is not expected to answer FETCH, so
 // stitching to it would only stall. Skipping the requester's own session
 // avoids a self-loop (mirrors subscribeUpstream's guard).
-func (h *sessionHandler) pickFetchUpstream(entry *TrackEntry) *UpstreamSub {
+func (h *sessionHandler) pickFetchUpstream(entry *registry.TrackEntry) *registry.UpstreamSub {
 	for _, u := range entry.CopyUpstream() {
 		if u.FetchCapable && u.IsEstablished() && u.Session != nil && u.Session != h.sess {
 			return u
@@ -451,7 +452,7 @@ func (h *sessionHandler) pickFetchUpstream(entry *TrackEntry) *UpstreamSub {
 // the upstream FETCH carries the same GROUP_ORDER parameter.
 func (h *sessionHandler) fetchUpstreamRange(
 	ctx context.Context,
-	up *UpstreamSub,
+	up *registry.UpstreamSub,
 	fullName track.FullTrackName,
 	start, wireEnd message.Location,
 	order message.GroupOrder,
@@ -495,7 +496,7 @@ func (h *sessionHandler) fetchUpstreamRange(
 	// the body stream lands on the upstream session's data loop keyed by
 	// fmsg.RequestID. Register after Fetch (the ID is only assigned there);
 	// the router tolerates a response that races ahead of registration.
-	ch, cleanup := h.fetch.register(up.Session, fmsg.RequestID)
+	ch, cleanup := h.fetch.Register(up.Session, fmsg.RequestID)
 	defer cleanup()
 
 	var fs *session.IncomingFetchStream

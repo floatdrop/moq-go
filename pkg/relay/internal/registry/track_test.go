@@ -1,4 +1,4 @@
-package relay_test
+package registry_test
 
 import (
 	"sync"
@@ -10,8 +10,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
-	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/cache"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 func newTestTrackName(name string) track.FullTrackName {
@@ -25,7 +25,7 @@ func newTestTrackName(name string) track.FullTrackName {
 // Get is a clean miss rather than a zero entry.
 func TestTrackRegistry_GetMissingReturnsFalse(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	if _, ok := r.Get(newTestTrackName("absent").Key()); ok {
 		t.Fatal("Get returned ok for absent key")
 	}
@@ -38,7 +38,7 @@ func TestTrackRegistry_GetMissingReturnsFalse(t *testing.T) {
 // same name return the same entry pointer — the whole point of the registry.
 func TestTrackRegistry_GetOrCreateIsIdempotent(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	name := newTestTrackName("track-1")
 	e1 := r.GetOrCreate(name)
 	e2 := r.GetOrCreate(name)
@@ -59,14 +59,14 @@ func TestTrackRegistry_GetOrCreateIsIdempotent(t *testing.T) {
 // contract is pinned here.
 func TestTrackRegistry_AddUpstreamFirstSignal(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	name := newTestTrackName("multi-pub")
 
-	_, first := r.AddUpstream(name, &relay.UpstreamSub{Subscription: relay.Subscription{ID: 1}})
+	_, first := r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}})
 	if !first {
 		t.Fatal("first AddUpstream should report becameNonEmpty=true")
 	}
-	_, again := r.AddUpstream(name, &relay.UpstreamSub{Subscription: relay.Subscription{ID: 2}})
+	_, again := r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 2}})
 	if again {
 		t.Fatal("second AddUpstream must report becameNonEmpty=false")
 	}
@@ -86,11 +86,11 @@ func TestTrackRegistry_AddUpstreamFirstSignal(t *testing.T) {
 // removal must delete the entry from the registry.
 func TestTrackRegistry_RemoveUpstreamEmptyTransitions(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	name := newTestTrackName("lifecycle")
 
-	r.AddUpstream(name, &relay.UpstreamSub{Subscription: relay.Subscription{ID: 1}})
-	r.AddUpstream(name, &relay.UpstreamSub{Subscription: relay.Subscription{ID: 2}})
+	r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}})
+	r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 2}})
 
 	removed, empty, deleted := r.RemoveUpstream(name, 1)
 	if !removed || empty || deleted {
@@ -114,11 +114,11 @@ func TestTrackRegistry_RemoveUpstreamEmptyTransitions(t *testing.T) {
 // signal upstreamEmpty so the Discovery store can unpublish.
 func TestTrackRegistry_EntryRetainedWhileDownstreamRemains(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	name := newTestTrackName("partial")
 
-	r.AddUpstream(name, &relay.UpstreamSub{Subscription: relay.Subscription{ID: 1}})
-	r.AddDownstream(name, &relay.DownstreamSub{Subscription: relay.Subscription{ID: 100}})
+	r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}})
+	r.AddDownstream(name, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 100}})
 
 	removed, empty, deleted := r.RemoveUpstream(name, 1)
 	if !removed || !empty {
@@ -147,7 +147,7 @@ func TestTrackRegistry_EntryRetainedWhileDownstreamRemains(t *testing.T) {
 // isn't on a known track. Neither should mutate the registry.
 func TestTrackRegistry_RemoveUnknownIsNoop(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	name := newTestTrackName("phantom")
 
 	removed, _, deleted := r.RemoveUpstream(name, 99)
@@ -155,7 +155,7 @@ func TestTrackRegistry_RemoveUnknownIsNoop(t *testing.T) {
 		t.Fatalf("phantom RemoveUpstream: removed=%v deleted=%v", removed, deleted)
 	}
 
-	r.AddUpstream(name, &relay.UpstreamSub{Subscription: relay.Subscription{ID: 1}})
+	r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}})
 	removed, _, deleted = r.RemoveUpstream(name, 99)
 	if removed || deleted {
 		t.Fatalf("wrong-ID RemoveUpstream: removed=%v deleted=%v", removed, deleted)
@@ -170,7 +170,7 @@ func TestTrackRegistry_RemoveUnknownIsNoop(t *testing.T) {
 // advance happened.
 func TestTrackRegistry_UpdateLargestMonotonic(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	e := r.GetOrCreate(newTestTrackName("largest"))
 
 	cases := []struct {
@@ -205,10 +205,10 @@ func TestTrackRegistry_UpdateLargestMonotonic(t *testing.T) {
 // that mutations to the entry don't affect already-handed-out snapshots.
 func TestTrackRegistry_CopySnapshotsAreIndependent(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	name := newTestTrackName("snapshot")
-	r.AddDownstream(name, &relay.DownstreamSub{Subscription: relay.Subscription{ID: 1}})
-	r.AddDownstream(name, &relay.DownstreamSub{Subscription: relay.Subscription{ID: 2}})
+	r.AddDownstream(name, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 1}})
+	r.AddDownstream(name, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 2}})
 
 	entry, _ := r.Get(name.Key())
 	snap := entry.CopyDownstream()
@@ -230,7 +230,7 @@ func TestTrackRegistry_CopySnapshotsAreIndependent(t *testing.T) {
 // TOCTOU re-check in tryDeleteIfEmpty.
 func TestTrackRegistry_ConcurrentAddRemove(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 
 	const goroutines = 16
 	const opsPerG = 200
@@ -246,7 +246,7 @@ func TestTrackRegistry_ConcurrentAddRemove(t *testing.T) {
 			}
 			for range opsPerG {
 				id := nextID.Add(1)
-				sub := &relay.UpstreamSub{Subscription: relay.Subscription{ID: id}}
+				sub := &registry.UpstreamSub{Subscription: registry.Subscription{ID: id}}
 				r.AddUpstream(name, sub)
 				if removed, _, _ := r.RemoveUpstream(name, id); !removed {
 					t.Errorf("expected to remove sub %d, did not", id)
@@ -267,12 +267,12 @@ func TestTrackRegistry_ConcurrentAddRemove(t *testing.T) {
 // with the same pointer and the registry must hold exactly one entry.
 func TestTrackRegistry_GetOrCreateRace(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	name := newTestTrackName("race")
 
 	var (
 		wg         sync.WaitGroup
-		got1, got2 *relay.TrackEntry
+		got1, got2 *registry.TrackEntry
 	)
 	start := make(chan struct{})
 	wg.Go(func() {
@@ -306,11 +306,11 @@ func TestTrackRegistry_GetOrCreateRace(t *testing.T) {
 // we hold both locks, it survives" — is what we actually need to prove.)
 func TestTrackRegistry_RemoveAfterResurrectionKeepsEntry(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	name := newTestTrackName("resurrect")
 
-	r.AddUpstream(name, &relay.UpstreamSub{Subscription: relay.Subscription{ID: 1}})
-	r.AddDownstream(name, &relay.DownstreamSub{Subscription: relay.Subscription{ID: 100}})
+	r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}})
+	r.AddDownstream(name, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 100}})
 
 	// Remove the downstream — upstream is still present, entry survives.
 	_, _, deleted := r.RemoveDownstream(name, 100)
@@ -334,7 +334,7 @@ func TestTrackRegistry_RemoveAfterResurrectionKeepsEntry(t *testing.T) {
 // Tracks whose slices both become empty are dropped from the registry too.
 func TestTrackRegistry_RemoveSession_EvictsAllEntriesForSession(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 
 	sessA := &session.Session{}
 	sessB := &session.Session{}
@@ -343,11 +343,11 @@ func TestTrackRegistry_RemoveSession_EvictsAllEntriesForSession(t *testing.T) {
 	nameAudio := newTestTrackName("audio")
 
 	// video: A is publisher, B is subscriber.
-	r.AddUpstream(nameVideo, &relay.UpstreamSub{Subscription: relay.Subscription{ID: 1, Session: sessA}})
-	r.AddDownstream(nameVideo, &relay.DownstreamSub{Subscription: relay.Subscription{ID: 100, Session: sessB}})
+	r.AddUpstream(nameVideo, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1, Session: sessA}})
+	r.AddDownstream(nameVideo, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 100, Session: sessB}})
 	// audio: A is the only participant (both pub and sub).
-	r.AddUpstream(nameAudio, &relay.UpstreamSub{Subscription: relay.Subscription{ID: 2, Session: sessA}})
-	r.AddDownstream(nameAudio, &relay.DownstreamSub{Subscription: relay.Subscription{ID: 101, Session: sessA}})
+	r.AddUpstream(nameAudio, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 2, Session: sessA}})
+	r.AddDownstream(nameAudio, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 101, Session: sessA}})
 
 	upRemoved, downRemoved := r.RemoveSession(sessA)
 	if upRemoved != 2 || downRemoved != 1 {
@@ -377,10 +377,10 @@ func TestTrackRegistry_RemoveSession_EvictsAllEntriesForSession(t *testing.T) {
 // any session, even one with nothing on file.
 func TestTrackRegistry_RemoveSession_NoOpForUnknownSession(t *testing.T) {
 	t.Parallel()
-	r := relay.NewTrackRegistry()
+	r := registry.NewTrackRegistry()
 	r.AddUpstream(
 		newTestTrackName("video"),
-		&relay.UpstreamSub{Subscription: relay.Subscription{ID: 1, Session: &session.Session{}}},
+		&registry.UpstreamSub{Subscription: registry.Subscription{ID: 1, Session: &session.Session{}}},
 	)
 
 	up, down := r.RemoveSession(&session.Session{}) // different pointer
@@ -419,14 +419,14 @@ func TestTrackRegistry_CacheTTLPolicy_OverridesDefault(t *testing.T) {
 
 	policy := func(n track.FullTrackName) time.Duration {
 		if string(n.Name) == "catalog" {
-			return relay.CacheTTLInfinite
+			return registry.CacheTTLInfinite
 		}
 		return 0 // fall through to default
 	}
 
-	r := relay.NewTrackRegistry(
-		relay.WithCacheConfig(64, defaultTTL),
-		relay.WithCacheTTLPolicy(policy),
+	r := registry.NewTrackRegistry(
+		registry.WithCacheConfig(64, defaultTTL),
+		registry.WithCacheTTLPolicy(policy),
 	)
 
 	// Materialise both entries.
@@ -466,9 +466,9 @@ func TestTrackRegistry_CacheTTLPolicy_OverridesDefault(t *testing.T) {
 func TestTrackRegistry_CacheTTLPolicy_NilFallback(t *testing.T) {
 	const defaultTTL = time.Millisecond
 
-	r := relay.NewTrackRegistry(
-		relay.WithCacheConfig(64, defaultTTL),
-		relay.WithCacheTTLPolicy(nil),
+	r := registry.NewTrackRegistry(
+		registry.WithCacheConfig(64, defaultTTL),
+		registry.WithCacheTTLPolicy(nil),
 	)
 	e := r.GetOrCreate(newTestTrackName("anything"))
 	e.Cache.Put(&cache.CachedObject{GroupID: 0, ObjectID: 0, Payload: []byte("x")})
@@ -490,9 +490,9 @@ func TestTrackRegistry_CacheTTLPolicy_NilFallback(t *testing.T) {
 func TestTrackRegistry_CacheTTLPolicy_ZeroReturnMeansDefault(t *testing.T) {
 	const defaultTTL = time.Millisecond
 
-	r := relay.NewTrackRegistry(
-		relay.WithCacheConfig(64, defaultTTL),
-		relay.WithCacheTTLPolicy(func(track.FullTrackName) time.Duration { return 0 }),
+	r := registry.NewTrackRegistry(
+		registry.WithCacheConfig(64, defaultTTL),
+		registry.WithCacheTTLPolicy(func(track.FullTrackName) time.Duration { return 0 }),
 	)
 	e := r.GetOrCreate(newTestTrackName("anything"))
 	e.Cache.Put(&cache.CachedObject{GroupID: 0, ObjectID: 0, Payload: []byte("x")})

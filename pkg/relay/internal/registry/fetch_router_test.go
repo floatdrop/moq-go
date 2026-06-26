@@ -1,4 +1,4 @@
-package relay
+package registry
 
 import (
 	"testing"
@@ -10,13 +10,13 @@ import (
 // is a fine stand-in; the response stream is likewise only moved through the
 // rendezvous, so a nil stream exercises the plumbing without a live transport.
 func TestFetchRouter_RegisterThenDeliver(t *testing.T) {
-	r := newFetchRouter()
+	r := NewFetchRouter()
 	sess := new(session.Session)
 
-	ch, cleanup := r.register(sess, 7)
+	ch, cleanup := r.Register(sess, 7)
 	defer cleanup()
 
-	if !r.deliver(sess, 7, nil) {
+	if !r.Deliver(sess, 7, nil) {
 		t.Fatal("deliver to a registered key must succeed")
 	}
 	select {
@@ -27,15 +27,15 @@ func TestFetchRouter_RegisterThenDeliver(t *testing.T) {
 }
 
 func TestFetchRouter_DeliverThenRegister(t *testing.T) {
-	r := newFetchRouter()
+	r := NewFetchRouter()
 	sess := new(session.Session)
 
 	// Response races ahead of registration: deliver parks the stream.
-	if !r.deliver(sess, 9, nil) {
+	if !r.Deliver(sess, 9, nil) {
 		t.Fatal("deliver before register must succeed (parked)")
 	}
 
-	ch, cleanup := r.register(sess, 9)
+	ch, cleanup := r.Register(sess, 9)
 	defer cleanup()
 	select {
 	case <-ch:
@@ -45,28 +45,28 @@ func TestFetchRouter_DeliverThenRegister(t *testing.T) {
 }
 
 func TestFetchRouter_DuplicateDeliverRejected(t *testing.T) {
-	r := newFetchRouter()
+	r := NewFetchRouter()
 	sess := new(session.Session)
 
-	if !r.deliver(sess, 1, nil) {
+	if !r.Deliver(sess, 1, nil) {
 		t.Fatal("first deliver must succeed")
 	}
-	if r.deliver(sess, 1, nil) {
+	if r.Deliver(sess, 1, nil) {
 		t.Fatal("second deliver for the same key must be rejected")
 	}
 }
 
 // Distinct keys (different reqID) are independent.
 func TestFetchRouter_KeysAreIndependent(t *testing.T) {
-	r := newFetchRouter()
+	r := NewFetchRouter()
 	sess := new(session.Session)
 
-	chA, cleanupA := r.register(sess, 1)
+	chA, cleanupA := r.Register(sess, 1)
 	defer cleanupA()
-	chB, cleanupB := r.register(sess, 2)
+	chB, cleanupB := r.Register(sess, 2)
 	defer cleanupB()
 
-	r.deliver(sess, 2, nil)
+	r.Deliver(sess, 2, nil)
 	select {
 	case <-chA:
 		t.Fatal("stream for reqID 2 leaked to reqID 1's reader")

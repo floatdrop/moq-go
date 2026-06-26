@@ -1,4 +1,4 @@
-package relay
+package registry
 
 import (
 	"sync"
@@ -24,27 +24,27 @@ type fetchKey struct {
 	reqID uint64
 }
 
-// fetchRouter rendezvouses upstream FETCH response streams with the downstream
+// FetchRouter rendezvouses upstream FETCH response streams with the downstream
 // handler that issued the FETCH. The two sides run on different goroutines —
-// the requester (a downstream FETCH handler) calls [fetchRouter.register] and
-// awaits, while the upstream session's data loop calls [fetchRouter.deliver] —
+// the requester (a downstream FETCH handler) calls [FetchRouter.Register] and
+// awaits, while the upstream session's data loop calls [FetchRouter.Deliver] —
 // and they may arrive in either order, so each side get-or-creates the
 // rendezvous and a buffered slot holds the stream until the reader takes it.
 //
-// One fetchRouter is shared per [Relay] and injected into every session
+// One FetchRouter is shared per [Relay] and injected into every session
 // handler.
-type fetchRouter struct {
+type FetchRouter struct {
 	mu      sync.Mutex
 	pending map[fetchKey]chan *session.IncomingFetchStream
 }
 
-func newFetchRouter() *fetchRouter {
-	return &fetchRouter{pending: make(map[fetchKey]chan *session.IncomingFetchStream)}
+func NewFetchRouter() *FetchRouter {
+	return &FetchRouter{pending: make(map[fetchKey]chan *session.IncomingFetchStream)}
 }
 
 // chanLocked returns the rendezvous channel for key, creating it if absent.
 // created reports whether this call created the entry. The caller holds r.mu.
-func (r *fetchRouter) chanLocked(key fetchKey) (ch chan *session.IncomingFetchStream, created bool) {
+func (r *FetchRouter) chanLocked(key fetchKey) (ch chan *session.IncomingFetchStream, created bool) {
 	ch, ok := r.pending[key]
 	if !ok {
 		ch = make(chan *session.IncomingFetchStream, 1)
@@ -54,12 +54,12 @@ func (r *fetchRouter) chanLocked(key fetchKey) (ch chan *session.IncomingFetchSt
 	return ch, created
 }
 
-// register reserves the rendezvous for an upstream FETCH the caller is about
+// Register reserves the rendezvous for an upstream FETCH the caller is about
 // to issue (or just issued) on sess with the assigned reqID. It returns the
 // channel the response stream will arrive on and a cleanup func the caller
 // MUST defer: cleanup removes the entry and resets any stream that arrived but
 // was never consumed (e.g. the caller timed out waiting).
-func (r *fetchRouter) register(
+func (r *FetchRouter) Register(
 	sess *session.Session,
 	reqID uint64,
 ) (<-chan *session.IncomingFetchStream, func()) {
@@ -86,14 +86,14 @@ func (r *fetchRouter) register(
 	return ch, cleanup
 }
 
-// deliver hands an upstream FETCH response stream to its waiting reader. It
-// reports whether the stream was accepted into the rendezvous. When deliver
+// Deliver hands an upstream FETCH response stream to its waiting reader. It
+// reports whether the stream was accepted into the rendezvous. When Deliver
 // creates the rendezvous (the response arrived before the reader registered),
 // it schedules a grace timer that resets the stream if no reader claims it, so
 // a stray response can't leak. It returns false only when a stream is already
 // parked for the same key (a duplicate or unexpected response); the caller
 // resets the incoming stream in that case.
-func (r *fetchRouter) deliver(sess *session.Session, reqID uint64, stream *session.IncomingFetchStream) bool {
+func (r *FetchRouter) Deliver(sess *session.Session, reqID uint64, stream *session.IncomingFetchStream) bool {
 	key := fetchKey{sess: sess, reqID: reqID}
 	r.mu.Lock()
 	ch, created := r.chanLocked(key)

@@ -1,4 +1,4 @@
-package relay_test
+package registry_test
 
 import (
 	"errors"
@@ -7,7 +7,7 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/relay"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 // TestSubState_String pins the human-readable names so log output stays
@@ -15,14 +15,14 @@ import (
 func TestSubState_String(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		s    relay.SubState
+		s    registry.SubState
 		want string
 	}{
-		{relay.SubIdle, "Idle"},
-		{relay.SubPending, "Pending"},
-		{relay.SubEstablished, "Established"},
-		{relay.SubTerminated, "Terminated"},
-		{relay.SubState(99), "SubState(99)"},
+		{registry.SubIdle, "Idle"},
+		{registry.SubPending, "Pending"},
+		{registry.SubEstablished, "Established"},
+		{registry.SubTerminated, "Terminated"},
+		{registry.SubState(99), "SubState(99)"},
 	}
 	for _, c := range cases {
 		if got := c.s.String(); got != c.want {
@@ -36,16 +36,16 @@ func TestSubState_String(t *testing.T) {
 // state queries are consistent.
 func TestSubscription_LinearLifecycle(t *testing.T) {
 	t.Parallel()
-	sub := relay.NewUpstreamSub(1, nil, nil, 0)
+	sub := registry.NewUpstreamSub(1, nil, nil, 0)
 
-	if got := sub.State(); got != relay.SubIdle {
+	if got := sub.State(); got != registry.SubIdle {
 		t.Fatalf("initial state = %s, want Idle", got)
 	}
 	if sub.IsEstablished() || sub.IsTerminated() {
 		t.Fatal("Idle reported as Established or Terminated")
 	}
 
-	for _, next := range []relay.SubState{relay.SubPending, relay.SubEstablished, relay.SubTerminated} {
+	for _, next := range []registry.SubState{registry.SubPending, registry.SubEstablished, registry.SubTerminated} {
 		if err := sub.SetState(next); err != nil {
 			t.Fatalf("SetState(%s) = %v", next, err)
 		}
@@ -63,12 +63,12 @@ func TestSubscription_LinearLifecycle(t *testing.T) {
 // Handler code that "ensures" a state benefits from this.
 func TestSubscription_SelfTransitionsAllowed(t *testing.T) {
 	t.Parallel()
-	sub := relay.NewDownstreamSub(1, nil, nil, 0)
-	if err := sub.SetState(relay.SubIdle); err != nil {
+	sub := registry.NewDownstreamSub(1, nil, nil, 0)
+	if err := sub.SetState(registry.SubIdle); err != nil {
 		t.Fatalf("Idle → Idle should be allowed: %v", err)
 	}
-	_ = sub.SetState(relay.SubPending)
-	if err := sub.SetState(relay.SubPending); err != nil {
+	_ = sub.SetState(registry.SubPending)
+	if err := sub.SetState(registry.SubPending); err != nil {
 		t.Fatalf("Pending → Pending should be allowed: %v", err)
 	}
 }
@@ -78,16 +78,16 @@ func TestSubscription_SelfTransitionsAllowed(t *testing.T) {
 // Terminated regardless of its current phase.
 func TestSubscription_AnyStateToTerminated(t *testing.T) {
 	t.Parallel()
-	for _, from := range []relay.SubState{relay.SubIdle, relay.SubPending, relay.SubEstablished} {
+	for _, from := range []registry.SubState{registry.SubIdle, registry.SubPending, registry.SubEstablished} {
 		t.Run(from.String(), func(t *testing.T) {
-			sub := relay.NewUpstreamSub(1, nil, nil, 0)
+			sub := registry.NewUpstreamSub(1, nil, nil, 0)
 			// drive into the desired starting state
 			for s := range from {
 				if err := sub.SetState(s + 1); err != nil {
 					t.Fatalf("setup: %v", err)
 				}
 			}
-			if err := sub.SetState(relay.SubTerminated); err != nil {
+			if err := sub.SetState(registry.SubTerminated); err != nil {
 				t.Fatalf("%s → Terminated: %v", from, err)
 			}
 		})
@@ -101,16 +101,22 @@ func TestSubscription_RejectsBackwardsTransitions(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
-		seq  []relay.SubState // states to drive through; last move is expected to fail
+		seq  []registry.SubState // states to drive through; last move is expected to fail
 	}{
-		{"Idle → Established skips Pending", []relay.SubState{relay.SubEstablished}},
-		{"Pending → Idle backwards", []relay.SubState{relay.SubPending, relay.SubIdle}},
-		{"Established → Pending backwards", []relay.SubState{relay.SubPending, relay.SubEstablished, relay.SubPending}},
-		{"Terminated is absorbing", []relay.SubState{relay.SubPending, relay.SubTerminated, relay.SubPending}},
+		{"Idle → Established skips Pending", []registry.SubState{registry.SubEstablished}},
+		{"Pending → Idle backwards", []registry.SubState{registry.SubPending, registry.SubIdle}},
+		{
+			"Established → Pending backwards",
+			[]registry.SubState{registry.SubPending, registry.SubEstablished, registry.SubPending},
+		},
+		{
+			"Terminated is absorbing",
+			[]registry.SubState{registry.SubPending, registry.SubTerminated, registry.SubPending},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			sub := relay.NewDownstreamSub(1, nil, nil, 0)
+			sub := registry.NewDownstreamSub(1, nil, nil, 0)
 			lastIdx := len(c.seq) - 1
 			for i, next := range c.seq {
 				err := sub.SetState(next)
@@ -123,7 +129,7 @@ func TestSubscription_RejectsBackwardsTransitions(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected failure on final %s, got nil", next)
 				}
-				var terr *relay.ErrInvalidSubTransition
+				var terr *registry.ErrInvalidSubTransition
 				if !errors.As(err, &terr) {
 					t.Fatalf("error type = %T (%v), want *ErrInvalidSubTransition", err, err)
 				}
@@ -135,7 +141,7 @@ func TestSubscription_RejectsBackwardsTransitions(t *testing.T) {
 // TestSubscription_ForwardState covers the §9.2 Forward flag round-trip.
 func TestSubscription_ForwardState(t *testing.T) {
 	t.Parallel()
-	sub := relay.NewUpstreamSub(1, nil, nil, 0)
+	sub := registry.NewUpstreamSub(1, nil, nil, 0)
 	if got := sub.ForwardState(); got != 0 {
 		t.Fatalf("initial ForwardState = %d, want 0", got)
 	}
@@ -152,7 +158,7 @@ func TestSubscription_ForwardState(t *testing.T) {
 // TestUpstreamSub_FilterRoundTrip pins the upstream filter accessor pair.
 func TestUpstreamSub_FilterRoundTrip(t *testing.T) {
 	t.Parallel()
-	sub := relay.NewUpstreamSub(7, nil, nil, 42)
+	sub := registry.NewUpstreamSub(7, nil, nil, 42)
 	if sub.GetFilter() != nil {
 		t.Fatal("initial filter not nil")
 	}
@@ -170,7 +176,7 @@ func TestUpstreamSub_FilterRoundTrip(t *testing.T) {
 // group-order accessors on the downstream type.
 func TestDownstreamSub_AccessorsRoundTrip(t *testing.T) {
 	t.Parallel()
-	sub := relay.NewDownstreamSub(11, nil, nil, 99)
+	sub := registry.NewDownstreamSub(11, nil, nil, 99)
 
 	if sub.GetFilter() != nil {
 		t.Fatal("initial filter not nil")
@@ -255,7 +261,7 @@ func TestDownstreamSub_EffectiveStreamPriority(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			sub := relay.NewDownstreamSub(1, nil, nil, 0)
+			sub := registry.NewDownstreamSub(1, nil, nil, 0)
 			if tc.subscriberSet {
 				sub.SetPriority(tc.subscriberPrio)
 			}
@@ -280,10 +286,10 @@ func TestDownstreamSub_EffectiveStreamPriority(t *testing.T) {
 //   - State() never returns a value outside the enum.
 func TestSubscription_ConcurrentTransitions(t *testing.T) {
 	t.Parallel()
-	sub := relay.NewUpstreamSub(1, nil, nil, 0)
+	sub := registry.NewUpstreamSub(1, nil, nil, 0)
 
 	const goroutines = 32
-	moves := []relay.SubState{relay.SubPending, relay.SubEstablished, relay.SubTerminated}
+	moves := []registry.SubState{registry.SubPending, registry.SubEstablished, registry.SubTerminated}
 
 	var wg sync.WaitGroup
 	for range goroutines {
@@ -299,7 +305,7 @@ func TestSubscription_ConcurrentTransitions(t *testing.T) {
 	}
 	wg.Wait()
 
-	if got := sub.State(); got != relay.SubTerminated {
+	if got := sub.State(); got != registry.SubTerminated {
 		t.Fatalf("final state = %s, want Terminated", got)
 	}
 }

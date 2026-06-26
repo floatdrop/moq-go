@@ -20,12 +20,12 @@ import (
 // Flow:
 //
 //  1. Authorize.
-//  2. Look up the track in [TrackRegistry]. If found and a publisher has
+//  2. Look up the track in [registry.TrackRegistry]. If found and a publisher has
 //     populated Properties (handlePublish / subscribeUpstream both do
 //     this), reply TRACK_STATUS_OK with those bytes plus a §10.2.11
 //     LARGEST_OBJECT parameter sourced from the entry's watermark when
 //     any object has been forwarded.
-//  3. Otherwise check the [NamespaceRegistry] — if a local publisher has
+//  3. Otherwise check the [registry.NamespaceRegistry] — if a local publisher has
 //     advertised the namespace, reply TRACK_STATUS_OK with empty
 //     Properties (and no LARGEST_OBJECT). The caller learns the track
 //     exists but the relay has no metadata to forward without issuing an

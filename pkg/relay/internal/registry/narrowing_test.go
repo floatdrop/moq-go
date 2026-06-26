@@ -1,4 +1,4 @@
-package relay
+package registry
 
 import (
 	"testing"
@@ -47,8 +47,8 @@ func TestGroupOutOfRange(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := groupOutOfRange(tc.group, tc.filter); got != tc.want {
-				t.Fatalf("groupOutOfRange(%d, %v) = %v, want %v", tc.group, tc.filter, got, tc.want)
+			if got := GroupOutOfRange(tc.group, tc.filter); got != tc.want {
+				t.Fatalf("GroupOutOfRange(%d, %v) = %v, want %v", tc.group, tc.filter, got, tc.want)
 			}
 		})
 	}

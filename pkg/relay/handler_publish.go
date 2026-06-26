@@ -11,13 +11,14 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 // handlePublish implements PUBLISH (§9.5, §10.10):
 //
 //  1. Authorize.
-//  2. Register an [UpstreamSub] in the TrackRegistry; transition through
-//     [SubPending] → [SubEstablished].
+//  2. Register an [registry.UpstreamSub] in the registry.TrackRegistry; transition through
+//     [registry.SubPending] → [registry.SubEstablished].
 //  3. Capture the publisher's Track Properties on the entry (§9.6).
 //  4. Reply REQUEST_OK.
 //  5. Forward the PUBLISH to every downstream SUBSCRIBE_TRACKS holder
@@ -52,10 +53,10 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		return
 	}
 
-	sub := NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias)
-	_ = sub.SetState(SubPending)
-	_ = sub.SetState(SubEstablished)
-	h.tracks.AddUpstream(fullName, sub, WithProperties(msg.TrackProperties))
+	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias)
+	_ = sub.SetState(registry.SubPending)
+	_ = sub.SetState(registry.SubEstablished)
+	h.tracks.AddUpstream(fullName, sub, registry.WithProperties(msg.TrackProperties))
 	defer func() {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH stream ended, removing upstream",
 			slog.String("name", string(msg.Name)))
@@ -136,12 +137,16 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 // PUBLISH stream, so it tells the subscriber on its SUBSCRIBE_TRACKS response
 // stream and MUST NOT forward a PUBLISH for that track again until the
 // subscriber issues a SUBSCRIBE (see [sessionHandler.handleSubscribe], which
-// calls [NamespaceRegistry.ClearBlockedForSession]).
+// calls [registry.NamespaceRegistry.ClearBlockedForSession]).
 //
 // Per §10.20 the message carries only the namespace suffix beyond the
 // subscriber's SUBSCRIBE_TRACKS prefix; we strip the prefix the same way
 // [namespaceMessageFor] does.
-func (h *sessionHandler) emitPublishBlocked(ctx context.Context, sub *SubscriberEntry, fullName track.FullTrackName) {
+func (h *sessionHandler) emitPublishBlocked(
+	ctx context.Context,
+	sub *registry.SubscriberEntry,
+	fullName track.FullTrackName,
+) {
 	suffix := fullName.Namespace[len(sub.Prefix):]
 	blocked := &message.PublishBlocked{
 		TrackNamespaceSuffix: append(wire.TrackNamespace(nil), suffix...),

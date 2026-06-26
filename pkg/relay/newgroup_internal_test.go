@@ -5,6 +5,7 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 func dynamicGroupsProps(t *testing.T, value uint64) []byte {
@@ -65,7 +66,7 @@ func TestConsiderNewGroupRequest(t *testing.T) {
 
 	t.Run("not forwarded when track lacks dynamic groups", func(t *testing.T) {
 		t.Parallel()
-		e := &TrackEntry{}
+		e := &registry.TrackEntry{}
 		if e.ConsiderNewGroupRequest(5, false) {
 			t.Fatal("forwarded despite dynamicGroups=false")
 		}
@@ -73,7 +74,7 @@ func TestConsiderNewGroupRequest(t *testing.T) {
 
 	t.Run("non-zero value at or below largest is not forwarded", func(t *testing.T) {
 		t.Parallel()
-		e := &TrackEntry{HasLargestObject: true, LargestObject: message.Location{Group: 5}}
+		e := &registry.TrackEntry{HasLargestObject: true, LargestObject: message.Location{Group: 5}}
 		if e.ConsiderNewGroupRequest(5, true) {
 			t.Fatal("forwarded value == largest group")
 		}
@@ -84,7 +85,7 @@ func TestConsiderNewGroupRequest(t *testing.T) {
 
 	t.Run("value larger than largest is forwarded once until covered", func(t *testing.T) {
 		t.Parallel()
-		e := &TrackEntry{HasLargestObject: true, LargestObject: message.Location{Group: 5}}
+		e := &registry.TrackEntry{HasLargestObject: true, LargestObject: message.Location{Group: 5}}
 		if !e.ConsiderNewGroupRequest(6, true) {
 			t.Fatal("first request not forwarded")
 		}
@@ -100,7 +101,7 @@ func TestConsiderNewGroupRequest(t *testing.T) {
 
 	t.Run("zero value always triggers but is covered while outstanding", func(t *testing.T) {
 		t.Parallel()
-		e := &TrackEntry{} // no objects: largest 0
+		e := &registry.TrackEntry{} // no objects: largest 0
 		if !e.ConsiderNewGroupRequest(0, true) {
 			t.Fatal("value 0 not forwarded")
 		}
@@ -111,7 +112,7 @@ func TestConsiderNewGroupRequest(t *testing.T) {
 
 	t.Run("outstanding clears once largest group advances", func(t *testing.T) {
 		t.Parallel()
-		e := &TrackEntry{} // largest 0
+		e := &registry.TrackEntry{} // largest 0
 		if !e.ConsiderNewGroupRequest(5, true) {
 			t.Fatal("first request not forwarded")
 		}
@@ -125,7 +126,7 @@ func TestConsiderNewGroupRequest(t *testing.T) {
 
 	t.Run("larger outstanding value covers a smaller later request", func(t *testing.T) {
 		t.Parallel()
-		e := &TrackEntry{}
+		e := &registry.TrackEntry{}
 		if !e.ConsiderNewGroupRequest(10, true) {
 			t.Fatal("first request not forwarded")
 		}

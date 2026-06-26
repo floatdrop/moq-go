@@ -1,20 +1,8 @@
-// Package relay implements an MOQT relay (§9 of draft-ietf-moq-transport-18):
-// an entity that is both a Publisher and a Subscriber, terminates Transport
-// Sessions, caches Objects, aggregates subscriptions, and forwards data
-// between upstream publishers and downstream subscribers.
-//
-// The relay is transport-agnostic. It operates on the
-// [github.com/floatdrop/moq-go/pkg/moqt/session.Conn] abstraction and does
-// not own a QUIC listener directly. Callers wire up the desired transport
-// (QUIC via quicconn, WebTransport via wtconn, or an in-process sessiontest
-// adapter) and hand the relay a [Listener] that yields ready-to-use
-// session.Conn instances with TLS/ALPN already negotiated.
-//
 // This file holds the relay's lifecycle scaffold: the transport-agnostic
 // Listener interface, the Relay struct, and Start/Stop. The remaining
 // components (Track Registry, Namespace Registry, Subscription Fanout,
-// Object Cache, Discovery Store) live in sibling files and plug into
-// this scaffold.
+// Object Cache, Discovery Store) live in sibling files and plug into this
+// scaffold. See doc.go for the package overview and the file-layer map.
 package relay
 
 import (
@@ -29,6 +17,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 // Listener yields ready-to-use MOQT transport connections. The caller is
@@ -93,19 +82,19 @@ type Config struct {
 	Metrics Metrics
 
 	// MaxCacheSize bounds the per-track Object Cache by object count.
-	// Zero means: use [defaultCacheMaxSize]. The bound is applied
+	// Zero means: use [registry.DefaultCacheMaxSize]. The bound is applied
 	// independently to every track the relay observes; a noisy track
 	// cannot evict a quiet one's entries.
 	MaxCacheSize int
 
 	// MaxCacheDuration bounds the per-track Object Cache by object age.
-	// Zero means: use [defaultCacheMaxDuration]. Objects older than this
+	// Zero means: use [registry.DefaultCacheMaxDuration]. Objects older than this
 	// are eligible for time-based eviction on the next Put.
 	MaxCacheDuration time.Duration
 
 	// CacheTTLPolicy, when non-nil, may override [MaxCacheDuration] on
 	// a per-track basis. See [CacheTTLPolicy] for the contract; the
-	// function is invoked once per [TrackEntry] at creation time and
+	// function is invoked once per [registry.TrackEntry] at creation time and
 	// never on the fanout hot path. Use this to give well-known tracks
 	// (e.g. an MSF catalog track) infinite retention without changing
 	// the default for everything else. [pkg/relay] does not own the
@@ -210,13 +199,13 @@ type Relay struct {
 
 	// tracks and names are the relay-wide registries shared across every
 	// session handler.
-	tracks *TrackRegistry
-	names  *NamespaceRegistry
+	tracks *registry.TrackRegistry
+	names  *registry.NamespaceRegistry
 
 	// fetch rendezvouses upstream FETCH response streams (dispatched by the
 	// upstream session's data loop) with the downstream handler that issued
 	// the FETCH. Shared across every session handler.
-	fetch *fetchRouter
+	fetch *registry.FetchRouter
 
 	// upstreams dials and pools relay-to-relay sessions for Discovery-driven
 	// cross-relay upstream SUBSCRIBE. nil when Config.Dialer is unset (the
@@ -272,32 +261,32 @@ func New(listener Listener, cfg Config) *Relay {
 	// MaxDropsBeforeReset is an opt-in hard cap: 0 means "disabled", so no
 	// default is applied.
 	if cfg.MaxCacheSize <= 0 {
-		cfg.MaxCacheSize = defaultCacheMaxSize
+		cfg.MaxCacheSize = registry.DefaultCacheMaxSize
 	}
 	if cfg.MaxCacheDuration <= 0 {
-		cfg.MaxCacheDuration = defaultCacheMaxDuration
+		cfg.MaxCacheDuration = registry.DefaultCacheMaxDuration
 	}
-	trackOpts := []TrackRegistryOption{
-		WithCacheConfig(cfg.MaxCacheSize, cfg.MaxCacheDuration),
-		WithTrackRegistryLogger(log),
+	trackOpts := []registry.TrackRegistryOption{
+		registry.WithCacheConfig(cfg.MaxCacheSize, cfg.MaxCacheDuration),
+		registry.WithTrackRegistryLogger(log),
 	}
 	if cfg.CacheTTLPolicy != nil {
-		trackOpts = append(trackOpts, WithCacheTTLPolicy(cfg.CacheTTLPolicy))
+		trackOpts = append(trackOpts, registry.WithCacheTTLPolicy(cfg.CacheTTLPolicy))
 	}
-	var nameOpts []NamespaceRegistryOption
-	nameOpts = append(nameOpts, WithNamespaceRegistryLogger(log))
+	var nameOpts []registry.NamespaceRegistryOption
+	nameOpts = append(nameOpts, registry.WithNamespaceRegistryLogger(log))
 	if cfg.Discovery != nil {
-		trackOpts = append(trackOpts, WithTrackDiscovery(cfg.Discovery, cfg.RelayAddr))
-		nameOpts = append(nameOpts, WithNamespaceDiscovery(cfg.Discovery, cfg.RelayAddr))
+		trackOpts = append(trackOpts, registry.WithTrackDiscovery(cfg.Discovery, cfg.RelayAddr))
+		nameOpts = append(nameOpts, registry.WithNamespaceDiscovery(cfg.Discovery, cfg.RelayAddr))
 	}
 
 	r := &Relay{
 		listener: listener,
 		cfg:      cfg,
 		log:      log.With("component", "relay"),
-		tracks:   NewTrackRegistry(trackOpts...),
-		names:    NewNamespaceRegistry(nameOpts...),
-		fetch:    newFetchRouter(),
+		tracks:   registry.NewTrackRegistry(trackOpts...),
+		names:    registry.NewNamespaceRegistry(nameOpts...),
+		fetch:    registry.NewFetchRouter(),
 		sessions: make(map[*session.Session]struct{}),
 		stopCh:   make(chan struct{}),
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 // handleSubscribe implements the SUBSCRIBE flow (§9.4, §10.7):
@@ -17,16 +18,16 @@ import (
 //  2. Look up the track. If an Established upstream exists, serve from it
 //     (the §9.4 aggregation path).
 //  3. Otherwise look for a matching local publisher in the
-//     [NamespaceRegistry] (§9.5 prefix matching). If one is found, issue an
+//     [registry.NamespaceRegistry] (§9.5 prefix matching). If one is found, issue an
 //     upstream SUBSCRIBE on its session with the Largest Object filter
 //     (§9.4 "relays that aggregate upstream subscriptions can subscribe
 //     using the Largest Object filter to avoid churn") and on SUBSCRIBE_OK
-//     register the resulting UpstreamSub.
+//     register the resulting registry.UpstreamSub.
 //  4. If no local publisher is available either, reject with
 //     [moqt.RequestDoesNotExist]. Discovery-driven cross-relay lookup
 //     plugs in here.
-//  5. Allocate an outbound Track Alias, register a [DownstreamSub] in
-//     [SubEstablished], reply SUBSCRIBE_OK, and block reading the request
+//  5. Allocate an outbound Track Alias, register a [registry.DownstreamSub] in
+//     [registry.SubEstablished], reply SUBSCRIBE_OK, and block reading the request
 //     stream until the subscriber cancels.
 func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Request, msg *message.Subscribe) {
 	h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE received",
@@ -93,7 +94,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	// publisher-chosen aliases, used to route inbound data streams).
 	alias := h.sess.AllocOutboundTrackAlias()
 
-	sub := NewDownstreamSub(h.allocSubID(), h.sess, req.Stream, alias)
+	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, req.Stream, alias)
 	if err := installSubscribeParams(sub, msg.Parameters); err != nil {
 		// §5.1.2 says a malformed SUBSCRIPTION_FILTER is a session-level
 		// PROTOCOL_VIOLATION. We scope the failure to this request for
@@ -104,8 +105,8 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
 		return
 	}
-	_ = sub.SetState(SubPending)
-	_ = sub.SetState(SubEstablished)
+	_ = sub.SetState(registry.SubPending)
+	_ = sub.SetState(registry.SubEstablished)
 
 	// Atomically append sub to the entry's Downstream AND snapshot the
 	// current LargestObject under one entry.mu acquisition. The atomic
@@ -192,7 +193,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 func (h *sessionHandler) readSubscribeUpdates(
 	ctx context.Context,
 	req *session.Request,
-	sub *DownstreamSub,
+	sub *registry.DownstreamSub,
 	fullName track.FullTrackName,
 ) {
 	done := make(chan struct{})
@@ -227,7 +228,7 @@ func (h *sessionHandler) readSubscribeUpdates(
 func (h *sessionHandler) handleSubscribeUpdate(
 	ctx context.Context,
 	req *session.Request,
-	sub *DownstreamSub,
+	sub *registry.DownstreamSub,
 	fullName track.FullTrackName,
 	upd *message.RequestUpdate,
 ) {
@@ -270,7 +271,7 @@ func (h *sessionHandler) handleSubscribeUpdate(
 // NEW_GROUP_REQUEST received on an Established downstream subscription: when the
 // track supports dynamic Groups and the request is not already covered, the
 // relay sends a REQUEST_UPDATE carrying NEW_GROUP_REQUEST on each upstream
-// subscription's stream. [TrackEntry.ConsiderNewGroupRequest] encapsulates the
+// subscription's stream. [registry.TrackEntry.ConsiderNewGroupRequest] encapsulates the
 // decision and outstanding-request bookkeeping.
 func (h *sessionHandler) propagateNewGroupUpstream(
 	ctx context.Context,
@@ -355,7 +356,7 @@ func (h *sessionHandler) subscribeUpstream(
 	ctx context.Context,
 	fullName track.FullTrackName,
 	extra message.Parameters,
-) (*TrackEntry, bool, error) {
+) (*registry.TrackEntry, bool, error) {
 	// 1. Local publisher that advertised a namespace covering fullName.
 	publishers := h.names.MatchPublishers(fullName.Namespace)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: namespace registry lookup",
@@ -405,7 +406,7 @@ func (h *sessionHandler) subscribeUpstream(
 }
 
 // subscribeUpstreamOnSession issues the upstream SUBSCRIBE on sess and registers
-// the resulting [UpstreamSub] on the track entry. sess is either a local
+// the resulting [registry.UpstreamSub] on the track entry. sess is either a local
 // publisher's session or a Discovery-resolved remote relay's session — the body
 // is identical, only the source differs.
 //
@@ -423,7 +424,7 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	sess *session.Session,
 	fullName track.FullTrackName,
 	extra message.Parameters,
-) (*TrackEntry, bool, error) {
+) (*registry.TrackEntry, bool, error) {
 	// §9.4 Largest Object filter — keeps the upstream subscription stable
 	// as downstream subscribers come and go with varying filters.
 	filter := &message.SubscriptionFilter{Type: message.FilterLargestObject}
@@ -445,17 +446,17 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	}
 
 	// Register the upstream subscription on the upstream session as an
-	// UpstreamSub. The upstream's TrackAlias is the alias the upstream peer
+	// registry.UpstreamSub. The upstream's TrackAlias is the alias the upstream peer
 	// assigned in SUBSCRIBE_OK; we use it for the fanout's alias remapping.
-	upstreamSub := NewUpstreamSub(h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias)
+	upstreamSub := registry.NewUpstreamSub(h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias)
 	upstreamSub.RequestID = subMsg.RequestID
 	upstreamSub.SetFilter(filter)
 	// This upstream is a relay/origin we SUBSCRIBE'd on demand, so it is
 	// expected to answer FETCH — eligible for §9.4 stitch backfill.
 	upstreamSub.FetchCapable = true
-	_ = upstreamSub.SetState(SubPending)
-	_ = upstreamSub.SetState(SubEstablished)
-	entry, _ := h.tracks.AddUpstream(fullName, upstreamSub, WithProperties(upstreamStream.OK.TrackProperties))
+	_ = upstreamSub.SetState(registry.SubPending)
+	_ = upstreamSub.SetState(registry.SubEstablished)
+	entry, _ := h.tracks.AddUpstream(fullName, upstreamSub, registry.WithProperties(upstreamStream.OK.TrackProperties))
 
 	// Watcher: keep the upstream stream alive until the publisher cancels
 	// it (FIN/reset) or this handler shuts down, then unregister.
@@ -472,10 +473,10 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 }
 
 // hasEstablishedUpstream reports whether the entry has at least one upstream
-// subscription in [SubEstablished]. The §9.4 SUBSCRIBE handler uses this as
+// subscription in [registry.SubEstablished]. The §9.4 SUBSCRIBE handler uses this as
 // the test for "can we serve a new downstream subscription from existing
 // upstream state?".
-func hasEstablishedUpstream(entry *TrackEntry) bool {
+func hasEstablishedUpstream(entry *registry.TrackEntry) bool {
 	for _, u := range entry.CopyUpstream() {
 		if u.IsEstablished() {
 			return true
@@ -488,11 +489,11 @@ func hasEstablishedUpstream(entry *TrackEntry) bool {
 // the SUBSCRIBE message parameters (§10.2) and records them on sub.
 //
 // The §5.1.2 / §9.4 LargestObject snapshot is intentionally NOT taken
-// here — it is captured atomically with [TrackRegistry.AddDownstreamSnapshotLargest]
+// here — it is captured atomically with [registry.TrackRegistry.AddDownstreamSnapshotLargest]
 // at the call site so the snapshot is consistent with the moment sub
 // becomes eligible for live fanout delivery. See that method's docstring
 // for the race it solves. Callers must invoke
-// [DownstreamSub.SetLargestAtSubscribe] separately with the returned snapshot.
+// [registry.DownstreamSub.SetLargestAtSubscribe] separately with the returned snapshot.
 //
 // Installed parameters:
 //   - SUBSCRIPTION_FILTER (§10.2.9) — fanout consults it on every object
@@ -502,7 +503,7 @@ func hasEstablishedUpstream(entry *TrackEntry) bool {
 //     so the value is currently advisory.
 //   - GROUP_ORDER (§10.2.8) — honoured by the FETCH responder (subgroup
 //     streams are §11.4.3 in-order and ignore the field).
-func installSubscribeParams(sub *DownstreamSub, ps message.Parameters) error {
+func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) error {
 	filter, err := message.SubscriptionFilterFromParam(ps)
 	if err != nil {
 		return fmt.Errorf("subscription filter: %w", err)
