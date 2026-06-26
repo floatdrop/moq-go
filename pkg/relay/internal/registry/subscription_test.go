@@ -105,8 +105,14 @@ func TestSubscription_RejectsBackwardsTransitions(t *testing.T) {
 	}{
 		{"Idle → Established skips Pending", []registry.SubState{registry.SubEstablished}},
 		{"Pending → Idle backwards", []registry.SubState{registry.SubPending, registry.SubIdle}},
-		{"Established → Pending backwards", []registry.SubState{registry.SubPending, registry.SubEstablished, registry.SubPending}},
-		{"Terminated is absorbing", []registry.SubState{registry.SubPending, registry.SubTerminated, registry.SubPending}},
+		{
+			"Established → Pending backwards",
+			[]registry.SubState{registry.SubPending, registry.SubEstablished, registry.SubPending},
+		},
+		{
+			"Terminated is absorbing",
+			[]registry.SubState{registry.SubPending, registry.SubTerminated, registry.SubPending},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

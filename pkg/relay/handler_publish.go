@@ -142,7 +142,11 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 // Per §10.20 the message carries only the namespace suffix beyond the
 // subscriber's SUBSCRIBE_TRACKS prefix; we strip the prefix the same way
 // [namespaceMessageFor] does.
-func (h *sessionHandler) emitPublishBlocked(ctx context.Context, sub *registry.SubscriberEntry, fullName track.FullTrackName) {
+func (h *sessionHandler) emitPublishBlocked(
+	ctx context.Context,
+	sub *registry.SubscriberEntry,
+	fullName track.FullTrackName,
+) {
 	suffix := fullName.Namespace[len(sub.Prefix):]
 	blocked := &message.PublishBlocked{
 		TrackNamespaceSuffix: append(wire.TrackNamespace(nil), suffix...),
