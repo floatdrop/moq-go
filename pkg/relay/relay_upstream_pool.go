@@ -78,18 +78,22 @@ func newUpstreamPool(cfg upstreamPoolConfig) *upstreamPool {
 	}
 }
 
-// resolve finds a remote relay that serves ns and returns a live session to it,
-// or nil when Discovery knows no usable remote (none advertised, only this
-// relay itself, or every candidate failed to dial). Discovery-lookup and
-// per-peer dial failures are logged and treated as "no upstream" — consistent
-// with the best-effort advertise side: the local registry / a clean SUBSCRIBE
-// rejection is the fallback, never a torn-down session.
+// resolveAll finds every remote relay that serves ns and returns a live session
+// to each, for §9.5 fault-tolerant fan-in: a downstream SUBSCRIBE pulls the
+// track from all matching upstreams, not just the first, so the loss of one
+// origin doesn't interrupt delivery. Returns nil when Discovery knows no usable
+// remote (none advertised, only this relay itself, or every candidate failed to
+// dial). Discovery-lookup and per-peer dial failures are logged and treated as
+// "skip that candidate" — consistent with the best-effort advertise side: the
+// local registry / a clean SUBSCRIBE rejection is the fallback, never a
+// torn-down session.
 //
 // Loop prevention is minimal: candidates whose RelayAddr equals this relay's
 // own (or is empty / unaddressable) are skipped so the relay never subscribes
-// to itself. Multi-hop cycle detection (A→B→C→A) is out of scope — see the
+// to itself. Duplicate RelayAddrs collapse to one session (the pool keys by
+// address). Multi-hop cycle detection (A→B→C→A) is out of scope — see the
 // package limitations.
-func (p *upstreamPool) resolve(ctx context.Context, ns wire.TrackNamespace) *session.Session {
+func (p *upstreamPool) resolveAll(ctx context.Context, ns wire.TrackNamespace) []*session.Session {
 	if p == nil || p.discovery == nil {
 		return nil
 	}
@@ -99,10 +103,15 @@ func (p *upstreamPool) resolve(ctx context.Context, ns wire.TrackNamespace) *ses
 			slog.String("err", err.Error()))
 		return nil
 	}
+	var (
+		out  []*session.Session
+		seen = make(map[string]bool, len(infos))
+	)
 	for _, info := range infos {
-		if info.RelayAddr == "" || info.RelayAddr == p.relayAddr {
-			continue // self / unaddressable — would loop or can't be dialled
+		if info.RelayAddr == "" || info.RelayAddr == p.relayAddr || seen[info.RelayAddr] {
+			continue // self / unaddressable / already dialled this address
 		}
+		seen[info.RelayAddr] = true
 		sess, err := p.get(info.RelayAddr)
 		if err != nil {
 			p.log.LogAttrs(ctx, slog.LevelDebug, "upstream pool dial failed",
@@ -110,9 +119,9 @@ func (p *upstreamPool) resolve(ctx context.Context, ns wire.TrackNamespace) *ses
 				slog.String("err", err.Error()))
 			continue // try the next advertised relay
 		}
-		return sess
+		out = append(out, sess)
 	}
-	return nil
+	return out
 }
 
 // get returns a pooled session for relayAddr, dialing one if none is live.

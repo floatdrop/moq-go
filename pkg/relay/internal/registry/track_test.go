@@ -21,6 +21,49 @@ func newTestTrackName(name string) track.FullTrackName {
 	}
 }
 
+// TestTrackEntry_ClaimDelivered pins the §2.1 dedup ledger: the first claim of a
+// {GroupID, ObjectID} wins, a repeat loses, distinct objects/groups are
+// independent, and a group that has aged out of the window is treated as already
+// delivered.
+func TestTrackEntry_ClaimDelivered(t *testing.T) {
+	t.Parallel()
+
+	r := registry.NewTrackRegistry()
+	e := r.GetOrCreate(newTestTrackName("dedup"))
+
+	// First sighting wins; an exact repeat loses.
+	if !e.ClaimDelivered(0, 5) {
+		t.Fatal("first ClaimDelivered(0,5) should win")
+	}
+	if e.ClaimDelivered(0, 5) {
+		t.Fatal("repeat ClaimDelivered(0,5) should lose")
+	}
+	// A gap-fill in the same group (object 5 already seen, 2 not) is independent.
+	if !e.ClaimDelivered(0, 2) {
+		t.Fatal("ClaimDelivered(0,2) should win — distinct object in a seen group")
+	}
+	// A different group is independent.
+	if !e.ClaimDelivered(1, 5) {
+		t.Fatal("ClaimDelivered(1,5) should win — distinct group")
+	}
+
+	// Advance the group far enough that group 0 ages out of the window; a late
+	// straggler from group 0 must then be treated as already delivered.
+	if !e.ClaimDelivered(1000, 0) {
+		t.Fatal("ClaimDelivered(1000,0) should win")
+	}
+	if e.ClaimDelivered(0, 9) {
+		t.Fatal("ClaimDelivered(0,9) should lose — group 0 has aged out of the dedup window")
+	}
+	// The current group still dedups normally after the window advanced.
+	if !e.ClaimDelivered(1000, 1) {
+		t.Fatal("ClaimDelivered(1000,1) should win in the current group")
+	}
+	if e.ClaimDelivered(1000, 1) {
+		t.Fatal("repeat ClaimDelivered(1000,1) should lose")
+	}
+}
+
 // TestTrackRegistry_GetMissingReturnsFalse confirms the unknown-key path of
 // Get is a clean miss rather than a zero entry.
 func TestTrackRegistry_GetMissingReturnsFalse(t *testing.T) {

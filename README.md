@@ -222,14 +222,17 @@ apps/
   §5.2 invariants.
 - **`relay`** — accepts publisher and subscriber sessions, routes objects
   through a track registry with per-subscription live fanout under a §8
-  latency-window slow-reader policy, serves FETCHes from a per-track 
-  object cache and stitches the evicted part of a range from an upstream
-  FETCH, issues on-demand upstream SUBSCRIBEs (to a local publisher or, via a
-  `DiscoveryStore` `FindNamespace` lookup + a pluggable `Dialer`, across relay
-  instances), reflects namespaces other relays advertise to local subscribers
-  by consuming `WatchNamespaces`, forwards namespace interest, gates each
-  request through an `Authorizer` hook, emits telemetry through a `Metrics`
-  hook, and drains sessions with GOAWAY.
+  latency-window slow-reader policy, merges multiple upstream publishers per
+  track (§9.5) into one outbound subgroup stream per subscriber with §2.1
+  {Group, Object} deduplication and survivor-continues failover, serves FETCHes
+  from a per-track object cache and stitches the evicted part of a range from an
+  upstream FETCH, issues on-demand upstream SUBSCRIBEs to *every* matching
+  publisher (a local publisher and/or, via a `DiscoveryStore` `FindNamespace`
+  lookup + a pluggable `Dialer`, each advertising relay instance), reflects
+  namespaces other relays advertise to local subscribers by consuming
+  `WatchNamespaces`, forwards namespace interest, gates each request through an
+  `Authorizer` hook, emits telemetry through a `Metrics` hook, and drains
+  sessions with GOAWAY.
 - **CLIs** — `cmd/relay` (with cert flags + self-signed fallback), `cmd/clock`
   (raw subgroup demo), and `cmd/msfdemo` (the LOC + MSF stack end to end).
 
@@ -247,10 +250,12 @@ itself (the binary stays single-instance; cross-relay is library-level). Known
 gaps in the current code, roughly ordered by how
 load-bearing they are:
 
-- **Multiple publishers per track** (§9.5) — the relay keeps exactly one
-  upstream per track; the "subscribe to each matching publisher"
-  fault-tolerance mode is not implemented (see the upstream-subscribe block in
-  [`pkg/relay/handler_subscribe.go`](pkg/relay/handler_subscribe.go)).
+- **Late publisher pickup** (§9.5) — multiple publishers per track *are*
+  merged and deduplicated, and an on-demand SUBSCRIBE subscribes to every
+  publisher matching at that moment. A publisher (or remote relay) that begins
+  advertising *after* a track's upstream set is established is not retroactively
+  pulled in until that set drains and a fresh SUBSCRIBE re-establishes it;
+  publishers that PUBLISH proactively are always merged regardless.
 - **Subscriber-priority scheduling** (§10.2.7) — `SUBSCRIBER_PRIORITY` is
   parsed and stored but currently advisory; subgroup streams expose no
   per-stream priority knob.
