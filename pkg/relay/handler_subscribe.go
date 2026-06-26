@@ -438,9 +438,6 @@ func (h *sessionHandler) subscribeUpstream(
 // many disparate downstream filters from one upstream stream — the fanout
 // enforces each downstream filter on the wire.
 //
-// We deliberately keep one upstream per track. §9.5 permits subscribing to
-// *each* matching publisher (for fault-tolerance) but multi-publisher fan-in
-// is a future concern.
 func (h *sessionHandler) subscribeUpstreamOnSession(
 	ctx context.Context,
 	sess *session.Session,

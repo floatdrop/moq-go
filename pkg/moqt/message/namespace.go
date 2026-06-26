@@ -34,7 +34,7 @@ func (m *PublishNamespace) Parse(r *wire.Reader) error {
 }
 
 // Namespace is the NAMESPACE message (§10.16). It announces a track
-// namespace suffix on a data stream.
+// namespace suffix on a PUBLISH_NAMESPACE or SUBSCRIBE_NAMESPACE request stream.
 type Namespace struct {
 	TrackNamespaceSuffix wire.TrackNamespace
 }

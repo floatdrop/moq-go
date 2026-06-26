@@ -38,7 +38,7 @@ type ObjectDatagram struct {
 
 // IsValidDatagramType checks if a datagram type value is valid per §11.3.1.
 //
-// Valid type values are: 0x00..0x0F / 0x20..0x21 / 0x24..0x25 / 0x28..0x29 / 0x2C..0x2D.
+// Valid type values are: 0x00..0x0F / 0x20 / 0x24 / 0x28 / 0x2C.
 // All other values (including STATUS+END_OF_GROUP and STATUS+PROPERTIES combinations)
 // are invalid and MUST cause a PROTOCOL_VIOLATION.
 func IsValidDatagramType(typ uint64) bool {

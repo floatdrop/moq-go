@@ -33,7 +33,7 @@ func (m *RequestUpdate) Parse(r *wire.Reader) error {
 }
 
 // RequestOK is the REQUEST_OK message (§10.5). Track Properties are populated
-// in TRACK_STATUS_OK (out of scope) and empty for PUBLISH_OK / REQUEST_UPDATE_OK.
+// when used as a TRACK_STATUS_OK response and empty otherwise (PUBLISH, REQUEST_UPDATE).
 type RequestOK struct {
 	Parameters      Parameters
 	TrackProperties []byte
