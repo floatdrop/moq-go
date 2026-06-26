@@ -12,10 +12,10 @@ import (
 // [TrackEntry.setPropertiesLocked]) so the §10.2.13 / §12 hot paths read a
 // cached field instead of re-walking the block.
 //
-// To cache another property: add a field here, a case in
+// To cache another property: add a field here, a branch in
 // [decodeTrackProperties], and an accessor on [TrackEntry]. The raw block is
-// still parsed only once, so a new property costs a switch case, not a second
-// pass over the bytes.
+// still parsed only once, so a new property costs a branch, not a second pass
+// over the bytes.
 type decodedProperties struct {
 	// parseErr is a structural failure parsing the raw block (a malformed
 	// upstream Properties field). It is nil for a well-formed block. When
@@ -40,8 +40,9 @@ func decodeTrackProperties(raw []byte) decodedProperties {
 	}
 	var d decodedProperties
 	for _, kv := range pairs {
-		switch kv.Type {
-		case message.PropertyDynamicGroups:
+		// Dispatch each property the relay acts on to its decoder. Add a
+		// branch here (turning this into a switch) for each new property.
+		if kv.Type == message.PropertyDynamicGroups {
 			d.dynamicGroups, d.dynamicGroupsErr = decodeDynamicGroups(kv.IntVal)
 		}
 	}
