@@ -47,18 +47,6 @@ func TestTrackSupportsDynamicGroups(t *testing.T) {
 	})
 }
 
-func TestNewGroupRequestValue(t *testing.T) {
-	t.Parallel()
-
-	if _, ok := newGroupRequestValue(message.Parameters{}); ok {
-		t.Fatal("absent NEW_GROUP_REQUEST reported present")
-	}
-	v, ok := newGroupRequestValue(message.Parameters{message.NewGroupRequestParam(7)})
-	if !ok || v != 7 {
-		t.Fatalf("got (%d, %v), want (7, true)", v, ok)
-	}
-}
-
 // TestConsiderNewGroupRequest pins the §10.2.13 relay decision and its
 // outstanding-request bookkeeping.
 func TestConsiderNewGroupRequest(t *testing.T) {

@@ -51,7 +51,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	// SUBSCRIBE we are about to open (rule 1, no Established upstream) or, when
 	// an upstream already exists, is evaluated against it as an Established
 	// subscription below.
-	newGroupReq, hasNewGroupReq := newGroupRequestValue(msg.Parameters)
+	newGroupReqParam, hasNewGroupReq := msg.Parameters.Find(message.ParamNewGroupRequest)
 	reusedUpstream := false
 
 	entry, ok := h.tracks.Get(fullName.Key())
@@ -65,7 +65,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		// the upstream) and the established check matter here.
 		var extra message.Parameters
 		if hasNewGroupReq {
-			extra = message.Parameters{message.NewGroupRequestParam(newGroupReq)}
+			extra = message.Parameters{message.NewGroupRequestParam(newGroupReqParam.Varint)}
 		}
 		_, established, err := h.subscribeUpstream(ctx, fullName, extra)
 		if err != nil {
@@ -170,7 +170,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	// a fresh upstream SUBSCRIBE), evaluate it against the upstream as an
 	// Established subscription and forward it if the rules call for it.
 	if hasNewGroupReq && reusedUpstream {
-		h.propagateNewGroupUpstream(ctx, fullName, newGroupReq)
+		h.propagateNewGroupUpstream(ctx, fullName, newGroupReqParam.Varint)
 	}
 
 	// Read follow-up messages (§10.9 REQUEST_UPDATE, and a peer FIN/reset)
@@ -262,8 +262,8 @@ func (h *sessionHandler) handleSubscribeUpdate(
 
 	// §10.2.13: a NEW_GROUP_REQUEST on a REQUEST_UPDATE for an Established
 	// subscription is forwarded upstream when the relay rules call for it.
-	if v, ok := newGroupRequestValue(upd.Parameters); ok {
-		h.propagateNewGroupUpstream(ctx, fullName, v)
+	if p, ok := upd.Parameters.Find(message.ParamNewGroupRequest); ok {
+		h.propagateNewGroupUpstream(ctx, fullName, p.Varint)
 	}
 }
 
