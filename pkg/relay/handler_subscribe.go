@@ -283,7 +283,7 @@ func (h *sessionHandler) propagateNewGroupUpstream(
 		return
 	}
 
-	dynamic, err := trackSupportsDynamicGroups(entry.GetProperties())
+	dynamic, err := entry.DynamicGroups()
 	if err != nil {
 		// §12.6: a DYNAMIC_GROUPS value > 1 is a protocol violation by the
 		// upstream publisher. Scope the failure to declining the request

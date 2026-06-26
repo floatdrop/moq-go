@@ -14,6 +14,7 @@ package registry
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"slices"
 	"sync"
@@ -86,6 +87,17 @@ type TrackEntry struct {
 	// The bytes are the on-the-wire encoding of the Track Properties
 	// block; the relay treats them opaquely.
 	Properties []byte
+
+	// dynamicGroups caches the one Track Property the relay acts on rather
+	// than forwards: DYNAMIC_GROUPS (§12.6), needed by the §10.2.13
+	// NEW_GROUP_REQUEST path. Properties are immutable for the entry's
+	// lifetime (§9.6, first-setter-wins), so the value is decoded once when
+	// Properties is set rather than re-parsing the whole block on every
+	// request. dynamicGroupsErr holds a §12.6 PROTOCOL_VIOLATION (a
+	// DYNAMIC_GROUPS value > 1) so the caller can decline the request. Both
+	// are set together by setPropertiesLocked.
+	dynamicGroups    bool
+	dynamicGroupsErr error
 
 	// LargestObject is the (Group, Object) high-water mark observed for
 	// this track, updated by the fanout path on every incoming object and
@@ -547,7 +559,7 @@ func (r *TrackRegistry) AddUpstream(
 		// captured by a prior caller — §9.6 expects them to be
 		// stable for the lifetime of the track entry, so the first
 		// setter wins.
-		entry.Properties = conf.properties
+		entry.setPropertiesLocked(conf.properties)
 	}
 	if becameNonEmpty {
 		r.publishTrackToDiscovery(entry)
@@ -978,8 +990,17 @@ func (e *TrackEntry) UpdateLargestAndDetectNew(
 // be replayed verbatim.)
 func (e *TrackEntry) SetProperties(props []byte) {
 	e.mu.Lock()
-	e.Properties = props
+	e.setPropertiesLocked(props)
 	e.mu.Unlock()
+}
+
+// setPropertiesLocked stores the raw Properties bytes and decodes the one
+// field the relay acts on (DYNAMIC_GROUPS) in the same step, so the cached
+// dynamicGroups value never drifts from the raw bytes. Callers must hold
+// e.mu.
+func (e *TrackEntry) setPropertiesLocked(props []byte) {
+	e.Properties = props
+	e.dynamicGroups, e.dynamicGroupsErr = parseDynamicGroups(props)
 }
 
 // GetProperties returns the raw Track Properties captured from the upstream
@@ -989,6 +1010,42 @@ func (e *TrackEntry) GetProperties() []byte {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.Properties
+}
+
+// DynamicGroups reports whether the track advertised DYNAMIC_GROUPS=1 (§12.6),
+// using the value decoded once when Properties was set. The error is a §12.6
+// PROTOCOL_VIOLATION (a DYNAMIC_GROUPS value > 1) by the upstream publisher;
+// the §10.2.13 caller declines the NEW_GROUP_REQUEST rather than acting on it.
+func (e *TrackEntry) DynamicGroups() (bool, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.dynamicGroups, e.dynamicGroupsErr
+}
+
+// parseDynamicGroups parses raw Track Properties and reports whether the track
+// advertised DYNAMIC_GROUPS=1 (§12.6). An absent property reports false. A
+// value greater than 1 is a PROTOCOL_VIOLATION per §12.6 and surfaces as an
+// error so the caller can decline to act on it.
+func parseDynamicGroups(props []byte) (bool, error) {
+	pairs, err := message.ParseTrackProperties(props)
+	if err != nil {
+		return false, err
+	}
+	for _, kv := range pairs {
+		if kv.Type != message.PropertyDynamicGroups {
+			continue
+		}
+		switch kv.IntVal {
+		case 0:
+			return false, nil
+		case 1:
+			return true, nil
+		default:
+			return false, fmt.Errorf(
+				"relay: DYNAMIC_GROUPS value %d > 1 (§12.6 PROTOCOL_VIOLATION)", kv.IntVal)
+		}
+	}
+	return false, nil
 }
 
 // CopyUpstream returns a snapshot of the current upstream slice. Callers
