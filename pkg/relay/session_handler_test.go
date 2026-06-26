@@ -3,6 +3,7 @@ package relay_test
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -82,31 +83,44 @@ func connectRelay(tb testing.TB, cfg relay.Config) (clientSess *session.Session,
 		// the GOAWAY broadcast to reach their clients while those
 		// clients are still alive — closing the clients up front
 		// would preempt that contract.
-		//
-		// To break the leak that wedges go test -count=N (relay
-		// handlers blocked in DrainAndWait reading from a client
-		// stream the test never closed), we also force-close every
-		// tracked client after a small delay, IN PARALLEL with Stop.
-		// The delay is short relative to Stop's 5s budget but long
-		// enough for cooperative-migration tests to win the race
-		// and close their own sessions first (closeAll is then a
-		// no-op via Session.closeOnce).
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		stopDone := make(chan error, 1)
 		go func() { stopDone <- r.Stop(ctx) }()
 
+		// A relay handler blocked in DrainAndWait reading a client stream
+		// the test never closed keeps Relay.Stop's (unbounded)
+		// r.handlers.Wait() from returning; closing the client gives that
+		// read an EOF so the handler exits. Give cooperative-migration
+		// clients a brief window to close themselves first, then force-close
+		// every tracked client.
+		//
+		// Exactly ONE goroutine — this one — ever receives from stopDone.
+		// An earlier version ran a second goroutine that also selected on
+		// stopDone to drive the force-close; when Stop finished within the
+		// window the two receivers raced for the single buffered value, and
+		// if the helper won, the teardown below blocked on stopDone forever
+		// (a ~10-minute CI hang that looked like a flake). Driving the
+		// window inline keeps stopDone single-consumer.
 		const cooperativeWindow = 250 * time.Millisecond
-		go func() {
+		select {
+		case <-stopDone:
+			// Stop drained within the window (clients closed cooperatively
+			// or no handler was wedged); no force-close needed to unblock it.
+		case <-time.After(cooperativeWindow):
+			clientsForRelay.closeAll()
+			// Closing the clients should let every wedged handler exit well
+			// within Stop's 5s ctx budget. Bound the wait so a genuine
+			// deadlock fails fast with a goroutine dump instead of hanging
+			// until the package test timeout (~10 min).
 			select {
 			case <-stopDone:
+			case <-time.After(8 * time.Second):
+				dumpGoroutines(tb, "relay teardown: Relay.Stop did not return "+
+					"within 8s after closing all clients (wedged session handler?)")
 				return
-			case <-time.After(cooperativeWindow):
 			}
-			clientsForRelay.closeAll()
-		}()
-
-		<-stopDone
+		}
 		clientsForRelay.closeAll() // idempotent final sweep
 
 		select {
@@ -153,6 +167,17 @@ func (t *clientSessionTracker) closeAll() {
 	for _, s := range sessions {
 		_ = s.Close(moqt.SessionNoError, "test teardown")
 	}
+}
+
+// dumpGoroutines fails the test with msg and a full goroutine stack dump. Used
+// by the relay teardown when Relay.Stop does not return in bounded time, so a
+// wedged session handler surfaces as a fast, diagnosable failure with the
+// blocking stacks attached instead of a silent ~10-minute package timeout.
+func dumpGoroutines(tb testing.TB, msg string) {
+	tb.Helper()
+	buf := make([]byte, 1<<20)
+	n := runtime.Stack(buf, true)
+	tb.Errorf("%s; goroutine dump follows:\n%s", msg, buf[:n])
 }
 
 // requireRejectedWithCode asserts that err is a *session.RequestRejectedError
