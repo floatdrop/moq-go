@@ -52,10 +52,10 @@ make interop-client CLIENT_RELAY_IMAGE=moq-dev-rs-interop:latest   # build the a
 ```
 
 For our client against every registered draft-18 relay, use the runner (the
-relay is registered there as the `moq` client role):
+relay is registered there as the `moq-go` client role):
 
 ```sh
-cd ../moq-interop-runner && make interop-client CLIENT=moq
+cd ../moq-interop-runner && make interop-client CLIENT=moq-go
 ```
 
 Current results are tracked in [`STATUS.md`](../../STATUS.md).

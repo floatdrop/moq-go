@@ -88,12 +88,12 @@ command's README for details.
 
 ### Run via the runner itself
 
-The relay is registered as `moq` in the runner's `implementations.json` (both a
+The relay is registered as `moq-go` in the runner's `implementations.json` (both a
 `relay` and a `client` role). After building the images (`make interop-build`,
 `make interop-client-build`):
 
 ```sh
 cd ../moq-interop-runner
-make interop-relay RELAY=moq          # our relay ← every registered client
-make interop-client CLIENT=moq        # our client → every registered relay
+make interop-relay RELAY=moq-go       # our relay ← every registered client
+make interop-client CLIENT=moq-go     # our client → every registered relay
 ```

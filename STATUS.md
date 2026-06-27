@@ -39,8 +39,8 @@ independent draft-18 implementations via the
   relays: `make interop-client`.
 
 For the full registered matrices, use the runner:
-`cd ../moq-interop-runner && make interop-relay RELAY=moq` and
-`make interop-client CLIENT=moq`.
+`cd ../moq-interop-runner && make interop-relay RELAY=moq-go` and
+`make interop-client CLIENT=moq-go`.
 
 Last run: 2026-06-19, built from this tree.
 
