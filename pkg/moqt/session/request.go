@@ -265,6 +265,44 @@ func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Mess
 	return msg, err
 }
 
+// UpdateRequest sends a REQUEST_UPDATE (§10.9) on an already-established
+// request stream and awaits the single REQUEST_OK / REQUEST_ERROR the spec
+// mandates in response. requestID MUST be the Request ID of the original
+// request the stream carries — REQUEST_UPDATE rides the original bidi stream
+// and does NOT consume a new Request ID. params carries only the fields the
+// caller wants to change; any parameter omitted keeps its prior value on the
+// peer (§10.9).
+//
+// On REQUEST_OK the parsed message is returned and the stream is left open
+// for further traffic. REQUEST_ERROR is surfaced as a *RequestRejectedError;
+// the stream is left open so the caller can decide how to tear down (a failed
+// subscription update is followed by PUBLISH_DONE from the publisher, §10.9).
+func (s *Session) UpdateRequest(
+	ctx context.Context,
+	stream Stream,
+	requestID uint64,
+	params message.Parameters,
+) (*message.RequestOK, error) {
+	if err := message.Marshal(stream, &message.RequestUpdate{
+		RequestID:  requestID,
+		Parameters: params,
+	}); err != nil {
+		return nil, fmt.Errorf("moqt/session: write REQUEST_UPDATE: %w", err)
+	}
+	resp, err := s.readResponse(ctx, stream)
+	if err != nil {
+		return nil, fmt.Errorf("moqt/session: read REQUEST_UPDATE response: %w", err)
+	}
+	switch r := resp.(type) {
+	case *message.RequestOK:
+		return r, nil
+	case *message.RequestError:
+		return nil, &RequestRejectedError{Code: r.ErrorCode, Reason: r.ErrorReason}
+	default:
+		return nil, fmt.Errorf("moqt/session: unexpected %s in REQUEST_UPDATE response", resp.Type())
+	}
+}
+
 // Reply marshals a response message onto the request's bidi stream. The
 // stream is left open so further messages can be written. Use RejectError or
 // Stream.Close to terminate the send direction.
