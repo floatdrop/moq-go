@@ -78,7 +78,7 @@ interop-matrix: interop-build interop-certs
 #   make interop-client CLIENT_RELAY_IMAGE=ghcr.io/englishm/moq-interop-runner-moq-relay-ietf-draft-18:latest
 #   make interop-client CLIENT_RELAY_IMAGE=moq-dev-rs-interop:latest   # (build the adapter in the runner first)
 # For our client against EVERY registered draft-18 relay, use the runner:
-#   cd ../moq-interop-runner && make interop-client CLIENT=moq
+#   cd ../moq-interop-runner && make interop-client CLIENT=moq-go
 CLIENT_RELAY_IMAGE ?= moq-relay:latest
 CLIENT_RELAY_URL   ?= moqt://relay:4443
 CLIENT_COMPOSE     := docker compose -f interop/docker-compose.client.yml

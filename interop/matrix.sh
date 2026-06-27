@@ -101,6 +101,6 @@ echo "FAIL = test ran and failed         ERROR = client never produced TAP"
 echo "[advisory] rows are shown for visibility but do not affect the exit status."
 echo
 echo "For the full registered matrix (all clients, classified vs the target draft),"
-echo "use the runner:  cd ../moq-interop-runner && make interop-relay RELAY=moq"
+echo "use the runner:  cd ../moq-interop-runner && make interop-relay RELAY=moq-go"
 
 exit $overall
