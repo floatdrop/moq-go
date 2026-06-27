@@ -57,6 +57,36 @@ func openPair(t *testing.T) (*session.Session, *session.Session) {
 	return aSess, bSess
 }
 
+// openPairWithLimits performs the SETUP handshake over a credit-capped conn
+// pair. aBidiLimit caps the client's outbound bidi-stream credit (the SETUP
+// control stream is unidirectional, so it is unaffected by the cap). A
+// negative limit means unlimited.
+func openPairWithLimits(t *testing.T, aBidiLimit int) (*session.Session, *session.Session) {
+	t.Helper()
+	ctx := t.Context()
+	aConn, bConn := sessiontest.NewConnPairWithLimits(aBidiLimit, -1)
+
+	var (
+		wg           sync.WaitGroup
+		aSess, bSess *session.Session
+		aErr, bErr   error
+	)
+	wg.Go(func() { aSess, aErr = session.Client(ctx, aConn) })
+	wg.Go(func() { bSess, bErr = session.Server(ctx, bConn) })
+	wg.Wait()
+	if aErr != nil {
+		t.Fatalf("client Open: %v", aErr)
+	}
+	if bErr != nil {
+		t.Fatalf("server Open: %v", bErr)
+	}
+	t.Cleanup(func() {
+		_ = aSess.Close(moqt.SessionNoError, "test cleanup")
+		_ = bSess.Close(moqt.SessionNoError, "test cleanup")
+	})
+	return aSess, bSess
+}
+
 func TestHandshakeExchangesPeerOptions(t *testing.T) {
 	client, server := openPair(t)
 
