@@ -276,10 +276,11 @@ func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Mess
 //   - any other message is an unexpected-response error and the stream is closed.
 //
 // Error messages name the operation via m.Type() (e.g. "SUBSCRIBE"). It is the
-// single primitive beneath [Session.Subscribe], [Session.Fetch],
-// [Session.TrackStatus], and the three namespace request openers, which share
-// this §10.1 open / await-OK skeleton and differ only in OK type and success
-// handling.
+// single primitive beneath [Session.Publish], [Session.Subscribe],
+// [Session.Fetch], [Session.TrackStatus], and the three namespace request
+// openers, which share this §10.1 open / await-OK skeleton and differ only in
+// OK type and success handling (Publish additionally pre-allocates its Track
+// Alias before the open).
 func awaitRequestResponse[OK message.Message, R any](
 	ctx context.Context,
 	s *Session,
