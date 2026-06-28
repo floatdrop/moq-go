@@ -51,6 +51,28 @@ func (m *RequestMux) Handle(t message.Type, h RequestHandler) {
 	m.handlers[t] = h
 }
 
+// HandleType registers h for inbound requests whose first message is the
+// concrete type T (e.g. *message.Subscribe), handing h the already-asserted
+// typed message alongside the [*Request]. It is the generic form of
+// [RequestMux.Handle]: the [message.Type] key is derived from T, and the type
+// assertion a Handle callback would otherwise repeat (req.First.(*message.X)) is
+// done once, here.
+//
+// Go methods cannot take type parameters, so this is a free function taking the
+// mux as its first argument. A nil h unregisters T's type; registering a type
+// that already has a handler replaces it.
+func HandleType[T message.WithRequestID](m *RequestMux, h func(*Request, T)) {
+	var zero T // nil pointer; message Type() methods are constant returns
+	if h == nil {
+		m.Handle(zero.Type(), nil)
+		return
+	}
+	m.Handle(zero.Type(), func(req *Request) {
+		msg, _ := req.First.(T)
+		h(req, msg)
+	})
+}
+
 // OnUnknown sets the callback invoked for an accepted request whose type has no
 // registered handler. With no callback set (the default, or a nil f), an
 // unmatched request is rejected with REQUEST_ERROR NOT_SUPPORTED and its stream

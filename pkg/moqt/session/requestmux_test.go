@@ -3,6 +3,7 @@ package session_test
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -75,6 +76,36 @@ func TestRequestMuxRoutesByType(t *testing.T) {
 		if !slices.Contains(got, want) {
 			t.Errorf("missing dispatched type %s; got %v", want, got)
 		}
+	}
+}
+
+// TestRequestMuxHandleType checks that HandleType derives the message.Type key
+// from T and hands the handler the already-asserted typed message.
+func TestRequestMuxHandleType(t *testing.T) {
+	t.Parallel()
+	client, server := openPair(t)
+
+	got := make(chan string, 1)
+	mux := session.NewRequestMux()
+	session.HandleType(mux, func(_ *session.Request, msg *message.Subscribe) {
+		got <- string(msg.Name) // typed access without a manual assertion
+	})
+	go func() { _ = mux.Run(t.Context(), server) }()
+
+	openRequest(t, client, &message.Subscribe{
+		RequestID:  0,
+		Namespace:  wire.Namespace("ns"),
+		Name:       []byte("typed-track"),
+		Parameters: message.Parameters{message.LargestObjectFilter()},
+	})
+
+	select {
+	case name := <-got:
+		if name != "typed-track" {
+			t.Errorf("handler saw Name = %q, want %q", name, "typed-track")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("typed handler was not invoked")
 	}
 }
 
