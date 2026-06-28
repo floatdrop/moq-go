@@ -2,7 +2,6 @@ package session
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
@@ -51,35 +50,20 @@ func (sub *Subscription) Update(ctx context.Context, params message.Parameters) 
 // streams. REQUEST_ERROR is surfaced as a *RequestRejectedError and the stream
 // is closed.
 func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscription, error) {
-	stream, err := s.openAllocRequest(m)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.readResponse(ctx, stream)
-	if err != nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: read SUBSCRIBE response: %w", err)
-	}
-	switch r := resp.(type) {
-	case *message.SubscribeOK:
-		// §2.5.1: reject tracks with unknown mandatory track properties.
-		if err := s.validateTrackProperties(r.TrackProperties, "SUBSCRIBE_OK"); err != nil {
-			_ = stream.Close()
-			return nil, err
-		}
-		// §11.1: register the alias the publisher assigned so we can detect
-		// DUPLICATE_TRACK_ALIAS if the same alias is reused for a different track.
-		key := track.NewKey(m.Namespace, m.Name)
-		if err := s.RegisterInboundTrackAlias(r.TrackAlias, key); err != nil {
-			_ = stream.Close()
-			return nil, err
-		}
-		return &Subscription{Stream: stream, OK: r, s: s, requestID: m.RequestID}, nil
-	case *message.RequestError:
-		_ = stream.Close()
-		return nil, &RequestRejectedError{Code: r.ErrorCode, Reason: r.ErrorReason}
-	default:
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: unexpected %s in SUBSCRIBE response", resp.Type())
-	}
+	return awaitRequestResponse(ctx, s, m,
+		func(stream Stream, ok *message.SubscribeOK) (*Subscription, error) {
+			// §2.5.1: reject tracks with unknown mandatory track properties.
+			if err := s.validateTrackProperties(ok.TrackProperties, "SUBSCRIBE_OK"); err != nil {
+				_ = stream.Close()
+				return nil, err
+			}
+			// §11.1: register the alias the publisher assigned so we can detect
+			// DUPLICATE_TRACK_ALIAS if the same alias is reused for a different track.
+			key := track.NewKey(m.Namespace, m.Name)
+			if err := s.RegisterInboundTrackAlias(ok.TrackAlias, key); err != nil {
+				_ = stream.Close()
+				return nil, err
+			}
+			return &Subscription{Stream: stream, OK: ok, s: s, requestID: m.RequestID}, nil
+		})
 }

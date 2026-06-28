@@ -89,25 +89,10 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 	if m.TrackAlias == 0 {
 		m.TrackAlias = s.AllocOutboundTrackAlias()
 	}
-	stream, err := s.OpenPublish(m)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.readResponse(ctx, stream)
-	if err != nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: read PUBLISH response: %w", err)
-	}
-	switch r := resp.(type) {
-	case *message.RequestOK:
-		return &Publication{Stream: stream, s: s, alias: m.TrackAlias}, nil
-	case *message.RequestError:
-		_ = stream.Close()
-		return nil, &RequestRejectedError{Code: r.ErrorCode, Reason: r.ErrorReason}
-	default:
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: unexpected %s in PUBLISH response", resp.Type())
-	}
+	return awaitRequestResponse(ctx, s, m,
+		func(stream Stream, _ *message.RequestOK) (*Publication, error) {
+			return &Publication{Stream: stream, s: s, alias: m.TrackAlias}, nil
+		})
 }
 
 // OpenPublish opens a PUBLISH request stream (§10.10) without blocking on
