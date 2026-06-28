@@ -48,33 +48,16 @@ func (f *FetchRequest) Update(ctx context.Context, params message.Parameters) (*
 //
 // On REQUEST_ERROR the stream is closed and a *RequestRejectedError is
 // returned.
-//
-//nolint:dupl // distinct §10.12 op; shares the mandated open/await-OK skeleton with TrackStatus (§10.14) but differs in message type and FETCH_OK handling.
 func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, error) {
-	stream, err := s.openAllocRequest(m)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.readResponse(ctx, stream)
-	if err != nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: read FETCH response: %w", err)
-	}
-	switch r := resp.(type) {
-	case *message.FetchOK:
-		// §2.5.1: reject tracks with unknown mandatory track properties.
-		if err := s.validateTrackProperties(r.TrackProperties, "FETCH_OK"); err != nil {
-			_ = stream.Close()
-			return nil, err
-		}
-		return &FetchRequest{Stream: stream, OK: r, s: s, requestID: m.RequestID}, nil
-	case *message.RequestError:
-		_ = stream.Close()
-		return nil, &RequestRejectedError{Code: r.ErrorCode, Reason: r.ErrorReason}
-	default:
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: unexpected %s in FETCH response", resp.Type())
-	}
+	return awaitRequestResponse(ctx, s, m,
+		func(stream Stream, ok *message.FetchOK) (*FetchRequest, error) {
+			// §2.5.1: reject tracks with unknown mandatory track properties.
+			if err := s.validateTrackProperties(ok.TrackProperties, "FETCH_OK"); err != nil {
+				_ = stream.Close()
+				return nil, err
+			}
+			return &FetchRequest{Stream: stream, OK: ok, s: s, requestID: m.RequestID}, nil
+		})
 }
 
 // OpenFetchStream opens an outbound FETCH_HEADER uni-stream (§11.5),

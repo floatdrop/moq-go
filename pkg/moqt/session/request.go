@@ -264,6 +264,48 @@ func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Mess
 	return msg, err
 }
 
+// awaitRequestResponse opens a request stream for m (allocating its Request ID
+// only after the open succeeds — see [Session.openAllocRequest]), awaits the
+// peer's initial response, and dispatches it:
+//
+//   - the expected success type OK is handed to onOK, which owns the still-open
+//     stream from that point: it wraps the stream in the typed handle, or closes
+//     it and returns an error (e.g. on Track Property validation failure);
+//   - REQUEST_ERROR (§10.5) is surfaced as a *RequestRejectedError and the
+//     stream is closed;
+//   - any other message is an unexpected-response error and the stream is closed.
+//
+// Error messages name the operation via m.Type() (e.g. "SUBSCRIBE"). It is the
+// single primitive beneath [Session.Subscribe], [Session.Fetch],
+// [Session.TrackStatus], and the three namespace request openers, which share
+// this §10.1 open / await-OK skeleton and differ only in OK type and success
+// handling.
+func awaitRequestResponse[OK message.Message, R any](
+	ctx context.Context,
+	s *Session,
+	m message.WithRequestID,
+	onOK func(stream Stream, ok OK) (R, error),
+) (R, error) {
+	var zero R
+	stream, err := s.openAllocRequest(m)
+	if err != nil {
+		return zero, err
+	}
+	resp, err := s.readResponse(ctx, stream)
+	if err != nil {
+		_ = stream.Close()
+		return zero, fmt.Errorf("moqt/session: read %s response: %w", m.Type(), err)
+	}
+	if ok, isOK := resp.(OK); isOK {
+		return onOK(stream, ok)
+	}
+	_ = stream.Close()
+	if rerr, isErr := resp.(*message.RequestError); isErr {
+		return zero, &RequestRejectedError{Code: rerr.ErrorCode, Reason: rerr.ErrorReason}
+	}
+	return zero, fmt.Errorf("moqt/session: unexpected %s in %s response", resp.Type(), m.Type())
+}
+
 // UpdateRequest sends a REQUEST_UPDATE (§10.9) on an already-established
 // request stream and awaits the single REQUEST_OK / REQUEST_ERROR the spec
 // mandates in response. requestID MUST be the Request ID of the original

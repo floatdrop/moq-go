@@ -57,25 +57,10 @@ func (s *Session) PublishNamespace(
 	ctx context.Context,
 	m *message.PublishNamespace,
 ) (*NamespacePublication, error) {
-	stream, err := s.openAllocRequest(m)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.readResponse(ctx, stream)
-	if err != nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: read PUBLISH_NAMESPACE response: %w", err)
-	}
-	switch r := resp.(type) {
-	case *message.RequestOK:
-		return &NamespacePublication{Stream: stream, OK: r}, nil
-	case *message.RequestError:
-		_ = stream.Close()
-		return nil, &RequestRejectedError{Code: r.ErrorCode, Reason: r.ErrorReason}
-	default:
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: unexpected %s in PUBLISH_NAMESPACE response", resp.Type())
-	}
+	return awaitRequestResponse(ctx, s, m,
+		func(stream Stream, ok *message.RequestOK) (*NamespacePublication, error) {
+			return &NamespacePublication{Stream: stream, OK: ok}, nil
+		})
 }
 
 // SubscribeNamespace opens a SUBSCRIBE_NAMESPACE request stream (§10.18) and
@@ -89,25 +74,10 @@ func (s *Session) SubscribeNamespace(
 	ctx context.Context,
 	m *message.SubscribeNamespace,
 ) (*NamespaceSubscription, error) {
-	stream, err := s.openAllocRequest(m)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.readResponse(ctx, stream)
-	if err != nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: read SUBSCRIBE_NAMESPACE response: %w", err)
-	}
-	switch r := resp.(type) {
-	case *message.RequestOK:
-		return &NamespaceSubscription{Stream: stream, OK: r}, nil
-	case *message.RequestError:
-		_ = stream.Close()
-		return nil, &RequestRejectedError{Code: r.ErrorCode, Reason: r.ErrorReason}
-	default:
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: unexpected %s in SUBSCRIBE_NAMESPACE response", resp.Type())
-	}
+	return awaitRequestResponse(ctx, s, m,
+		func(stream Stream, ok *message.RequestOK) (*NamespaceSubscription, error) {
+			return &NamespaceSubscription{Stream: stream, OK: ok}, nil
+		})
 }
 
 // SubscribeTracks opens a SUBSCRIBE_TRACKS request stream (§10.19) and awaits
@@ -118,25 +88,10 @@ func (s *Session) SubscribeNamespace(
 // for PUBLISH_BLOCKED follow-ups (read via [TrackSubscription.ReadPublishBlocked]).
 // On REQUEST_ERROR the stream is closed and a *RequestRejectedError is returned.
 func (s *Session) SubscribeTracks(ctx context.Context, m *message.SubscribeTracks) (*TrackSubscription, error) {
-	stream, err := s.openAllocRequest(m)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := s.readResponse(ctx, stream)
-	if err != nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: read SUBSCRIBE_TRACKS response: %w", err)
-	}
-	switch r := resp.(type) {
-	case *message.RequestOK:
-		return &TrackSubscription{Stream: stream, OK: r}, nil
-	case *message.RequestError:
-		_ = stream.Close()
-		return nil, &RequestRejectedError{Code: r.ErrorCode, Reason: r.ErrorReason}
-	default:
-		_ = stream.Close()
-		return nil, fmt.Errorf("moqt/session: unexpected %s in SUBSCRIBE_TRACKS response", resp.Type())
-	}
+	return awaitRequestResponse(ctx, s, m,
+		func(stream Stream, ok *message.RequestOK) (*TrackSubscription, error) {
+			return &TrackSubscription{Stream: stream, OK: ok}, nil
+		})
 }
 
 // ReadPublishBlocked reads the next follow-up message on this SUBSCRIBE_TRACKS
