@@ -141,8 +141,7 @@ func ReadVarint(r io.ByteReader) (uint64, error) {
 }
 
 // NewByteReader adapts an io.Reader to io.ByteReader by reading a single byte
-// per call, with no buffering or look-ahead. It mirrors the contract callers
-// previously relied on from quicvarint.NewReader, so a varint read leaves the
+// per call, with no buffering or look-ahead, so a varint read leaves the
 // underlying reader positioned exactly after the varint.
 func NewByteReader(r io.Reader) io.ByteReader {
 	if br, ok := r.(io.ByteReader); ok {
