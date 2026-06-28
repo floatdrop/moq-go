@@ -131,6 +131,7 @@ grouped here by the file they live in:
 | Publish a track | `ExampleSession_Publish` |
 | Subscribe to a track | `ExampleSession_Subscribe` |
 | Route many tracks' data streams | `ExampleDemux` |
+| Route inbound requests (server side) | `ExampleRequestMux` |
 | Joining / standalone FETCH | `ExampleSession_Fetch`, `ExampleSession_Fetch_standalone`, `ExampleIncomingFetchStream` |
 | Update a live request | `ExampleSession_UpdateRequest` |
 | End a publication | `Example_endingAPublication` |
