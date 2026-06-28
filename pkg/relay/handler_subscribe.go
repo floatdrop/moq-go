@@ -84,14 +84,9 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE serving from existing upstream")
 	}
 
-	// Allocate the Track Alias the relay will use when publishing this track
-	// downstream to the subscriber. Per §11.1 this outbound alias space is
-	// independent of the inbound aliases the peer chose for its own PUBLISHes
-	// — a session that both publishes and subscribes (e.g. a conferencing
-	// client) would otherwise collide, since both spaces start at 0. The
-	// monotonic allocator already guarantees outbound uniqueness, so it is not
-	// registered in the inbound alias map (which is reserved for the peer's
-	// publisher-chosen aliases, used to route inbound data streams).
+	// Allocate the Track Alias the relay uses when publishing this track
+	// downstream. Per §11.1 the outbound alias space is independent of the
+	// inbound aliases the peer chose for its own PUBLISHes.
 	alias := h.sess.AllocOutboundTrackAlias()
 
 	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, req.Stream, alias)
@@ -171,11 +166,9 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		h.propagateNewGroupUpstream(ctx, fullName, newGroupReqParam.Varint)
 	}
 
-	// Read follow-up messages (§10.9 REQUEST_UPDATE, and a peer FIN/reset)
-	// on the same bidi stream until the subscriber tears it down or ctx is
-	// cancelled. Unlike the previous DrainAndWait, which discarded every
-	// follow-up byte, this loop parses and dispatches REQUEST_UPDATE so the
-	// subscription's Forward / priority / filter can change mid-flight.
+	// Read follow-ups (§10.9 REQUEST_UPDATE, peer FIN/reset) on the bidi stream
+	// until the subscriber tears it down or ctx is cancelled, dispatching
+	// REQUEST_UPDATE so Forward / priority / filter can change mid-flight.
 	h.readSubscribeUpdates(ctx, req, sub, fullName)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE stream ended",
 		slog.String("name", string(msg.Name)))
@@ -337,24 +330,17 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 }
 
 // subscribeUpstream establishes upstream SUBSCRIBEs for fullName. Per §9.5 it
-// subscribes to EVERY matching publisher for fault tolerance — all local
-// publishers that advertised a covering namespace (§9.5 prefix match) AND all
-// remote relays Discovery resolves (§9.4 cross-relay aggregation) — fanning them
-// into one track via [runFanout]'s dedup so losing one origin doesn't interrupt
-// delivery. A candidate whose SUBSCRIBE fails does not abort the rest. Returns
-// (entry, true, nil) when at least one upstream was established, (nil, false,
-// nil) when no upstream is available anywhere, and (nil, false, err) only when
-// every candidate failed and the last failure was a hard error (e.g. a publisher
-// session died mid-subscribe).
+// subscribes to EVERY matching source for fault tolerance — every local
+// publisher advertising a covering namespace and every remote relay Discovery
+// resolves (§9.4 cross-relay aggregation) — deduping already-subscribed
+// sessions and fanning the rest into one track. A failed candidate does not
+// abort the others. Returns (entry, true, nil) when at least one upstream was
+// established, (nil, false, nil) when none is available anywhere, and
+// (nil, false, err) when every candidate failed with the last a hard error.
 //
-// Already-subscribed sessions are skipped (source dedup) so a track that already
-// has an upstream on a given session is never double-subscribed.
-//
-// extra carries additional parameters to fold into each upstream SUBSCRIBE
-// alongside the mandatory §9.4 Largest Object filter — currently the
-// NEW_GROUP_REQUEST a downstream SUBSCRIBE arrived with (§10.2.13 rule 1: a
-// relay with no Established upstream MUST include NEW_GROUP_REQUEST when
-// subscribing upstream).
+// extra carries parameters folded into each upstream SUBSCRIBE alongside the
+// §9.4 Largest Object filter — currently the NEW_GROUP_REQUEST a downstream
+// SUBSCRIBE arrived with (§10.2.13 rule 1).
 func (h *sessionHandler) subscribeUpstream(
 	ctx context.Context,
 	fullName track.FullTrackName,
@@ -472,12 +458,9 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	upstreamSub.FetchCapable = true
 	entry, _ := h.tracks.AddUpstream(fullName, upstreamSub, registry.WithProperties(upstreamStream.OK.TrackProperties))
 
-	// Watcher: keep the upstream stream alive until the publisher cancels
-	// it (FIN/reset) or this handler shuts down, then unregister.
-	// waitForStreamEnd handles the ctx-cancel + CancelRead dance; it's
-	// the same primitive every long-lived handler uses to keep a request
-	// stream open. The unregister runs in the watcher's goroutine so the
-	// handler's wg join in run() waits for it.
+	// Keep the upstream stream alive until the publisher cancels it (FIN/reset)
+	// or this handler shuts down, then unregister. The unregister runs under
+	// h.spawn so run()'s wg join waits for it.
 	h.spawn(func() {
 		session.DrainAndWait(ctx, upstreamStream)
 		h.tracks.RemoveUpstream(fullName, upstreamSub.ID)
@@ -499,24 +482,14 @@ func hasEstablishedUpstream(entry *registry.TrackEntry) bool {
 	return false
 }
 
-// installSubscribeParams extracts the per-subscription policy fields from
-// the SUBSCRIBE message parameters (§10.2) and records them on sub.
+// installSubscribeParams extracts the per-subscription policy fields from the
+// SUBSCRIBE parameters (§10.2) and records them on sub: SUBSCRIPTION_FILTER
+// (§10.2.9), SUBSCRIBER_PRIORITY (§10.2.7, advisory), GROUP_ORDER (§10.2.8).
 //
-// The §5.1.2 / §9.4 LargestObject snapshot is intentionally NOT taken
-// here — it is captured atomically with [registry.TrackRegistry.AddDownstreamSnapshotLargest]
-// at the call site so the snapshot is consistent with the moment sub
-// becomes eligible for live fanout delivery. See that method's docstring
-// for the race it solves. Callers must invoke
-// [registry.DownstreamSub.SetLargestAtSubscribe] separately with the returned snapshot.
-//
-// Installed parameters:
-//   - SUBSCRIPTION_FILTER (§10.2.9) — fanout consults it on every object
-//     pre-enqueue.
-//   - SUBSCRIBER_PRIORITY (§10.2.7) — stored for future cross-stream
-//     scheduling; subgroup streams don't expose a per-stream priority knob,
-//     so the value is currently advisory.
-//   - GROUP_ORDER (§10.2.8) — honoured by the FETCH responder (subgroup
-//     streams are §11.4.3 in-order and ignore the field).
+// The §5.1.2 / §9.4 LargestObject snapshot is intentionally NOT taken here — the
+// caller captures it atomically via
+// [registry.TrackRegistry.AddDownstreamSnapshotLargest] and applies it with
+// [registry.DownstreamSub.SetLargestAtSubscribe].
 func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) error {
 	filter, err := message.SubscriptionFilterFromParam(ps)
 	if err != nil {

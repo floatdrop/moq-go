@@ -11,31 +11,15 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 )
 
-// handleTrackStatus implements TRACK_STATUS (§10.14). It is a metadata-only
-// query: the caller wants the track's Properties (and, implicitly, its
-// existence) without creating a subscription. Per the spec the response is
-// REQUEST_OK (aliased as [message.TrackStatusOK]) carrying the same Track
-// Properties block that SUBSCRIBE_OK would.
+// handleTrackStatus implements TRACK_STATUS (§10.14): a metadata-only query for
+// a track's Properties and existence, answered without creating a subscription
+// or round-tripping upstream. The reply is REQUEST_OK (aliased as
+// [message.TrackStatusOK]) carrying the same Track Properties block SUBSCRIBE_OK
+// would, plus §10.2.11 LARGEST_OBJECT when objects have been forwarded.
 //
-// Flow:
-//
-//  1. Authorize.
-//  2. Look up the track in [registry.TrackRegistry]. If found and a publisher has
-//     populated Properties (handlePublish / subscribeUpstream both do
-//     this), reply TRACK_STATUS_OK with those bytes plus a §10.2.11
-//     LARGEST_OBJECT parameter sourced from the entry's watermark when
-//     any object has been forwarded.
-//  3. Otherwise check the [registry.NamespaceRegistry] — if a local publisher has
-//     advertised the namespace, reply TRACK_STATUS_OK with empty
-//     Properties (and no LARGEST_OBJECT). The caller learns the track
-//     exists but the relay has no metadata to forward without issuing an
-//     upstream SUBSCRIBE.
-//  4. If neither is true, reject with [moqt.RequestDoesNotExist].
-//
-// The handler deliberately does NOT issue an upstream TRACK_STATUS on
-// demand. TRACK_STATUS is a status query, not a subscription — the
-// answer the relay can give without round-tripping upstream is sufficient
-// for callers that just want to know "does this track exist?".
+// It answers from the track registry when metadata exists, falls back to an
+// empty TRACK_STATUS_OK when only the namespace is advertised locally, and
+// otherwise rejects with [moqt.RequestDoesNotExist].
 func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Request, msg *message.TrackStatus) {
 	if err := h.auth.AuthorizeTrackStatus(ctx, h.sess, msg); err != nil {
 		h.rejectAuth(ctx, req, "TrackStatus", err)
@@ -44,11 +28,8 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 
 	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 	entry, known := h.tracks.Get(fullName.Key())
-	// The relay can answer TRACK_STATUS_OK for any entry it has metadata
-	// to surface: either Properties (captured from the upstream publisher
-	// in PUBLISH / SUBSCRIBE_OK) or a §10.2.11 LargestObject watermark
-	// (the fanout advances this on every forwarded object). Either field
-	// — even on its own — is useful to the caller.
+	// Answer TRACK_STATUS_OK for any entry with metadata to surface: Properties
+	// or a §10.2.11 LargestObject watermark. Either field alone is useful.
 	var (
 		largest    message.Location
 		hasLargest bool

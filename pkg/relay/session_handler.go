@@ -15,26 +15,13 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
-// sessionHandler owns the per-session request and data-stream loops. One
-// instance is created per accepted [session.Session] in [Relay.handleConn]
-// and torn down when the session terminates.
+// sessionHandler owns the per-session request and data-stream loops, one per
+// accepted [session.Session]. The relay's shared state (registries, authorizer)
+// is injected by [Relay.handleConn] and referenced read-only.
 //
-// The handler is purely a façade over the relay's shared state — it does not
-// own the [registry.TrackRegistry], [registry.NamespaceRegistry], or [Authorizer]. They are
-// injected by [Relay.handleConn] and referenced read-only on the handler.
-//
-// Concurrency model:
-//
-//   - One goroutine drives the request-dispatch loop ([sessionHandler.runRequestLoop]).
-//   - One goroutine drives the data-stream loop ([sessionHandler.runDataLoop]).
-//   - One goroutine drives the datagram loop ([sessionHandler.runDatagramLoop]).
-//   - Per-request handler goroutines may be spawned by the dispatch loop
-//     (e.g. a SUBSCRIBE handler that needs to wait for an upstream reply).
-//     The handler tracks them via wg so [sessionHandler.run] can join cleanly
-//     before returning.
-//
-// All registry interactions for this session pass through the handler so
-// bulk-cleanup on session teardown is centralised.
+// Concurrency: [sessionHandler.run] drives the request, data-stream, and
+// datagram loops on separate goroutines, plus per-request handler goroutines
+// spawned by the dispatch loop and tracked via wg for a clean join on teardown.
 type sessionHandler struct {
 	sess                *session.Session
 	log                 *slog.Logger
@@ -51,11 +38,9 @@ type sessionHandler struct {
 	// limiter enforces the §13.1 / §13.7.1 per-session resource caps.
 	limiter sessionLimiter
 
-	// nextSubID allocates relay-internal subscription IDs for the
-	// registry.UpstreamSub / registry.DownstreamSub records this handler installs into the
-	// registry.TrackRegistry. The counter is per-handler because IDs only have to
-	// be unique within a registry.TrackEntry's slices — there is no global
-	// requirement — and a per-handler counter avoids contention.
+	// subID allocates relay-internal subscription IDs for the UpstreamSub /
+	// DownstreamSub records this handler installs into the registry. Per-handler
+	// because IDs only need to be unique within a TrackEntry's slices.
 	subIDMu sync.Mutex
 	subID   uint64
 
@@ -115,30 +100,17 @@ func newSessionHandler(
 	}
 }
 
-// handleInboundGoaway implements §10.4: when the peer sends GOAWAY,
-// honour the timeout it declared by giving in-flight subscriptions
-// that long to wrap up, then close the session.
+// handleInboundGoaway implements §10.4: when the peer sends GOAWAY, grant the
+// timeout it declared for in-flight subscriptions to wrap up, then close the
+// session. Per-session registry cleanup drops the entries on teardown.
 //
-// Per §10.4 the peer MUST NOT issue new requests after sending GOAWAY;
-// existing in-flight work continues. The relay does no role-based
-// distinction here:
+// The relay does not migrate upstream subscriptions to the peer's NewSessionURI
+// (§9.5.1); dependent DownstreamSubs see their tracks end and the client
+// re-subscribes, which may re-establish the track via the on-demand upstream
+// subscribe path.
 //
-//   - Inbound GOAWAY from a downstream subscriber: the subscriber is
-//     migrating. Their request streams will close as part of that;
-//     when the timer fires the relay tears the session down. The
-//     per-session registry cleanup drops registry entries.
-//   - Inbound GOAWAY from an upstream publisher: §9.5.1 would have the
-//     relay migrate its subscriptions to a new URI; until the
-//     UpstreamPool lands the relay just terminates the session at the
-//     timeout. Dependent DownstreamSubs see their tracks end and the
-//     client re-subscribes — possibly succeeding via the on-demand
-//     upstream subscribe path, possibly failing cleanly if the
-//     publisher's namespace is gone.
-//
-// The function blocks on either the peer's declared timeout or
-// sess.Done() (the peer closed the session earlier) or ctx (relay-level
-// shutdown). When it returns, the caller's defer cancels runCtx, which
-// unblocks the per-session loops.
+// Blocks on the declared timeout, sess.Done() (peer closed earlier), or ctx
+// (relay shutdown). The caller's defer then cancels runCtx to unblock the loops.
 func (h *sessionHandler) handleInboundGoaway(ctx context.Context) {
 	g := h.sess.PeerGoaway()
 	if g == nil {
@@ -173,24 +145,14 @@ func (h *sessionHandler) allocSubID() uint64 {
 	return h.subID
 }
 
-// run blocks until the session ends, returning the cause:
-//
-//   - nil when the peer closed the session cleanly or our side initiated
-//     shutdown via ctx cancellation.
-//   - the request-loop or data-loop error otherwise.
-//
-// run spawns the two protocol loops, waits for both to finish (joining via
-// a WaitGroup so neither can be left dangling), then joins all in-flight
-// per-request goroutines before returning. The session itself is closed by
-// [Relay.Stop] or the peer; run does not call [session.Session.Close] except
-// on a protocol violation detected by a loop.
+// run blocks until the session ends, returning nil on a clean close (peer or
+// ctx-driven shutdown) or the request/data-loop error otherwise. It spawns the
+// protocol loops, joins them and all in-flight per-request goroutines, and does
+// not close the session itself except on a protocol violation detected by a loop.
 func (h *sessionHandler) run(ctx context.Context) error {
-	// Tie our local ctx to both the parent ctx and the session's Done
-	// channel so loops unblock as soon as the session terminates for any
-	// reason. Inbound GOAWAY handling is folded into the same watcher:
-	// when the peer sends GOAWAY, the relay grants the peer's declared
-	// Timeout for any in-flight subscriptions to drain, then closes the
-	// session.
+	// Watcher ties runCtx to the parent ctx and the session's Done channel so
+	// loops unblock as soon as the session terminates, and folds in inbound
+	// GOAWAY handling (see handleInboundGoaway).
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -219,12 +181,9 @@ func (h *sessionHandler) run(ctx context.Context) error {
 		cancel() // wake sibling loops if the data loop dies first
 	})
 	// Datagrams are OPTIONAL (§11.6): a transport or peer without DATAGRAM
-	// support makes ReceiveDatagram fail on the very first call. That must not
-	// take down SUBSCRIBE/PUBLISH handling, so the datagram loop neither
-	// cancels its siblings nor promotes its error as a session fault — it just
-	// stops. Session death is still observed: the request/data loops cancel on
-	// real transport errors, and a datagram-level PROTOCOL_VIOLATION closes the
-	// session, which the runCtx watcher above turns into a cancel.
+	// support fails ReceiveDatagram on the first call, which must not take down
+	// SUBSCRIBE/PUBLISH handling. So the datagram loop neither cancels its
+	// siblings nor promotes its error as a session fault — it just stops.
 	loops.Go(func() {
 		if err := h.runDatagramLoop(runCtx); err != nil && !isShutdownErr(err) {
 			h.log.LogAttrs(ctx, slog.LevelDebug,
@@ -284,17 +243,12 @@ func (h *sessionHandler) runRequestLoop(ctx context.Context) error {
 	}
 }
 
-// runDataLoop accepts inbound data streams and routes each to the
-// appropriate fanout entry point. Subgroup streams go to
-// [sessionHandler.runFanout]; fetch response streams (the body side of
-// a FETCH the relay issued upstream) are handed to the downstream handler
-// waiting on the matching (session, RequestID) via the fetch router, and
-// reset when no reader is registered. Unknown stream types are logged and
-// the stream is reset to keep the publisher's flow control unblocked.
+// runDataLoop accepts inbound data streams and routes each by type: subgroup
+// streams to [sessionHandler.runFanout], fetch response streams to the fetch
+// router (see the inline comments below).
 //
-// Per-stream errors do not terminate the loop: §9.5 forbids "one bad data
-// stream kills the session" semantics. Transport-level errors from
-// AcceptDataStream do terminate, matching the request-loop convention.
+// Per-stream errors do not terminate the loop (§9.5: one bad data stream must
+// not kill the session); transport-level errors from AcceptDataStream do.
 func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 	for {
 		ds, err := h.sess.AcceptDataStream(ctx)
@@ -345,12 +299,9 @@ func (h *sessionHandler) dispatch(ctx context.Context, req *session.Request) {
 	h.log.LogAttrs(ctx, slog.LevelDebug, "relay dispatching request",
 		slog.String("type", fmt.Sprintf("%T", req.First)))
 
-	// §10.2.2: authorize the request's resolved AUTHORIZATION_TOKEN(s)
-	// before any handler runs. The session has already resolved aliases
-	// against the inbound cache and attached them as req.Tokens; here we
-	// apply the application's TokenVerifier (configured via
-	// session.WithTokenVerifier). A denial is per-request — reply
-	// REQUEST_ERROR with the mapped code and keep the session running.
+	// §10.2.2: apply the application's TokenVerifier to the request's resolved
+	// AUTHORIZATION_TOKEN(s) before any handler runs. A denial is per-request:
+	// reply REQUEST_ERROR with the mapped code and keep the session running.
 	if err := h.sess.VerifyRequestTokens(ctx, req); err != nil {
 		h.rejectTokenDenied(ctx, req, err)
 		return

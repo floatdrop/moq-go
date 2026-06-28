@@ -27,18 +27,18 @@
 //	                   (subscribe, publish, namespace, track_status, fetch,
 //	                   fanout, datagram). Every handler_* function is a method on
 //	                   the unexported sessionHandler and a façade over the shared
-//	                   registries. auth.go, metrics.go, limiter.go, and
-//	                   newgroup.go are leaf helpers.
+//	                   registries. auth.go, metrics.go, and limiter.go are leaf
+//	                   helpers.
 //
 //	internal/registry  Relay-wide shared state, created once and shared across
-//	                   every session handler. track.go routes objects and owns
-//	                   the per-track cache; namespace.go tracks PUBLISH_NAMESPACE
-//	                   / SUBSCRIBE_NAMESPACE state; fetch_router.go rendezvouses
-//	                   upstream FETCH response streams with the downstream
-//	                   handler that issued the FETCH; subscription.go is the
-//	                   Subscription / UpstreamSub / DownstreamSub state machine.
-//	                   This package never imports the parent — the dependency
-//	                   only ever points handler → registry.
+//	                   every session handler. track_registry.go routes objects to
+//	                   per-track track_entry.go entries (each owning a cache);
+//	                   namespace.go tracks PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE
+//	                   state; fetch_router.go rendezvouses upstream FETCH response
+//	                   streams with the downstream handler that issued the FETCH;
+//	                   subscription.go is the UpstreamSub / DownstreamSub state
+//	                   machine. This package never imports the parent — the
+//	                   dependency only ever points handler → registry.
 //
 // The other sibling subpackages are cache (per-track LRU+TTL object cache),
 // discovery (cross-instance track + namespace advertisement fabric), and
