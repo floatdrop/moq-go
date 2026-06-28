@@ -1,93 +1,65 @@
 # MoQT Implementation Status
 
 Tracks this codebase's implementation of
-[`draft-ietf-moq-transport-18`](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/18/).
+[`draft-ietf-moq-transport-18`](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/18/)
+(plus [`-loc-02`](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) and
+[`-msf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) at the edges).
 
 ## Overall: ~98% complete
 
-The wire codec, all control messages, all message parameters, data
-streams/datagrams, the session lifecycle, and the single-instance relay are
-implemented and wired end-to-end. Every previously-tracked gap has been closed;
-what remains is intentionally out of scope — behaviour the draft delegates to
-the transport (congestion control, 0-RTT, communication security, media
-security) and *global* cross-session resource quotas, which sit above this
-library (per-session caps and the `Authorizer` hook are the in-library surface).
+The wire codec, all control messages and parameters, data streams/datagrams, the
+session lifecycle, and the single-instance relay are implemented and wired end to
+end. What remains is intentionally out of scope: behaviour the draft delegates to
+the transport (congestion control, 0-RTT, communication/media security) and
+*global* cross-session resource quotas, which sit above this library (per-session
+caps and the `Authorizer` hook are the in-library surface).
 
-**How this number is derived.** Each trackable feature below is scored
+**How the number is derived.** Each trackable feature below is scored
 `DONE = 1`, `PARTIAL = 0.5`, `MISSING = 0`. Items the spec explicitly delegates
-to QUIC/TLS or to deployment policy (most of §13) are scored as their hook/
+to QUIC/TLS or to deployment policy (most of §13) are scored on their hook/
 surface-area completeness, not as protocol obligations. Legend:
 
 - **DONE** — wire codec + session/relay behaviour both present and wired.
 - **PARTIAL** — present but incomplete; see note.
 - **MISSING** — not implemented.
-- **N/A (transport)** — handled by the underlying QUIC/WebTransport stack, not
-  this library; listed for completeness.
+- **N/A (transport)** — handled by the underlying QUIC/WebTransport stack.
 
----
+## What's implemented
 
-## Interoperability test status
+By package, bottom-up along the dependency stack:
 
-Beyond the self-contained `go test ./...` suite (which round-trips through this
-codebase's own codec), interop is tested in **both directions** against
-independent draft-18 implementations via the
-[moq-interop-runner](https://github.com/englishm/moq-interop-runner):
-
-- **Relay direction** — our relay vs third-party clients: `make interop`,
-  `make interop-matrix`.
-- **Client direction** — our client (`cmd/interop-client`) vs third-party
-  relays: `make interop-client`.
-
-For the full registered matrices, use the runner:
-`cd ../moq-interop-runner && make interop-relay RELAY=moq-go` and
-`make interop-client CLIENT=moq-go`.
-
-Last run: 2026-06-19, built from this tree.
-
-### Relay direction (our relay ← third-party clients)
-
-Client × transport matrix (`make interop-matrix`):
-
-| Client | Transport | Pass | Skip | Fail | Notes |
-|--------|-----------|------|------|------|-------|
-| `moq-dev-rs` (moq-net) | QUIC | 4 | 2 | 0 | Skips `subscribe-error` / `subscribe-before-announce` — its consumer API can't subscribe before an announcement. |
-| `moq-dev-rs` (moq-net) | WebTransport | 4 | 2 | 0 | Same as above. |
-| `moq-dev-js` (moq-net, JS) | WebTransport | **6** | 0 | 0 | **Full coverage — all six cases exercised and passing.** WebTransport-only (no raw-QUIC mode). |
-| `moq-rs-draft-18` (Cloudflare) | QUIC | 2 | 0 | 4 | *Advisory.* Its `moq-transport` enforces a Maximum Request ID that draft-18 removed, so it reports `too many requests` before the relay acts — a client/draft-version divergence, **not** a relay fault (relay logs are clean). |
-| `moq-rs-draft-18` (Cloudflare) | WebTransport | 2 | 0 | 4 | Advisory, same cause. |
-
-Every canonical case passes against at least one independent client, with no
-relay-attributable failures. `moq-dev-js` over WebTransport covers all six;
-`announce-subscribe` was unblocked by the §1.4.1 leading-ones varint fix.
-
-### Client direction (our client → third-party relays)
-
-`cmd/interop-client` implements all six cases over raw QUIC *and* WebTransport
-with **no skips** (our session library is lower-level than the consumer APIs
-that force skips elsewhere). Our client × relay (raw QUIC unless noted):
-
-| Relay | Pass | Fail | Notes |
-|-------|------|------|-------|
-| our relay (loopback, `make interop-client`) | 6 | 0 | Regression guard — client and relay agree on all six, over QUIC and WebTransport. |
-| `moq-dev` (kixelated) | 4 | 2 | Core flows pass (`setup-only`, `announce-only`, `publish-namespace-done`, `subscribe-error`). The two namespace-**discovery** cases fail: moq-dev uses moq-net's announce / "root" model instead of forwarding IETF `SUBSCRIBE_NAMESPACE` → `NAMESPACE`. |
-| `moq-rs-draft-18` (Cloudflare) | 1 | 5 | Only `setup-only`; all request streams time out — the same `MAX_REQUEST_ID` divergence seen in the relay direction. |
-
-Per-case client-direction coverage (✅ pass · ❌ fail):
-
-| Test case | our relay | `moq-dev` | `moq-rs-draft-18` |
-|-----------|-----------|-----------|-------------------|
-| `setup-only` | ✅ | ✅ | ✅ |
-| `announce-only` | ✅ | ✅ | ❌ |
-| `publish-namespace-done` | ✅ | ✅ | ❌ |
-| `subscribe-error` | ✅ | ✅ | ❌ |
-| `announce-subscribe` | ✅ | ❌ | ❌ |
-| `subscribe-before-announce` | ✅ | ❌ | ❌ |
-
-Our client passes 6/6 against our spec-conformant relay on both transports; the
-remaining failures are documented cross-implementation divergences (moq-dev's
-announce model, moq-rs's `MAX_REQUEST_ID`), not client bugs.
-
----
+- **`wire`** — byte-level codec: §1.4.1 leading-ones varints (distinct from
+  QUIC's RFC 9000 varints), length-prefixed bytes, delta-encoded KV pairs
+  (§1.4.3), track namespaces, reason phrases; an in-memory `Reader` and a
+  streaming `Decoder` over one control-frame interface.
+- **`message`** — typed control, request-stream, and data-stream messages with
+  parameter negotiation: SETUP, GOAWAY, SUBSCRIBE, PUBLISH (+DONE/BLOCKED),
+  FETCH (standalone + relative/absolute joining), TRACK_STATUS, REQUEST_UPDATE,
+  the namespace messages, §11 object framing (subgroup/fetch/datagram),
+  subscription filters, GREASE, and a parse-time `Validate` hook that rejects
+  structurally-malformed messages.
+- **`session`** — the SETUP handshake with version negotiation, control
+  multiplexing and request-ID allocation, §3.5 Track-Alias management with
+  collision detection, the request openers (`Publish`/`Subscribe`/`Fetch`/…) and
+  the `AcceptRequest` responder, typed inbound data streams that resolve
+  §11.4.2/§11.4.4 deltas to absolute IDs, GOAWAY, the §10.20 token cache, and
+  pluggable transport via the `Conn` interface (`quicconn` + `wtconn` adapters).
+- **`loc`** — `Object.Encode`/`Decode`: typed Timestamp/Timescale/VideoConfig/
+  VideoFrameMarking/AudioLevel properties with `Extras` passthrough for unknown
+  IDs, an RFC 6464 audio-level codec, and AVC/HEVC NAL framing detection.
+- **`msf`** — `Catalog`/`Track` JSON (independent and delta catalogs, with
+  `Apply` replaying delta operations in document order), group-ID sequencing,
+  the Media and Event Timeline record formats, the `BeginBroadcast`/
+  `EndBroadcast*` workflow helpers, and `Catalog.Validate`.
+- **`relay`** — routes objects through a track registry with per-subscription
+  live fanout under a §8 slow-reader policy, merges multiple upstream publishers
+  per track (§9.5) with §2.1 {Group, Object} dedup and survivor-continues
+  failover, serves FETCHes from a per-track cache (stitching evicted ranges from
+  an upstream FETCH), issues on-demand upstream SUBSCRIBEs to every matching
+  publisher (local and, via a `DiscoveryStore` + `Dialer`, remote), reflects
+  remote namespaces to local subscribers, gates requests through an `Authorizer`
+  hook, emits telemetry through a `Metrics` hook, and drains sessions with
+  GOAWAY.
 
 ## §1.4 Foundational structures
 
@@ -266,3 +238,38 @@ policy. This library provides the hooks; enforcement is the operator's.
 | §   | Feature | Status | Notes |
 |-----|---------|--------|-------|
 | 14  | GREASE  | DONE   | `IsGrease`/`GreaseValue`/`GreaseSetupOption`; unknown values ignored. |
+
+## Limitations
+
+This is a **single-instance** reference relay, though cross-relay routing works
+when wired up: set `Config.Discovery` + `Config.Dialer` and the relay follows a
+`FindNamespace` lookup to dial and subscribe upstream on another instance (and
+reflects remote namespaces to local subscribers via `WatchNamespaces`). Out of
+scope: multi-hop **loop detection** (the only guard is skipping the relay's own
+`RelayAddr`), an upstream **connection-health / redial policy** beyond
+dial-on-demand, production `DiscoveryStore` backends (only the in-process
+`MemoryStore` ships), GOAWAY **cascading**, and a `Dialer` for `cmd/relay`
+itself (the binary stays single-instance; cross-relay is library-level).
+
+Known protocol gaps, roughly ordered by how load-bearing they are:
+
+- **Late publisher pickup (§9.5)** — multiple publishers per track are merged
+  and deduplicated, but a publisher (or remote relay) that begins advertising
+  *after* a track's upstream set is established is not retroactively pulled in
+  until that set drains and a fresh SUBSCRIBE re-establishes it; publishers that
+  PUBLISH proactively are always merged.
+- **Subscriber-priority scheduling (§7.2 / §10.2.7)** — fully plumbed but not
+  enforced on the wire: the §7.2 composite key is computed
+  (`EffectiveStreamPriority`) and pushed through `session.PrioritizedSendStream`,
+  but quic-go and webtransport-go expose no per-stream priority API today
+  ([quic-go#437](https://github.com/quic-go/quic-go/issues/437)), so the bundled
+  adapters absorb the knob and quic-go round-robins instead. A REQUEST_UPDATE
+  that changes priority mid-stream applies only to subsequently opened subgroups.
+- **LOC encryption / SecureObjects and Private Properties** — intentionally out
+  of scope pending a chosen SecureObjects revision. Some property IDs are
+  draft-tentative (e.g. `PropAudioLevel = 0x0A`, pending IANA assignment).
+- **MSF** — no timeline GZIP compression, content protection (§4.3), token
+  authorization, or logs/analytics. No built-in ABR helper: every catalog field
+  a selector needs is surfaced (AltGroup, Width/Height, Bitrate, RenderGroup,
+  Depends, TemporalID, SpatialID), but variant-selection policy is the
+  application's job.
