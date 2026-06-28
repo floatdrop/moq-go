@@ -192,6 +192,45 @@ func drain(s *session.IncomingSubgroupStream, label string) {
 	}()
 }
 
+// Routing inbound requests on the server side. RequestMux is the request-stream
+// counterpart of Demux: register a handler per message.Type instead of hand-
+// rolling an AcceptRequest loop + type switch.
+func ExampleRequestMux() {
+	var server *session.Session // e.g. from session.Server
+	ctx := context.Background()
+
+	mux := session.NewRequestMux()
+
+	// A SUBSCRIBE handler keeps the request stream open for the subscription's
+	// lifetime, so it spawns a goroutine — Run dispatches synchronously, exactly
+	// like Demux.
+	mux.Handle(message.TypeSubscribe, func(r *session.Request) {
+		go func() {
+			pub, err := r.AcceptSubscribe(nil) // writes SUBSCRIBE_OK, returns a Publication
+			if err != nil {
+				return
+			}
+			defer pub.Close()
+			// … push objects via pub.OpenSubgroup … then pub.Done(...).
+			_ = pub
+		}()
+	})
+	mux.Handle(message.TypePublishNamespace, func(r *session.Request) {
+		_ = r.Reply(&message.RequestOK{})
+		_ = r.Stream.Close()
+	})
+
+	// Optional: without OnUnknown, an unhandled type is rejected NOT_SUPPORTED.
+	mux.OnUnknown(func(r *session.Request) {
+		_ = r.RejectError(moqt.RequestNotSupported, "unsupported request type")
+	})
+
+	// Run returns when ctx is cancelled or AcceptRequest fails. A session-fatal
+	// error (e.g. *session.ErrDuplicateRequestID) should be escalated by closing
+	// the session with the mapped code.
+	_ = mux.Run(ctx, server)
+}
+
 // Backfilling with a Relative Joining FETCH (§10.12.2): a FilterLargestObject
 // subscription only delivers objects strictly after the live edge, so the
 // current group is invisible until the next one lands. A joining FETCH keyed
