@@ -439,13 +439,10 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session) {
 	r.addSession(sess)
 	defer func() {
 		r.removeSession(sess)
-		// Belt-and-suspenders cleanup: per-request handler defers
-		// remove their own registrations on a clean shutdown, but if a
-		// handler raced past Stop or wedged on a stale stream, the
-		// registries can hold dangling refs to a Session that is no
-		// longer reachable. Sweep both registries unconditionally so
-		// the post-condition "handleConn returned ⇒ no registry entry
-		// references sess" holds.
+		// Belt-and-suspenders: per-request handlers unregister themselves on
+		// clean shutdown, but a handler that raced past Stop or wedged could
+		// leave dangling refs. Sweep both registries so the post-condition
+		// "serveSession returned ⇒ no registry entry references sess" holds.
 		r.tracks.RemoveSession(sess)
 		r.names.RemoveSession(sess)
 	}()

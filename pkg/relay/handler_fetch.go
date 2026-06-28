@@ -21,26 +21,16 @@ import (
 // handler: the stitch degrades to cache-only once it elapses.
 const defaultUpstreamFetchTimeout = 5 * time.Second
 
-// handleFetch implements FETCH (§9.4, §10.12): validate the requested
-// range, reply FETCH_OK, open a FETCH_HEADER uni-stream, and serialise
-// the cached objects in the requested group order. Gaps in the response
-// stream are how the spec signals "objects do not exist" (§11.4.4,
-// §3553).
+// handleFetch implements FETCH (§9.4, §10.12): validate the requested range,
+// reply FETCH_OK, open a FETCH_HEADER uni-stream, and serialise the cached
+// objects in the requested group order. Gaps in the response stream are how the
+// spec signals "objects do not exist" (§11.4.4, §3553).
 //
 // The below-floor portion of the range — objects the relay evicted or never
 // cached — is stitched from an upstream FETCH when one is reachable; see
-// [sessionHandler.stitchedFetchObjects]. With no reachable upstream the relay
-// still emits whatever it has and leaves the rest as gaps, which §3553 lets
-// the subscriber read as non-existence.
-//
-// Current limitations:
-//
-//   - Upstream stitching needs an Established upstream on another session that
-//     answers FETCH (i.e. a relay/origin). A leaf publisher that doesn't serve
-//     FETCH leaves below-floor gaps unfilled.
-//   - Upstream-fetched objects are not written back into the cache (the FIFO
-//     ring is keyed by arrival; inserting old backfill would evict live data).
-//   - FILL_TIMEOUT bounds both the response setup and the upstream-fetch wait.
+// [sessionHandler.stitchedFetchObjects]. Otherwise the relay emits what it has
+// and leaves the rest as gaps, which §3553 lets the subscriber read as
+// non-existence.
 func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, msg *message.Fetch) {
 	if err := h.auth.AuthorizeFetch(ctx, h.sess, msg); err != nil {
 		h.rejectAuth(ctx, req, "Fetch", err)
@@ -129,12 +119,10 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 	}
 	_ = out.Close()
 
-	// Read follow-up messages (§10.9 REQUEST_UPDATE, and a peer FIN/reset)
-	// on the bidi request stream until the peer tears it down or ctx is
-	// cancelled. Unlike the previous DrainAndWait, which discarded every
-	// follow-up byte, this loop parses and dispatches REQUEST_UPDATE so a
-	// malformed FETCH update is answered with REQUEST_ERROR and the FETCH
-	// data stream is reset per §10.9.
+	// Read follow-ups (§10.9 REQUEST_UPDATE, peer FIN/reset) on the bidi
+	// request stream until the peer tears it down or ctx is cancelled, so a
+	// malformed FETCH update is answered with REQUEST_ERROR and the data
+	// stream reset per §10.9.
 	h.readFetchUpdates(ctx, req, out)
 }
 
@@ -371,20 +359,16 @@ func capFetchEndLocation(requested, largest message.Location) message.Location {
 // the below-floor portion the relay does not hold from an upstream FETCH when
 // one is reachable (§9.4 upstream stitching).
 //
-// The cache's retained set is a Location suffix (see [cache.ObjectCache.OldestRetained]):
-// everything below the eviction floor was evicted or never cached, so a gap
-// there might still exist upstream, whereas a gap at or above the floor is
-// ground-truth non-existence. The handler therefore splits the request at the
-// floor, fetches [requestStart, floor) from an established upstream, and
-// concatenates it with the cached part in the requested group order — the two
-// parts are disjoint by Location, so a concatenation is correctly ordered.
-//
-// When there is no FETCH-able upstream, or the upstream FETCH errors / times
-// out, it degrades to "serve what the cache has": the below-floor gap stays a
-// gap, which the subscriber reads as non-existence (§3553) — exactly the
-// pre-stitching behaviour. Upstream-fetched objects are NOT written back into
-// the cache: the cache is a FIFO ring keyed by arrival, and inserting old
-// backfill would evict live objects.
+// Everything below the cache's eviction floor (see
+// [cache.ObjectCache.OldestRetained]) was evicted or never cached, so a gap
+// there might still exist upstream whereas a gap at/above the floor is
+// ground-truth non-existence. The handler splits the request at the floor,
+// fetches [requestStart, floor) from an established upstream, and concatenates
+// it with the cached part — the two are disjoint by Location, so the result is
+// correctly ordered. With no FETCH-able upstream (or on error/timeout) it
+// degrades to serving what the cache has. Upstream-fetched objects are NOT
+// cached back: the FIFO ring is keyed by arrival, so old backfill would evict
+// live objects.
 func (h *sessionHandler) stitchedFetchObjects(
 	ctx context.Context,
 	entry *registry.TrackEntry,

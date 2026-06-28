@@ -47,10 +47,8 @@ func (h *sessionHandler) runDatagramLoop(ctx context.Context) error {
 func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDatagram) {
 	key, ok := h.sess.LookupInboundTrackAlias(d.TrackAlias)
 	if !ok {
-		// §11.3: "If an endpoint receives a datagram with an unknown
-		// Track Alias, it MAY drop the datagram or choose to buffer
-		// it for a brief period to handle reordering with the control
-		// message that establishes the Track Alias." We drop.
+		// §11.3: an unknown Track Alias MAY be dropped or briefly buffered for
+		// reordering against the establishing control message. We drop.
 		h.log.LogAttrs(ctx, slog.LevelDebug, "datagram: unknown inbound Track Alias",
 			slog.Uint64("alias", d.TrackAlias))
 		return

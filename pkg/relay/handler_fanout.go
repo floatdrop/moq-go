@@ -72,14 +72,11 @@ type subgroupWriterSet struct {
 // second and later copy of each {GroupID, ObjectID} so the subscriber sees each
 // object exactly once. A single publisher is just the one-contributor case.
 //
-// The per-subscriber forward path runs in a dedicated writer goroutine
-// fed by a bounded send queue. §5.1.2 filters are evaluated pre-enqueue
-// and ObjectIDDelta is re-encoded on the outbound side so filter drops
-// don't shift the subscriber's decoded absolute IDs. §11.4.3 gap-driven
-// reset/reopen is implemented; the inbound FIN-vs-reset distinction is
-// propagated to the outbound streams when the LAST contributor leaves;
-// [registry.TrackEntry.LargestObject] (§10.2.11) is bumped on every forwarded
-// object.
+// The per-subscriber forward path runs in a dedicated [subgroupWriter]
+// goroutine fed by a bounded send queue: §5.1.2 filters are evaluated
+// pre-enqueue and ObjectIDDelta re-encoded outbound so drops don't shift the
+// subscriber's absolute IDs. The inbound FIN-vs-reset distinction propagates to
+// the outbound streams only when the LAST contributor leaves.
 func (h *sessionHandler) runFanout(ctx context.Context, stream *session.IncomingSubgroupStream) {
 	hdr := stream.Header
 
@@ -458,28 +455,13 @@ func (w *subgroupWriter) publish(fwd fwdObject) {
 	}
 }
 
-// run is the writer goroutine. It exits when its inbox is closed; close
-// signals whether the inbound side ended cleanly (FIN propagation) or
-// abnormally (reset propagation).
+// run is the writer goroutine. It drains the inbox and writes objects to the
+// outbound stream until the inbox is closed, then decides the stream's fate
+// (FIN / reset) from the flags close recorded — see the post-drain block below.
 //
-// If WriteObject fails mid-stream (QUIC-level error: stream torn down or
-// session dead) the writer cancels the outbound stream, marks writeFailed,
-// and keeps draining the inbox until close is called. This keeps publish
-// non-blocking from the producer's side without spawning a second goroutine
-// just to discard the tail of the queue.
-//
-// Stream-lifecycle decisions:
-//
-//   - The outbound stream was opened eagerly by runFanout, so the very
-//     first forwarded object writes against that stream (with the
-//     publisher's first absolute Object ID as the delta).
-//   - A non-consecutive Object ID (gap) cancels the current outbound
-//     stream and opens a new one before writing — §11.4.3 forbids
-//     forwarding non-consecutive objects on the same subgroup stream.
-//   - When the inbox closes, the post-drain path either FINs (clean
-//     inbound EOF), cancels with [moqt.StreamResetCancelled] (inbound
-//     reset propagation), or cancels with [moqt.StreamResetExcessiveLoad]
-//     (slow-reader escalation).
+// If WriteObject fails mid-stream (QUIC-level error) the writer cancels the
+// outbound stream, marks writeFailed, and keeps draining until close is called,
+// keeping publish non-blocking without a second drain goroutine.
 func (w *subgroupWriter) run() {
 	defer close(w.done)
 
@@ -637,25 +619,12 @@ func (w *subgroupWriter) run() {
 	_ = w.out.Close()
 }
 
-// applyPriority pushes the §7.2 effective priority for this writer's
-// current outbound stream into the transport.
-// [session.OutgoingSubgroupStream.SetSendPriority] forwards to the
-// underlying [session.SendStream] iff it implements
-// [session.PrioritizedSendStream]; adapters that don't (currently all of
-// them — see the interface docs) silently no-op.
-//
-// applyPriority is called on stream open and on §11.4.3 reopen, so a writer
-// always picks up the latest subscriber + publisher values when it (re)opens
-// its stream. A REQUEST_UPDATE that changes SUBSCRIBER_PRIORITY mid-stream
-// updates the stored DownstreamSub priority (see handleSubscribeUpdate ->
-// installSubscribeParams) but is NOT re-pushed to already-open writers — the
-// new key takes effect on the next open/reopen, not in-flight. Live re-push is
-// a follow-up that only matters once a transport honors the knob (§10.2.7;
-// quic-go#437).
-//
-// The publisher-priority byte, Group ID and Subgroup ID all come from the
-// inbound SubgroupHeader; the subscriber-priority and group-order halves come
-// from the subscription. Together they form the full §7.2 key (rules 1–4).
+// applyPriority pushes the §7.2 effective priority for this writer's current
+// outbound stream into the transport. It is called on stream open and §11.4.3
+// reopen, so a mid-stream SUBSCRIBER_PRIORITY change takes effect on the next
+// (re)open rather than in-flight. The key combines the publisher-priority,
+// Group ID and Subgroup ID from the inbound header with the subscriber-priority
+// and group-order from the subscription (§7.2 rules 1–4).
 func (w *subgroupWriter) applyPriority() {
 	if w.out == nil {
 		return
