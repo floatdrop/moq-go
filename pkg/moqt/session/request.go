@@ -183,8 +183,7 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 
 // resetStream resets both directions of a bidi request stream with
 // StreamResetInternalError (§3.3.3) — the common teardown when a request stream
-// is abandoned mid-parse or fails §10.1 validation. (Add a code-taking variant
-// if a future caller needs to reset with a different code.)
+// is abandoned mid-parse or fails §10.1 validation.
 func resetStream(s Stream) {
 	s.CancelRead(uint64(moqt.StreamResetInternalError))
 	s.CancelWrite(uint64(moqt.StreamResetInternalError))
