@@ -41,10 +41,14 @@ COPY cmd/relay/entrypoint-relay.sh /app/run_endpoint.sh
 RUN chmod +x /app/run_endpoint.sh && mkdir -p /certs /mlog
 
 # Defaults follow the runner conventions; override at `docker run`/compose time.
+# MOQT_TRANSPORT defaults to webtransport: the runner's docker harness always
+# dials the relay at https://relay:4443 (WebTransport / ALPN "h3") and exposes
+# no knob to set MOQT_TRANSPORT, so a raw-QUIC default makes every client fail
+# the TLS handshake with "no application protocol".
 ENV MOQT_ROLE=relay \
     MOQT_PORT=4443 \
-    MOQT_TRANSPORT=quic \
-    MOQT_WEBTRANSPORT_PATH=/moq
+    MOQT_TRANSPORT=webtransport \
+    MOQT_WEBTRANSPORT_PATH=/
 
 EXPOSE 4443/udp
 

@@ -239,15 +239,22 @@ func webTransportListener(addr, path string, tlsCfg *tls.Config) (*wtconn.Listen
 	mux := http.NewServeMux()
 	// Catch-all so requests that don't hit `path` (wrong URL, missing
 	// upgrade header, plain GET) get logged instead of silently 404'ing.
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		alpn := ""
-		if r.TLS != nil {
-			alpn = r.TLS.NegotiatedProtocol
-		}
-		log.Printf("http3: unmatched request %s %s%s proto=%s alpn=%q upgrade=%q",
-			r.Method, r.Host, r.URL.Path, r.Proto, alpn, r.Header.Get(":protocol"))
-		http.NotFound(w, r)
-	})
+	// Skip it when the upgrade handler itself owns "/" (path == "/"):
+	// registering two handlers for the same pattern panics the ServeMux,
+	// and a root-mounted upgrade already covers every request anyway. The
+	// interop runner dials a path-less URL (https://relay:4443), so the
+	// CONNECT targets "/" — see MOQT_WEBTRANSPORT_PATH in entrypoint-relay.sh.
+	if path != "/" {
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			alpn := ""
+			if r.TLS != nil {
+				alpn = r.TLS.NegotiatedProtocol
+			}
+			log.Printf("http3: unmatched request %s %s%s proto=%s alpn=%q upgrade=%q",
+				r.Method, r.Host, r.URL.Path, r.Proto, alpn, r.Header.Get(":protocol"))
+			http.NotFound(w, r)
+		})
+	}
 	h3 := &http3.Server{
 		TLSConfig: tlsCfg,
 		Handler:   mux,
