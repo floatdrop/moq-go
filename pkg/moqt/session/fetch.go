@@ -60,6 +60,52 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 		})
 }
 
+// FetchResponder is the publisher side of a FETCH (§10.12) this endpoint
+// accepted via [Request.AcceptFetch] — the accept-side counterpart of
+// [Session.Fetch]. FETCH_OK has already been written on the embedded request
+// stream; the response objects are streamed on a separate FETCH_HEADER
+// uni-stream (§11.5) opened via [FetchResponder.OpenFetchStream], which binds
+// this fetch's Request ID automatically. The embedded request stream stays open
+// for REQUEST_UPDATE follow-ups.
+type FetchResponder struct {
+	// Stream is the FETCH request stream, still open for REQUEST_UPDATE
+	// follow-ups. Close it to end the fetch.
+	Stream
+
+	s         *Session
+	requestID uint64
+}
+
+// OpenFetchStream opens the outbound FETCH_HEADER uni-stream (§11.5) carrying
+// this fetch's response objects, with the Request ID bound automatically. The
+// caller MUST Close the returned stream to FIN it once all objects are written,
+// or Cancel to reset. It is [Session.OpenFetchStream] pre-bound to this fetch.
+func (f *FetchResponder) OpenFetchStream() (*OutgoingFetchStream, error) {
+	return f.s.OpenFetchStream(message.FetchHeader{RequestID: f.requestID})
+}
+
+// AcceptFetch accepts an inbound FETCH (§10.12) and returns a [FetchResponder]
+// for streaming the response objects — the accept-side counterpart of
+// [Session.Fetch]. r.First MUST be a *message.Fetch.
+//
+// ok carries the FETCH_OK fields the caller wants to set (EndOfTrack,
+// EndLocation, negotiated Parameters, TrackProperties); it may be nil for the
+// all-default reply. AcceptFetch writes FETCH_OK and returns a responder whose
+// [FetchResponder.OpenFetchStream] is pre-bound to this fetch's Request ID.
+func (r *Request) AcceptFetch(ok *message.FetchOK) (*FetchResponder, error) {
+	f, isFetch := r.First.(*message.Fetch)
+	if !isFetch {
+		return nil, fmt.Errorf("moqt/session: AcceptFetch on a %s request", r.First.Type())
+	}
+	if ok == nil {
+		ok = &message.FetchOK{}
+	}
+	if err := message.Marshal(r.Stream, ok); err != nil {
+		return nil, fmt.Errorf("moqt/session: write FETCH_OK: %w", err)
+	}
+	return &FetchResponder{Stream: r.Stream, s: r.s, requestID: f.RequestID}, nil
+}
+
 // OpenFetchStream opens an outbound FETCH_HEADER uni-stream (§11.5),
 // writes the header (Type + Request ID), and returns the body writer. The
 // caller MUST Close to FIN the stream once all fetch objects have been

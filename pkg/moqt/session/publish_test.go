@@ -231,7 +231,7 @@ func TestRequestAcceptPublish(t *testing.T) {
 			serverErr = err
 			return
 		}
-		if err := req.AcceptPublish(); err != nil {
+		if _, err := req.AcceptPublish(); err != nil {
 			serverErr = err
 			return
 		}

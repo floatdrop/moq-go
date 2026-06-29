@@ -138,6 +138,7 @@ grouped here by the file they live in:
 | Stream exhaustion (PUBLISH_BLOCKED) | `ExampleSession_OpenPublish`, `ExampleSession_ReadPublishBlocked` |
 | Announce / discover namespaces | `ExampleSession_PublishNamespace`, `ExampleSession_SubscribeNamespace` |
 | Accept requests (server side) | `ExampleSession_AcceptRequest` |
+| Accept-side helpers (`Accept*`) | `Request.AcceptSubscribe` / `AcceptPublish` / `AcceptFetch` / `AcceptTrackStatus` / `AcceptPublishNamespace` / `AcceptSubscribeNamespace` / `AcceptSubscribeTracks` |
 | Graceful shutdown (GOAWAY) | `ExampleSession_SendGoaway`, `ExampleSession_OnGoaway` |
 
 **[`relay`](pkg/relay/example_test.go)**

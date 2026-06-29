@@ -442,9 +442,19 @@ func ExampleSession_AcceptRequest() {
 		case *message.Publish:
 			// AcceptPublish registers the Track Alias (§11.1) and replies
 			// REQUEST_OK; objects arrive via Session.AcceptDataStream.
-			_ = req.AcceptPublish()
+			recv, err := req.AcceptPublish()
+			if err != nil {
+				return
+			}
+			_ = recv // recv.TrackAlias() / recv.Update(...) for follow-ups.
 		case *message.Fetch:
-			_ = req.RejectError(moqt.RequestDoesNotExist, "no such range")
+			// AcceptFetch replies FETCH_OK and returns a responder whose
+			// OpenFetchStream is pre-bound to this fetch's Request ID.
+			resp, err := req.AcceptFetch(nil)
+			if err != nil {
+				return
+			}
+			_ = resp // resp.OpenFetchStream() to stream the response objects.
 		}
 	}
 }
