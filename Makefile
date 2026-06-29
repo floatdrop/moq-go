@@ -83,6 +83,12 @@ CLIENT_RELAY_IMAGE ?= moq-relay:latest
 CLIENT_RELAY_URL   ?= moqt://relay:4443
 CLIENT_COMPOSE     := docker compose -f interop/docker-compose.client.yml
 
+# Transport our loopback relay must speak, derived from the URL scheme so the
+# default moqt:// loopback uses raw QUIC and an https:// override uses
+# WebTransport. Only consumed by our own relay image (third-party relays ignore
+# MOQT_TRANSPORT); see interop/docker-compose.client.yml.
+CLIENT_RELAY_TRANSPORT ?= $(if $(filter https://%,$(CLIENT_RELAY_URL)),webtransport,quic)
+
 # Build our test-client image from this repo's sources.
 interop-client-build:
 	docker build -f cmd/interop-client/Dockerfile.client -t moq-interop-client:latest .
@@ -91,7 +97,8 @@ interop-client-build:
 # loopback works out of the box; harmless when targeting a third-party relay.
 interop-client: interop-build interop-certs
 	@echo ">> interop-client: moq-interop-client -> $(CLIENT_RELAY_IMAGE) ($(CLIENT_RELAY_URL))"
-	RELAY_IMAGE=$(CLIENT_RELAY_IMAGE) RELAY_URL=$(CLIENT_RELAY_URL) $(CLIENT_ENV) \
+	RELAY_IMAGE=$(CLIENT_RELAY_IMAGE) RELAY_URL=$(CLIENT_RELAY_URL) \
+		MOQT_TRANSPORT=$(CLIENT_RELAY_TRANSPORT) $(CLIENT_ENV) \
 		$(CLIENT_COMPOSE) up --build --abort-on-container-exit --exit-code-from test-client; \
 	status=$$?; $(CLIENT_COMPOSE) down -v >/dev/null 2>&1; exit $$status
 
