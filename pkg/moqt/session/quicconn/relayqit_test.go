@@ -18,7 +18,7 @@ import (
 )
 
 // startRelayOverQUIC boots a real relay on a loopback QUIC listener and returns
-// its dial address. enableDatagrams mirrors cmd/relay / tlmst when true; passing
+// its dial address. enableDatagrams mirrors cmd/relay when true; passing
 // false exercises the case where the transport lacks DATAGRAM support, which must
 // NOT take down the relay's request/data handling.
 func startRelayOverQUIC(t *testing.T, enableDatagrams bool) (addr string, quicCfg *quic.Config) {
@@ -62,15 +62,15 @@ func dialRelayClient(t *testing.T, addr string, quicCfg *quic.Config) *session.S
 	return sess
 }
 
-// publishPeer mirrors tlmst's publisher.start: PUBLISH catalog (+ emit the
-// one-shot catalog object), PUBLISH video+audio, then announce the namespace
-// LAST. Aliases are session-local so the fixed values are fine per peer.
+// publishPeer reproduces a conferencing publisher's startup: PUBLISH catalog
+// (+ emit the one-shot catalog object), PUBLISH video+audio, then announce the
+// namespace LAST. Aliases are session-local so the fixed values are fine per peer.
 func publishPeer(t *testing.T, sess *session.Session, id string) wire.TrackNamespace {
 	t.Helper()
 	ns := wire.Namespace("room", id)
 
-	// Mirror tlmst exactly: pre-allocate the alias, PUBLISH with it, then emit
-	// the one-shot catalog object on that SAME alias. This is the pattern that
+	// Pre-allocate the alias, PUBLISH with it, then emit the one-shot catalog
+	// object on that SAME alias. This is the pattern that
 	// broke when AllocOutboundTrackAlias handed out 0 (the catalog's first
 	// alias) and Publish silently re-allocated it — sending the object under a
 	// stale alias the relay never bound.
@@ -126,8 +126,8 @@ func publishPeer(t *testing.T, sess *session.Session, id string) wire.TrackNames
 
 // awaitPeerAndFetchCatalog discovers selfID's view of the namespace, waits for
 // the announce whose suffix is wantID (skipping its own), then pairs SUBSCRIBE
-// (FilterLargestObject) with a relative Joining FETCH against wantID's catalog —
-// exactly tlmst's subscribeCatalog. Fails if the FETCH is rejected.
+// (FilterLargestObject) with a relative Joining FETCH against wantID's catalog.
+// Fails if the FETCH is rejected.
 func awaitPeerAndFetchCatalog(t *testing.T, sess *session.Session, selfID, wantID string) {
 	t.Helper()
 	nsStream, err := sess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
@@ -199,9 +199,9 @@ func TestReproRelayCatalogOverQUIC(t *testing.T) {
 	awaitPeerAndFetchCatalog(t, sub, "peerB", "peerA")
 }
 
-// TestReproRelayMutualConference is tlmst's actual topology: two peers, each
-// session BOTH publishes its own catalog/video/audio AND subscribes to the
-// other's catalog via a joining FETCH.
+// TestReproRelayMutualConference reproduces a mutual conferencing topology: two
+// peers, each session BOTH publishes its own catalog/video/audio AND subscribes
+// to the other's catalog via a joining FETCH.
 func TestReproRelayMutualConference(t *testing.T) {
 	addr, quicCfg := startRelayOverQUIC(t, true)
 

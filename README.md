@@ -175,9 +175,7 @@ go test -race ./pkg/moqt/session/...   # race detector for goroutine/stream code
 golangci-lint run                      # lint + format check (.golangci.yml)
 ```
 
-`go test ./...` from the root does not include `apps/tlmst` (a separate module
-with CGO/WebKit deps). For the benchmark suite and the `benchstat`
-regression-comparison workflow, see
+For the benchmark suite and the `benchstat` regression-comparison workflow, see
 [`benchmarks/README.md`](benchmarks/README.md).
 
 ### Interoperability tests
