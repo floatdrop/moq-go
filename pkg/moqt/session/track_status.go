@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 )
@@ -31,6 +32,29 @@ type TrackStatusRequest struct {
 // in.
 func (t *TrackStatusRequest) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
 	return t.s.UpdateRequest(ctx, t.Stream, t.requestID, params)
+}
+
+// AcceptTrackStatus accepts an inbound TRACK_STATUS (§10.14) and replies
+// TRACK_STATUS_OK with the given status fields — the accept-side counterpart of
+// [Session.TrackStatus]. r.First MUST be a *message.TrackStatus.
+//
+// ok carries the TRACK_STATUS_OK fields (status, largest location, Track
+// Properties — [message.TrackStatusOK] is an alias of [message.RequestOK]); it
+// may be nil for the all-default reply. Unlike the other Accept* helpers,
+// TRACK_STATUS is a one-shot status query with no object-push or follow-up
+// stream, so no handle is returned; use [Request.Stream] directly to service a
+// later REQUEST_UPDATE.
+func (r *Request) AcceptTrackStatus(ok *message.TrackStatusOK) error {
+	if _, isTS := r.First.(*message.TrackStatus); !isTS {
+		return fmt.Errorf("moqt/session: AcceptTrackStatus on a %s request", r.First.Type())
+	}
+	if ok == nil {
+		ok = &message.TrackStatusOK{}
+	}
+	if err := message.Marshal(r.Stream, ok); err != nil {
+		return fmt.Errorf("moqt/session: write TRACK_STATUS_OK: %w", err)
+	}
+	return nil
 }
 
 // TrackStatus opens a TRACK_STATUS request stream (§10.14) and awaits

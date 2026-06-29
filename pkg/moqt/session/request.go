@@ -398,20 +398,25 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 
 // AcceptPublish accepts an inbound PUBLISH (§10.10): it registers the
 // publisher-assigned Track Alias (§11.1, so inbound subgroup/datagram streams
-// resolve to this track and a reused alias is caught as DUPLICATE_TRACK_ALIAS)
-// and replies REQUEST_OK. r.First MUST be a *message.Publish. The objects arrive
-// on subgroup uni-streams via [Session.AcceptDataStream].
+// resolve to this track and a reused alias is caught as DUPLICATE_TRACK_ALIAS),
+// replies REQUEST_OK, and returns an [IncomingPublication] for the receiving
+// side — the accept-side counterpart of [Session.Publish]. r.First MUST be a
+// *message.Publish. The objects arrive on subgroup uni-streams via
+// [Session.AcceptDataStream].
 //
 // If the alias collides with a different already-registered track,
 // *ErrDuplicateTrackAlias is returned WITHOUT replying OK; the caller MUST close
 // the session with [moqt.SessionDuplicateTrackAlias] (§11.1).
-func (r *Request) AcceptPublish() error {
+func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 	pub, isPub := r.First.(*message.Publish)
 	if !isPub {
-		return fmt.Errorf("moqt/session: AcceptPublish on a %s request", r.First.Type())
+		return nil, fmt.Errorf("moqt/session: AcceptPublish on a %s request", r.First.Type())
 	}
 	if err := r.s.RegisterInboundTrackAlias(pub.TrackAlias, track.NewKey(pub.Namespace, pub.Name)); err != nil {
-		return err
+		return nil, err
 	}
-	return message.Marshal(r.Stream, &message.RequestOK{})
+	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
+		return nil, fmt.Errorf("moqt/session: write PUBLISH REQUEST_OK: %w", err)
+	}
+	return &IncomingPublication{Stream: r.Stream, s: r.s, alias: pub.TrackAlias, requestID: pub.RequestID}, nil
 }

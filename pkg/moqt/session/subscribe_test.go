@@ -493,7 +493,7 @@ func TestAcceptWrongType(t *testing.T) {
 			Name:      []byte("t"),
 		}
 		_, gotResp := runRequestRoundTrip(t, client, server, sub, func(r *session.Request) error {
-			if err := r.AcceptPublish(); err == nil {
+			if _, err := r.AcceptPublish(); err == nil {
 				t.Error("AcceptPublish on a SUBSCRIBE request: want error, got nil")
 			}
 			return r.RejectError(moqt.RequestDoesNotExist, "wrong type")

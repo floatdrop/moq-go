@@ -71,6 +71,39 @@ func (p *Publication) Done(code moqt.PublishDoneCode, reason string) error {
 	return p.Stream.Close()
 }
 
+// IncomingPublication is the receiving side of a publisher-initiated PUBLISH
+// (§10.10) this endpoint accepted via [Request.AcceptPublish] — the accept-side
+// counterpart of [Session.Subscribe]'s [Subscription]. The objects arrive on
+// subgroup uni-streams (or datagrams) keyed by [IncomingPublication.TrackAlias]
+// and are consumed via [Session.AcceptDataStream]; the embedded request stream
+// stays open for follow-ups — PUBLISH_DONE from the publisher, or a
+// REQUEST_UPDATE this side sends via [IncomingPublication.Update] to adjust
+// forwarding (§10.9). Close it to end the reception.
+type IncomingPublication struct {
+	// Stream is the PUBLISH request stream, still open for follow-up traffic
+	// (inbound PUBLISH_DONE, outbound REQUEST_UPDATE). Close it to end the
+	// reception.
+	Stream
+
+	s         *Session
+	alias     uint64
+	requestID uint64
+}
+
+// TrackAlias reports the §11.1 Track Alias the publisher assigned — the integer
+// inbound subgroup and datagram streams carry to identify this track (resolve it
+// via [Session.LookupInboundTrackAlias]).
+func (p *IncomingPublication) TrackAlias() uint64 { return p.alias }
+
+// Update sends a REQUEST_UPDATE (§10.9) on the publication stream and awaits the
+// single REQUEST_OK / REQUEST_ERROR the spec mandates. params carries only the
+// fields to change; any parameter omitted keeps its prior value on the peer. It
+// is [Session.UpdateRequest] with this publication's stream and Request ID
+// filled in.
+func (p *IncomingPublication) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
+	return p.s.UpdateRequest(ctx, p.Stream, p.requestID, params)
+}
+
 // Publish opens a PUBLISH request stream (§10.10) and awaits the peer's
 // initial response. It is [Session.OpenPublish] plus the response wait: the
 // session assigns m.RequestID (after the stream opens, so a blocked open

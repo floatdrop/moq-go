@@ -137,7 +137,7 @@ grouped here by the file they live in:
 | End a publication | `Example_endingAPublication` |
 | Stream exhaustion (PUBLISH_BLOCKED) | `ExampleSession_OpenPublish`, `ExampleSession_ReadPublishBlocked` |
 | Announce / discover namespaces | `ExampleSession_PublishNamespace`, `ExampleSession_SubscribeNamespace` |
-| Accept requests (server side) | `ExampleSession_AcceptRequest` |
+| Accept requests + reply (`Accept*` helpers) | `ExampleSession_AcceptRequest` |
 | Graceful shutdown (GOAWAY) | `ExampleSession_SendGoaway`, `ExampleSession_OnGoaway` |
 
 **[`relay`](pkg/relay/example_test.go)**

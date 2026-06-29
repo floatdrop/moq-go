@@ -442,9 +442,47 @@ func ExampleSession_AcceptRequest() {
 		case *message.Publish:
 			// AcceptPublish registers the Track Alias (§11.1) and replies
 			// REQUEST_OK; objects arrive via Session.AcceptDataStream.
-			_ = req.AcceptPublish()
+			recv, err := req.AcceptPublish()
+			if err != nil {
+				return
+			}
+			_ = recv // recv.TrackAlias() / recv.Update(...) for follow-ups.
 		case *message.Fetch:
-			_ = req.RejectError(moqt.RequestDoesNotExist, "no such range")
+			// AcceptFetch replies FETCH_OK and returns a responder whose
+			// OpenFetchStream is pre-bound to this fetch's Request ID.
+			resp, err := req.AcceptFetch(nil)
+			if err != nil {
+				return
+			}
+			_ = resp // resp.OpenFetchStream() to stream the response objects.
+		case *message.TrackStatus:
+			// AcceptTrackStatus replies TRACK_STATUS_OK. It is a one-shot status
+			// query, so (unlike the others) it returns no handle.
+			_ = req.AcceptTrackStatus(nil)
+		case *message.PublishNamespace:
+			// AcceptPublishNamespace replies REQUEST_OK; NAMESPACE / NAMESPACE_DONE
+			// follow-ups arrive by reading the returned handle (e.g. message.Parse).
+			ann, err := req.AcceptPublishNamespace()
+			if err != nil {
+				return
+			}
+			_ = ann
+		case *message.SubscribeNamespace:
+			// AcceptSubscribeNamespace replies REQUEST_OK; announce matching
+			// namespaces by writing NAMESPACE / NAMESPACE_DONE to the handle.
+			sub, err := req.AcceptSubscribeNamespace()
+			if err != nil {
+				return
+			}
+			_ = sub
+		case *message.SubscribeTracks:
+			// AcceptSubscribeTracks replies REQUEST_OK; forward matching tracks as
+			// PUBLISHes and signal stream exhaustion with WritePublishBlocked.
+			tracks, err := req.AcceptSubscribeTracks()
+			if err != nil {
+				return
+			}
+			_ = tracks // tracks.WritePublishBlocked(...) on §6.1 stream exhaustion.
 		}
 	}
 }

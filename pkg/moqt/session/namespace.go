@@ -94,6 +94,95 @@ func (s *Session) SubscribeTracks(ctx context.Context, m *message.SubscribeTrack
 		})
 }
 
+// IncomingNamespacePublication is an accepted inbound PUBLISH_NAMESPACE (§10.15)
+// — the receiving side of [Session.PublishNamespace]'s [NamespacePublication],
+// returned by [Request.AcceptPublishNamespace]. REQUEST_OK has been sent; the
+// announcer's NAMESPACE / NAMESPACE_DONE follow-ups arrive by reading the
+// embedded stream (e.g. via message.Parse). Close it to end the publication.
+type IncomingNamespacePublication struct {
+	// Stream is the PUBLISH_NAMESPACE request stream, still open to receive
+	// NAMESPACE / NAMESPACE_DONE notifications. Close it to end the publication.
+	Stream
+}
+
+// IncomingNamespaceSubscription is an accepted inbound SUBSCRIBE_NAMESPACE
+// (§10.18) — the announcing side of [Session.SubscribeNamespace]'s
+// [NamespaceSubscription], returned by [Request.AcceptSubscribeNamespace].
+// REQUEST_OK has been sent; the caller announces matching namespaces by writing
+// NAMESPACE / NAMESPACE_DONE to the embedded stream (e.g. via message.Marshal).
+// Close it to end the subscription.
+type IncomingNamespaceSubscription struct {
+	// Stream is the SUBSCRIBE_NAMESPACE request stream, still open for
+	// NAMESPACE / NAMESPACE_DONE follow-ups. Close it to end the subscription.
+	Stream
+}
+
+// IncomingTrackSubscription is an accepted inbound SUBSCRIBE_TRACKS (§10.19) —
+// the publishing side of [Session.SubscribeTracks]'s [TrackSubscription],
+// returned by [Request.AcceptSubscribeTracks]. REQUEST_OK has been sent; the
+// publisher forwards matching tracks as PUBLISH requests on new streams (see
+// [Session.OpenPublish]) and signals stream exhaustion with
+// [IncomingTrackSubscription.WritePublishBlocked] (§6.1 / §10.20). Close it to
+// end the subscription.
+type IncomingTrackSubscription struct {
+	// Stream is the SUBSCRIBE_TRACKS request stream, still open for
+	// PUBLISH_BLOCKED follow-ups. Close it to end the subscription.
+	Stream
+}
+
+// WritePublishBlocked sends a PUBLISH_BLOCKED (§6.1 / §10.20) on the
+// SUBSCRIBE_TRACKS stream, telling the subscriber the publisher could not open a
+// PUBLISH stream for the named track because it has no available bidirectional
+// streams. It is the publisher-side counterpart of
+// [TrackSubscription.ReadPublishBlocked].
+func (t *IncomingTrackSubscription) WritePublishBlocked(pb *message.PublishBlocked) error {
+	return message.Marshal(t.Stream, pb)
+}
+
+// AcceptPublishNamespace accepts an inbound PUBLISH_NAMESPACE (§10.15), replies
+// REQUEST_OK, and returns an [IncomingNamespacePublication] for receiving the
+// announcer's NAMESPACE / NAMESPACE_DONE follow-ups — the accept-side
+// counterpart of [Session.PublishNamespace]. r.First MUST be a
+// *message.PublishNamespace.
+func (r *Request) AcceptPublishNamespace() (*IncomingNamespacePublication, error) {
+	if _, ok := r.First.(*message.PublishNamespace); !ok {
+		return nil, fmt.Errorf("moqt/session: AcceptPublishNamespace on a %s request", r.First.Type())
+	}
+	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
+		return nil, fmt.Errorf("moqt/session: write PUBLISH_NAMESPACE REQUEST_OK: %w", err)
+	}
+	return &IncomingNamespacePublication{Stream: r.Stream}, nil
+}
+
+// AcceptSubscribeNamespace accepts an inbound SUBSCRIBE_NAMESPACE (§10.18),
+// replies REQUEST_OK, and returns an [IncomingNamespaceSubscription] for
+// announcing matching namespaces via NAMESPACE / NAMESPACE_DONE — the
+// accept-side counterpart of [Session.SubscribeNamespace]. r.First MUST be a
+// *message.SubscribeNamespace.
+func (r *Request) AcceptSubscribeNamespace() (*IncomingNamespaceSubscription, error) {
+	if _, ok := r.First.(*message.SubscribeNamespace); !ok {
+		return nil, fmt.Errorf("moqt/session: AcceptSubscribeNamespace on a %s request", r.First.Type())
+	}
+	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
+		return nil, fmt.Errorf("moqt/session: write SUBSCRIBE_NAMESPACE REQUEST_OK: %w", err)
+	}
+	return &IncomingNamespaceSubscription{Stream: r.Stream}, nil
+}
+
+// AcceptSubscribeTracks accepts an inbound SUBSCRIBE_TRACKS (§10.19), replies
+// REQUEST_OK, and returns an [IncomingTrackSubscription] for forwarding matching
+// PUBLISHes and sending PUBLISH_BLOCKED follow-ups — the accept-side counterpart
+// of [Session.SubscribeTracks]. r.First MUST be a *message.SubscribeTracks.
+func (r *Request) AcceptSubscribeTracks() (*IncomingTrackSubscription, error) {
+	if _, ok := r.First.(*message.SubscribeTracks); !ok {
+		return nil, fmt.Errorf("moqt/session: AcceptSubscribeTracks on a %s request", r.First.Type())
+	}
+	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
+		return nil, fmt.Errorf("moqt/session: write SUBSCRIBE_TRACKS REQUEST_OK: %w", err)
+	}
+	return &IncomingTrackSubscription{Stream: r.Stream}, nil
+}
+
 // ReadPublishBlocked reads the next follow-up message on this SUBSCRIBE_TRACKS
 // response stream and returns it as a PUBLISH_BLOCKED.
 //
