@@ -33,12 +33,6 @@ go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest
   -errorsastype ./...        # add -fix to apply
 ```
 
-`go test ./...` from the root does **not** include `apps/tlmst`: that is a
-deliberately separate Go module (Wails3 desktop app) so its CGO/WebKit deps stay
-out of the root build. There is no committed `go.work` (it's `.gitignore`d);
-`apps/tlmst` resolves the parent module via a `replace` directive, so plain `go`
-commands work without a workspace.
-
 Run the stack locally (each in its own terminal):
 
 ```sh

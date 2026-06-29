@@ -9,15 +9,6 @@ updates:
       go-modules:
         patterns: ["*"]
 
-  # apps/tlmst is a deliberately separate Go module.
-  - package-ecosystem: gomod
-    directory: /apps/tlmst
-    schedule:
-      interval: weekly
-    groups:
-      go-modules:
-        patterns: ["*"]
-
   # Keep the GitHub Actions used in workflows up to date.
   - package-ecosystem: github-actions
     directory: /

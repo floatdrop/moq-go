@@ -19,10 +19,6 @@ The packages form a strict bottom-up dependency stack
 at the edges. `CLAUDE.md` has a fuller map of the architecture and where changes
 belong; `README.md` is the example-driven guide to the public API.
 
-`apps/tlmst` is a deliberately separate Go module (a Wails3 desktop app) so its
-CGO/WebKit dependencies stay out of the root build. `go test ./...` from the root
-does **not** cover it.
-
 ## Development workflow
 
 Run these before opening a pull request:
