@@ -9,7 +9,7 @@ No authentication — suitable for local development and testing.
 ## Usage
 
 ```
-relay [-addr host:port] [-cert file] [-key file]
+relay [-addr host:port] [-cert file] [-key file] [-webtransport [-webtransport-path /moq]]
 ```
 
 | Flag | Default | Description |
@@ -17,6 +17,12 @@ relay [-addr host:port] [-cert file] [-key file]
 | `-addr` | `0.0.0.0:4433` | UDP address to listen on |
 | `-cert` | — | PEM certificate file. If omitted, an ephemeral self-signed cert is generated. |
 | `-key` | — | PEM private key file. Required when `-cert` is set. |
+| `-webtransport` | `false` | Serve MOQT over WebTransport (HTTP/3) instead of raw QUIC. |
+| `-webtransport-path` | `/moq` | HTTP/3 path for the WebTransport CONNECT (only used with `-webtransport`). |
+| `-catalog-track-name` | `catalog` | Track name whose object cache uses `-catalog-ttl` instead of the default; empty disables the override. |
+| `-catalog-ttl` | `0` | Per-object TTL for tracks matching `-catalog-track-name`; `0` means infinite retention (FIFO size cap still applies). |
+| `-max-subscriptions` | `0` | Per-session cap on concurrent subscriptions (§13.1); `0` = unlimited. |
+| `-max-namespace-requests` | `0` | Per-session cap on concurrent namespace requests (§13.7.1); `0` = unlimited. |
 
 ## Quick start
 
