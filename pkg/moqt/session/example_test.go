@@ -455,6 +455,34 @@ func ExampleSession_AcceptRequest() {
 				return
 			}
 			_ = resp // resp.OpenFetchStream() to stream the response objects.
+		case *message.TrackStatus:
+			// AcceptTrackStatus replies TRACK_STATUS_OK. It is a one-shot status
+			// query, so (unlike the others) it returns no handle.
+			_ = req.AcceptTrackStatus(nil)
+		case *message.PublishNamespace:
+			// AcceptPublishNamespace replies REQUEST_OK; NAMESPACE / NAMESPACE_DONE
+			// follow-ups arrive by reading the returned handle (e.g. message.Parse).
+			ann, err := req.AcceptPublishNamespace()
+			if err != nil {
+				return
+			}
+			_ = ann
+		case *message.SubscribeNamespace:
+			// AcceptSubscribeNamespace replies REQUEST_OK; announce matching
+			// namespaces by writing NAMESPACE / NAMESPACE_DONE to the handle.
+			sub, err := req.AcceptSubscribeNamespace()
+			if err != nil {
+				return
+			}
+			_ = sub
+		case *message.SubscribeTracks:
+			// AcceptSubscribeTracks replies REQUEST_OK; forward matching tracks as
+			// PUBLISHes and signal stream exhaustion with WritePublishBlocked.
+			tracks, err := req.AcceptSubscribeTracks()
+			if err != nil {
+				return
+			}
+			_ = tracks // tracks.WritePublishBlocked(...) on §6.1 stream exhaustion.
 		}
 	}
 }
