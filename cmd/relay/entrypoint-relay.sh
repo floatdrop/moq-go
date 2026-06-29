@@ -7,8 +7,17 @@
 #   MOQT_PORT              UDP port to listen on (default: 4443)
 #   MOQT_CERT              TLS certificate PEM (default: /certs/cert.pem)
 #   MOQT_KEY               TLS private key PEM (default: /certs/priv.key)
-#   MOQT_TRANSPORT         "quic" (moqt://) or "webtransport" (https://) (default: quic)
-#   MOQT_WEBTRANSPORT_PATH HTTP/3 CONNECT path for WebTransport (default: /moq)
+#   MOQT_TRANSPORT         "quic" (moqt://) or "webtransport" (https://) (default: webtransport)
+#                          The runner's docker harness always points the client
+#                          at https://relay:4443 (WebTransport / ALPN "h3") and
+#                          provides no way to set MOQT_TRANSPORT, so the relay
+#                          must speak WebTransport by default or every handshake
+#                          fails with "tls: no application protocol".
+#   MOQT_WEBTRANSPORT_PATH HTTP/3 CONNECT path for WebTransport (default: /)
+#                          The runner dials a path-less https://relay:4443, so
+#                          the CONNECT targets "/"; serving WebTransport at the
+#                          root is what lets the upgrade succeed (otherwise the
+#                          request 404s against the /moq handler).
 #
 # Mounts:
 #   /certs/cert.pem, /certs/priv.key
@@ -21,8 +30,8 @@ ROLE="${MOQT_ROLE:-relay}"
 PORT="${MOQT_PORT:-4443}"
 CERT="${MOQT_CERT:-/certs/cert.pem}"
 KEY="${MOQT_KEY:-/certs/priv.key}"
-TRANSPORT="${MOQT_TRANSPORT:-quic}"
-WT_PATH="${MOQT_WEBTRANSPORT_PATH:-/moq}"
+TRANSPORT="${MOQT_TRANSPORT:-webtransport}"
+WT_PATH="${MOQT_WEBTRANSPORT_PATH:-/}"
 
 if [ "$ROLE" != "relay" ]; then
     echo "role '$ROLE' not supported (only 'relay')" >&2
