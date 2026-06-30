@@ -43,3 +43,8 @@ interop/certs/
 
 # Local custom prompts
 CLAUDE.local.md
+
+# devenv (https://devenv.sh) — generated state; devenv.lock is committed
+.devenv*
+devenv.local.nix
+.direnv/

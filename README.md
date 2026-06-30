@@ -178,6 +178,44 @@ golangci-lint run                      # lint + format check (.golangci.yml)
 For the benchmark suite and the `benchstat` regression-comparison workflow, see
 [`benchmarks/README.md`](benchmarks/README.md).
 
+### Development environment (devenv + direnv)
+
+The repo ships a [devenv](https://devenv.sh) config (`devenv.nix`) that pins the
+Go toolchain (matching `go.mod`) plus `golangci-lint`, `golines`, `goimports`,
+`gopls`, and `dlv` — so everyone builds against the same versions. It is
+optional: a plain `go` install works fine. With [Nix](https://nixos.org)
+installed:
+
+```sh
+# One-time: install devenv and direnv.
+nix profile add nixpkgs#devenv nixpkgs#direnv
+```
+
+Then either enter the shell on demand:
+
+```sh
+devenv shell        # drops you into a shell with the full toolchain on PATH
+devenv test         # sanity-check the toolchain wiring
+```
+
+…or let [direnv](https://direnv.net) load it automatically on `cd` (recommended).
+Hook direnv into your shell once (see the
+[direnv setup guide](https://direnv.net/docs/hook.html)), e.g. for zsh:
+
+```sh
+echo 'eval "$(direnv hook zsh)"' >> ~/.zshrc
+```
+
+then trust this repo's `.envrc` once:
+
+```sh
+direnv allow        # run from the repo root; re-run if .envrc changes
+```
+
+After that the environment activates whenever you enter the directory. Inside
+the shell, convenience scripts wrap the canonical commands: `build`, `test`,
+`test-race`, `lint`, `bench`, and `modernize`.
+
 ### Interoperability tests
 
 This implementation is registered (as `moq-go`) in the
