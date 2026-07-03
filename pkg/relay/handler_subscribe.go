@@ -2,7 +2,9 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -291,8 +293,7 @@ func (h *sessionHandler) propagateNewGroupUpstream(
 		if !up.IsEstablished() {
 			continue
 		}
-		if _, err := up.Session.UpdateRequest(ctx, up.Stream, up.RequestID,
-			message.Parameters{message.NewGroupRequestParam(value)}); err != nil {
+		if _, err := up.Update(ctx, message.Parameters{message.NewGroupRequestParam(value)}); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream NEW_GROUP_REQUEST REQUEST_UPDATE failed",
 				slog.String("err", err.Error()))
 		}
@@ -315,8 +316,7 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 		if up.ForwardState() == 1 || !up.IsEstablished() {
 			continue
 		}
-		resp, err := up.Session.UpdateRequest(ctx, up.Stream, up.RequestID,
-			message.Parameters{message.ForwardParam(true)})
+		resp, err := up.Update(ctx, message.Parameters{message.ForwardParam(true)})
 		if err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream REQUEST_UPDATE failed",
 				slog.String("err", err.Error()))
@@ -450,8 +450,10 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// Register the upstream subscription on the upstream session as an
 	// registry.UpstreamSub. The upstream's TrackAlias is the alias the upstream peer
 	// assigned in SUBSCRIBE_OK; we use it for the fanout's alias remapping.
-	upstreamSub := registry.NewUpstreamSub(h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias)
-	upstreamSub.RequestID = subMsg.RequestID
+	// The SUBSCRIBE's Request ID (assigned inside sess.Subscribe) is what a
+	// later upstream REQUEST_UPDATE must reuse (§10.9).
+	upstreamSub := registry.NewUpstreamSub(
+		h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias, subMsg.RequestID)
 	upstreamSub.SetFilter(filter)
 	// This upstream is a relay/origin we SUBSCRIBE'd on demand, so it is
 	// expected to answer FETCH — eligible for §9.4 stitch backfill.
@@ -462,11 +464,73 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// or this handler shuts down, then unregister. The unregister runs under
 	// h.spawn so run()'s wg join waits for it.
 	h.spawn(func() {
-		session.DrainAndWait(ctx, upstreamStream)
+		h.readUpstreamMessages(ctx, upstreamSub)
 		h.tracks.RemoveUpstream(fullName, upstreamSub.ID)
 	})
 
 	return entry, true, nil
+}
+
+// readUpstreamMessages owns ALL reads on an upstream request stream (the
+// relay's on-demand SUBSCRIBE to a publisher, or an accepted PUBLISH). It
+// routes the §10.9 REQUEST_OK / REQUEST_ERROR responses to in-flight
+// [registry.UpstreamSub.Update] calls and answers peer-sent REQUEST_UPDATEs
+// with the single REQUEST_OK §10.9 mandates; other follow-ups need no
+// action (PUBLISH_DONE precedes the FIN that ends this loop). It returns
+// when the publisher tears the stream down (EOF / reset) or ctx is
+// cancelled.
+//
+// Do NOT read the stream anywhere else (e.g. [session.DrainAndWait] or
+// [session.Session.UpdateRequest]) while this loop runs: a second reader
+// races it for the §10.9 response.
+func (h *sessionHandler) readUpstreamMessages(ctx context.Context, up *registry.UpstreamSub) {
+	defer up.CloseUpdates()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			m, err := message.Parse(up.Stream)
+			if err != nil {
+				// A clean FIN parses as io.EOF; anything else is a
+				// malformed / unknown follow-up — reset the read side so
+				// the peer learns we stopped consuming, then let the
+				// caller unregister the upstream.
+				if !errors.Is(err, io.EOF) {
+					up.Stream.CancelRead(uint64(moqt.StreamResetInternalError))
+				}
+				return
+			}
+			switch m.(type) {
+			case *message.RequestOK, *message.RequestError:
+				if !up.RouteUpdateResponse(m) {
+					h.log.LogAttrs(ctx, slog.LevelDebug,
+						"unsolicited response on upstream request stream",
+						slog.Uint64("sub_id", up.ID))
+				}
+			case *message.RequestUpdate:
+				// §10.9: the receiver of a REQUEST_UPDATE "MUST respond
+				// with exactly one REQUEST_OK or REQUEST_ERROR". The relay
+				// keeps no mutable per-publication parameters, so the
+				// update is acknowledged without further action (same
+				// policy as handleFetchUpdate for a finished FETCH).
+				if err := up.WriteMessage(&message.RequestOK{}); err != nil {
+					h.log.LogAttrs(ctx, slog.LevelDebug,
+						"REQUEST_UPDATE ack on upstream stream failed",
+						slog.String("err", err.Error()))
+				}
+			default:
+				// PUBLISH_DONE and other follow-ups: the publisher FINs
+				// the stream afterwards, which ends this loop and lets
+				// the caller unregister the upstream.
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		up.Stream.CancelRead(uint64(moqt.StreamResetSessionClosed))
+		<-done
+	}
 }
 
 // hasEstablishedUpstream reports whether the entry has at least one upstream

@@ -578,8 +578,8 @@ func (w *subgroupWriter) run() {
 		w.sub.Terminate()
 
 		// Also cancel the subscriber's request stream so the
-		// handleSubscribe goroutine's DrainAndWait returns and its
-		// defer removes this registry.DownstreamSub from the registry.TrackRegistry.
+		// handleSubscribe goroutine's readSubscribeUpdates loop returns and
+		// its defer removes this registry.DownstreamSub from the registry.TrackRegistry.
 		// Without this the sub would linger in registry.SubTerminated state in
 		// entry.Downstream until the subscriber's session itself
 		// dies — runFanout would skip it (because !IsEstablished()),

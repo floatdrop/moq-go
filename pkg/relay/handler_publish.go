@@ -51,20 +51,31 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		return
 	}
 
-	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias)
+	// Reply BEFORE registering the upstream: once AddUpstream makes the sub
+	// visible, another session's propagation path may call
+	// [registry.UpstreamSub.Update], which writes to this same stream —
+	// session.Stream does not serialize concurrent writers, so the
+	// REQUEST_OK below must be the last unserialized write. (It also keeps
+	// the wire order sane: the publisher sees its PUBLISH accepted before
+	// any relay-initiated REQUEST_UPDATE.)
+	if err := req.Reply(&message.RequestOK{}); err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH REQUEST_OK write failed",
+			slog.String("err", err.Error()))
+		h.sess.UnregisterInboundTrackAlias(msg.TrackAlias)
+		return
+	}
+
+	// §10.9: a later upstream REQUEST_UPDATE rides this PUBLISH stream and
+	// must reuse the PUBLISH's Request ID.
+	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias, msg.RequestID)
 	h.tracks.AddUpstream(fullName, sub, registry.WithProperties(msg.TrackProperties))
 	defer func() {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH stream ended, removing upstream",
 			slog.String("name", string(msg.Name)))
+		sub.CloseUpdates()
 		h.tracks.RemoveUpstream(fullName, sub.ID)
 		h.sess.UnregisterInboundTrackAlias(msg.TrackAlias)
 	}()
-
-	if err := req.Reply(&message.RequestOK{}); err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH REQUEST_OK write failed",
-			slog.String("err", err.Error()))
-		return
-	}
 	h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH accepted, waiting for publisher",
 		slog.String("name", string(msg.Name)))
 
@@ -118,7 +129,10 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		forwarded = append(forwarded, pubStream)
 	}
 
-	session.DrainAndWait(ctx, req.Stream)
+	// Block until the publisher tears the stream down, routing §10.9
+	// responses to any upstream REQUEST_UPDATE the relay sends meanwhile
+	// (e.g. NEW_GROUP_REQUEST propagation).
+	h.readUpstreamMessages(ctx, sub)
 
 	// The publication ended (publisher FIN/reset). FIN every forwarded
 	// PUBLISH stream so each subscriber sees the publication terminate.

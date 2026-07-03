@@ -1,6 +1,7 @@
 package relay_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -232,6 +233,18 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no object delivered within 2s of Forward State 1 (resume failed)")
+	}
+
+	// Regression: the Forward 0→1 flip above runs the §9.2 upstream
+	// propagation path. It used to wedge the relay's update-dispatch loop
+	// (an upstream REQUEST_UPDATE awaited a response the drain goroutine
+	// swallowed — and a leaf publisher never answers at all), so any later
+	// update was never processed. A third update must still get REQUEST_OK.
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	if _, err := subSess.UpdateRequest(ctx, subStream, subMsg.RequestID,
+		message.Parameters{message.SubscriberPriorityParam(17)}); err != nil {
+		t.Fatalf("UpdateRequest after Forward resume (update loop wedged?): %v", err)
 	}
 }
 

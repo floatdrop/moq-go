@@ -1,6 +1,7 @@
 package relay_test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -104,6 +105,82 @@ func TestNewGroupRequest_ForwardedUpstreamOnUpdate(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("relay did not forward NEW_GROUP_REQUEST upstream within 2s")
+	}
+}
+
+// TestNewGroupRequest_BackToBackUpdatesSurvive is the regression test for the
+// upstream REQUEST_UPDATE response routing: the relay's upstream update rides
+// the PUBLISH request stream, whose reader must route the publisher's
+// REQUEST_OK back to the in-flight update instead of discarding it (the old
+// DrainAndWait swallowed it, wedging the subscriber's update-dispatch loop
+// forever after the first propagation). Two NEW_GROUP_REQUEST propagations
+// back to back must both reach the publisher and both downstream updates must
+// be answered.
+func TestNewGroupRequest_BackToBackUpdatesSurvive(t *testing.T) {
+	t.Parallel()
+
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	const publisherAlias = uint64(7)
+	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
+		Namespace:       wire.TrackNamespace{[]byte("video")},
+		Name:            []byte("cam1"),
+		TrackAlias:      publisherAlias,
+		TrackProperties: dynamicGroupsProperties(1),
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer pubStream.Close()
+
+	// Publisher side: answer every REQUEST_UPDATE with REQUEST_OK and
+	// collect the NEW_GROUP_REQUEST values in arrival order.
+	values := make(chan uint64, 4)
+	go func() {
+		for {
+			m, err := message.Parse(pubStream)
+			if err != nil {
+				return
+			}
+			upd, ok := m.(*message.RequestUpdate)
+			if !ok {
+				continue
+			}
+			_ = message.Marshal(pubStream, &message.RequestOK{})
+			if v, ok := newGroupReqValue(upd.Parameters); ok {
+				values <- v
+			}
+		}
+	}()
+
+	subSess := dialAnotherClient(t, pubSess)
+	subMsg := &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	}
+	subStream, err := subSess.Subscribe(t.Context(), subMsg)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer subStream.Close()
+
+	for i, want := range []uint64{5, 8} { // 8 > 5: not covered by the outstanding request
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+		_, err := subSess.UpdateRequest(ctx, subStream, subMsg.RequestID,
+			message.Parameters{message.NewGroupRequestParam(want)})
+		cancel()
+		if err != nil {
+			t.Fatalf("UpdateRequest #%d (update loop wedged?): %v", i+1, err)
+		}
+		select {
+		case v := <-values:
+			if v != want {
+				t.Fatalf("upstream NEW_GROUP_REQUEST #%d = %d, want %d", i+1, v, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("relay did not forward NEW_GROUP_REQUEST #%d upstream within 2s", i+1)
+		}
 	}
 }
 

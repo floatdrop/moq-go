@@ -1,8 +1,12 @@
 package registry
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -199,20 +203,199 @@ type UpstreamSub struct {
 	// It stays false for a directly-connected leaf publisher, which pushes
 	// live objects and does not serve FETCH.
 	FetchCapable bool
+
+	// updMu serializes REQUEST_UPDATE writes on Stream and guards the
+	// waiter queue. It is deliberately held across the stream write:
+	// §10.9 responses arrive in request order, so the waiter queue order
+	// must match the write order.
+	updMu sync.Mutex
+
+	// updWaiters holds one channel per in-flight [UpstreamSub.Update],
+	// oldest first. The stream's reader goroutine answers the head waiter
+	// on REQUEST_OK and every waiter on REQUEST_ERROR (§10.9 coalescing)
+	// via RouteUpdateResponse.
+	updWaiters []chan updateResult
+
+	// updClosed is latched by CloseUpdates once the stream's reader has
+	// exited; subsequent Update calls fail immediately instead of queueing
+	// a waiter nothing will ever answer.
+	updClosed bool
+}
+
+// updateResult carries one §10.9 response to a waiting Update call.
+type updateResult struct {
+	ok  *message.RequestOK
+	err error
+}
+
+// ErrUpstreamClosed is returned by [UpstreamSub.Update] when the upstream
+// request stream's reader has exited (publisher FIN/reset or session
+// shutdown) — no further REQUEST_UPDATE can be answered.
+var ErrUpstreamClosed = errors.New("registry: upstream request stream closed")
+
+// updateResponseTimeout bounds the wait for the §10.9 REQUEST_OK /
+// REQUEST_ERROR after Update writes a REQUEST_UPDATE. A conforming peer
+// always answers; the bound keeps a peer that never does (this repo's own
+// demo publishers drain their PUBLISH streams without replying) from
+// wedging the dispatch loop the Update call runs on.
+const updateResponseTimeout = 5 * time.Second
+
+// Update sends a REQUEST_UPDATE (§10.9) on the upstream request stream and
+// awaits the single REQUEST_OK / REQUEST_ERROR the spec mandates, bounded
+// by [updateResponseTimeout] (tightened further by any earlier deadline on
+// ctx).
+//
+// This is the relay-side replacement for [session.Session.UpdateRequest]:
+// that helper reads the response off the stream directly, which cannot
+// coexist with the relay's per-stream reader goroutine (two concurrent
+// readers race for the response — the reader must own ALL reads). Instead,
+// Update queues a waiter and the reader hands the response back through
+// RouteUpdateResponse.
+//
+// A REQUEST_ERROR is surfaced as a [session.RequestRejectedError]. On
+// timeout the waiter is removed from the queue so an upstream that never
+// answers cannot permanently shift response routing for later updates.
+//
+// Known limitation: the REQUEST_UPDATE write itself runs under updMu and is
+// not ctx-bounded — a peer that stalls stream flow control blocks Update
+// (and the stream's reader) until the session dies and errors the write.
+func (u *UpstreamSub) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
+	ctx, cancel := context.WithTimeout(ctx, updateResponseTimeout)
+	defer cancel()
+
+	ch := make(chan updateResult, 1)
+
+	u.updMu.Lock()
+	if u.updClosed {
+		u.updMu.Unlock()
+		return nil, ErrUpstreamClosed
+	}
+	// Write while holding updMu: it serializes writers on the stream AND
+	// keeps the waiter queue order equal to the write order, which is what
+	// lets the reader pair each §10.9 response with its update.
+	err := message.Marshal(u.Stream, &message.RequestUpdate{
+		RequestID:  u.RequestID,
+		Parameters: params,
+	})
+	if err == nil {
+		u.updWaiters = append(u.updWaiters, ch)
+	}
+	u.updMu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("registry: write REQUEST_UPDATE: %w", err)
+	}
+
+	select {
+	case res := <-ch:
+		return res.ok, res.err
+	case <-ctx.Done():
+		// Remove our waiter so a peer that never answers doesn't leave a
+		// stale head absorbing the NEXT update's response forever. (If the
+		// response is merely late, routing for updates written after this
+		// removal shifts by one — the lesser evil versus permanent
+		// poisoning; conforming peers answer well within the bound.)
+		u.updMu.Lock()
+		if i := slices.Index(u.updWaiters, ch); i >= 0 {
+			u.updWaiters = slices.Delete(u.updWaiters, i, i+1)
+		}
+		u.updMu.Unlock()
+		return nil, ctx.Err()
+	}
+}
+
+// RouteUpdateResponse delivers a REQUEST_OK / REQUEST_ERROR read off the
+// upstream request stream to in-flight Update calls: a REQUEST_OK answers
+// the oldest waiter; a REQUEST_ERROR answers ALL of them, because §10.9
+// lets the peer coalesce pipelined updates and "only a single REQUEST_ERROR
+// will be sent" for the batch. It reports whether any waiter consumed the
+// message; false means none was pending (an unsolicited response the caller
+// may log and drop).
+func (u *UpstreamSub) RouteUpdateResponse(msg message.Message) bool {
+	u.updMu.Lock()
+	if len(u.updWaiters) == 0 {
+		u.updMu.Unlock()
+		return false
+	}
+	var recipients []chan updateResult
+	if _, isErr := msg.(*message.RequestError); isErr {
+		recipients = u.updWaiters
+		u.updWaiters = nil
+	} else {
+		recipients = u.updWaiters[:1]
+		u.updWaiters = u.updWaiters[1:]
+	}
+	u.updMu.Unlock()
+
+	var res updateResult
+	switch m := msg.(type) {
+	case *message.RequestOK:
+		res = updateResult{ok: m}
+	case *message.RequestError:
+		res = updateResult{err: &session.RequestRejectedError{Code: m.ErrorCode, Reason: m.ErrorReason}}
+	default:
+		res = updateResult{err: fmt.Errorf("registry: unexpected %s in REQUEST_UPDATE response", msg.Type())}
+	}
+	for _, ch := range recipients {
+		ch <- res
+	}
+	return true
+}
+
+// CloseUpdates latches the broker shut and fails every pending and future
+// Update with [ErrUpstreamClosed]. Idempotent; the stream's reader calls it
+// on exit and teardown paths call it defensively.
+func (u *UpstreamSub) CloseUpdates() {
+	u.updMu.Lock()
+	waiters := u.updWaiters
+	u.updWaiters = nil
+	u.updClosed = true
+	u.updMu.Unlock()
+	for _, ch := range waiters {
+		ch <- updateResult{err: ErrUpstreamClosed}
+	}
+}
+
+// WriteMessage marshals a control message onto the upstream request stream
+// under the same lock that serializes Update's REQUEST_UPDATE writes.
+// session.Stream does not serialize concurrent writers, so every relay
+// write on this stream after the request is accepted must go through here
+// or Update.
+func (u *UpstreamSub) WriteMessage(msg message.Message) error {
+	u.updMu.Lock()
+	defer u.updMu.Unlock()
+	return message.Marshal(u.Stream, msg)
 }
 
 // NewUpstreamSub constructs an UpstreamSub in [SubEstablished] with the given
 // identity fields. The relay only builds an UpstreamSub once the upstream
 // SUBSCRIBE_OK has arrived (the TrackAlias comes from it), so the
 // subscription is live from construction.
-func NewUpstreamSub(id uint64, sess *session.Session, stream session.Stream, trackAlias uint64) *UpstreamSub {
+//
+// requestID is the §10.1 Request ID of the SUBSCRIBE / PUBLISH that opened
+// the request stream; [UpstreamSub.Update] reuses it on every REQUEST_UPDATE,
+// so passing the wrong value silently corrupts §10.9 update routing at the
+// peer — hence a constructor argument rather than a set-later field.
+//
+// The Forward State starts at 1: per §10.7 a SUBSCRIBE (or accepted PUBLISH)
+// that omits the FORWARD parameter implies Forward State 1, and the relay's
+// upstream requests never carry FORWARD. Starting at 0 would make the §9.2
+// propagation path emit a spurious REQUEST_UPDATE(Forward=1) on the first
+// downstream resume.
+func NewUpstreamSub(
+	id uint64,
+	sess *session.Session,
+	stream session.Stream,
+	trackAlias, requestID uint64,
+) *UpstreamSub {
 	return &UpstreamSub{
 		Subscription: Subscription{
-			state:      SubEstablished,
-			ID:         id,
-			Session:    sess,
-			Stream:     stream,
-			TrackAlias: trackAlias,
+			state:        SubEstablished,
+			ID:           id,
+			RequestID:    requestID,
+			Session:      sess,
+			Stream:       stream,
+			TrackAlias:   trackAlias,
+			forwardState: 1,
 		},
 	}
 }
@@ -489,10 +672,10 @@ func GroupOutOfRange(group uint64, f *message.SubscriptionFilter) bool {
 
 // TerminateWithPublishDone gracefully ends this downstream subscription
 // per §10.11: the relay writes a PUBLISH_DONE message on the
-// subscriber's request stream and FINs the send side. The
-// subscriber's handler goroutine, which is blocked in
-// [session.DrainAndWait] on the same stream, sees EOF and exits; its
-// defer evicts the [DownstreamSub] from the [TrackRegistry].
+// subscriber's request stream and FINs the send side. The subscriber
+// eventually FINs its side too, the handler's readSubscribeUpdates
+// loop sees EOF and exits, and its defer evicts the [DownstreamSub]
+// from the [TrackRegistry].
 //
 // The Terminate latch prevents double-termination: the first caller
 // flips the state and writes the message; subsequent calls return

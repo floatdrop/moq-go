@@ -319,6 +319,12 @@ func awaitRequestResponse[OK message.Message, R any](
 // for further traffic. REQUEST_ERROR is surfaced as a *RequestRejectedError;
 // the stream is left open so the caller can decide how to tear down (a failed
 // subscription update is followed by PUBLISH_DONE from the publisher, §10.9).
+//
+// UpdateRequest reads the response directly off the stream, so it MUST NOT
+// run concurrently with any other reader of the same stream ([DrainAndWait],
+// a PUBLISH_DONE-draining loop, another UpdateRequest) — a concurrent reader
+// races it for the response and can swallow it, blocking this call until ctx
+// expires.
 func (s *Session) UpdateRequest(
 	ctx context.Context,
 	stream Stream,
