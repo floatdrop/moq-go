@@ -451,3 +451,26 @@ func (h *sessionHandler) rejectTokenDenied(ctx context.Context, req *session.Req
 			slog.String("err", err.Error()))
 	}
 }
+
+// handleFollowupTokens routes a follow-up message's AUTHORIZATION_TOKEN
+// parameters through the session token cache — §10.2.2 allows REQUEST_UPDATE
+// to REGISTER or DELETE aliases, and the readers that parse follow-ups
+// directly bypass AcceptRequest's processing. Returns false when a token
+// fault closed the session, in which case the caller's read loop should
+// stop.
+func (h *sessionHandler) handleFollowupTokens(ctx context.Context, msg message.Message) bool {
+	_, err := h.sess.ProcessFollowupTokens(msg)
+	if err == nil {
+		return true
+	}
+	if tce, ok := errors.AsType[*session.TokenCacheError](err); ok {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "relay closing session on follow-up token cache error",
+			slog.String("err", err.Error()),
+			slog.Uint64("code", uint64(tce.Code)))
+		_ = h.sess.Close(tce.Code, tce.Error())
+		return false
+	}
+	h.log.LogAttrs(ctx, slog.LevelDebug, "follow-up token processing failed",
+		slog.String("err", err.Error()))
+	return false
+}

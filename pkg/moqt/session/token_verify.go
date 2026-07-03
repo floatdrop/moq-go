@@ -263,3 +263,20 @@ func messageParameters(msg message.Message) (message.Parameters, bool) {
 	}
 	return nil, false
 }
+
+// ProcessFollowupTokens resolves the AUTHORIZATION_TOKEN parameters (§10.2.2)
+// of a follow-up message read off an established request stream — §10.2.2
+// explicitly allows tokens on REQUEST_UPDATE, and a REGISTER alias "MUST be
+// added to the cache even if the message fails for some other reason".
+// AcceptRequest performs the same processing for a stream's FIRST message;
+// any code that reads follow-ups directly (message.Parse on the stream) MUST
+// route messages carrying parameters through here, or the peer's view of the
+// token cache silently diverges and its next USE_ALIAS kills the session
+// with UNKNOWN_AUTH_TOKEN_ALIAS.
+//
+// The error contract matches AcceptRequest: a *TokenCacheError carries the
+// SESSION_ERROR code the caller must close the session with. Messages
+// without parameters (or without token parameters) return (nil, nil).
+func (s *Session) ProcessFollowupTokens(msg message.Message) ([]ResolvedToken, error) {
+	return s.processRequestTokens(msg)
+}

@@ -145,6 +145,11 @@ func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Requ
 				return // EOF / reset / parse error — stream is gone.
 			}
 			if upd, ok := m.(*message.RequestUpdate); ok {
+				// §10.2.2: an update may REGISTER/DELETE token aliases;
+				// a cache fault there is session-fatal.
+				if !h.handleFollowupTokens(ctx, upd) {
+					return
+				}
 				h.handleFetchUpdate(ctx, req, out, upd)
 			}
 		}

@@ -227,6 +227,11 @@ func (h *sessionHandler) readSubscribeUpdates(
 				return // EOF / reset / parse error — stream is gone.
 			}
 			if upd, ok := m.(*message.RequestUpdate); ok {
+				// §10.2.2: an update may REGISTER/DELETE token aliases;
+				// a cache fault there is session-fatal.
+				if !h.handleFollowupTokens(ctx, upd) {
+					return
+				}
 				h.handleSubscribeUpdate(ctx, sub, fullName, upd)
 			}
 		}
@@ -550,6 +555,11 @@ func (h *sessionHandler) readUpstreamMessages(ctx context.Context, up *registry.
 						slog.Uint64("sub_id", up.ID))
 				}
 			case *message.RequestUpdate:
+				// §10.2.2: an update may REGISTER/DELETE token aliases;
+				// a cache fault there is session-fatal.
+				if !h.handleFollowupTokens(ctx, m) {
+					return
+				}
 				// §10.9: the receiver of a REQUEST_UPDATE "MUST respond
 				// with exactly one REQUEST_OK or REQUEST_ERROR". The relay
 				// keeps no mutable per-publication parameters, so the

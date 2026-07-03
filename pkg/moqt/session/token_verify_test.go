@@ -340,3 +340,91 @@ func TestTokenCacheAccessor(t *testing.T) {
 		t.Errorf("MaxSize() = %d, want 2048", cache.MaxSize())
 	}
 }
+
+// TestProcessFollowupTokensRegistersAlias pins the §10.2.2 REQUEST_UPDATE
+// token path: an alias REGISTERed on a follow-up REQUEST_UPDATE (routed
+// through ProcessFollowupTokens by whoever reads follow-ups directly) must
+// enter the cache exactly like a first-message REGISTER, so a later
+// USE_ALIAS on a fresh request resolves instead of killing the session with
+// UNKNOWN_AUTH_TOKEN_ALIAS.
+func TestProcessFollowupTokensRegistersAlias(t *testing.T) {
+	client, server := openTokenPair(t, session.WithMaxAuthTokenCacheSize(4096))
+
+	// Request 1: a plain SUBSCRIBE establishing the stream the update rides.
+	// Opened inline (not via sendSubscribeWithTokens) because the client
+	// stream is needed below to send the REQUEST_UPDATE.
+	sub := &message.Subscribe{RequestID: client.AllocRequestID(), Name: []byte("track")}
+	streamCh := make(chan session.Stream, 1)
+	go func() {
+		stream, err := client.OpenRequest(sub)
+		if err != nil {
+			t.Errorf("client OpenRequest: %v", err)
+			close(streamCh)
+			return
+		}
+		streamCh <- stream
+	}()
+	req1, err := server.AcceptRequest(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptRequest 1: %v", err)
+	}
+	clientStream, okStream := <-streamCh
+	if !okStream || clientStream == nil {
+		t.Fatal("client stream not opened")
+	}
+	t.Cleanup(func() {
+		clientStream.CancelRead(uint64(moqt.StreamResetCancelled))
+		clientStream.CancelWrite(uint64(moqt.StreamResetCancelled))
+	})
+
+	// Client sends REQUEST_UPDATE carrying a REGISTER token; the server
+	// reads the follow-up directly and routes it through
+	// ProcessFollowupTokens, then acks per §10.9.
+	updDone := make(chan error, 1)
+	go func() {
+		_, err := client.UpdateRequest(t.Context(), clientStream, sub.RequestID, message.Parameters{
+			message.AuthorizationTokenParam(message.Token{
+				AliasType:  message.AliasTypeRegister,
+				TokenAlias: 7,
+				TokenType:  9,
+				TokenValue: []byte("secret"),
+			}),
+		})
+		updDone <- err
+	}()
+
+	m, err := message.Parse(req1.Stream)
+	if err != nil {
+		t.Fatalf("server Parse follow-up: %v", err)
+	}
+	upd, ok := m.(*message.RequestUpdate)
+	if !ok {
+		t.Fatalf("follow-up = %T, want *message.RequestUpdate", m)
+	}
+	resolved, err := server.ProcessFollowupTokens(upd)
+	if err != nil {
+		t.Fatalf("ProcessFollowupTokens: %v", err)
+	}
+	if len(resolved) != 1 || resolved[0].Type != 9 || string(resolved[0].Value) != "secret" {
+		t.Fatalf("resolved = %+v, want one {9, secret}", resolved)
+	}
+	if err := req1.Reply(&message.RequestOK{}); err != nil {
+		t.Fatalf("Reply REQUEST_OK: %v", err)
+	}
+	if err := <-updDone; err != nil {
+		t.Fatalf("UpdateRequest: %v", err)
+	}
+
+	// Request 2: USE_ALIAS must resolve to the value registered above.
+	sendSubscribeWithTokens(t, client, message.Token{
+		AliasType:  message.AliasTypeUseAlias,
+		TokenAlias: 7,
+	})
+	req2, err := server.AcceptRequest(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptRequest 2 (alias registered via REQUEST_UPDATE not honored?): %v", err)
+	}
+	if len(req2.Tokens) != 1 || req2.Tokens[0].Type != 9 || string(req2.Tokens[0].Value) != "secret" {
+		t.Fatalf("req2 resolved token = %+v, want {9, secret}", req2.Tokens)
+	}
+}
