@@ -35,10 +35,10 @@ type fwdObject struct {
 // hands back, so two contributors never double-open a writer or race the
 // joiner scan.
 //
-// The map key is the *registry.DownstreamSub pointer rather than sub.ID because
-// IDs are allocated per-session-handler (allocSubID), so subs from different
-// sessions can collide on ID. A nil value records "tried to open and failed" so
-// we don't retry.
+// The map key is the *registry.DownstreamSub pointer: the sub's identity is
+// exactly what the writer serves, with no ID indirection (IDs are globally
+// unique since allocSubID went process-wide, but the pointer needs no lookup).
+// A nil value records "sub wasn't Established when scanned" so we don't retry.
 type subgroupWriterSet struct {
 	writers map[*registry.DownstreamSub]*subgroupWriter
 	// hdr is the canonical SUBGROUP_HEADER (the first contributor's), reused for
@@ -319,13 +319,20 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	}
 }
 
-// openWriterForSub opens an outbound subgroup stream for sub, builds a
-// subgroupWriter, and records it in writers keyed by the *registry.DownstreamSub
-// pointer. On any failure (sub not Established, OpenSubgroup error)
-// writers[sub] is set to nil so we don't retry. If replaying is true, the outbound
-// stream's header sets §11.4.2 ReplayingSubgroup — per the spec, "when
-// the first Object on this stream is NOT the first object the original
+// openWriterForSub builds a subgroupWriter for sub and records it in writers
+// keyed by the *registry.DownstreamSub pointer. If sub is not Established,
+// writers[sub] is set to nil so we don't retry. If replaying is true, the
+// outbound stream's header sets §11.4.2 ReplayingSubgroup — per the spec,
+// "when the first Object on this stream is NOT the first object the original
 // publisher pushed for this subgroup".
+//
+// Deliberately NO transport I/O happens here: both call sites run under
+// sg.Mu — the lock every contributor takes per forwarded object — and
+// writing the SUBGROUP_HEADER can block on ONE subscriber's flow control,
+// which would stall the entire subgroup's fanout (plus the inbound read
+// loop) on one slow peer. The writer goroutine opens the stream and writes
+// the header lazily, before the first object it forwards; a subscriber whose
+// filter drops every object never gets an empty header-only stream at all.
 func (h *sessionHandler) openWriterForSub(
 	ctx context.Context,
 	hdr message.SubgroupHeader,
@@ -345,19 +352,10 @@ func (h *sessionHandler) openWriterForSub(
 	if replaying {
 		subHdr.ReplayingSubgroup = true
 	}
-	os, err := sub.Session.OpenSubgroup(subHdr)
-	if err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "fanout: OpenSubgroup failed",
-			slog.Uint64("sub_id", sub.ID),
-			slog.String("err", err.Error()))
-		writers[sub] = nil
-		return
-	}
 	w := &subgroupWriter{
 		sub:                 sub,
 		ctx:                 ctx,
 		hdr:                 subHdr,
-		out:                 os,
 		inbox:               make(chan fwdObject, h.sendQueueSize),
 		done:                make(chan struct{}),
 		log:                 h.log,
@@ -365,10 +363,6 @@ func (h *sessionHandler) openWriterForSub(
 		maxDropsBeforeReset: h.maxDropsBeforeReset,
 		maxLag:              h.maxFanoutLag,
 	}
-	w.applyPriority()
-	// §11.4.3: mark the just-written SUBGROUP_HEADER as reliable so a later
-	// reset still delivers it (the receiver can identify the subscription).
-	w.out.MarkReliable()
 	writers[sub] = w
 	h.spawn(w.run)
 }
@@ -396,8 +390,8 @@ func (h *sessionHandler) openWriterForSub(
 type subgroupWriter struct {
 	sub                 *registry.DownstreamSub
 	ctx                 context.Context
-	hdr                 message.SubgroupHeader // template; TrackAlias already remapped
-	out                 *session.OutgoingSubgroupStream
+	hdr                 message.SubgroupHeader          // template; TrackAlias already remapped
+	out                 *session.OutgoingSubgroupStream // nil until run opens it lazily
 	inbox               chan fwdObject
 	done                chan struct{}
 	log                 *slog.Logger
@@ -471,11 +465,11 @@ func (w *subgroupWriter) run() {
 		writeFailed bool
 	)
 
-	// reopen cancels the current outbound stream and opens a fresh one
-	// with the same header template. Used when a §11.4.3 gap is detected
-	// — the current stream is no longer eligible to carry the next
-	// forwarded object. The effective §7.2 priority is reapplied on
-	// the new stream.
+	// reopen cancels the current outbound stream (if any) and opens a fresh
+	// one with the same header template, writing its SUBGROUP_HEADER. Used
+	// for the lazy first open and when a §11.4.3 gap is detected — the
+	// current stream is no longer eligible to carry the next forwarded
+	// object. The effective §7.2 priority is reapplied on the new stream.
 	reopen := func() bool {
 		if w.out != nil {
 			w.out.Cancel(moqt.StreamResetCancelled)
@@ -495,6 +489,21 @@ func (w *subgroupWriter) run() {
 		return true
 	}
 
+	// failWrites latches this writer broken: no further stream writes will
+	// be attempted, and — via w.closed — contributors stop enqueueing (and
+	// stop counting ObjectForwarded for objects that would be discarded).
+	// The inbox channel itself is only ever closed by close() under sg.Mu.
+	var writeFailedLatched bool
+	failWrites := func() {
+		writeFailed = true
+		if !writeFailedLatched {
+			writeFailedLatched = true
+			w.dropsMu.Lock()
+			w.closed = true
+			w.dropsMu.Unlock()
+		}
+	}
+
 	var lagExceeded bool
 	for fwd := range w.inbox {
 		// §8 lag window: how long this object waited in the queue is how far
@@ -512,6 +521,17 @@ func (w *subgroupWriter) run() {
 			continue
 		}
 
+		// Lazy first open: openWriterForSub runs under sg.Mu and must not
+		// perform transport I/O, so the stream (and its SUBGROUP_HEADER
+		// write, which can block on this subscriber's flow control) happens
+		// here, on this subscriber's own goroutine.
+		if w.out == nil {
+			if !reopen() {
+				failWrites()
+				continue
+			}
+		}
+
 		// §11.4.3: the relay MUST NOT forward a non-consecutive
 		// Object on an existing subgroup stream. When the next
 		// forwarded Object ID isn't prevID + 1 — gap from a filter
@@ -519,7 +539,7 @@ func (w *subgroupWriter) run() {
 		// reset the current outbound stream and open a new one.
 		if hasWritten && fwd.absID != prevID+1 {
 			if !reopen() {
-				writeFailed = true
+				failWrites()
 				continue
 			}
 		}
@@ -539,7 +559,7 @@ func (w *subgroupWriter) run() {
 				"sub_id", w.sub.ID, "err", err.Error())
 			w.out.Cancel(moqt.StreamResetInternalError)
 			w.out = nil
-			writeFailed = true
+			failWrites()
 			continue
 		}
 		prevID = fwd.absID
@@ -572,6 +592,15 @@ func (w *subgroupWriter) run() {
 			resetCode = moqt.StreamResetExcessiveLoad
 		}
 		w.metrics.SubscriptionResetSlowReader()
+		// Refuse further enqueues so contributors stop stamping objects into
+		// an inbox nobody drains. The channel itself stays open (publish and
+		// close serialize under sg.Mu; the writer must not close it from
+		// here). Objects already queued stay pinned until the whole writer
+		// becomes unreachable after the last contributor's teardown joins
+		// this goroutine — bounded by the queue size.
+		w.dropsMu.Lock()
+		w.closed = true
+		w.dropsMu.Unlock()
 		if w.out != nil {
 			w.out.Cancel(resetCode)
 		}
@@ -597,7 +626,8 @@ func (w *subgroupWriter) run() {
 	}
 
 	if w.out == nil {
-		// reopen() failed earlier; nothing to close.
+		// Either every object was filtered before the lazy first open (no
+		// outbound stream ever existed) or a reopen failed; nothing to close.
 		return
 	}
 

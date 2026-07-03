@@ -218,8 +218,11 @@ func TestFanout_StalledSubscriberDoesNotBlockFastOne(t *testing.T) {
 		}
 	}()
 
-	// Wait for both to have accepted their streams before we flood.
-	<-slowAcceptDone
+	// No pre-flood wait on the slow accept: outbound subgroup streams open
+	// lazily on the writer goroutine's first forwarded object, so the slow
+	// subscriber's stream doesn't exist until the flood starts. The acceptor
+	// goroutine above picks it up whenever it appears; a writer blocked on
+	// the (unread) slow stream only ever blocks its own goroutine.
 
 	// Flood, but stay at most `window` objects ahead of the fast subscriber's
 	// reads so the fast inbox (SendQueueSize) can never overflow regardless of
@@ -261,6 +264,103 @@ func TestFanout_StalledSubscriberDoesNotBlockFastOne(t *testing.T) {
 	// stressed.
 	if got := m.dropped.Load(); got == 0 {
 		t.Fatal("stalled subscriber did not overflow (dropped == 0); test no longer exercises isolation")
+	}
+
+	// The stalled subscriber's stream must have been offered (accepted)
+	// even though it never read an object.
+	select {
+	case ds := <-slowAcceptDone:
+		if ds == nil {
+			t.Fatal("slow subscriber accept failed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("slow subscriber's outbound stream never appeared")
+	}
+}
+
+// TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup is the regression
+// test for header writes under the subgroup lock: subscriber A never even
+// accepts its data stream, so the relay's SUBGROUP_HEADER write to A blocks
+// forever. That write used to run inside openWriterForSub under sg.Mu — the
+// lock every contributor takes per forwarded object — stalling the whole
+// subgroup (subscriber B starved and the inbound read loop wedged). With the
+// lazy per-writer open, only A's own writer goroutine blocks.
+func TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	const publisherAlias = uint64(7)
+	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
+		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Name:       []byte("cam1"),
+		TrackAlias: publisherAlias,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer pubReqStream.Close()
+
+	// Subscriber A: subscribes, then never touches its data plane — no
+	// AcceptDataStream, so the relay's header write to it can never
+	// complete on the in-process unbuffered pipes.
+	deadSess := dialAnotherClient(t, pubSess)
+	deadReq, err := deadSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("dead Subscribe: %v", err)
+	}
+	defer deadReq.Close()
+
+	liveSess := dialAnotherClient(t, pubSess)
+	liveReq, err := liveSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("live Subscribe: %v", err)
+	}
+	defer liveReq.Close()
+
+	got := make(chan string, 1)
+	go func() {
+		ds, err := liveSess.AcceptDataStream(t.Context())
+		if err != nil {
+			return
+		}
+		sg, ok := ds.(*session.IncomingSubgroupStream)
+		if !ok {
+			return
+		}
+		obj, err := sg.ReadObject()
+		if err != nil {
+			return
+		}
+		got <- string(obj.Payload)
+	}()
+
+	sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDExplicit,
+		TrackAlias:     publisherAlias,
+		GroupID:        0,
+		SubgroupID:     0,
+	})
+	if err != nil {
+		t.Fatalf("OpenSubgroup: %v", err)
+	}
+	if err := sg.WriteObject(&message.SubgroupObject{Payload: []byte("through")}); err != nil {
+		t.Fatalf("WriteObject: %v", err)
+	}
+
+	select {
+	case payload := <-got:
+		if payload != "through" {
+			t.Fatalf("live subscriber got %q, want %q", payload, "through")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("live subscriber starved — an unresponsive peer stalled the subgroup fanout")
 	}
 }
 
