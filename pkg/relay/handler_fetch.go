@@ -202,6 +202,43 @@ func validateFetchUpdateParams(ps message.Parameters) error {
 	return nil
 }
 
+// joiningFetchWaitTimeout bounds how long a Joining FETCH waits for its
+// referenced SUBSCRIBE to finish establishing (§10.12.2 buffering). A
+// pipelined SUBSCRIBE + Joining FETCH can put the FETCH first, or the
+// SUBSCRIBE may still be waiting on an upstream round trip.
+const joiningFetchWaitTimeout = 5 * time.Second
+
+// waitJoiningLocation returns the joining location registered for the given
+// SUBSCRIBE Request ID, waiting up to [joiningFetchWaitTimeout] for it to
+// appear — §10.12.2: a Joining Fetch referencing a subscription "that has
+// not yet been established" is buffered "until either the Subscription is
+// established or the request times out". Handlers run on their own
+// goroutines, so blocking here holds up only this FETCH.
+func (h *sessionHandler) waitJoiningLocation(
+	ctx context.Context,
+	joiningRequestID uint64,
+) (joiningLocation, bool) {
+	deadline := time.NewTimer(joiningFetchWaitTimeout)
+	defer deadline.Stop()
+	for {
+		h.joinLocMu.RLock()
+		jloc, ok := h.joinLocs[joiningRequestID]
+		notify := h.joinLocNotify
+		h.joinLocMu.RUnlock()
+		if ok {
+			return jloc, true
+		}
+		select {
+		case <-notify:
+			// A SUBSCRIBE registered; re-check whether it was ours.
+		case <-deadline.C:
+			return joiningLocation{}, false
+		case <-ctx.Done():
+			return joiningLocation{}, false
+		}
+	}
+}
+
 // handleJoiningFetch implements the Relative / Absolute Joining FETCH
 // flows (§10.12.2). A Joining FETCH references an active SUBSCRIBE by
 // Request ID; the relay recovers the associated Joining Location from
@@ -223,9 +260,7 @@ func (h *sessionHandler) handleJoiningFetch(ctx context.Context, req *session.Re
 		return
 	}
 
-	h.joinLocMu.RLock()
-	jloc, ok := h.joinLocs[jf.JoiningRequestID]
-	h.joinLocMu.RUnlock()
+	jloc, ok := h.waitJoiningLocation(ctx, jf.JoiningRequestID)
 	if !ok {
 		// §10.12.2: "If a publisher receives a Joining Fetch with a
 		// Request ID that does not correspond to a subscription in

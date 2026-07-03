@@ -54,8 +54,15 @@ type sessionHandler struct {
 	// sent SUBSCRIBE_OK. A subsequent Joining FETCH (§10.12.2) references
 	// the same Request ID to recover the snapshot and compute its end
 	// location contiguous with the live subscription.
-	joinLocMu sync.RWMutex
-	joinLocs  map[uint64]joiningLocation
+	//
+	// joinLocNotify is closed (and replaced) on every registration so a
+	// Joining FETCH that arrived before its SUBSCRIBE finished establishing
+	// can wait for the record instead of failing — §10.12.2: the publisher
+	// "buffers the pending Joining Fetch until either the Subscription is
+	// established or the request times out".
+	joinLocMu     sync.RWMutex
+	joinLocs      map[uint64]joiningLocation
+	joinLocNotify chan struct{}
 }
 
 // joiningLocation is the per-subscription record stored in
@@ -100,6 +107,7 @@ func newSessionHandler(
 		maxFanoutLag:        maxFanoutLag,
 		limiter:             sessionLimiter{maxSubs: maxSubsPerSession, maxNS: maxNamespaceReqsPerSession},
 		joinLocs:            make(map[uint64]joiningLocation),
+		joinLocNotify:       make(chan struct{}),
 		relayGo:             relayGo,
 	}
 }

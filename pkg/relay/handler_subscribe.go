@@ -146,6 +146,10 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		largest:    snapshotLargest,
 		hasLargest: snapshotHas,
 	}
+	// Wake any Joining FETCH that arrived before this SUBSCRIBE finished
+	// establishing (§10.12.2 buffering — see handleJoiningFetch).
+	close(h.joinLocNotify)
+	h.joinLocNotify = make(chan struct{})
 	h.joinLocMu.Unlock()
 
 	defer func() {

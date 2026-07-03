@@ -331,6 +331,85 @@ func TestFetch_StatusMarkersNotServed(t *testing.T) {
 	}
 }
 
+// TestFetch_JoiningBuffersUntilSubscribeEstablished pins the §10.12.2
+// buffering rule: a Joining FETCH referencing a subscription "that has not
+// yet been established" is buffered until the subscription lands, not
+// rejected with INVALID_JOINING_REQUEST_ID. The test pipelines the FETCH
+// BEFORE the SUBSCRIBE it references: on a fresh client session request IDs
+// are even from 0, so the FETCH takes ID 0 and the SUBSCRIBE takes ID 2 —
+// the FETCH's JoiningRequestID is 2, deterministically.
+func TestFetch_JoiningBuffersUntilSubscribeEstablished(t *testing.T) {
+	t.Parallel()
+	pubSess, _, publisherAlias := publishAndCache(t)
+
+	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, 3 /*count*/)
+	time.Sleep(50 * time.Millisecond)
+
+	fetchSess := dialAnotherClient(t, pubSess)
+
+	type fetchResult struct {
+		objs []decodedFetchObject
+		err  error
+	}
+	done := make(chan fetchResult, 1)
+	go func() {
+		reqStream, err := fetchSess.Fetch(t.Context(), &message.Fetch{
+			FetchType: message.FetchTypeRelativeJoining,
+			Joining: &message.JoiningFetch{
+				JoiningRequestID: 2, // the SUBSCRIBE below
+				JoiningStart:     0, // largest group itself
+			},
+			Parameters: message.Parameters{message.GroupOrderParam(message.GroupOrderAscending)},
+		})
+		if err != nil {
+			done <- fetchResult{err: err}
+			return
+		}
+		defer reqStream.Close()
+		ds, err := fetchSess.AcceptDataStream(t.Context())
+		if err != nil {
+			done <- fetchResult{err: err}
+			return
+		}
+		fs, isFetch := ds.(*session.IncomingFetchStream)
+		if !isFetch {
+			done <- fetchResult{err: errors.New("not a fetch stream")}
+			return
+		}
+		done <- fetchResult{objs: decodeFetchStream(t, fs, message.GroupOrderAscending)}
+	}()
+
+	// Let the FETCH reach the relay (and take request ID 0) first.
+	time.Sleep(100 * time.Millisecond)
+
+	subStream, err := fetchSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer subStream.Close()
+	go drainAllStreams(t.Context(), fetchSess)
+
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("pipelined joining FETCH failed: %v (buffering per §10.12.2 broken?)", res.err)
+		}
+		want := []decodedFetchObject{
+			{group: 0, object: 0, payload: []byte("A")},
+			{group: 0, object: 1, payload: []byte("B")},
+			{group: 0, object: 2, payload: []byte("C")},
+		}
+		if !reflect.DeepEqual(res.objs, want) {
+			t.Fatalf("objects = %+v, want %+v", res.objs, want)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("pipelined joining FETCH neither served nor rejected")
+	}
+}
+
 // TestFetch_WholeGroupEndForm pins the §10.12.1 "End Object 0 means the
 // entire group" wire form end to end: a mid-group start with End={G,0} is a
 // valid range (validation used to reject it as end < start), the FETCH_OK
