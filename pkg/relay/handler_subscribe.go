@@ -169,7 +169,10 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		}
 	}
 	properties := entry.GetProperties()
-	if err := req.Reply(&message.SubscribeOK{
+	// sub.WriteMessage, not req.Reply: the sub is registered, so a registry
+	// teardown goroutine could write PUBLISH_DONE concurrently — every write
+	// on this stream must go through the sub's write lock from here on.
+	if err := sub.WriteMessage(&message.SubscribeOK{
 		TrackAlias:      alias,
 		Parameters:      okParams,
 		TrackProperties: properties,
@@ -220,7 +223,7 @@ func (h *sessionHandler) readSubscribeUpdates(
 				return // EOF / reset / parse error — stream is gone.
 			}
 			if upd, ok := m.(*message.RequestUpdate); ok {
-				h.handleSubscribeUpdate(ctx, req, sub, fullName, upd)
+				h.handleSubscribeUpdate(ctx, sub, fullName, upd)
 			}
 		}
 	}()
@@ -242,7 +245,6 @@ func (h *sessionHandler) readSubscribeUpdates(
 // with PUBLISH_DONE / UPDATE_FAILED.
 func (h *sessionHandler) handleSubscribeUpdate(
 	ctx context.Context,
-	req *session.Request,
 	sub *registry.DownstreamSub,
 	fullName track.FullTrackName,
 	upd *message.RequestUpdate,
@@ -253,8 +255,9 @@ func (h *sessionHandler) handleSubscribeUpdate(
 			slog.String("err", err.Error()))
 		// §10.9: a failed subscription update is answered with
 		// REQUEST_ERROR and the publisher MUST also terminate the
-		// subscription with PUBLISH_DONE / UPDATE_FAILED.
-		_ = req.Reply(&message.RequestError{
+		// subscription with PUBLISH_DONE / UPDATE_FAILED. Writes go
+		// through the sub's lock — see [registry.DownstreamSub.WriteMessage].
+		_ = sub.WriteMessage(&message.RequestError{
 			ErrorCode:   moqt.RequestMalformedTrack,
 			ErrorReason: err.Error(),
 		})
@@ -262,7 +265,7 @@ func (h *sessionHandler) handleSubscribeUpdate(
 		return
 	}
 
-	if err := req.Reply(&message.RequestOK{}); err != nil {
+	if err := sub.WriteMessage(&message.RequestOK{}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE_OK write failed",
 			slog.String("err", err.Error()))
 		return

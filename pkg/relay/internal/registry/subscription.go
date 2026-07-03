@@ -453,6 +453,16 @@ func (u *UpstreamSub) GetFilter() *message.SubscriptionFilter {
 type DownstreamSub struct {
 	Subscription
 
+	// writeMu serializes control-message writes on Stream.
+	// session.Stream does not serialize concurrent writers and one
+	// Marshal is multiple stream Writes, but two goroutines legitimately
+	// write here: the subscriber's request handler (SUBSCRIBE_OK,
+	// REQUEST_OK / REQUEST_ERROR replies — via WriteMessage) and registry
+	// teardown goroutines (PUBLISH_DONE via TerminateWithPublishDone,
+	// triggered by a *publisher* leaving). Same rationale as
+	// SubscriberEntry's writeMu.
+	writeMu sync.Mutex
+
 	// Filter is the §5.1.2 filter the subscriber declared. The fanout
 	// consults it on every object to decide whether to forward. nil
 	// means "no filter installed" — the relay treats the subscription
@@ -725,6 +735,8 @@ func (d *DownstreamSub) TerminateWithPublishDone(code moqt.PublishDoneCode, reas
 	if d.Stream == nil {
 		return
 	}
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
 	_ = message.Marshal(d.Stream, &message.PublishDone{
 		StatusCode:  code,
 		StreamCount: streamCount,
@@ -732,3 +744,26 @@ func (d *DownstreamSub) TerminateWithPublishDone(code moqt.PublishDoneCode, reas
 	})
 	_ = d.Stream.Close()
 }
+
+// WriteMessage marshals a control message onto the downstream request stream
+// under the same lock TerminateWithPublishDone uses. Every relay write on
+// this stream after the DownstreamSub is registered must go through here —
+// registration makes the sub reachable by registry teardown goroutines, so
+// even the SUBSCRIBE_OK reply can otherwise interleave with a PUBLISH_DONE.
+//
+// A write after termination fails with ErrSubscriptionTerminated on every
+// transport: PUBLISH_DONE + FIN already went out under this same lock, so
+// the message could only land after the FIN (real QUIC rejects that; the
+// in-process test transport would silently deliver it).
+func (d *DownstreamSub) WriteMessage(msg message.Message) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	if d.IsTerminated() {
+		return ErrSubscriptionTerminated
+	}
+	return message.Marshal(d.Stream, msg)
+}
+
+// ErrSubscriptionTerminated is returned by [DownstreamSub.WriteMessage] when
+// the subscription was already ended with PUBLISH_DONE (its stream is FIN'd).
+var ErrSubscriptionTerminated = errors.New("registry: subscription terminated")
