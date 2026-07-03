@@ -60,3 +60,9 @@ func (m *SubscribeOK) Parse(r *wire.Reader) error {
 	m.TrackProperties = r.RemainingBytes()
 	return nil
 }
+
+// Validate enforces the §2.4.1 Full Track Name size limit; ParsePayload
+// invokes it automatically after decoding a SUBSCRIBE frame.
+func (m *Subscribe) Validate() error {
+	return validateFullTrackName(m.Namespace, m.Name)
+}

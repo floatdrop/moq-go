@@ -46,3 +46,9 @@ func (m *TrackStatus) Parse(r *wire.Reader) error {
 // Use RequestOK directly when sending; TrackStatusOK is a convenience alias
 // that wraps RequestOK for clarity at call sites.
 type TrackStatusOK = RequestOK
+
+// Validate enforces the §2.4.1 Full Track Name size limit; ParsePayload
+// invokes it automatically after decoding a TRACK_STATUS frame.
+func (m *TrackStatus) Validate() error {
+	return validateFullTrackName(m.Namespace, m.Name)
+}

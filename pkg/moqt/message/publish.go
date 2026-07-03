@@ -71,3 +71,9 @@ func (m *PublishDone) Parse(r *wire.Reader) error {
 	m.StatusCode = moqt.PublishDoneCode(code)
 	return nil
 }
+
+// Validate enforces the §2.4.1 Full Track Name size limit; ParsePayload
+// invokes it automatically after decoding a PUBLISH frame.
+func (m *Publish) Validate() error {
+	return validateFullTrackName(m.Namespace, m.Name)
+}

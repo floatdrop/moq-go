@@ -39,6 +39,7 @@ func (r *Reader) TrackNamespace() (TrackNamespace, error) {
 		return nil, fmt.Errorf("moqt/wire: track namespace has %d fields, max %d", count, MaxTrackNamespaceFields)
 	}
 	ns := make(TrackNamespace, 0, count)
+	total := 0
 	for i := range count {
 		field, err := r.VarintBytes()
 		if err != nil {
@@ -46,6 +47,16 @@ func (r *Reader) TrackNamespace() (TrackNamespace, error) {
 		}
 		if len(field) == 0 {
 			return nil, fmt.Errorf("moqt/wire: track namespace field %d has zero length", i)
+		}
+		// §2.4.1: "If an endpoint receives a Track Namespace or a Full
+		// Track Name exceeding 4,096 bytes, it MUST close the session with
+		// a PROTOCOL_VIOLATION." The namespace-only half is enforced here,
+		// at the single parse point every message shares; messages that
+		// also carry a Track Name check the combined length in Validate.
+		total += len(field)
+		if total > MaxFullTrackNameBytes {
+			return nil, fmt.Errorf(
+				"moqt/wire: track namespace exceeds %d bytes (§2.4.1)", MaxFullTrackNameBytes)
 		}
 		ns = append(ns, field)
 	}

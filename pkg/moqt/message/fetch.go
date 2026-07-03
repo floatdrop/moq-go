@@ -97,6 +97,19 @@ func (m *Fetch) Type() Type             { return TypeFetch }
 func (m *Fetch) GetRequestID() uint64   { return m.RequestID }
 func (m *Fetch) SetRequestID(id uint64) { m.RequestID = id }
 
+// validateFullTrackName enforces §2.4.1: "If an endpoint receives a Track
+// Namespace or a Full Track Name exceeding 4,096 bytes, it MUST close the
+// session with a PROTOCOL_VIOLATION." The namespace-only half is already
+// enforced at parse time by wire.Reader.TrackNamespace; this adds the Track
+// Name's length for messages that carry a full name.
+func validateFullTrackName(ns wire.TrackNamespace, name []byte) error {
+	if total := ns.ByteLen() + len(name); total > wire.MaxFullTrackNameBytes {
+		return fmt.Errorf("moqt/message: full track name is %d bytes, max %d (§2.4.1)",
+			total, wire.MaxFullTrackNameBytes)
+	}
+	return nil
+}
+
 // FetchEndBeforeStart reports whether a standalone-FETCH range violates the
 // §10.12 rule "End Location MUST specify the same or a larger Location than
 // Start Location", interpreting the wire encoding: End is the last Object
@@ -117,6 +130,9 @@ func (m *Fetch) Validate() error {
 	case FetchTypeStandalone:
 		if m.Standalone == nil {
 			return errors.New("moqt/message: standalone FETCH missing range")
+		}
+		if err := validateFullTrackName(m.Standalone.Namespace, m.Standalone.Name); err != nil {
+			return err
 		}
 		if FetchEndBeforeStart(m.Standalone.StartLocation, m.Standalone.EndLocation) {
 			return fmt.Errorf(
