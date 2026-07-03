@@ -16,25 +16,14 @@ import (
 // [Session.AcceptDataStream], not on the embedded stream. It is returned by
 // [Session.Fetch].
 type FetchRequest struct {
-	// Stream is the FETCH request stream, still open for REQUEST_UPDATE
-	// follow-ups. Close it to cancel the fetch.
-	Stream
+	// requestHandle carries the FETCH request stream — still open for
+	// REQUEST_UPDATE follow-ups (Close it to cancel the fetch) — and
+	// provides Update.
+	requestHandle
 
 	// OK is the parsed FETCH_OK response — EndOfTrack, EndLocation,
 	// negotiated Parameters, and TrackProperties.
 	OK *message.FetchOK
-
-	s         *Session
-	requestID uint64
-}
-
-// Update sends a REQUEST_UPDATE (§10.9) on the fetch stream and awaits the
-// single REQUEST_OK / REQUEST_ERROR the spec mandates. params carries only the
-// fields to change; any parameter omitted keeps its prior value on the peer.
-// It is [Session.UpdateRequest] with this fetch's stream and Request ID filled
-// in.
-func (f *FetchRequest) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
-	return f.s.UpdateRequest(ctx, f.Stream, f.requestID, params)
 }
 
 // Fetch opens a FETCH request stream (§10.12) and awaits FETCH_OK or
@@ -56,7 +45,10 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 				_ = stream.Close()
 				return nil, err
 			}
-			return &FetchRequest{Stream: stream, OK: ok, s: s, requestID: m.RequestID}, nil
+			return &FetchRequest{
+				requestHandle: requestHandle{Stream: stream, s: s, requestID: m.RequestID},
+				OK:            ok,
+			}, nil
 		})
 }
 

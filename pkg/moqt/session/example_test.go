@@ -302,15 +302,14 @@ func ExampleIncomingFetchStream() {
 // and Request ID; [Session.UpdateRequest] is the lower-level form for when you
 // hold those yourself.
 func ExampleSession_UpdateRequest() {
-	var sub *session.Subscription // from sess.Subscribe
-	ctx := context.Background()
-
-	_, err := sub.Update(ctx, message.Parameters{
-		message.SubscriberPriorityParam(10), // lower = higher priority
-	})
-	if err != nil {
-		return // *session.RequestRejectedError on REQUEST_ERROR
+	// raisePriority takes the live Subscription returned by sess.Subscribe.
+	raisePriority := func(ctx context.Context, sub *session.Subscription) error {
+		_, err := sub.Update(ctx, message.Parameters{
+			message.SubscriberPriorityParam(10), // lower = higher priority
+		})
+		return err // *session.RequestRejectedError on REQUEST_ERROR
 	}
+	_ = raisePriority
 }
 
 // Ending a publication (§10.11): Publication.Done writes PUBLISH_DONE on the

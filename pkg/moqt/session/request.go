@@ -195,14 +195,33 @@ func resetStream(s Stream) {
 	s.CancelWrite(uint64(moqt.StreamResetInternalError))
 }
 
-// rejectStreamWithError writes a REQUEST_ERROR onto a bidi request stream and
-// tears it down, mirroring [Request.RejectError] for the pre-Request path in
-// AcceptRequest where no *Request value exists yet. Write/close failures are
-// ignored: the stream is being abandoned regardless.
+// rejectStreamWithError applies [Request.RejectError]'s teardown on the
+// pre-Request path in AcceptRequest, where no *Request value exists yet.
+// Write/close failures are ignored: the stream is being abandoned regardless.
 func rejectStreamWithError(stream Stream, code moqt.RequestErrorCode, reason string) {
-	_ = message.Marshal(stream, &message.RequestError{ErrorCode: code, ErrorReason: reason})
-	stream.CancelRead(uint64(moqt.StreamResetInternalError))
-	_ = stream.Close()
+	_ = (&Request{Stream: stream}).RejectError(code, reason)
+}
+
+// requestHandle is the state every requester-side typed handle embeds: the
+// still-open bidi request stream (close it to end the request), the owning
+// session, and the §10.1 Request ID that follow-up REQUEST_UPDATEs must
+// reuse. Embedding it provides the shared Update method.
+type requestHandle struct {
+	// Stream is the request stream, still open for follow-up traffic.
+	// Close it to end the request.
+	Stream
+
+	s         *Session
+	requestID uint64
+}
+
+// Update sends a REQUEST_UPDATE (§10.9) on the request stream and awaits the
+// single REQUEST_OK / REQUEST_ERROR the spec mandates. params carries only
+// the fields to change; any parameter omitted keeps its prior value on the
+// peer. It is [Session.UpdateRequest] with this request's stream and Request
+// ID filled in.
+func (h *requestHandle) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
+	return h.s.UpdateRequest(ctx, h.Stream, h.requestID, params)
 }
 
 // openRequest opens a new outbound bidirectional stream and writes first as
@@ -437,5 +456,8 @@ func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
 		return nil, fmt.Errorf("moqt/session: write PUBLISH REQUEST_OK: %w", err)
 	}
-	return &IncomingPublication{Stream: r.Stream, s: r.s, alias: pub.TrackAlias, requestID: pub.RequestID}, nil
+	return &IncomingPublication{
+		requestHandle: requestHandle{Stream: r.Stream, s: r.s, requestID: pub.RequestID},
+		alias:         pub.TrackAlias,
+	}, nil
 }

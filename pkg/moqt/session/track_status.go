@@ -14,24 +14,13 @@ import (
 // separately. It carries the peer's TRACK_STATUS_OK and is returned by
 // [Session.TrackStatus].
 type TrackStatusRequest struct {
-	// Stream is the TRACK_STATUS request stream, still open for REQUEST_UPDATE
-	// follow-ups. Close it to end the request.
-	Stream
+	// requestHandle carries the TRACK_STATUS request stream — still open
+	// for REQUEST_UPDATE follow-ups (Close it to end the request) — and
+	// provides Update.
+	requestHandle
 
 	// OK is the TRACK_STATUS_OK the peer replied with.
 	OK *message.TrackStatusOK
-
-	s         *Session
-	requestID uint64
-}
-
-// Update sends a REQUEST_UPDATE (§10.9) on the track-status stream and awaits
-// the single REQUEST_OK / REQUEST_ERROR the spec mandates. params carries only
-// the fields to change; any parameter omitted keeps its prior value on the peer.
-// It is [Session.UpdateRequest] with this request's stream and Request ID filled
-// in.
-func (t *TrackStatusRequest) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
-	return t.s.UpdateRequest(ctx, t.Stream, t.requestID, params)
 }
 
 // AcceptTrackStatus accepts an inbound TRACK_STATUS (§10.14) and replies
@@ -74,6 +63,9 @@ func (s *Session) TrackStatus(ctx context.Context, m *message.TrackStatus) (*Tra
 				_ = stream.Close()
 				return nil, err
 			}
-			return &TrackStatusRequest{Stream: stream, OK: ok, s: s, requestID: m.RequestID}, nil
+			return &TrackStatusRequest{
+				requestHandle: requestHandle{Stream: stream, s: s, requestID: m.RequestID},
+				OK:            ok,
+			}, nil
 		})
 }

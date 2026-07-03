@@ -14,17 +14,14 @@ import (
 // [Subscription.Update] without holding them separately. It is returned by
 // [Session.Subscribe].
 type Subscription struct {
-	// Stream is the SUBSCRIBE request stream, still open for follow-up
-	// traffic: REQUEST_UPDATE and inbound PUBLISH_DONE. Close it to end the
-	// subscription.
-	Stream
+	// requestHandle carries the SUBSCRIBE request stream — still open for
+	// follow-up traffic (REQUEST_UPDATE and inbound PUBLISH_DONE; Close it
+	// to end the subscription) — and provides Update.
+	requestHandle
 
 	// OK is the parsed SUBSCRIBE_OK response — the publisher-assigned Track
 	// Alias, negotiated Parameters, and TrackProperties.
 	OK *message.SubscribeOK
-
-	s         *Session
-	requestID uint64
 }
 
 // TrackAlias reports the §11.1 Track Alias the publisher assigned to this
@@ -32,15 +29,6 @@ type Subscription struct {
 // identify the track (see [Session.AcceptDataStream]). It is shorthand for
 // sub.OK.TrackAlias.
 func (sub *Subscription) TrackAlias() uint64 { return sub.OK.TrackAlias }
-
-// Update sends a REQUEST_UPDATE (§10.9) on the subscription stream and awaits
-// the single REQUEST_OK / REQUEST_ERROR the spec mandates. params carries only
-// the fields to change; any parameter omitted keeps its prior value on the
-// peer. It is [Session.UpdateRequest] with this subscription's stream and
-// Request ID filled in.
-func (sub *Subscription) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
-	return sub.s.UpdateRequest(ctx, sub.Stream, sub.requestID, params)
-}
 
 // Subscribe opens a SUBSCRIBE request stream (§10.7) and awaits SUBSCRIBE_OK.
 // The session assigns m.RequestID; the caller supplies the rest. On success a
@@ -64,6 +52,9 @@ func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscri
 				_ = stream.Close()
 				return nil, err
 			}
-			return &Subscription{Stream: stream, OK: ok, s: s, requestID: m.RequestID}, nil
+			return &Subscription{
+				requestHandle: requestHandle{Stream: stream, s: s, requestID: m.RequestID},
+				OK:            ok,
+			}, nil
 		})
 }
