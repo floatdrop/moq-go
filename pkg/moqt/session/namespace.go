@@ -139,19 +139,29 @@ func (t *IncomingTrackSubscription) WritePublishBlocked(pb *message.PublishBlock
 	return message.Marshal(t.Stream, pb)
 }
 
+// acceptNamespaceRequest is the shared accept path of the three namespace
+// requests (§10.15 / §10.18 / §10.19): assert the request's first message is
+// of type M, reply the all-default REQUEST_OK, and hand the still-open
+// stream to wrap. op names the caller for error messages.
+func acceptNamespaceRequest[M message.Message, T any](r *Request, op string, wrap func(Stream) T) (T, error) {
+	var zero T
+	if _, ok := r.First.(M); !ok {
+		return zero, fmt.Errorf("moqt/session: %s on a %s request", op, r.First.Type())
+	}
+	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
+		return zero, fmt.Errorf("moqt/session: %s: write REQUEST_OK: %w", op, err)
+	}
+	return wrap(r.Stream), nil
+}
+
 // AcceptPublishNamespace accepts an inbound PUBLISH_NAMESPACE (§10.15), replies
 // REQUEST_OK, and returns an [IncomingNamespacePublication] for receiving the
 // announcer's NAMESPACE / NAMESPACE_DONE follow-ups — the accept-side
 // counterpart of [Session.PublishNamespace]. r.First MUST be a
 // *message.PublishNamespace.
 func (r *Request) AcceptPublishNamespace() (*IncomingNamespacePublication, error) {
-	if _, ok := r.First.(*message.PublishNamespace); !ok {
-		return nil, fmt.Errorf("moqt/session: AcceptPublishNamespace on a %s request", r.First.Type())
-	}
-	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
-		return nil, fmt.Errorf("moqt/session: write PUBLISH_NAMESPACE REQUEST_OK: %w", err)
-	}
-	return &IncomingNamespacePublication{Stream: r.Stream}, nil
+	return acceptNamespaceRequest[*message.PublishNamespace](r, "AcceptPublishNamespace",
+		func(s Stream) *IncomingNamespacePublication { return &IncomingNamespacePublication{Stream: s} })
 }
 
 // AcceptSubscribeNamespace accepts an inbound SUBSCRIBE_NAMESPACE (§10.18),
@@ -160,13 +170,8 @@ func (r *Request) AcceptPublishNamespace() (*IncomingNamespacePublication, error
 // accept-side counterpart of [Session.SubscribeNamespace]. r.First MUST be a
 // *message.SubscribeNamespace.
 func (r *Request) AcceptSubscribeNamespace() (*IncomingNamespaceSubscription, error) {
-	if _, ok := r.First.(*message.SubscribeNamespace); !ok {
-		return nil, fmt.Errorf("moqt/session: AcceptSubscribeNamespace on a %s request", r.First.Type())
-	}
-	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
-		return nil, fmt.Errorf("moqt/session: write SUBSCRIBE_NAMESPACE REQUEST_OK: %w", err)
-	}
-	return &IncomingNamespaceSubscription{Stream: r.Stream}, nil
+	return acceptNamespaceRequest[*message.SubscribeNamespace](r, "AcceptSubscribeNamespace",
+		func(s Stream) *IncomingNamespaceSubscription { return &IncomingNamespaceSubscription{Stream: s} })
 }
 
 // AcceptSubscribeTracks accepts an inbound SUBSCRIBE_TRACKS (§10.19), replies
@@ -174,13 +179,8 @@ func (r *Request) AcceptSubscribeNamespace() (*IncomingNamespaceSubscription, er
 // PUBLISHes and sending PUBLISH_BLOCKED follow-ups — the accept-side counterpart
 // of [Session.SubscribeTracks]. r.First MUST be a *message.SubscribeTracks.
 func (r *Request) AcceptSubscribeTracks() (*IncomingTrackSubscription, error) {
-	if _, ok := r.First.(*message.SubscribeTracks); !ok {
-		return nil, fmt.Errorf("moqt/session: AcceptSubscribeTracks on a %s request", r.First.Type())
-	}
-	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
-		return nil, fmt.Errorf("moqt/session: write SUBSCRIBE_TRACKS REQUEST_OK: %w", err)
-	}
-	return &IncomingTrackSubscription{Stream: r.Stream}, nil
+	return acceptNamespaceRequest[*message.SubscribeTracks](r, "AcceptSubscribeTracks",
+		func(s Stream) *IncomingTrackSubscription { return &IncomingTrackSubscription{Stream: s} })
 }
 
 // ReadPublishBlocked reads the next follow-up message on this SUBSCRIBE_TRACKS
