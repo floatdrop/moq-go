@@ -103,10 +103,10 @@ func TestAppendTrackPropertiesEmpty(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// HasMandatoryUnknownTrackProperty
+// FirstUnknownMandatoryTrackProperty
 // ---------------------------------------------------------------------------
 
-func TestHasMandatoryUnknownTrackProperty(t *testing.T) {
+func TestFirstUnknownMandatoryTrackProperty(t *testing.T) {
 	mandatoryType := PropertyType(0x5000)
 	knownType := PropertyType(0x6000)
 
@@ -168,9 +168,12 @@ func TestHasMandatoryUnknownTrackProperty(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := HasMandatoryUnknownTrackProperty(tt.pairs, tt.knownTypes)
+			typ, got := FirstUnknownMandatoryTrackProperty(tt.pairs, tt.knownTypes)
 			if got != tt.expected {
-				t.Errorf("HasMandatoryUnknownTrackProperty() = %v, want %v", got, tt.expected)
+				t.Errorf("FirstUnknownMandatoryTrackProperty() = %v, want %v", got, tt.expected)
+			}
+			if got && !IsMandatoryTrackProperty(typ) {
+				t.Errorf("returned type %#x is not in the mandatory range", typ)
 			}
 		})
 	}

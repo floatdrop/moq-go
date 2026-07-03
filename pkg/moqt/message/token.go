@@ -63,12 +63,6 @@ type Token struct {
 	TokenValue []byte // present for REGISTER, USE_VALUE
 }
 
-// TokenSize returns the cache size contribution of this token per §10.3.1.3:
-// 16 bytes overhead + len(TokenValue). Only meaningful for REGISTER tokens.
-func (t *Token) TokenSize() uint64 {
-	return 16 + uint64(len(t.TokenValue))
-}
-
 // Append serialises t into w. The caller is responsible for the outer
 // KindBytes length prefix (handled by params.go via VarintBytes).
 func (t *Token) Append(w *wire.Writer) {

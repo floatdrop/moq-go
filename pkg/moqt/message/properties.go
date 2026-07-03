@@ -97,23 +97,25 @@ func AppendTrackProperties(pairs []wire.KVPair) []byte {
 	return w.Bytes()
 }
 
-// HasMandatoryUnknownTrackProperty reports whether pairs contains any Mandatory
-// Track Property (range 0x4000–0x7FFF) that the caller does not recognise.
-// knownTypes is the set of Mandatory Track Property types the caller supports.
-// If knownTypes is nil, all mandatory properties are treated as unknown.
+// FirstUnknownMandatoryTrackProperty returns the first Mandatory Track
+// Property (range 0x4000–0x7FFF) in pairs whose type is not in knownTypes,
+// and whether one was found — the offending type is what callers need to
+// build their rejection error. A nil knownTypes treats every mandatory
+// property as unknown.
 //
-// Per §2.5.1, an endpoint that receives Track Properties containing an unknown
-// Mandatory Track Property MUST NOT process or forward that track.
-func HasMandatoryUnknownTrackProperty(pairs []wire.KVPair, knownTypes map[PropertyType]struct{}) bool {
+// Per §2.5.1, an endpoint that receives Track Properties containing an
+// unknown Mandatory Track Property MUST NOT process or forward that track.
+func FirstUnknownMandatoryTrackProperty(
+	pairs []wire.KVPair,
+	knownTypes map[PropertyType]struct{},
+) (PropertyType, bool) {
 	for _, kv := range pairs {
-		if IsMandatoryTrackProperty(kv.Type) {
-			if knownTypes == nil {
-				return true
-			}
-			if _, known := knownTypes[kv.Type]; !known {
-				return true
-			}
+		if !IsMandatoryTrackProperty(kv.Type) {
+			continue
+		}
+		if _, known := knownTypes[kv.Type]; !known {
+			return kv.Type, true
 		}
 	}
-	return false
+	return 0, false
 }

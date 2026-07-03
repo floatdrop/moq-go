@@ -52,14 +52,10 @@ func ValidateTrackProperties(
 	if err != nil {
 		return nil, fmt.Errorf("moqt/session: parsing track properties in %s: %w", context, err)
 	}
-	for _, kv := range pairs {
-		if message.IsMandatoryTrackProperty(kv.Type) {
-			if _, known := knownMandatory[kv.Type]; !known {
-				return nil, &ErrUnsupportedMandatoryTrackProperty{
-					PropertyType: kv.Type,
-					Context:      context,
-				}
-			}
+	if typ, unknown := message.FirstUnknownMandatoryTrackProperty(pairs, knownMandatory); unknown {
+		return nil, &ErrUnsupportedMandatoryTrackProperty{
+			PropertyType: typ,
+			Context:      context,
 		}
 	}
 	return pairs, nil

@@ -136,27 +136,6 @@ func TestTokenParseUnknownAliasType(t *testing.T) {
 // TokenSize
 // ---------------------------------------------------------------------------
 
-func TestTokenSize(t *testing.T) {
-	tok := Token{
-		AliasType:  AliasTypeRegister,
-		TokenAlias: 1,
-		TokenType:  0,
-		TokenValue: []byte("hello"), // 5 bytes
-	}
-	// Per §10.3.1.3: size = 16 + len(TokenValue)
-	want := uint64(16 + 5)
-	if got := tok.TokenSize(); got != want {
-		t.Errorf("TokenSize() = %d, want %d", got, want)
-	}
-}
-
-func TestTokenSizeEmptyValue(t *testing.T) {
-	tok := Token{AliasType: AliasTypeRegister}
-	if got := tok.TokenSize(); got != 16 {
-		t.Errorf("TokenSize() = %d, want 16", got)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // AuthorizationTokenParam / TokensFromParam
 // ---------------------------------------------------------------------------
