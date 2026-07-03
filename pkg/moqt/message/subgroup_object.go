@@ -136,37 +136,3 @@ func (o *SubgroupObject) IsEndOfTrack() bool {
 func (o *SubgroupObject) IsTerminal() bool {
 	return o.IsEndOfGroup() || o.IsEndOfTrack()
 }
-
-// IsNormalObject reports whether this is a normal object with payload.
-func (o *SubgroupObject) IsNormalObject() bool {
-	return len(o.Payload) > 0
-}
-
-// NewSubgroupObject creates a new SubgroupObject with default values.
-func NewSubgroupObject() *SubgroupObject {
-	return &SubgroupObject{}
-}
-
-// WithObjectIDDelta sets the Object ID Delta value.
-func (o *SubgroupObject) WithObjectIDDelta(delta uint64) *SubgroupObject {
-	o.ObjectIDDelta = delta
-	return o
-}
-
-// WithProperties sets the Properties value.
-func (o *SubgroupObject) WithProperties(props []byte) *SubgroupObject {
-	o.Properties = props
-	return o
-}
-
-// WithPayload sets the object payload.
-func (o *SubgroupObject) WithPayload(payload []byte) *SubgroupObject {
-	o.Payload = payload
-	return o
-}
-
-// WithStatus sets the object status (for status-only objects).
-func (o *SubgroupObject) WithStatus(status uint64) *SubgroupObject {
-	o.ObjectStatus = status
-	return o
-}

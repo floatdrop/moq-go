@@ -2,30 +2,11 @@ package message
 
 import "testing"
 
-func TestIsGrease(t *testing.T) {
-	tests := []struct {
-		name string
-		v    uint64
-		want bool
-	}{
-		{"first value 0x9D", 0x9D, true},
-		{"second value 0x11C", 0x11C, true},
-		{"third value 0x19B", 0x19B, true},
-		{"zero", 0, false},
-		{"one", 1, false},
-		{"0x9C (one below first)", 0x9C, false},
-		{"0x9E (one above first)", 0x9E, false},
-		{"0x100 (between first and second)", 0x100, false},
-		{"large valid N=1000", greaseBase + greaseStep*1000, true},
-		{"max valid", greaseBase + greaseStep*maxGreaseN, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsGrease(tt.v); got != tt.want {
-				t.Errorf("IsGrease(%#x) = %v, want %v", tt.v, got, tt.want)
-			}
-		})
-	}
+// isGreasePattern is the test-local check that v matches the GREASE
+// pattern 0x7F * N + 0x9D (the production IsGrease helper was removed as
+// dead code; the generator invariant is still pinned here).
+func isGreasePattern(v uint64) bool {
+	return v >= greaseBase && (v-greaseBase)%greaseStep == 0
 }
 
 func TestGreaseValue(t *testing.T) {
@@ -33,7 +14,7 @@ func TestGreaseValue(t *testing.T) {
 	seen := make(map[uint64]bool)
 	for range 100 {
 		v := GreaseValue()
-		if !IsGrease(v) {
+		if !isGreasePattern(v) {
 			t.Fatalf("GreaseValue() = %#x, which is not a GREASE value", v)
 		}
 		seen[v] = true
@@ -47,7 +28,7 @@ func TestGreaseValue(t *testing.T) {
 func TestGreaseSetupOption(t *testing.T) {
 	for range 50 {
 		kv := GreaseSetupOption()
-		if !IsGrease(kv.Type) {
+		if !isGreasePattern(kv.Type) {
 			t.Fatalf("GreaseSetupOption().Type = %#x, not a GREASE value", kv.Type)
 		}
 		if kv.IsBytes() {

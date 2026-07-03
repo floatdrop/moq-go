@@ -55,9 +55,6 @@ func (s *Scanner) Varint(dst *uint64) { scan(s, dst, s.r.Varint) }
 // UInt8 reads a single byte into dst.
 func (s *Scanner) UInt8(dst *uint8) { scan(s, dst, s.r.UInt8) }
 
-// UInt16 reads a big-endian uint16 into dst.
-func (s *Scanner) UInt16(dst *uint16) { scan(s, dst, s.r.UInt16) }
-
 // VarintBytes reads a varint-length-prefixed byte slice into dst.
 func (s *Scanner) VarintBytes(dst *[]byte) { scan(s, dst, s.r.VarintBytes) }
 
@@ -69,31 +66,3 @@ func (s *Scanner) TrackNamespace(dst *TrackNamespace) { scan(s, dst, s.r.TrackNa
 
 // KVPairsRemaining reads delta-encoded KV pairs to end-of-buffer into dst.
 func (s *Scanner) KVPairsRemaining(dst *[]KVPair) { scan(s, dst, s.r.KVPairsRemaining) }
-
-// FixedBytes reads exactly n bytes into dst.
-func (s *Scanner) FixedBytes(n int, dst *[]byte) {
-	scan(s, dst, func() ([]byte, error) { return s.r.FixedBytes(n) })
-}
-
-// KVPairsBounded reads KV pairs from the next byteLen bytes into dst.
-func (s *Scanner) KVPairsBounded(byteLen int, dst *[]KVPair) {
-	scan(s, dst, func() ([]KVPair, error) { return s.r.KVPairsBounded(byteLen) })
-}
-
-// RemainingBytes consumes the rest of the buffer into dst. No error is possible,
-// but the read is still skipped when an error is already pending.
-func (s *Scanner) RemainingBytes(dst *[]byte) {
-	if s.err != nil {
-		return
-	}
-	*dst = s.r.RemainingBytes()
-}
-
-// Skip advances the read offset by n bytes, recording a short-buffer error if
-// fewer than n bytes remain.
-func (s *Scanner) Skip(n int) {
-	if s.err != nil {
-		return
-	}
-	s.err = s.r.Skip(n)
-}

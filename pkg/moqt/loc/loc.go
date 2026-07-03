@@ -23,12 +23,12 @@
 //     assigns a final value.
 //
 // VIDEO_FRAME_MARKING uses 0x04, which is also the Track-scoped
-// PropertyMaxCacheDuration in [github.com/floatdrop/moq-go/pkg/moqt/message].
-// On the wire that is fine — Track Properties and Object Properties
-// live in different syntactic positions in MOQ messages — but callers
-// MUST NOT pass LOC-produced Object Properties through
-// [message.ObjectProperties.ValidateObjectScope]: that helper checks
-// IDs against the MoQ Transport property registry and will incorrectly
+// PropertyMaxCacheDuration in [github.com/floatdrop/moq-go/pkg/moqt/message]
+// (and TIMESTAMP 0x06 likewise collides with the Track-scoped
+// PropertySubgroupDeliveryTimeout). On the wire that is fine — Track
+// Properties and Object Properties live in different syntactic positions
+// in MOQ messages — but any validation of LOC-produced Object Properties
+// against the MoQ Transport TRACK property registry would incorrectly
 // reject LOC's Object-scoped redefinitions.
 //
 // # End-to-end encryption

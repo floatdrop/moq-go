@@ -76,7 +76,7 @@ func TestSubgroupObject_AppendAndParse(t *testing.T) {
 
 			// Parse back
 			r := wire.NewReader(w.Bytes())
-			parsed := NewSubgroupObject()
+			parsed := &SubgroupObject{}
 			err := parsed.Parse(r, tt.hasProperties)
 
 			if (err != nil) != tt.wantErr {
@@ -212,31 +212,10 @@ func TestSubgroupObject_HelperMethods(t *testing.T) {
 			if got := tt.object.IsEndOfTrack(); got != tt.wantEndOfTrack {
 				t.Errorf("IsEndOfTrack() = %v, want %v", got, tt.wantEndOfTrack)
 			}
-			if got := tt.object.IsNormalObject(); got != tt.wantNormal {
+			if got := len(tt.object.Payload) > 0; got != tt.wantNormal {
 				t.Errorf("IsNormalObject() = %v, want %v", got, tt.wantNormal)
 			}
 		})
-	}
-}
-
-func TestSubgroupObject_BuilderMethods(t *testing.T) {
-	obj := NewSubgroupObject().
-		WithObjectIDDelta(42).
-		WithProperties([]byte("props")).
-		WithPayload([]byte("payload")).
-		WithStatus(0x3)
-
-	if obj.ObjectIDDelta != 42 {
-		t.Errorf("ObjectIDDelta = %v, want 42", obj.ObjectIDDelta)
-	}
-	if !bytes.Equal(obj.Properties, []byte("props")) {
-		t.Errorf("Properties = %v, want 'props'", obj.Properties)
-	}
-	if !bytes.Equal(obj.Payload, []byte("payload")) {
-		t.Errorf("Payload = %v, want 'payload'", obj.Payload)
-	}
-	if obj.ObjectStatus != 0x3 {
-		t.Errorf("ObjectStatus = %v, want 0x3", obj.ObjectStatus)
 	}
 }
 
@@ -282,7 +261,7 @@ func TestSubgroupObject_ParseErrors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := wire.NewReader(tt.data)
-			obj := NewSubgroupObject()
+			obj := &SubgroupObject{}
 			err := obj.Parse(r, tt.hasProperties)
 
 			if err == nil {

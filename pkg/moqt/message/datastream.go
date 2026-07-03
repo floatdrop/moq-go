@@ -62,14 +62,3 @@ func ReadDataStreamType(r io.Reader) (uint64, error) {
 // PaddingStreamType is the leading Type varint of a padding uni-stream
 // (§11.6). Receivers MUST silently discard padding streams.
 const PaddingStreamType uint64 = 0x132B3E28
-
-// ReadTrackAlias reads a Track Alias varint from r. Intended for use after
-// ReadDataStreamType when the dispatcher has committed to a header parser
-// that begins with Track Alias (currently just SUBGROUP_HEADER).
-func ReadTrackAlias(r io.Reader) (uint64, error) {
-	alias, err := wire.ReadVarint(wire.NewByteReader(r))
-	if err != nil {
-		return 0, fmt.Errorf("moqt/message: read Track Alias: %w", err)
-	}
-	return alias, nil
-}

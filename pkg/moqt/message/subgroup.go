@@ -121,8 +121,8 @@ func (h SubgroupHeader) Type() uint64 {
 func (h SubgroupHeader) RawType() uint64 { return h.Type() }
 
 // DecodeSubgroupHeaderType parses a wire Type byte (§11.4.2) into the
-// flag fields of a SubgroupHeader. TrackAlias is left zero — the caller
-// fills it from a subsequent ReadTrackAlias. Returns an error if t is
+// flag fields of a SubgroupHeader. TrackAlias is left zero — the header
+// parser reads it from the following varint. Returns an error if t is
 // not a valid SUBGROUP_HEADER Type (i.e. IsSubgroupHeaderType(t) is
 // false).
 func DecodeSubgroupHeaderType(t uint64) (SubgroupHeader, error) {

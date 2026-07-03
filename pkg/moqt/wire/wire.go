@@ -13,7 +13,6 @@
 package wire
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -56,21 +55,6 @@ func (r *Reader) Remaining() int { return len(r.buf) - r.off }
 // Empty reports whether the reader has consumed all bytes.
 func (r *Reader) Empty() bool { return r.off >= len(r.buf) }
 
-// Tail returns the unconsumed bytes without advancing. The returned slice
-// aliases the underlying buffer and is valid only until the next Reader
-// operation; callers that retain bytes should copy. For the common case of
-// consuming the rest of a payload, use RemainingBytes.
-func (r *Reader) Tail() []byte { return r.buf[r.off:] }
-
-// Skip advances the read offset by n bytes.
-func (r *Reader) Skip(n int) error {
-	if r.Remaining() < n {
-		return ErrShortBuffer
-	}
-	r.off += n
-	return nil
-}
-
 // Varint reads a MoQT leading-ones varint (§1.4.1, 1–9 bytes).
 func (r *Reader) Varint() (uint64, error) {
 	v, n, err := ParseVarint(r.buf[r.off:])
@@ -91,21 +75,9 @@ func (r *Reader) UInt8() (uint8, error) {
 	return v, nil
 }
 
-// UInt16 reads a big-endian uint16.
-func (r *Reader) UInt16() (uint16, error) {
-	if r.Remaining() < 2 {
-		return 0, ErrShortBuffer
-	}
-	v := binary.BigEndian.Uint16(r.buf[r.off:])
-	r.off += 2
-	return v, nil
-}
-
 // FixedBytes reads exactly n bytes. The returned slice is a fresh copy that
 // the caller owns; mutating it does not affect the Reader's buffer, and
 // retaining it does not pin the buffer for GC. Zero-length reads return nil.
-//
-// If callers need to peek without consuming, use Tail.
 func (r *Reader) FixedBytes(n int) ([]byte, error) {
 	if r.Remaining() < n {
 		return nil, ErrShortBuffer
@@ -188,9 +160,6 @@ func (w *Writer) Varint(v uint64) { w.buf = AppendVarint(w.buf, v) }
 
 // UInt8 appends a single byte.
 func (w *Writer) UInt8(v uint8) { w.buf = append(w.buf, v) }
-
-// UInt16 appends a big-endian uint16.
-func (w *Writer) UInt16(v uint16) { w.buf = binary.BigEndian.AppendUint16(w.buf, v) }
 
 // FixedBytes appends raw bytes without any length prefix.
 func (w *Writer) FixedBytes(p []byte) { w.buf = append(w.buf, p...) }

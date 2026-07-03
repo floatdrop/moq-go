@@ -466,7 +466,7 @@ func TestGreaseRoundTrip(t *testing.T) {
 		t.Helper()
 		var found bool
 		for _, kv := range opts {
-			if message.IsGrease(kv.Type) {
+			if kv.Type >= 0x9D && (kv.Type-0x9D)%0x7F == 0 /* GREASE pattern */ {
 				found = true
 				break
 			}

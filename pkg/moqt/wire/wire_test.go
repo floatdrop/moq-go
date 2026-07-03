@@ -31,9 +31,6 @@ func TestReaderShortBuffer(t *testing.T) {
 	if _, err := r.UInt8(); !errors.Is(err, ErrShortBuffer) {
 		t.Fatalf("empty UInt8: got %v, want ErrShortBuffer", err)
 	}
-	if _, err := r.UInt16(); !errors.Is(err, ErrShortBuffer) {
-		t.Fatalf("empty UInt16: got %v, want ErrShortBuffer", err)
-	}
 	if _, err := r.FixedBytes(1); !errors.Is(err, ErrShortBuffer) {
 		t.Fatalf("empty FixedBytes: got %v, want ErrShortBuffer", err)
 	}
@@ -77,21 +74,6 @@ func TestVarintBytesRoundTrip(t *testing.T) {
 		}
 		if !bytes.Equal(got, payload) {
 			t.Fatalf("VarintBytes round-trip differs (len=%d)", len(payload))
-		}
-	}
-}
-
-func TestUInt16RoundTrip(t *testing.T) {
-	cases := []uint16{0, 1, 255, 256, 0xFFFF}
-	for _, v := range cases {
-		w := NewWriter(nil)
-		w.UInt16(v)
-		got, err := NewReader(w.Bytes()).UInt16()
-		if err != nil {
-			t.Fatalf("UInt16(%d): %v", v, err)
-		}
-		if got != v {
-			t.Fatalf("UInt16 round-trip: got %d, want %d", got, v)
 		}
 	}
 }

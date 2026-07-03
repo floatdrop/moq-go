@@ -241,7 +241,7 @@ func TestFetchOKWithEndOfTrackFalse(t *testing.T) {
 }
 
 func TestFetchObjectMinimal(t *testing.T) {
-	obj := NewFetchObject().WithPayload([]byte("test payload"))
+	obj := &FetchObject{ObjectPayload: []byte("test payload")}
 
 	w := wire.NewWriter(nil)
 	obj.Append(w)
@@ -259,13 +259,16 @@ func TestFetchObjectMinimal(t *testing.T) {
 }
 
 func TestFetchObjectWithAllFields(t *testing.T) {
-	obj := NewFetchObject().
-		WithGroupIDDelta(10).
-		WithSubgroupID(5).
-		WithObjectIDDelta(3).
-		WithPriority(127).
-		WithProperties([]byte("props")).
-		WithPayload([]byte("data"))
+	obj := &FetchObject{
+		SerializationFlags: FetchFlagGroupIDDelta | FetchFlagObjectIDDelta | FetchFlagPriority |
+			FetchFlagProperties | uint64(FetchSubgroupIDExplicit),
+		GroupIDDelta:      10,
+		SubgroupID:        5,
+		ObjectIDDelta:     3,
+		PublisherPriority: 127,
+		Properties:        []byte("props"),
+		ObjectPayload:     []byte("data"),
+	}
 
 	w := wire.NewWriter(nil)
 	obj.Append(w)

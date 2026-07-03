@@ -198,10 +198,12 @@ func TestFetchObjectRoundTrip(t *testing.T) {
 	ctx := t.Context()
 
 	hdr := message.FetchHeader{RequestID: 0}
-	obj := message.NewFetchObject().
-		WithGroupIDDelta(3).
-		WithObjectIDDelta(1).
-		WithPayload([]byte("fetch-payload"))
+	obj := &message.FetchObject{
+		SerializationFlags: message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta,
+		GroupIDDelta:       3,
+		ObjectIDDelta:      1,
+		ObjectPayload:      []byte("fetch-payload"),
+	}
 
 	writeErr := make(chan error, 1)
 	go func() {

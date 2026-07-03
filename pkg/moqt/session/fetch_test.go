@@ -39,8 +39,15 @@ func TestFetchRoundTrip(t *testing.T) {
 		EndLocation: message.Location{Group: 2, Object: 5},
 	}
 
-	obj1 := message.NewFetchObject().WithGroupIDDelta(0).WithObjectIDDelta(0).WithPayload([]byte("frame-1"))
-	obj2 := message.NewFetchObject().WithGroupIDDelta(0).WithObjectIDDelta(1).WithPayload([]byte("frame-2"))
+	mkObj := func(objectIDDelta uint64, payload string) *message.FetchObject {
+		return &message.FetchObject{
+			SerializationFlags: message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta,
+			ObjectIDDelta:      objectIDDelta,
+			ObjectPayload:      []byte(payload),
+		}
+	}
+	obj1 := mkObj(0, "frame-1")
+	obj2 := mkObj(1, "frame-2")
 
 	var (
 		wg              sync.WaitGroup

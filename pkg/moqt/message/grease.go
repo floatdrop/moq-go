@@ -27,14 +27,6 @@ const (
 // 0x7F * N + 0x9D ≤ 0x3FFFFFFFFFFFFFFF  →  N ≤ (0x3FFFFFFFFFFFFFFF - 0x9D) / 0x7F.
 const maxGreaseN uint64 = (0x3FFFFFFFFFFFFFFF - greaseBase) / greaseStep
 
-// IsGrease reports whether v matches the GREASE pattern 0x7F * N + 0x9D.
-func IsGrease(v uint64) bool {
-	if v < greaseBase {
-		return false
-	}
-	return (v-greaseBase)%greaseStep == 0
-}
-
 // GreaseValue returns a random GREASE value from the reserved range. The
 // returned value is suitable for use as a Setup Option type, Property type,
 // or error code. Each call returns a fresh random value.
