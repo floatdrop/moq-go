@@ -38,11 +38,14 @@ func TestIsValidDatagramType(t *testing.T) {
 		{"Invalid type 0x2B", 0x2B, false},
 		{"Invalid type 0x2E", 0x2E, false},
 		{"Invalid type 0x2F", 0x2F, false},
-		// Invalid: STATUS+PROPERTIES
-		{"Invalid type 0x21 (STATUS|PROPERTIES)", DatagramStatusBit | DatagramPropertiesBit, false},
-		{"Invalid type 0x25", 0x25, false},
-		{"Invalid type 0x29", 0x29, false},
-		{"Invalid type 0x2D", 0x2D, false},
+		// Valid: STATUS+PROPERTIES types are listed in Figure 23
+		// (0x20..0x21 / 0x24..0x25 / 0x28..0x29 / 0x2C..0x2D); they only
+		// become an error when the Object Status is not Normal — a
+		// per-value rule in Validate, not a type-level one.
+		{"Valid type 0x21 (STATUS|PROPERTIES)", DatagramStatusBit | DatagramPropertiesBit, true},
+		{"Valid type 0x25", 0x25, true},
+		{"Valid type 0x29", 0x29, true},
+		{"Valid type 0x2D", 0x2D, true},
 		// Out of range entirely
 		{"Invalid type 0x10", 0x10, false},
 		{"Invalid type 0x1F", 0x1F, false},
@@ -169,7 +172,7 @@ func TestObjectDatagramValidate(t *testing.T) {
 				TrackAlias:   1,
 				GroupID:      100,
 				ObjectID:     50,
-				ObjectStatus: 1, // Normal status
+				ObjectStatus: ObjectStatusEndOfGroup,
 			},
 			expectError: false,
 		},
@@ -197,17 +200,30 @@ func TestObjectDatagramValidate(t *testing.T) {
 			errorMsg:    "invalid datagram type: 0x22",
 		},
 		{
-			// Per §11.3.1: STATUS+PROPERTIES is an invalid type value itself.
-			name: "Invalid: PROPERTIES with STATUS bit (type 0x21)",
+			// §11.3.1: STATUS+PROPERTIES with a non-Normal status MUST close
+			// the session — only Normal Objects can have Properties.
+			name: "Invalid: non-Normal status with Properties (type 0x21)",
 			datagram: &ObjectDatagram{
 				Type:         DatagramStatusBit | DatagramPropertiesBit, // 0x21
 				TrackAlias:   1,
 				GroupID:      100,
 				Properties:   []byte("properties"),
-				ObjectStatus: 1,
+				ObjectStatus: ObjectStatusEndOfGroup,
 			},
 			expectError: true,
-			errorMsg:    "invalid datagram type: 0x21",
+			errorMsg:    "invalid datagram: non-Normal status 0x3 with Properties",
+		},
+		{
+			// §11.3.1 Figure 23: 0x21 with a Normal (0x0) status is valid.
+			name: "Valid: Normal status with Properties (type 0x21)",
+			datagram: &ObjectDatagram{
+				Type:         DatagramStatusBit | DatagramPropertiesBit, // 0x21
+				TrackAlias:   1,
+				GroupID:      100,
+				Properties:   []byte("properties"),
+				ObjectStatus: ObjectStatusNormal,
+			},
+			expectError: false,
 		},
 		{
 			// Per §11.2.1.1: ObjectStatus 0x0 = Normal, which is valid
@@ -268,6 +284,21 @@ func TestObjectDatagramRoundTrip(t *testing.T) {
 			},
 		},
 		{
+			// §11.3.1 Figure 23: STATUS+PROPERTIES (0x21) with Normal
+			// status is a valid wire form — Properties precede the status
+			// varint and there is no payload.
+			name: "STATUS+PROPERTIES with Normal status (type 0x21)",
+			datagram: &ObjectDatagram{
+				Type:              DatagramStatusBit | DatagramPropertiesBit,
+				TrackAlias:        3,
+				GroupID:           7,
+				ObjectID:          9,
+				PublisherPriority: 4,
+				Properties:        []byte("props"),
+				ObjectStatus:      ObjectStatusNormal,
+			},
+		},
+		{
 			name: "Datagram with all optional fields",
 			datagram: &ObjectDatagram{
 				Type:              DatagramPropertiesBit,
@@ -305,7 +336,7 @@ func TestObjectDatagramRoundTrip(t *testing.T) {
 				TrackAlias:   5,
 				GroupID:      500,
 				ObjectID:     125,
-				ObjectStatus: 1,
+				ObjectStatus: ObjectStatusEndOfGroup,
 			},
 		},
 		{
@@ -398,10 +429,20 @@ func TestParseObjectDatagramErrors(t *testing.T) {
 			expectError: "invalid datagram type: 0x22",
 		},
 		{
-			// Per §11.3.1: STATUS+PROPERTIES (0x21) is an invalid type value.
-			name:        "PROPERTIES with STATUS bit (type 0x21)",
-			data:        []byte{0x21, 0x01, 0x64},
-			expectError: "invalid datagram type: 0x21",
+			// §11.3.1: STATUS+PROPERTIES with a non-Normal Object Status is
+			// a PROTOCOL_VIOLATION. Type 0x21 fields: TrackAlias, GroupID,
+			// ObjectID, Priority, Properties (len 1), Status (0x3 EndOfGroup).
+			name:        "non-Normal status with Properties (type 0x21)",
+			data:        []byte{0x21, 0x01, 0x64, 0x01, 0x00, 0x01, 0x70, 0x03},
+			expectError: "invalid datagram: non-Normal status 0x3 with Properties",
+		},
+		{
+			// §11.3.1 Figure 23: the status varint is the last field —
+			// trailing bytes are malformed. Type 0x20 fields: TrackAlias,
+			// GroupID, ObjectID, Priority, Status, then one stray byte.
+			name:        "trailing bytes after Object Status (type 0x20)",
+			data:        []byte{0x20, 0x01, 0x64, 0x01, 0x00, 0x03, 0xFF},
+			expectError: "invalid datagram: 1 trailing byte(s) after Object Status",
 		},
 		{
 			// Per §11.3.1: PROPERTIES bit set with Properties Length 0 is a
@@ -484,7 +525,7 @@ func TestObjectDatagramWithStatusValidation(t *testing.T) {
 		GroupID:           100,
 		ObjectID:          50,
 		PublisherPriority: 128,
-		ObjectStatus:      1,
+		ObjectStatus:      ObjectStatusEndOfGroup,
 	}
 	if err := d.Validate(); err != nil {
 		t.Errorf("Validate() unexpected error: %v", err)
@@ -593,12 +634,16 @@ func TestObjectDatagramComplexCombinations(t *testing.T) {
 			if !d.HasDefaultPriority() {
 				d.PublisherPriority = 128
 			}
-			// Properties only allowed without STATUS bit
-			if d.HasProperties() && !d.HasStatus() {
+			if d.HasProperties() {
 				d.Properties = []byte("properties")
 			}
 			if d.HasStatus() {
-				d.ObjectStatus = 1
+				// §11.3.1: with Properties present only Normal status
+				// is valid; without them any defined status works.
+				d.ObjectStatus = ObjectStatusEndOfGroup
+				if d.HasProperties() {
+					d.ObjectStatus = ObjectStatusNormal
+				}
 			} else {
 				d.ObjectPayload = []byte("payload")
 			}
