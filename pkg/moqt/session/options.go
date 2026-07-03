@@ -7,7 +7,7 @@ import (
 
 // Option configures a session opened via Client or Server. See WithPath,
 // WithAuthority, WithImplementation, WithMaxAuthTokenCacheSize,
-// WithTokenVerifier, WithSetupOption, and WithGrease for the available knobs.
+// WithTokenVerifier, and WithGrease for the available knobs.
 type Option func(*config)
 
 // config carries the resolved set of options applied to a single
@@ -83,14 +83,6 @@ func WithMaxAuthTokenCacheSize(maxBytes uint64) Option {
 func WithTokenVerifier(v TokenVerifier) Option {
 	return func(c *config) {
 		c.tokenVerifier = v
-	}
-}
-
-// WithSetupOption appends an arbitrary KVPair to the SETUP option set.
-// Escape hatch for fields not yet covered by a typed helper.
-func WithSetupOption(kv wire.KVPair) Option {
-	return func(c *config) {
-		c.setupOptions = append(c.setupOptions, kv)
 	}
 }
 

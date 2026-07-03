@@ -69,7 +69,7 @@ func sendSubscribeWithTokens(t *testing.T, client *session.Session, toks ...mess
 	}
 	streamCh := make(chan session.Stream, 1)
 	go func() {
-		stream, err := client.OpenRequest(sub)
+		stream, err := session.OpenRequestForTest(client, sub)
 		if err != nil {
 			t.Errorf("client OpenRequest: %v", err)
 			close(streamCh)
@@ -356,7 +356,7 @@ func TestProcessFollowupTokensRegistersAlias(t *testing.T) {
 	sub := &message.Subscribe{RequestID: client.AllocRequestID(), Name: []byte("track")}
 	streamCh := make(chan session.Stream, 1)
 	go func() {
-		stream, err := client.OpenRequest(sub)
+		stream, err := session.OpenRequestForTest(client, sub)
 		if err != nil {
 			t.Errorf("client OpenRequest: %v", err)
 			close(streamCh)

@@ -44,7 +44,7 @@ func runRequestRoundTrip(
 		}
 	})
 	wg.Go(func() {
-		stream, err := client.OpenRequest(first)
+		stream, err := session.OpenRequestForTest(client, first)
 		if err != nil {
 			clientErr = err
 			return
@@ -210,7 +210,7 @@ func TestAcceptRequestDuplicateID(t *testing.T) {
 
 	// Client: open two streams with the same Request ID.
 	wg.Go(func() {
-		s1, err := client.OpenRequest(firstSub)
+		s1, err := session.OpenRequestForTest(client, firstSub)
 		if err != nil {
 			return
 		}
@@ -218,7 +218,7 @@ func TestAcceptRequestDuplicateID(t *testing.T) {
 		_, _ = message.Parse(s1)
 		_ = s1.Close()
 
-		s2, err := client.OpenRequest(dupSub)
+		s2, err := session.OpenRequestForTest(client, dupSub)
 		if err != nil {
 			return
 		}
@@ -277,14 +277,14 @@ func TestAcceptRequestOutOfOrderID(t *testing.T) {
 	})
 
 	wg.Go(func() {
-		s1, err := client.OpenRequest(firstSub)
+		s1, err := session.OpenRequestForTest(client, firstSub)
 		if err != nil {
 			return
 		}
 		_, _ = message.Parse(s1)
 		_ = s1.Close()
 
-		s2, err := client.OpenRequest(oooSub)
+		s2, err := session.OpenRequestForTest(client, oooSub)
 		if err != nil {
 			return
 		}
@@ -340,7 +340,7 @@ func TestAcceptRequestMonotonicHappyPath(t *testing.T) {
 				Namespace: wire.TrackNamespace{[]byte("test")},
 				Name:      []byte("track"),
 			}
-			s, err := client.OpenRequest(sub)
+			s, err := session.OpenRequestForTest(client, sub)
 			if err != nil {
 				return
 			}
@@ -383,7 +383,7 @@ func TestAcceptRequestParityViolation_ServerReceivesOddID(t *testing.T) {
 		}
 		// OpenRequest will succeed (the client side doesn't validate parity of
 		// outgoing IDs); the server's AcceptRequest will reject it.
-		stream, err := client.OpenRequest(sub)
+		stream, err := session.OpenRequestForTest(client, sub)
 		if err != nil {
 			return // server closed the conn; that's fine
 		}
@@ -431,7 +431,7 @@ func TestAcceptRequestParityViolation_ClientReceivesEvenID(t *testing.T) {
 			Namespace: wire.TrackNamespace{[]byte("test")},
 			Name:      []byte("track"),
 		}
-		stream, err := server.OpenRequest(pub)
+		stream, err := session.OpenRequestForTest(server, pub)
 		if err != nil {
 			return // client closed the conn; that's fine
 		}
@@ -504,7 +504,7 @@ func TestAcceptRequestParityHappyPath(t *testing.T) {
 			_ = req.RejectError(moqt.RequestDoesNotExist, "ok-parity test")
 		})
 		wg.Go(func() {
-			stream, err := server.OpenRequest(pub)
+			stream, err := session.OpenRequestForTest(server, pub)
 			if err != nil {
 				return
 			}
@@ -563,7 +563,7 @@ func TestRejectErrorCancelsReadSide(t *testing.T) {
 
 	// Client: open the request, read the rejection, then try to write.
 	wg.Go(func() {
-		stream, err := client.OpenRequest(sub)
+		stream, err := session.OpenRequestForTest(client, sub)
 		if err != nil {
 			cResult.writeErr = err
 			return

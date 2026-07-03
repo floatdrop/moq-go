@@ -71,21 +71,6 @@ type StreamPriority struct {
 	Subgroup   uint64
 }
 
-// Less reports whether p is scheduled strictly before q under the §7.2
-// scheduling algorithm. Lower-comparing means higher transmission priority.
-func (p StreamPriority) Less(q StreamPriority) bool {
-	switch {
-	case p.Subscriber != q.Subscriber:
-		return p.Subscriber < q.Subscriber
-	case p.Publisher != q.Publisher:
-		return p.Publisher < q.Publisher
-	case p.GroupKey != q.GroupKey:
-		return p.GroupKey < q.GroupKey
-	default:
-		return p.Subgroup < q.Subgroup
-	}
-}
-
 // PrioritizedSendStream is optionally implemented by [SendStream]
 // implementations that expose a per-stream scheduling priority knob to the
 // underlying transport (§7 / §7.2 of draft-ietf-moq-transport-18).

@@ -205,14 +205,14 @@ func rejectStreamWithError(stream Stream, code moqt.RequestErrorCode, reason str
 	_ = stream.Close()
 }
 
-// OpenRequest opens a new outbound bidirectional stream and writes first as
+// openRequest opens a new outbound bidirectional stream and writes first as
 // its initial message. The returned Stream can be used to read responses
 // (typically a single REQUEST_OK / REQUEST_ERROR / SUBSCRIBE_OK first, then
 // optionally more) and to send follow-up messages such as REQUEST_UPDATE.
 //
 // On any error before the stream is established and the first message
 // written, the stream (if any) is reset and the error is returned.
-func (s *Session) OpenRequest(first message.Message) (Stream, error) {
+func (s *Session) openRequest(first message.Message) (Stream, error) {
 	stream, err := s.conn.OpenStream()
 	if err != nil {
 		return nil, err

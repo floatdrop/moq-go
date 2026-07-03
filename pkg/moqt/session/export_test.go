@@ -1,5 +1,7 @@
 package session
 
+import "github.com/floatdrop/moq-go/pkg/moqt/message"
+
 // SendControl bypasses the SendGoaway "already sent" guard so external tests
 // can drive duplicate-GOAWAY scenarios. Exposed only in the test build.
 var SendControl = (*Session).sendControl
@@ -19,3 +21,10 @@ func SessionConn(s *Session) Conn { return s.conn }
 // ReservedNamespaceRejection exposes the §3.2.1 / §3.2.2 reserved-namespace
 // classifier for unit tests across message types.
 var ReservedNamespaceRejection = reservedNamespaceRejection
+
+// OpenRequestForTest exposes openRequest to black-box tests, which use it to
+// send hand-crafted requests (e.g. §10.1 parity / duplicate Request IDs) that
+// the typed openers deliberately make impossible.
+func OpenRequestForTest(s *Session, first message.Message) (Stream, error) {
+	return s.openRequest(first)
+}

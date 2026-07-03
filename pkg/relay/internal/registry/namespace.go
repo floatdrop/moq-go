@@ -75,7 +75,7 @@ type SubscriberEntry struct {
 	// track after PUBLISH_BLOCKED until the subscriber issues a SUBSCRIBE for
 	// it; this set enforces that sticky prohibition. It is guarded by the
 	// owning [NamespaceRegistry]'s mutex, accessed only via MarkBlocked /
-	// IsBlocked / ClearBlocked. nil until the first MarkBlocked.
+	// IsBlocked / ClearBlockedForSession. nil until the first MarkBlocked.
 	blocked map[track.Key]struct{}
 }
 
@@ -411,16 +411,6 @@ func (r *NamespaceRegistry) IsBlocked(entry *SubscriberEntry, key track.Key) boo
 	defer r.mu.RUnlock()
 	_, ok := entry.blocked[key]
 	return ok
-}
-
-// ClearBlocked removes any PUBLISH_BLOCKED prohibition for (entry's
-// subscriber, key). The §6.1 recovery path calls this when the subscriber
-// issues a SUBSCRIBE for the previously-blocked track, re-permitting future
-// PUBLISH forwards. Idempotent.
-func (r *NamespaceRegistry) ClearBlocked(entry *SubscriberEntry, key track.Key) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(entry.blocked, key)
 }
 
 // ClearBlockedForSession removes any PUBLISH_BLOCKED prohibition for the track

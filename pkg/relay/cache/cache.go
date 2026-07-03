@@ -75,43 +75,6 @@ func (o *CachedObject) IsStatusMarker() bool {
 	return len(o.Payload) == 0 && o.Status != 0
 }
 
-// Cache is the write-side contract implemented by both [NopCache] (tests
-// that don't need real caching) and [*ObjectCache] (the real bounded
-// in-memory cache). The relay's fanout holds a Cache and calls Put /
-// PutDatagram on every forwarded object; the per-track [TrackEntry.Cache]
-// is the production implementation.
-//
-// Reads (Get / GetRange / OldestRetained) are NOT on this interface —
-// callers that need them go through *[ObjectCache] directly. The reason
-// is that the cache is intentionally always local and in-memory (storing
-// object payloads in NATS / Redis is neither performant nor
-// storage-efficient for media relay workloads), so abstracting the read
-// surface behind an interface buys nothing and only hides the contract.
-//
-// Implementations MUST be safe for concurrent Put / PutDatagram from
-// multiple goroutines.
-type Cache interface {
-	// Put records that obj was forwarded, handing ownership of obj to the
-	// implementation. The production cache retains obj — including its
-	// Payload / Properties slices — by reference rather than copying, so
-	// callers MUST NOT mutate obj or those slices after the call.
-	Put(obj *CachedObject)
-
-	// PutDatagram records that d (an §11.3 OBJECT_DATAGRAM) was forwarded.
-	// The production cache retains d's Payload / Properties slices by
-	// reference, so callers MUST NOT mutate them after the call.
-	PutDatagram(d *message.ObjectDatagram)
-}
-
-// NopCache is the placeholder used by tests that exercise the fanout
-// without caring about cache state. Both methods discard.
-type NopCache struct{}
-
-var _ Cache = NopCache{}
-
-func (NopCache) Put(*CachedObject)                   {}
-func (NopCache) PutDatagram(*message.ObjectDatagram) {}
-
 // cacheKey is the composite (GroupID, ObjectID) key used to deduplicate
 // re-Puts of the same object onto the same ring slot.
 type cacheKey struct {
@@ -173,8 +136,6 @@ func NewObjectCache(maxSize int, maxDuration time.Duration) *ObjectCache {
 		maxAge: maxDuration,
 	}
 }
-
-var _ Cache = (*ObjectCache)(nil)
 
 // Put stores obj in the cache, taking ownership of it: the cache keeps
 // obj's pointer (and its Properties / Payload slices) by reference — it

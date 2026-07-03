@@ -116,9 +116,9 @@ func TestDownstreamSub_AccessorsRoundTrip(t *testing.T) {
 	}
 	// §10.2.7: SUBSCRIBER_PRIORITY defaults to 128 (mid-range); GROUP_ORDER
 	// is left at its zero value (treated as Ascending) until the peer sets it.
-	if sub.GetPriority() != 128 || sub.GetGroupOrder() != 0 {
+	if sub.Priority != 128 || sub.GroupOrder != 0 {
 		t.Fatalf("default priority/group-order = %d/%d, want 128/0",
-			sub.GetPriority(), sub.GetGroupOrder())
+			sub.Priority, sub.GroupOrder)
 	}
 
 	f := &message.SubscriptionFilter{
@@ -132,10 +132,10 @@ func TestDownstreamSub_AccessorsRoundTrip(t *testing.T) {
 	if sub.GetFilter() != f {
 		t.Fatal("filter pointer lost")
 	}
-	if got := sub.GetPriority(); got != 64 {
+	if got := sub.Priority; got != 64 {
 		t.Fatalf("priority = %d, want 64", got)
 	}
-	if got := sub.GetGroupOrder(); got != 1 {
+	if got := sub.GroupOrder; got != 1 {
 		t.Fatalf("group order = %d, want 1", got)
 	}
 }

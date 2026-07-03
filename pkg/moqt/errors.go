@@ -32,34 +32,6 @@ const (
 	SessionMalformedAuthority       SessionErrorCode = 0x1A
 )
 
-// IsKnown reports whether c is a defined SESSION error code (IANA §15.10.1).
-func (c SessionErrorCode) IsKnown() bool {
-	switch c {
-	case SessionNoError,
-		SessionInternalError,
-		SessionUnauthorized,
-		SessionProtocolViolation,
-		SessionInvalidRequestID,
-		SessionDuplicateTrackAlias,
-		SessionKeyValueFormattingError,
-		SessionInvalidPath,
-		SessionMalformedPath,
-		SessionGoawayTimeout,
-		SessionControlMessageTimeout,
-		SessionDataStreamTimeout,
-		SessionAuthTokenCacheOverflow,
-		SessionDuplicateAuthTokenAlias,
-		SessionVersionNegotiationFailed,
-		SessionMalformedAuthToken,
-		SessionUnknownAuthTokenAlias,
-		SessionExpiredAuthToken,
-		SessionInvalidAuthority,
-		SessionMalformedAuthority:
-		return true
-	}
-	return false
-}
-
 // RequestErrorCode is a REQUEST_ERROR code (§10.6, IANA §15.10.2).
 type RequestErrorCode uint64
 
@@ -84,32 +56,6 @@ const (
 	RequestRedirect              RequestErrorCode = 0x34
 )
 
-// IsKnown reports whether c is a defined REQUEST_ERROR code (IANA §15.10.2).
-func (c RequestErrorCode) IsKnown() bool {
-	switch c {
-	case RequestInternalError,
-		RequestUnauthorized,
-		RequestTimeout,
-		RequestNotSupported,
-		RequestMalformedAuthToken,
-		RequestExpiredAuthToken,
-		RequestGoingAway,
-		RequestExcessiveLoad,
-		RequestDoesNotExist,
-		RequestInvalidRange,
-		RequestMalformedTrack,
-		RequestDuplicateSubscription,
-		RequestUninterested,
-		RequestPrefixOverlap,
-		RequestNamespaceTooLarge,
-		RequestInvalidJoiningID,
-		RequestUnsupportedExtension,
-		RequestRedirect:
-		return true
-	}
-	return false
-}
-
 // PublishDoneCode is a PUBLISH_DONE status code (§10.11, IANA §15.10.3).
 type PublishDoneCode uint64
 
@@ -126,24 +72,6 @@ const (
 	PublishDoneMalformedTrack    PublishDoneCode = 0x12
 )
 
-// IsKnown reports whether c is a defined PUBLISH_DONE code (IANA §15.10.3).
-func (c PublishDoneCode) IsKnown() bool {
-	switch c {
-	case PublishDoneInternalError,
-		PublishDoneUnauthorized,
-		PublishDoneTrackEnded,
-		PublishDoneSubscriptionEnded,
-		PublishDoneGoingAway,
-		PublishDoneTooFarBehind,
-		PublishDoneExpired,
-		PublishDoneUpdateFailed,
-		PublishDoneExcessiveLoad,
-		PublishDoneMalformedTrack:
-		return true
-	}
-	return false
-}
-
 // StreamResetCode is a per-stream reset code (§3.3.3, IANA §15.10.4).
 type StreamResetCode uint64
 
@@ -159,21 +87,3 @@ const (
 	StreamResetExcessiveLoad       StreamResetCode = 0x9
 	StreamResetMalformedTrack      StreamResetCode = 0x12
 )
-
-// IsKnown reports whether c is a defined stream-reset code (IANA §15.10.4).
-func (c StreamResetCode) IsKnown() bool {
-	switch c {
-	case StreamResetInternalError,
-		StreamResetCancelled,
-		StreamResetDeliveryTimeout,
-		StreamResetSessionClosed,
-		StreamResetGoingAway,
-		StreamResetTooFarBehind,
-		StreamResetUnknownObjectStatus,
-		StreamResetExpiredAuthToken,
-		StreamResetExcessiveLoad,
-		StreamResetMalformedTrack:
-		return true
-	}
-	return false
-}

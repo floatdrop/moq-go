@@ -119,7 +119,7 @@ func TestRequestMuxDefaultRejectsUnhandled(t *testing.T) {
 	mux := session.NewRequestMux() // no handlers, no OnUnknown
 	go func() { _ = mux.Run(t.Context(), server) }()
 
-	stream, err := client.OpenRequest(&message.TrackStatus{
+	stream, err := session.OpenRequestForTest(client, &message.TrackStatus{
 		RequestID: 0,
 		Namespace: wire.Namespace("ns"),
 		Name:      []byte("x"),
@@ -145,7 +145,7 @@ func TestRequestMuxDefaultRejectsUnhandled(t *testing.T) {
 // and leaves it open (the mux handler or session cleanup tears it down).
 func openRequest(t *testing.T, s *session.Session, first message.Message) {
 	t.Helper()
-	if _, err := s.OpenRequest(first); err != nil {
+	if _, err := session.OpenRequestForTest(s, first); err != nil {
 		t.Fatalf("OpenRequest(%s): %v", first.Type(), err)
 	}
 }

@@ -88,11 +88,6 @@ func NewMemoryStore(opts ...MemoryStoreOption) *MemoryStore {
 // MemoryStoreOption tweaks a [MemoryStore] at construction time.
 type MemoryStoreOption func(*MemoryStore)
 
-// WithLogger installs a logger for slow-watcher warnings.
-func WithLogger(l *slog.Logger) MemoryStoreOption {
-	return func(s *MemoryStore) { s.log = l }
-}
-
 // WithWatchBufferSize overrides the per-watcher channel capacity.
 // Values <= 0 fall back to the package default.
 func WithWatchBufferSize(n int) MemoryStoreOption {

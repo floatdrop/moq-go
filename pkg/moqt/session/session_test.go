@@ -267,7 +267,7 @@ func TestGoawayWatermarkAdvancesAfterAcceptRequest(t *testing.T) {
 	wg.Go(func() {
 		for i := range 2 {
 			sub := &message.Subscribe{RequestID: client.AllocRequestID()}
-			s, err := client.OpenRequest(sub)
+			s, err := session.OpenRequestForTest(client, sub)
 			if err != nil {
 				t.Errorf("client OpenRequest %d: %v", i, err)
 				return

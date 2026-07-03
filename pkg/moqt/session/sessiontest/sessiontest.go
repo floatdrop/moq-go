@@ -94,12 +94,6 @@ func NewConnPairBuffered(bufSize int) (a, b session.Conn) {
 	return newConnPair(-1, -1, bufSize)
 }
 
-// NewConnPairBufferedWithLimits combines [NewConnPairBuffered]'s per-stream
-// buffering with [NewConnPairWithLimits]' bidi-stream credit caps.
-func NewConnPairBufferedWithLimits(bufSize, aBidiLimit, bBidiLimit int) (a, b session.Conn) {
-	return newConnPair(aBidiLimit, bBidiLimit, bufSize)
-}
-
 func newConnPair(aBidiLimit, bBidiLimit, bufSize int) (a, b session.Conn) {
 	aUniToB := make(chan *uniStream, 4)
 	bUniToA := make(chan *uniStream, 4)

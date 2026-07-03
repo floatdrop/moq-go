@@ -548,26 +548,12 @@ func (d *DownstreamSub) SetPriority(p uint8) {
 	d.mu.Unlock()
 }
 
-// GetPriority returns the §7 Subscriber Priority.
-func (d *DownstreamSub) GetPriority() uint8 {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.Priority
-}
-
 // SetGroupOrder records the §5.2 Group Order. Updated when the peer sends a
 // REQUEST_UPDATE.
 func (d *DownstreamSub) SetGroupOrder(o uint8) {
 	d.mu.Lock()
 	d.GroupOrder = o
 	d.mu.Unlock()
-}
-
-// GetGroupOrder returns the §5.2 Group Order.
-func (d *DownstreamSub) GetGroupOrder() uint8 {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.GroupOrder
 }
 
 // SetLargestAtSubscribe records the largest-object snapshot captured when

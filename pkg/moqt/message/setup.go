@@ -1,8 +1,6 @@
 package message
 
 import (
-	"fmt"
-
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
@@ -20,23 +18,6 @@ const (
 	SetupOptionAuthority          SetupOption = 0x05
 	SetupOptionMOQTImplementation SetupOption = 0x07
 )
-
-// String returns a short name for known options; unknown values render as hex.
-func (o SetupOption) String() string {
-	switch o {
-	case SetupOptionPath:
-		return "PATH"
-	case SetupOptionAuthorizationToken:
-		return "AUTHORIZATION_TOKEN"
-	case SetupOptionMaxAuthTokenCache:
-		return "MAX_AUTH_TOKEN_CACHE_SIZE"
-	case SetupOptionAuthority:
-		return "AUTHORITY"
-	case SetupOptionMOQTImplementation:
-		return "MOQT_IMPLEMENTATION"
-	}
-	return fmt.Sprintf("SetupOption(%#x)", uint64(o))
-}
 
 // Setup carries the SETUP message payload (§10.3). Setup Options span the
 // remainder of the message payload as a delta-encoded sequence of KVPairs.

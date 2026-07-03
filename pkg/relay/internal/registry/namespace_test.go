@@ -306,12 +306,6 @@ func TestNamespaceRegistry_BlockedSet(t *testing.T) {
 		t.Fatal("IsBlocked false after repeated MarkBlocked")
 	}
 
-	// ClearBlocked lifts exactly the one entry.
-	r.ClearBlocked(entry, key)
-	if r.IsBlocked(entry, key) {
-		t.Fatal("IsBlocked true after ClearBlocked")
-	}
-
 	// ClearBlockedForSession lifts across the session and reports whether it
 	// changed anything.
 	r.MarkBlocked(entry, key)
