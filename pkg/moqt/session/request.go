@@ -114,9 +114,15 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 		if err != nil {
 			return nil, err
 		}
-		msg, err := message.Parse(stream)
+		// readResponse bridges ctx to the otherwise context-free Parse, so a
+		// peer that opens the stream but stalls mid-message cannot wedge the
+		// accept loop past cancellation.
+		msg, err := s.readResponse(ctx, stream)
 		if err != nil {
 			resetStream(stream)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, fmt.Errorf("moqt/session: parse request first message: %w", err)
 		}
 
@@ -252,6 +258,13 @@ func writeFirst(stream Stream, first message.Message) (Stream, error) {
 // deferred stop() removes the hook. When ctx fired, ctx.Err() is returned in
 // place of the resulting wire error so the caller sees context.Canceled /
 // context.DeadlineExceeded.
+//
+// Known teardown-only race: a cancellation landing after a successful Parse
+// but before stop() detaches the hook fires a stale CancelRead — the caller
+// receives (msg, nil) on a stream whose read side was just reset. Every
+// caller's ctx is a session/relay-lifetime context, so the poisoned handle
+// only occurs mid-shutdown, where the very next read surfacing a reset is
+// acceptable.
 func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Message, error) {
 	stop := context.AfterFunc(ctx, func() {
 		stream.CancelRead(uint64(moqt.StreamResetCancelled))

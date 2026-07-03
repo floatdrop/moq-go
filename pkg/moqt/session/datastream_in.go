@@ -431,10 +431,20 @@ func (s *Session) AcceptDataStream(ctx context.Context) (DataStream, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The header reads below are context-free stream I/O; bridge ctx with
+	// CancelRead (the readResponse pattern) so a peer that opens a stream
+	// but stalls mid-header cannot wedge the accept loop past cancellation.
+	stop := context.AfterFunc(ctx, func() {
+		src.CancelRead(uint64(moqt.StreamResetCancelled))
+	})
+	defer stop()
 	br := bufio.NewReader(src)
 	typ, err := message.ReadDataStreamType(br)
 	if err != nil {
 		src.CancelRead(uint64(moqt.StreamResetInternalError))
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("moqt/session: read data stream type: %w", err)
 	}
 	switch {
@@ -442,6 +452,9 @@ func (s *Session) AcceptDataStream(ctx context.Context) (DataStream, error) {
 		hdr, err := message.ReadSubgroupHeader(br, typ)
 		if err != nil {
 			src.CancelRead(uint64(moqt.StreamResetInternalError))
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, fmt.Errorf("moqt/session: read SUBGROUP_HEADER: %w", err)
 		}
 		in := &IncomingSubgroupStream{Header: hdr, src: src, br: br, rd: wire.NewStreamReader(br), sess: s}
@@ -450,6 +463,9 @@ func (s *Session) AcceptDataStream(ctx context.Context) (DataStream, error) {
 		hdr, err := message.ReadFetchHeader(br)
 		if err != nil {
 			src.CancelRead(uint64(moqt.StreamResetInternalError))
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			return nil, fmt.Errorf("moqt/session: read FETCH_HEADER: %w", err)
 		}
 		return &IncomingFetchStream{Header: hdr, src: src, br: br, rd: wire.NewStreamReader(br)}, nil
