@@ -331,6 +331,47 @@ func TestFetch_StatusMarkersNotServed(t *testing.T) {
 	}
 }
 
+// TestFetch_WholeGroupEndForm pins the §10.12.1 "End Object 0 means the
+// entire group" wire form end to end: a mid-group start with End={G,0} is a
+// valid range (validation used to reject it as end < start), the FETCH_OK
+// EndLocation is capped to the watermark+1 (capping used to echo {G,0}
+// uncapped), and the delivered objects run from the start to the group's
+// end.
+func TestFetch_WholeGroupEndForm(t *testing.T) {
+	t.Parallel()
+	pubSess, _, publisherAlias := publishAndCache(t)
+
+	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, 3 /*count*/)
+	time.Sleep(50 * time.Millisecond)
+
+	fetchSess := dialAnotherClient(t, pubSess)
+	ok, objs := fetchAndDrain(t,
+		fetchSess,
+		wire.TrackNamespace{[]byte("video")},
+		[]byte("cam1"),
+		message.Location{Group: 0, Object: 1},
+		message.Location{Group: 0, Object: 0}, // "rest of group 0"
+		message.GroupOrderAscending,
+	)
+
+	if ok == nil {
+		t.Fatal("FetchOK is nil")
+	}
+	// Largest is {0,2}; the whole-group request extends past it, so the
+	// response end is capped to watermark+1 = {0,3}.
+	if ok.EndLocation.Group != 0 || ok.EndLocation.Object != 3 {
+		t.Fatalf("FETCH_OK EndLocation = {%d,%d}, want {0,3} (capped watermark+1)",
+			ok.EndLocation.Group, ok.EndLocation.Object)
+	}
+	want := []decodedFetchObject{
+		{group: 0, object: 1, payload: []byte("B")},
+		{group: 0, object: 2, payload: []byte("C")},
+	}
+	if !reflect.DeepEqual(objs, want) {
+		t.Fatalf("objects = %+v, want %+v", objs, want)
+	}
+}
+
 // TestFetch_FromCacheAscending pins the 7d happy path: publisher emits
 // objects across two groups; subscriber FETCHes the full range; relay
 // returns each object in ascending (group asc, object asc) order with

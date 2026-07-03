@@ -97,19 +97,28 @@ func (m *Fetch) Type() Type             { return TypeFetch }
 func (m *Fetch) GetRequestID() uint64   { return m.RequestID }
 func (m *Fetch) SetRequestID(id uint64) { m.RequestID = id }
 
+// FetchEndBeforeStart reports whether a standalone-FETCH range violates the
+// §10.12 rule "End Location MUST specify the same or a larger Location than
+// Start Location", interpreting the wire encoding: End is the last Object
+// plus 1, and an End Object of 0 means "the entire group" (§10.12.1) — it
+// only constrains the Group, so Start={G,5}, End={G,0} (the rest of group
+// G) is valid. Equal Start/End denotes an EMPTY range (last = Start-1) and
+// is also valid.
+func FetchEndBeforeStart(start, end Location) bool {
+	return end.Group < start.Group || (end.Object != 0 && end.Less(start))
+}
+
 // Validate enforces the FETCH invariants the wire decoder cannot: the
-// sub-message selected by FetchType must be present, and for a Standalone
-// FETCH the End Location MUST be at or after the Start Location (§10.12 —
-// "End Location MUST specify the same or a larger Location than Start
-// Location"). Equal Start/End is a valid single-object range. ParsePayload
-// invokes this automatically after decoding a FETCH frame.
+// sub-message selected by FetchType must be present, and a Standalone
+// FETCH's range must satisfy [FetchEndBeforeStart]'s §10.12 rule.
+// ParsePayload invokes this automatically after decoding a FETCH frame.
 func (m *Fetch) Validate() error {
 	switch m.FetchType {
 	case FetchTypeStandalone:
 		if m.Standalone == nil {
 			return errors.New("moqt/message: standalone FETCH missing range")
 		}
-		if m.Standalone.EndLocation.Less(m.Standalone.StartLocation) {
+		if FetchEndBeforeStart(m.Standalone.StartLocation, m.Standalone.EndLocation) {
 			return fmt.Errorf(
 				"moqt/message: FETCH End Location %+v precedes Start Location %+v (§10.12)",
 				m.Standalone.EndLocation, m.Standalone.StartLocation,

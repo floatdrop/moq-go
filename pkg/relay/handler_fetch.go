@@ -72,7 +72,10 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 
 	// §3576: "End Location MUST specify the same or a larger Location
 	// than Start Location for Standalone and Absolute Joining Fetches."
-	if sf.EndLocation.Less(sf.StartLocation) {
+	// For wire input message.Fetch.Validate already enforced this at parse
+	// time (a violation is a session PROTOCOL_VIOLATION there); this check
+	// answers locally-constructed requests with the gentler INVALID_RANGE.
+	if message.FetchEndBeforeStart(sf.StartLocation, sf.EndLocation) {
 		_ = req.RejectError(moqt.RequestInvalidRange, "relay: end < start")
 		return
 	}
@@ -257,11 +260,12 @@ func (h *sessionHandler) handleJoiningFetch(ctx context.Context, req *session.Re
 
 	// End = {Joining Location.Group, Joining Location.Object + 1}. The
 	// +1 might overflow when Object == MaxUint64; in practice this is
-	// astronomically unlikely, but guard so we don't silently wrap to
-	// {Group, 0} (which §10.12.2.1 reserves for "entire group").
+	// astronomically unlikely, but guard by falling back to the §10.12.1
+	// "entire group" form {Group, 0}, whose inclusive end {Group, Max} is
+	// exactly the joining location.
 	endLoc := message.Location{Group: jloc.largest.Group, Object: jloc.largest.Object + 1}
 	if jloc.largest.Object == math.MaxUint64 {
-		endLoc = message.Location{Group: jloc.largest.Group + 1, Object: 0}
+		endLoc = message.Location{Group: jloc.largest.Group, Object: 0}
 	}
 
 	if endLoc.Less(startLoc) {
@@ -342,15 +346,21 @@ func inclusiveFetchEnd(end message.Location) message.Location {
 // capFetchEndLocation implements §3628-3632: if the requested end is
 // beyond {Largest.Group, Largest.Object + 1} we cap the response's
 // EndLocation to that watermark+1. Otherwise echo the request's value.
+//
+// The comparison runs in inclusive space via [inclusiveFetchEnd]: the wire
+// form "End Object 0 = the entire group" (§10.12.1) is numerically tiny but
+// semantically huge, so comparing the raw exclusive form would fail to cap
+// a whole-group request that extends past the watermark.
 func capFetchEndLocation(requested, largest message.Location) message.Location {
 	capped := message.Location{Group: largest.Group, Object: largest.Object + 1}
 	// largest+1 might overflow when largest.Object == MaxUint64; in
-	// practice that's astronomically unlikely, but guard so we don't
-	// silently wrap to {largest.Group, 0}.
+	// practice that's astronomically unlikely, but the correct wire form
+	// for "through the end of largest.Group" is precisely the §10.12.1
+	// whole-group encoding {largest.Group, 0}.
 	if largest.Object == math.MaxUint64 {
-		capped = message.Location{Group: largest.Group + 1, Object: 0}
+		capped = message.Location{Group: largest.Group, Object: 0}
 	}
-	if capped.Less(requested) {
+	if largest.Less(inclusiveFetchEnd(requested)) {
 		return capped
 	}
 	return requested
