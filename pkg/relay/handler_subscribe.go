@@ -2,9 +2,7 @@ package relay
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -208,40 +206,29 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 // readSubscribeUpdates is the follow-up dispatch loop for an established
 // downstream SUBSCRIBE. It parses messages off the bidi request stream and
 // routes REQUEST_UPDATE (§10.9) to [sessionHandler.handleSubscribeUpdate];
-// any other follow-up is ignored (the peer is free to send periodic
-// keepalives). The loop exits on io.EOF / reset (subscriber tore the stream
-// down) or ctx cancellation (session shutdown), at which point the deferred
-// cleanup in handleSubscribe evicts the subscription.
+// any other DECODABLE follow-up is ignored. An undecodable one ends the
+// loop and resets the read side (see [readRequestStream]) — the eviction
+// that follows is the same as on FIN/reset. The loop exits on io.EOF /
+// reset (subscriber tore the stream down) or ctx cancellation (session
+// shutdown), at which point the deferred cleanup in handleSubscribe evicts
+// the subscription.
 func (h *sessionHandler) readSubscribeUpdates(
 	ctx context.Context,
 	req *session.Request,
 	sub *registry.DownstreamSub,
 	fullName track.FullTrackName,
 ) {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			m, err := message.Parse(req.Stream)
-			if err != nil {
-				return // EOF / reset / parse error — stream is gone.
+	readRequestStream(ctx, req.Stream, func(m message.Message) bool {
+		if upd, ok := m.(*message.RequestUpdate); ok {
+			// §10.2.2: an update may REGISTER/DELETE token aliases;
+			// a cache fault there is session-fatal.
+			if !h.handleFollowupTokens(ctx, upd) {
+				return false
 			}
-			if upd, ok := m.(*message.RequestUpdate); ok {
-				// §10.2.2: an update may REGISTER/DELETE token aliases;
-				// a cache fault there is session-fatal.
-				if !h.handleFollowupTokens(ctx, upd) {
-					return
-				}
-				h.handleSubscribeUpdate(ctx, sub, fullName, upd)
-			}
+			h.handleSubscribeUpdate(ctx, sub, fullName, upd)
 		}
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		req.Stream.CancelRead(uint64(moqt.StreamResetSessionClosed))
-		<-done
-	}
+		return true
+	})
 }
 
 // handleSubscribeUpdate applies a REQUEST_UPDATE (§10.9) to an established
@@ -532,57 +519,37 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 // races it for the §10.9 response.
 func (h *sessionHandler) readUpstreamMessages(ctx context.Context, up *registry.UpstreamSub) {
 	defer up.CloseUpdates()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			m, err := message.Parse(up.Stream)
-			if err != nil {
-				// A clean FIN parses as io.EOF; anything else is a
-				// malformed / unknown follow-up — reset the read side so
-				// the peer learns we stopped consuming, then let the
-				// caller unregister the upstream.
-				if !errors.Is(err, io.EOF) {
-					up.Stream.CancelRead(uint64(moqt.StreamResetInternalError))
-				}
-				return
+	readRequestStream(ctx, up.Stream, func(m message.Message) bool {
+		switch m.(type) {
+		case *message.RequestOK, *message.RequestError:
+			if !up.RouteUpdateResponse(m) {
+				h.log.LogAttrs(ctx, slog.LevelDebug,
+					"unsolicited response on upstream request stream",
+					slog.Uint64("sub_id", up.ID))
 			}
-			switch m.(type) {
-			case *message.RequestOK, *message.RequestError:
-				if !up.RouteUpdateResponse(m) {
-					h.log.LogAttrs(ctx, slog.LevelDebug,
-						"unsolicited response on upstream request stream",
-						slog.Uint64("sub_id", up.ID))
-				}
-			case *message.RequestUpdate:
-				// §10.2.2: an update may REGISTER/DELETE token aliases;
-				// a cache fault there is session-fatal.
-				if !h.handleFollowupTokens(ctx, m) {
-					return
-				}
-				// §10.9: the receiver of a REQUEST_UPDATE "MUST respond
-				// with exactly one REQUEST_OK or REQUEST_ERROR". The relay
-				// keeps no mutable per-publication parameters, so the
-				// update is acknowledged without further action (same
-				// policy as handleFetchUpdate for a finished FETCH).
-				if err := up.WriteMessage(&message.RequestOK{}); err != nil {
-					h.log.LogAttrs(ctx, slog.LevelDebug,
-						"REQUEST_UPDATE ack on upstream stream failed",
-						slog.String("err", err.Error()))
-				}
-			default:
-				// PUBLISH_DONE and other follow-ups: the publisher FINs
-				// the stream afterwards, which ends this loop and lets
-				// the caller unregister the upstream.
+		case *message.RequestUpdate:
+			// §10.2.2: an update may REGISTER/DELETE token aliases;
+			// a cache fault there is session-fatal.
+			if !h.handleFollowupTokens(ctx, m) {
+				return false
 			}
+			// §10.9: the receiver of a REQUEST_UPDATE "MUST respond
+			// with exactly one REQUEST_OK or REQUEST_ERROR". The relay
+			// keeps no mutable per-publication parameters, so the
+			// update is acknowledged without further action (same
+			// policy as handleFetchUpdate for a finished FETCH).
+			if err := up.WriteMessage(&message.RequestOK{}); err != nil {
+				h.log.LogAttrs(ctx, slog.LevelDebug,
+					"REQUEST_UPDATE ack on upstream stream failed",
+					slog.String("err", err.Error()))
+			}
+		default:
+			// PUBLISH_DONE and other follow-ups: the publisher FINs
+			// the stream afterwards, which ends this loop and lets
+			// the caller unregister the upstream.
 		}
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		up.Stream.CancelRead(uint64(moqt.StreamResetSessionClosed))
-		<-done
-	}
+		return true
+	})
 }
 
 // hasEstablishedUpstream reports whether the entry has at least one upstream

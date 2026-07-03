@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -473,4 +474,89 @@ func (h *sessionHandler) handleFollowupTokens(ctx context.Context, msg message.M
 	h.log.LogAttrs(ctx, slog.LevelDebug, "follow-up token processing failed",
 		slog.String("err", err.Error()))
 	return false
+}
+
+// readRequestStream owns all reads on an established request stream: it
+// parses follow-up messages off the stream and dispatches each to onMsg
+// until the peer tears the stream down (EOF / reset), onMsg returns false,
+// or ctx is cancelled (the read side is then reset with
+// StreamResetSessionClosed to unblock the parse). A malformed follow-up —
+// any non-EOF parse error — resets the read side with
+// StreamResetInternalError so the peer learns reads stopped instead of
+// filling flow control into a void.
+//
+// This is the single scaffolding under readSubscribeUpdates,
+// readFetchUpdates, and readUpstreamMessages; the three differ only in
+// their per-message dispatch.
+func readRequestStream(ctx context.Context, stream session.Stream, onMsg func(message.Message) bool) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			m, err := message.Parse(stream)
+			if err != nil {
+				// Covers peer resets too (a STOP_SENDING on an
+				// already-reset stream is a transport no-op), and may run
+				// after the ctx arm's SessionClosed CancelRead — the first
+				// code sent wins on every bundled adapter.
+				if !errors.Is(err, io.EOF) {
+					stream.CancelRead(uint64(moqt.StreamResetInternalError))
+				}
+				return
+			}
+			if !onMsg(m) {
+				return
+			}
+		}
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		stream.CancelRead(uint64(moqt.StreamResetSessionClosed))
+		<-done
+	}
+}
+
+// serveFetchObjects is the shared response tail of the standalone and
+// joining FETCH handlers: open the data stream, stream the stitched range,
+// count the objects actually written (the FetchServed metric), FIN, and
+// park in the §10.9 follow-up loop until the peer tears the request stream
+// down. kind tags log lines with the FETCH flavour ("standalone" / "joining").
+func (h *sessionHandler) serveFetchObjects(
+	ctx context.Context,
+	req *session.Request,
+	kind string,
+	requestID uint64,
+	entry *registry.TrackEntry,
+	fullName track.FullTrackName,
+	start, end message.Location,
+	order message.GroupOrder,
+	fillTimeout time.Duration,
+) {
+	out, err := h.sess.OpenFetchStream(message.FetchHeader{RequestID: requestID})
+	if err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH OpenFetchStream failed",
+			slog.String("kind", kind), slog.String("err", err.Error()))
+		return
+	}
+
+	// Gather cached objects, stitching the below-floor portion from upstream
+	// when the cache doesn't cover the whole range (§9.4).
+	objs := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
+
+	written, err := streamFetchObjects(out, objs)
+	h.metrics.FetchServed(written)
+	if err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH stream write failed",
+			slog.String("kind", kind), slog.String("err", err.Error()))
+		out.Cancel(moqt.StreamResetInternalError)
+		return
+	}
+	_ = out.Close()
+
+	// Read follow-ups (§10.9 REQUEST_UPDATE, peer FIN/reset) on the bidi
+	// request stream until the peer tears it down or ctx is cancelled, so a
+	// malformed FETCH update is answered with REQUEST_ERROR and the data
+	// stream reset per §10.9.
+	h.readFetchUpdates(ctx, req, out)
 }

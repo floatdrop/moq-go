@@ -102,64 +102,25 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 		return
 	}
 
-	out, err := h.sess.OpenFetchStream(message.FetchHeader{RequestID: msg.RequestID})
-	if err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH OpenFetchStream failed",
-			slog.String("err", err.Error()))
-		return
-	}
-
-	// Gather cached objects, stitching the below-floor portion from upstream
-	// when the cache doesn't cover the whole range (§9.4).
-	objs := h.stitchedFetchObjects(ctx, entry, fullName, sf.StartLocation, sf.EndLocation, order, fillTimeout)
-
-	written, err := streamFetchObjects(out, objs)
-	h.metrics.FetchServed(written)
-	if err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH stream write failed",
-			slog.String("err", err.Error()))
-		out.Cancel(moqt.StreamResetInternalError)
-		return
-	}
-	_ = out.Close()
-
-	// Read follow-ups (§10.9 REQUEST_UPDATE, peer FIN/reset) on the bidi
-	// request stream until the peer tears it down or ctx is cancelled, so a
-	// malformed FETCH update is answered with REQUEST_ERROR and the data
-	// stream reset per §10.9.
-	h.readFetchUpdates(ctx, req, out)
+	h.serveFetchObjects(ctx, req, "standalone", msg.RequestID, entry, fullName,
+		sf.StartLocation, sf.EndLocation, order, fillTimeout)
 }
 
-// readFetchUpdates is the follow-up dispatch loop for an established FETCH.
-// It parses messages off the bidi request stream and routes REQUEST_UPDATE
-// (§10.9) to [sessionHandler.handleFetchUpdate]; any other follow-up is
-// ignored. The loop exits on io.EOF / reset (peer tore the stream down) or
-// ctx cancellation (session shutdown).
+// readFetchUpdates is the follow-up dispatch loop for an established FETCH:
+// REQUEST_UPDATE (§10.9) routes to [sessionHandler.handleFetchUpdate]; any
+// other follow-up is ignored. Scaffolding lives in [readRequestStream].
 func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Request, out *session.OutgoingFetchStream) {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			m, err := message.Parse(req.Stream)
-			if err != nil {
-				return // EOF / reset / parse error — stream is gone.
+	readRequestStream(ctx, req.Stream, func(m message.Message) bool {
+		if upd, ok := m.(*message.RequestUpdate); ok {
+			// §10.2.2: an update may REGISTER/DELETE token aliases;
+			// a cache fault there is session-fatal.
+			if !h.handleFollowupTokens(ctx, upd) {
+				return false
 			}
-			if upd, ok := m.(*message.RequestUpdate); ok {
-				// §10.2.2: an update may REGISTER/DELETE token aliases;
-				// a cache fault there is session-fatal.
-				if !h.handleFollowupTokens(ctx, upd) {
-					return
-				}
-				h.handleFetchUpdate(ctx, req, out, upd)
-			}
+			h.handleFetchUpdate(ctx, req, out, upd)
 		}
-	}()
-	select {
-	case <-done:
-	case <-ctx.Done():
-		req.Stream.CancelRead(uint64(moqt.StreamResetSessionClosed))
-		<-done
-	}
+		return true
+	})
 }
 
 // handleFetchUpdate applies a REQUEST_UPDATE (§10.9) to an in-flight FETCH.
@@ -335,22 +296,8 @@ func (h *sessionHandler) handleJoiningFetch(ctx context.Context, req *session.Re
 		return
 	}
 
-	out, err := h.sess.OpenFetchStream(message.FetchHeader{RequestID: msg.RequestID})
-	if err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "joining FETCH OpenFetchStream failed",
-			slog.String("err", err.Error()))
-		return
-	}
-	objs := h.stitchedFetchObjects(ctx, entry, jloc.fullName, startLoc, endLoc, order, 0)
-	if _, err := streamFetchObjects(out, objs); err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "joining FETCH stream write failed",
-			slog.String("err", err.Error()))
-		out.Cancel(moqt.StreamResetInternalError)
-		return
-	}
-	_ = out.Close()
-
-	h.readFetchUpdates(ctx, req, out)
+	h.serveFetchObjects(ctx, req, "joining", msg.RequestID, entry, jloc.fullName,
+		startLoc, endLoc, order, 0)
 }
 
 // fetchGroupOrder pulls the GROUP_ORDER parameter (§10.2.8) out of a
