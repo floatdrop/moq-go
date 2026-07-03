@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -12,10 +11,9 @@ import (
 	"time"
 
 	"github.com/lmittmann/tint"
-	"github.com/quic-go/quic-go"
 
+	dialpkg "github.com/floatdrop/moq-go/internal/dial"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/session/quicconn"
 )
 
 func main() {
@@ -56,26 +54,10 @@ func main() {
 }
 
 // dial establishes a QUIC connection and completes the MOQT client handshake.
+// addr may be a bare host:port or a moqt:// URI (see internal/dial).
 func dial(ctx context.Context, addr string) (*session.Session, error) {
-	tlsCfg := &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec // G402: dev-only demo client; certs not verified by design.
-		NextProtos:         []string{"moq-00"},
-	}
-	quicCfg := &quic.Config{
-		MaxIdleTimeout:                   30 * time.Second,
-		KeepAlivePeriod:                  5 * time.Second,
-		EnableDatagrams:                  true,
-		EnableStreamResetPartialDelivery: true, // §11.4.3 RESET_STREAM_AT
-	}
-	qconn, err := quic.DialAddr(ctx, addr, tlsCfg, quicCfg)
-	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", addr, err)
-	}
-	sess, err := session.Client(ctx, quicconn.New(qconn),
-		session.WithImplementation("clock/0.1"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("moqt handshake: %w", err)
-	}
-	return sess, nil
+	return dialpkg.QUIC(ctx, addr, dialpkg.Options{
+		Implementation:     "clock/0.1",
+		InsecureSkipVerify: true, // dev-only demo client; certs not verified by design
+	})
 }

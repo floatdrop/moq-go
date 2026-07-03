@@ -11,8 +11,8 @@ import (
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 
+	dialpkg "github.com/floatdrop/moq-go/internal/dial"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/session/quicconn"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/wtconn"
 )
 
@@ -72,26 +72,16 @@ func quicConfig() *quic.Config {
 }
 
 func (h *harness) dialQUIC(ctx context.Context, u *url.URL) (*session.Session, error) {
-	addr := u.Host
-	if u.Port() == "" {
-		addr = u.Host + ":443"
-	}
-	tlsCfg := &tls.Config{
-		//nolint:gosec // G402: TLS verification is a CLI flag for self-signed interop relays.
-		InsecureSkipVerify: h.insecure,
-		// Offer every MOQT-over-QUIC ALPN we speak; the relay picks. The MOQT
-		// version is then negotiated at the SETUP layer.
-		NextProtos: []string{"moqt-18", "moqt-17", "moqt-16", "moq-00"},
-	}
-	qconn, err := quic.DialAddr(ctx, addr, tlsCfg, quicConfig())
-	if err != nil {
-		return nil, fmt.Errorf("dial quic %s: %w", addr, err)
-	}
-	sess, err := session.Client(ctx, quicconn.New(qconn), session.WithImplementation("moq-interop-client/0.1"))
-	if err != nil {
-		return nil, fmt.Errorf("moqt handshake: %w", err)
-	}
-	return sess, nil
+	// internal/dial parses the moqt:// URI itself and carries its authority
+	// and path/query in the §3.1.4 AUTHORITY / PATH Setup Options — the
+	// §10.3.1.1 MUST this binary's hand-rolled dial used to drop.
+	return dialpkg.QUIC(ctx, u.String(), dialpkg.Options{
+		Implementation:     "moq-interop-client/0.1",
+		InsecureSkipVerify: h.insecure, // CLI flag for self-signed interop relays
+		// Offer every MOQT-over-QUIC ALPN we speak; the relay picks. The
+		// MOQT version is then negotiated at the SETUP layer.
+		ALPN: []string{"moqt-18", "moqt-17", "moqt-16", "moq-00"},
+	})
 }
 
 func (h *harness) dialWebTransport(ctx context.Context, u *url.URL) (*session.Session, error) {
