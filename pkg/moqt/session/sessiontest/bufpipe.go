@@ -2,6 +2,7 @@ package sessiontest
 
 import (
 	"io"
+	"net"
 	"sync"
 )
 
@@ -65,17 +66,25 @@ func newBufPipe(capacity int) (pipeReadCloser, pipeWriteCloser) {
 
 // write copies all of p into the ring, blocking while the buffer is full. It
 // returns early with rerr if the reader has gone away (mirrors io.Pipe writing
-// to a closed reader).
+// to a closed reader), and with werr when the WRITE side itself was already
+// closed — real QUIC rejects writes after FIN, and silently buffering them
+// here would let tests pass flows production fails on.
 func (bp *bufPipe) write(p []byte) (int, error) {
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
 	total := 0
 	for len(p) > 0 {
-		for bp.n == len(bp.buf) && bp.rerr == nil {
+		if bp.werr != nil {
+			return total, net.ErrClosed
+		}
+		for bp.n == len(bp.buf) && bp.rerr == nil && bp.werr == nil {
 			bp.notFull.Wait()
 		}
 		if bp.rerr != nil {
 			return total, bp.rerr
+		}
+		if bp.werr != nil {
+			return total, net.ErrClosed
 		}
 		// Copy into the contiguous free region starting at the write index,
 		// stopping at the buffer end (the next iteration handles the wrap).
@@ -125,6 +134,7 @@ func (bp *bufPipe) closeWrite(err error) error {
 		bp.werr = err
 	}
 	bp.notEmpty.Broadcast()
+	bp.notFull.Broadcast() // wake any writer blocked on a full buffer
 	bp.mu.Unlock()
 	return nil
 }

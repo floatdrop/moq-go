@@ -77,7 +77,7 @@ which returns a typed `IncomingSubgroupStream` / `IncomingFetchStream` whose
 `ReadDecoded` resolves the deltas back to absolute IDs.
 
 **The relay** (`pkg/relay`) wires many sessions together: a track registry routes
-objects, a per-track LRU+TTL cache (otter) serves joining FETCHes, an `Authorizer`
+objects, a per-track FIFO ring cache with read-side TTL serves joining FETCHes, an `Authorizer`
 hook gates each request once before state mutation, and a `DiscoveryStore`
 triggers on-demand upstream SUBSCRIBE. `session_handler.go` is the per-session
 dispatch hub.

@@ -15,8 +15,8 @@ const MaxControlMessagePayload = 0xFFFF
 // payload is freshly allocated; the caller owns it.
 //
 // ReadFrame returns io.EOF only when r reports EOF before the type byte has
-// been read; once any byte has been consumed, ErrShortBuffer is returned
-// instead.
+// been read; once any byte has been consumed, a truncated frame surfaces as
+// io.ErrUnexpectedEOF.
 func ReadFrame(r io.Reader) (uint64, []byte, error) {
 	msgType, err := ReadVarint(NewByteReader(r))
 	if err != nil {

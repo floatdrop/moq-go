@@ -37,9 +37,11 @@ type Metrics interface {
 	// queue overflows and the object is dropped (§8 slow-reader pressure).
 	ObjectDropped()
 
-	// SubscriptionResetSlowReader is called when a subscriber exceeds
-	// [Config.MaxDropsBeforeReset] and the relay forcibly resets its outbound
-	// stream and terminates the subscription.
+	// SubscriptionResetSlowReader is called when the relay forcibly resets a
+	// subscriber's outbound stream and terminates the subscription because it
+	// fell too far behind: an object waited longer than [Config.MaxFanoutLag]
+	// in the send queue (the primary trigger), or the optional cumulative
+	// [Config.MaxDropsBeforeReset] cap was exceeded.
 	SubscriptionResetSlowReader()
 
 	// FetchServed is called when a FETCH is answered from the relay's object

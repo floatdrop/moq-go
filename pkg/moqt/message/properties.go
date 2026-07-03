@@ -73,9 +73,9 @@ func IsMandatoryTrackProperty(t PropertyType) bool {
 // outer message frame (§2.5).  The raw bytes are typically obtained via
 // wire.Reader.RemainingBytes().
 //
-// Returns an error if any pair cannot be parsed, or if a Mandatory Track
-// Property (range 0x4000–0x7FFF) is present and the caller should treat the
-// track as unsupported (see §2.5.1).
+// Returns an error if any pair cannot be parsed. Mandatory Track Property
+// screening (§2.5.1) is the caller's job — see
+// [FirstUnknownMandatoryTrackProperty].
 func ParseTrackProperties(raw []byte) ([]wire.KVPair, error) {
 	if len(raw) == 0 {
 		return nil, nil

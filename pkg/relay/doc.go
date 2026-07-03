@@ -40,7 +40,7 @@
 //	                   machine. This package never imports the parent — the
 //	                   dependency only ever points handler → registry.
 //
-// The other sibling subpackages are cache (per-track LRU+TTL object cache),
+// The other sibling subpackages are cache (per-track FIFO ring object cache with read-side TTL),
 // discovery (cross-instance track + namespace advertisement fabric), and
 // internal/relaytest (shared test scaffolding).
 //

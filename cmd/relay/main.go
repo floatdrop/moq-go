@@ -203,7 +203,7 @@ func catalogPolicy(catalogName string, ttl time.Duration) relay.CacheTTLPolicy {
 // tlsConfig returns a TLS config suitable for the chosen MOQT transport.
 // If certFile and keyFile are non-empty the certs are loaded from disk;
 // otherwise a self-signed ECDSA-P256 certificate is generated in memory
-// (valid for 24 h, appropriate for local development only). alpns lists
+// (valid for 10 days — within Chrome's ≤14-day tolerance for self-signed certs — appropriate for local development only). alpns lists
 // the acceptable ALPNs in server-preference order.
 func tlsConfig(certFile, keyFile string, alpns []string) (*tls.Config, error) {
 	var cert tls.Certificate
@@ -323,6 +323,9 @@ func selfSignedCert() (tls.Certificate, error) {
 		return tls.Certificate{}, err
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	// SEC1 EC keys use the "EC PRIVATE KEY" PEM type (RFC 5915); the generic
+	// "PRIVATE KEY" label denotes PKCS#8 and only parsed because
+	// tls.X509KeyPair tries every format.
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
 	return tls.X509KeyPair(certPEM, keyPEM)
 }

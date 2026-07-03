@@ -7,8 +7,11 @@
 // The implementation deliberately mirrors a real QUIC stream's semantics
 // where it matters for tests:
 //
-//   - Opening a unidirectional stream is purely local; the peer doesn't see
-//     it until at least one byte is written (matching quic-go).
+//   - Opening a stream never blocks (per the Conn contract): the stream is
+//     offered to the peer's accept queue immediately, and a full queue —
+//     the peer isn't accepting — surfaces as ErrNoStreamCredit rather than
+//     a deadlocked opener. (Unlike quic-go, the peer can therefore see a
+//     uni stream before its first byte is written.)
 //   - CancelRead / CancelWrite unblock any in-flight Read / Write with an
 //     error.
 //   - CloseWithError cancels the shared connection context, which unblocks
@@ -254,7 +257,16 @@ func (c *pipeConn) track(s cancellable) bool {
 }
 
 func (c *pipeConn) OpenUniStream() (session.SendStream, error) {
+	select {
+	case <-c.ctx.Done():
+		return nil, errConnClosed
+	default:
+	}
 	s := newUniStream(c.bufSize)
+	// Non-blocking per the Conn contract: a full accept queue means the
+	// peer isn't draining opens — surface ErrNoStreamCredit instead of
+	// deadlocking the opener (the transport equivalent of an exhausted
+	// stream limit).
 	select {
 	case c.uniOut <- s:
 		if !c.track(s) {
@@ -265,6 +277,8 @@ func (c *pipeConn) OpenUniStream() (session.SendStream, error) {
 		return s, nil
 	case <-c.ctx.Done():
 		return nil, errConnClosed
+	default:
+		return nil, session.ErrNoStreamCredit
 	}
 }
 
@@ -292,6 +306,7 @@ func (c *pipeConn) OpenStream() (session.Stream, error) {
 		return nil, session.ErrNoStreamCredit
 	}
 	mine, peers := newBidiStreamPair(c.bufSize)
+	// Non-blocking per the Conn contract — see OpenUniStream.
 	select {
 	case c.bidiOut <- peers:
 		if !c.track(mine) {
@@ -302,6 +317,8 @@ func (c *pipeConn) OpenStream() (session.Stream, error) {
 		return mine, nil
 	case <-c.ctx.Done():
 		return nil, errConnClosed
+	default:
+		return nil, session.ErrNoStreamCredit
 	}
 }
 

@@ -619,9 +619,9 @@ func (r *Relay) beginShutdown() []*session.Session {
 }
 
 // isShutdownErr reports whether err is one of the "the world is going away"
-// signals that should be treated as a clean shutdown rather than a failure.
-// Most transports (quic-go, webtransport-go, net.Listener) return one of
-// net.ErrClosed, context.Canceled, or io.EOF on Close; we accept all three.
+// signals that should be treated as a clean shutdown rather than a failure:
+// net.ErrClosed, context.Canceled, or context.DeadlineExceeded (transports
+// surface one of these when the conn/listener is closed under a loop).
 func isShutdownErr(err error) bool {
 	if err == nil {
 		return false

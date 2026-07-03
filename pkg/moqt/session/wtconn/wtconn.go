@@ -143,7 +143,8 @@ func (s *bidiStream) CancelWrite(code uint64) {
 func (s *bidiStream) Context() context.Context { return s.s.Context() }
 
 // defaultBacklog bounds the pending-session queue used by [Listener].
-// 16 mirrors the depth of the in-process sessiontest queue.
+// A small queue absorbs handler-invocation bursts while the relay accept
+// loop catches up.
 const defaultBacklog = 16
 
 // Listener adapts a *webtransport.Server so it can be handed directly

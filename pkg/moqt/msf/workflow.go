@@ -28,8 +28,9 @@ func BeginBroadcast(tracks []Track, generatedAt time.Time) Catalog {
 
 // EndBroadcastTerminate returns the §11.3 final independent catalog
 // with isComplete=true and an empty Tracks array. After emitting this
-// catalog object the publisher MUST also send SUBSCRIBE_DONE with
-// status 0x2 Track Ended on each active track stream — this helper
+// catalog object the publisher MUST also end each active publication
+// with PUBLISH_DONE status 0x2 Track Ended (moqt.PublishDoneTrackEnded;
+// the MSF draft's older text calls it SUBSCRIBE_DONE) — this helper
 // only constructs the catalog body.
 func EndBroadcastTerminate(generatedAt time.Time) Catalog {
 	if generatedAt.IsZero() {

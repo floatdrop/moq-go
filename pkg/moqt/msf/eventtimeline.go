@@ -30,7 +30,7 @@ const (
 // EventIndexLocation.
 //
 // Data is the opaque application-defined payload whose schema is
-// declared by the catalog's EventType field for this track (§5.1.13).
+// declared by the catalog's EventType field for this track (§5.2.5).
 type EventRecord struct {
 	Index    EventIndex
 	Time     int64

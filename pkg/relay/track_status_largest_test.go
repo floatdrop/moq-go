@@ -95,9 +95,9 @@ func TestTrackStatus_OmitsLargestObjectBeforeAnyObjects(t *testing.T) {
 // the range implies. Per §3553 the subscriber interprets gaps as
 // "objects do not exist".
 //
-// otter's W-TinyLFU policy doesn't promise an exact set of survivors;
-// the test asserts the boundary (Len ≤ cap on the recent-tail FETCH,
-// fewer-than-cap on the early-range FETCH) rather than specific IDs.
+// The FIFO ring evicts strictly oldest-first, but the test asserts only
+// the boundary (Len ≤ cap on the recent-tail FETCH, fewer-than-cap on
+// the early-range FETCH) rather than specific IDs.
 func TestFetch_CacheEvictionUnderLoad(t *testing.T) {
 	t.Parallel()
 
@@ -137,8 +137,8 @@ func TestFetch_CacheEvictionUnderLoad(t *testing.T) {
 	const totalObjects = cacheCap * 4
 	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, totalObjects)
 
-	// otter's admission filter runs partly asynchronously — wait for
-	// the cache to settle before the read-side asserts.
+	// Give the relay a beat to drain the publish flood into the cache
+	// before the read side asserts.
 	time.Sleep(200 * time.Millisecond)
 
 	// FETCH the recent tail — those objects should still be present.
@@ -165,9 +165,9 @@ func TestFetch_CacheEvictionUnderLoad(t *testing.T) {
 	}
 
 	// FETCH the oldest range — these objects should mostly be evicted.
-	// We don't claim to know exactly how many survive; otter's
-	// admission policy might keep a few. The boundary is "fewer than
-	// the range itself".
+	// The FIFO ring keeps exactly the newest cacheCap entries, but the
+	// test only asserts the boundary: fewer objects than the range
+	// itself.
 	fetchSess2 := dialAnotherClient(t, pubSess)
 	_, oldest := fetchAndDrain(t,
 		fetchSess2,
