@@ -390,7 +390,10 @@ func TestFetch_JoiningBuffersUntilSubscribeEstablished(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer subStream.Close()
-	go drainAllStreams(t.Context(), fetchSess)
+	// NOTE: no drainAllStreams here — the fetch goroutine's AcceptDataStream
+	// must be the session's only data-stream consumer, or a drain goroutine
+	// can steal the FETCH response. No live objects flow (everything was
+	// published before the SUBSCRIBE), so nothing else needs draining.
 
 	select {
 	case res := <-done:

@@ -61,13 +61,23 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		return
 	}
 
+	// §2.1 dedup across redundant upstream publishers, same ledger as the
+	// subgroup path (handler_fanout): the first copy of {GroupID, ObjectID}
+	// wins; later copies from peer upstreams are dropped so each subscriber
+	// sees the object exactly once — and the loser neither re-caches nor
+	// re-bumps the watermark.
+	if !entry.ClaimDelivered(d.GroupID, d.ObjectID) {
+		return
+	}
+
 	// §10.2.11: a forwarded datagram counts towards the track's
 	// LARGEST_OBJECT watermark just like a subgroup object does.
 	entry.UpdateLargest(message.Location{Group: d.GroupID, Object: d.ObjectID})
 
-	// Cache via the per-track ObjectCache. The cache stores a defensive
-	// copy of the payload + properties so the caller may continue to
-	// use d after this returns.
+	// Cache via the per-track ObjectCache. The cache retains the payload +
+	// properties BY REFERENCE (see cache.PutDatagram); ReceiveDatagram
+	// hands out caller-owned buffers, so nothing here mutates them after
+	// the Put.
 	entry.Cache.PutDatagram(d)
 
 	downstream := entry.CopyDownstream()
@@ -75,9 +85,13 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		if !sub.IsEstablished() {
 			continue
 		}
-		// §5.1.2 filter evaluation. A filter miss simply means we
-		// don't send — there is no "stream slot" to recover from.
-		if !sub.PassesFilter(d.GroupID, d.ObjectID) {
+		// One lock acquisition folds the §9.2 Forward-State gate and the
+		// §5.1.2 filter test, exactly like the subgroup fanout: a paused
+		// subscription (Forward State 0) receives no datagrams. There is
+		// no per-datagram stream to reset, so the groupExhausted signal
+		// is irrelevant here.
+		forward, _ := sub.ForwardDecision(d.GroupID, d.ObjectID)
+		if !forward {
 			continue
 		}
 		// Re-encode the datagram with the subscriber's outbound

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
@@ -240,5 +241,168 @@ func TestDatagram_UnknownAliasDroppedSilently(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("subscriber did not receive the follow-up datagram — session may have been closed by the bogus alias")
+	}
+}
+
+// TestDatagram_PausedSubscriptionReceivesNothing pins the §9.2 Forward-State
+// gate on the datagram path: a subscription paused via REQUEST_UPDATE
+// (Forward=0) receives no datagrams, and resuming (Forward=1) restores
+// delivery — mirroring the subgroup fanout's ForwardDecision gate.
+func TestDatagram_PausedSubscriptionReceivesNothing(t *testing.T) {
+	t.Parallel()
+
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	const publisherAlias = uint64(7)
+	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
+		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Name:       []byte("cam1"),
+		TrackAlias: publisherAlias,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer pubStream.Close()
+
+	subSess := dialAnotherClient(t, pubSess)
+	subMsg := &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	}
+	subStream, err := subSess.Subscribe(t.Context(), subMsg)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer subStream.Close()
+
+	received := make(chan uint64, 8)
+	go func() {
+		for {
+			d, err := subSess.ReceiveDatagram(t.Context())
+			if err != nil {
+				return
+			}
+			received <- d.ObjectID
+		}
+	}()
+
+	send := func(objectID uint64) {
+		t.Helper()
+		if err := pubSess.SendDatagram(&message.ObjectDatagram{
+			Type:          0x08, // DEFAULT_PRIORITY only
+			TrackAlias:    publisherAlias,
+			GroupID:       0,
+			ObjectID:      objectID,
+			ObjectPayload: []byte("d"),
+		}); err != nil {
+			t.Fatalf("SendDatagram(%d): %v", objectID, err)
+		}
+	}
+
+	// Pause, then publish: nothing may arrive.
+	if _, err := subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+		message.Parameters{message.ForwardParam(false)}); err != nil {
+		t.Fatalf("UpdateRequest(Forward=0): %v", err)
+	}
+	send(1)
+	select {
+	case id := <-received:
+		t.Fatalf("received datagram %d while Forward State 0", id)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Resume, then publish: delivery restored.
+	if _, err := subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+		message.Parameters{message.ForwardParam(true)}); err != nil {
+		t.Fatalf("UpdateRequest(Forward=1): %v", err)
+	}
+	send(2)
+	select {
+	case id := <-received:
+		if id != 2 {
+			t.Fatalf("received datagram %d after resume, want 2", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no datagram delivered after Forward State 1")
+	}
+}
+
+// TestDatagram_RedundantPublishersDeduped pins §2.1 on the datagram path:
+// with two redundant publishers feeding the same track, each {Group,
+// Object} is forwarded to a subscriber exactly once (the subgroup path
+// already dedups via the same entry ledger).
+func TestDatagram_RedundantPublishersDeduped(t *testing.T) {
+	t.Parallel()
+
+	pubA, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	pubB := dialAnotherClient(t, pubA)
+
+	publish := func(sess *session.Session, alias uint64) {
+		t.Helper()
+		stream, err := sess.Publish(t.Context(), &message.Publish{
+			Namespace:  wire.TrackNamespace{[]byte("video")},
+			Name:       []byte("cam1"),
+			TrackAlias: alias,
+		})
+		if err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+		t.Cleanup(func() { _ = stream.Close() })
+	}
+	publish(pubA, 7)
+	publish(pubB, 9)
+
+	subSess := dialAnotherClient(t, pubA)
+	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer subStream.Close()
+
+	received := make(chan uint64, 8)
+	go func() {
+		for {
+			d, err := subSess.ReceiveDatagram(t.Context())
+			if err != nil {
+				return
+			}
+			received <- d.ObjectID
+		}
+	}()
+
+	// Both publishers send the SAME object {group 0, object 5}.
+	for _, p := range []struct {
+		sess  *session.Session
+		alias uint64
+	}{{pubA, 7}, {pubB, 9}} {
+		if err := p.sess.SendDatagram(&message.ObjectDatagram{
+			Type:          0x08,
+			TrackAlias:    p.alias,
+			GroupID:       0,
+			ObjectID:      5,
+			ObjectPayload: []byte("dup"),
+		}); err != nil {
+			t.Fatalf("SendDatagram: %v", err)
+		}
+	}
+
+	// Exactly one copy arrives.
+	select {
+	case id := <-received:
+		if id != 5 {
+			t.Fatalf("received object %d, want 5", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no datagram delivered")
+	}
+	select {
+	case id := <-received:
+		t.Fatalf("duplicate datagram %d delivered (dedup broken)", id)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
