@@ -65,6 +65,16 @@ type CachedObject struct {
 	ReceivedAt        time.Time
 }
 
+// IsStatusMarker reports whether the object is a §11.2.1.1 status marker
+// (End of Group / End of Track) rather than a real object. Markers describe
+// the absence of objects: the subscription path forwards them, but FETCH
+// responses never serialize them — the Object Status field "is absent in
+// Objects delivered via a FETCH". Zero-length payloads with Status 0 are
+// real (Normal) objects, not markers.
+func (o *CachedObject) IsStatusMarker() bool {
+	return len(o.Payload) == 0 && o.Status != 0
+}
+
 // Cache is the write-side contract implemented by both [NopCache] (tests
 // that don't need real caching) and [*ObjectCache] (the real bounded
 // in-memory cache). The relay's fanout holds a Cache and calls Put /

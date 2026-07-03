@@ -109,9 +109,10 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 	// Gather cached objects, stitching the below-floor portion from upstream
 	// when the cache doesn't cover the whole range (§9.4).
 	objs := h.stitchedFetchObjects(ctx, entry, fullName, sf.StartLocation, sf.EndLocation, order, fillTimeout)
-	h.metrics.FetchServed(len(objs))
 
-	if err := streamFetchObjects(out, objs); err != nil {
+	written, err := streamFetchObjects(out, objs)
+	h.metrics.FetchServed(written)
+	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH stream write failed",
 			slog.String("err", err.Error()))
 		out.Cancel(moqt.StreamResetInternalError)
@@ -297,7 +298,7 @@ func (h *sessionHandler) handleJoiningFetch(ctx context.Context, req *session.Re
 		return
 	}
 	objs := h.stitchedFetchObjects(ctx, entry, jloc.fullName, startLoc, endLoc, order, 0)
-	if err := streamFetchObjects(out, objs); err != nil {
+	if _, err := streamFetchObjects(out, objs); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "joining FETCH stream write failed",
 			slog.String("err", err.Error()))
 		out.Cancel(moqt.StreamResetInternalError)
@@ -503,17 +504,23 @@ func (h *sessionHandler) fetchUpstreamRange(
 		if obj.EndOfNonExistentRange || obj.EndOfUnknownRange {
 			continue // §11.4.4.2 absence markers carry no payload
 		}
+		// The §11.4.4.1 Datagram bit carries the original wire shape
+		// across this relay hop, so the object is re-emitted downstream
+		// with the same forwarding preference it was published with.
+		// (Stitched objects are merged into the response only — they are
+		// not written back into the cache.)
+		pref := cache.ForwardingSubgroup
+		if obj.Datagram {
+			pref = cache.ForwardingDatagram
+		}
 		out = append(out, &cache.CachedObject{
 			GroupID:           obj.GroupID,
 			ObjectID:          obj.ObjectID,
 			SubgroupID:        obj.SubgroupID,
 			PublisherPriority: obj.PublisherPriority,
-			// FETCH responses don't preserve the original datagram-vs-subgroup
-			// shape; re-emit as subgroup objects (the common case).
-			ForwardingPref: cache.ForwardingSubgroup,
-			Status:         obj.ObjectStatus,
-			Properties:     obj.Properties,
-			Payload:        obj.Payload,
+			ForwardingPref:    pref,
+			Properties:        obj.Properties,
+			Payload:           obj.Payload,
 		})
 	}
 	return out
@@ -579,8 +586,9 @@ func exclusiveFetchEnd(incl message.Location) message.Location {
 //     absolute Object ID in the new group.
 //   - Datagram-flavoured objects set bit 0x40 (§4486-4490); subscriber
 //     ignores the subgroup bits.
-func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedObject) error {
+func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedObject) (int, error) {
 	var (
+		written      int
 		prevGroup    uint64
 		prevObject   uint64
 		prevPriority uint8
@@ -591,6 +599,14 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 	)
 
 	for _, o := range objs {
+		// §11.2.1.1: the Object Status field "is absent in Objects
+		// delivered via a FETCH". Cached status markers describe absence,
+		// so they are simply not serialized — the gap in Object IDs
+		// conveys it.
+		if o.IsStatusMarker() {
+			continue
+		}
+
 		fo := &message.FetchObject{}
 
 		switch {
@@ -661,16 +677,12 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 			fo.Properties = o.Properties
 		}
 
-		if len(o.Payload) == 0 && o.Status != 0 {
-			fo.SerializationFlags |= message.FetchFlagStatus
-			fo.ObjectStatus = o.Status
-		} else {
-			fo.ObjectPayload = o.Payload
-		}
+		fo.ObjectPayload = o.Payload
 
 		if err := out.WriteObject(fo); err != nil {
-			return err
+			return written, err
 		}
+		written++
 
 		prevGroup = o.GroupID
 		prevObject = o.ObjectID
@@ -678,5 +690,5 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 		havePrev = true
 	}
 
-	return nil
+	return written, nil
 }

@@ -256,16 +256,19 @@ func (s *IncomingFetchStream) ReadObject() (*message.FetchObject, error) {
 //
 // End-of-range markers (§11.4.4.2) surface via EndOfNonExistentRange or
 // EndOfUnknownRange; for those, GroupID / ObjectID hold the absolute range
-// boundary the marker carries and the payload / status / properties fields
-// are zero.
+// boundary the marker carries and the payload / properties fields are zero.
 type DecodedFetchObject struct {
 	GroupID           uint64
 	ObjectID          uint64
 	SubgroupID        uint64
 	PublisherPriority uint8
-	ObjectStatus      uint64
 	Properties        []byte
 	Payload           []byte
+
+	// Datagram reports the §11.4.4.1 Datagram bit (0x40): the object was
+	// published with Forwarding Preference "Datagram" and has no Subgroup
+	// ID (SubgroupID is 0).
+	Datagram bool
 
 	EndOfNonExistentRange bool // §11.4.4.2 flag 0x8C
 	EndOfUnknownRange     bool // §11.4.4.2 flag 0x10C
@@ -303,9 +306,9 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 	}
 
 	d := &DecodedFetchObject{
-		ObjectStatus: raw.ObjectStatus,
-		Properties:   raw.Properties,
-		Payload:      raw.ObjectPayload,
+		Datagram:   raw.IsDatagram(),
+		Properties: raw.Properties,
+		Payload:    raw.ObjectPayload,
 	}
 
 	// Group / Object reconstruction.
@@ -324,7 +327,7 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		// The "prior" and "prior+1" modes do exactly that; only "zero" and
 		// "explicit" are valid here. When the Datagram bit (0x40) is set the
 		// subgroup bits are ignored (§11.4.4.1), so skip the check then.
-		if raw.SerializationFlags&message.FetchFlagDatagram == 0 {
+		if !raw.IsDatagram() {
 			if m := raw.SubgroupMode(); m == message.FetchSubgroupIDPrior ||
 				m == message.FetchSubgroupIDPriorPlusOne {
 				return nil, fmt.Errorf(
@@ -354,16 +357,23 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		}
 	}
 
-	// SubgroupID reconstruction per §11.4.4.1 modes.
-	switch raw.SubgroupMode() {
-	case message.FetchSubgroupIDZero:
-		d.SubgroupID = 0
-	case message.FetchSubgroupIDPrior:
-		d.SubgroupID = s.decPrevSubgroup
-	case message.FetchSubgroupIDPriorPlusOne:
-		d.SubgroupID = s.decPrevSubgroup + 1
-	case message.FetchSubgroupIDExplicit:
-		d.SubgroupID = raw.SubgroupID
+	// SubgroupID reconstruction per §11.4.4.1 modes. Datagram objects
+	// (bit 0x40) have no Subgroup ID and the mode bits are ignored; they
+	// also don't become the "prior Object's Subgroup ID" for later objects
+	// (the spec is silent here; this mirrors the §11.4.4.2 rule that the
+	// prior Subgroup ID comes from the last actual subgroup object).
+	if !d.Datagram {
+		switch raw.SubgroupMode() {
+		case message.FetchSubgroupIDZero:
+			d.SubgroupID = 0
+		case message.FetchSubgroupIDPrior:
+			d.SubgroupID = s.decPrevSubgroup
+		case message.FetchSubgroupIDPriorPlusOne:
+			d.SubgroupID = s.decPrevSubgroup + 1
+		case message.FetchSubgroupIDExplicit:
+			d.SubgroupID = raw.SubgroupID
+		}
+		s.decPrevSubgroup = d.SubgroupID
 	}
 
 	// Priority: inherit from previous unless explicitly set on this object.
@@ -373,10 +383,10 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		d.PublisherPriority = s.decPrevPriority
 	}
 
-	// Advance decoder state.
+	// Advance decoder state (decPrevSubgroup advances above, with the same
+	// datagram guard as its reconstruction).
 	s.decPrevGroup = d.GroupID
 	s.decPrevObject = d.ObjectID
-	s.decPrevSubgroup = d.SubgroupID
 	s.decPrevPriority = d.PublisherPriority
 	s.decHavePrev = true
 

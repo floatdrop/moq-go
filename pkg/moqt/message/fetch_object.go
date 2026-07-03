@@ -29,12 +29,11 @@ type FetchObject struct {
 	// Properties are present when FetchFlagProperties (0x20) is set.
 	Properties []byte
 
-	// ObjectPayload is present when FetchFlagStatus (0x40) is NOT set.
-	// Encoded on the wire with a varint length prefix.
+	// ObjectPayload is always present, encoded on the wire with a varint
+	// length prefix (§11.4.4 Figure 27). FETCH objects carry no Object
+	// Status field (§11.2.1.1); absent ranges are expressed with the
+	// end-of-range markers instead.
 	ObjectPayload []byte
-
-	// ObjectStatus is present when FetchFlagStatus (0x40) is set.
-	ObjectStatus uint64
 }
 
 // Serialization flag bits per §11.4.4.1 (Table 8 & 9).
@@ -44,7 +43,7 @@ type FetchObject struct {
 // Bit 3  (0x08): Group ID Delta present.
 // Bit 4  (0x10): Priority field present.
 // Bit 5  (0x20): Properties field present.
-// Bit 6  (0x40): Status field present (instead of payload).
+// Bit 6  (0x40): Datagram — no Subgroup ID; the subgroup-mode LSBs are ignored.
 // Bit 7+ : reserved / end-of-range special values.
 const (
 	FetchFlagSubgroupIDMode uint64 = 0x03 // bits 0–1: subgroup encoding mode
@@ -52,8 +51,7 @@ const (
 	FetchFlagGroupIDDelta   uint64 = 0x08 // bit 3: Group ID Delta present
 	FetchFlagPriority       uint64 = 0x10 // bit 4: Priority present
 	FetchFlagProperties     uint64 = 0x20 // bit 5: Properties present
-	FetchFlagStatus         uint64 = 0x40 // bit 6: Status present (no payload)
-	FetchFlagDatagram       uint64 = 0x40 // bit 6: Datagram — ignore subgroup bits (alias)
+	FetchFlagDatagram       uint64 = 0x40 // bit 6: Datagram — ignore subgroup bits
 )
 
 // FetchSubgroupIDMode encodes how the Subgroup ID is determined (bits 0–1).
@@ -78,7 +76,14 @@ const (
 // requires Group ID and Object ID fields to follow the flags varint.
 // For normal objects, the payload is length-prefixed (varint + bytes).
 func (o *FetchObject) Append(w *wire.Writer) {
-	w.Varint(o.SerializationFlags)
+	flags := o.SerializationFlags
+	// §11.4.4.1: when the Datagram bit is set the publisher "SHOULD set the
+	// two least significant bits to zero"; mask them so hand-built flag
+	// combinations stay conformant on the wire.
+	if flags&FetchFlagDatagram != 0 && flags < 128 {
+		flags &^= FetchFlagSubgroupIDMode
+	}
+	w.Varint(flags)
 
 	// End-of-range markers: Group ID and Object ID are always present (§11.4.4.2).
 	if o.SerializationFlags == FetchEndOfRangeObject || o.SerializationFlags == FetchEndOfRangeGroup {
@@ -91,8 +96,7 @@ func (o *FetchObject) Append(w *wire.Writer) {
 		w.Varint(o.GroupIDDelta)
 	}
 
-	mode := FetchSubgroupIDMode(o.SerializationFlags & FetchFlagSubgroupIDMode)
-	if mode == FetchSubgroupIDExplicit {
+	if o.hasSubgroupIDField() {
 		w.Varint(o.SubgroupID)
 	}
 
@@ -108,12 +112,8 @@ func (o *FetchObject) Append(w *wire.Writer) {
 		w.VarintBytes(o.Properties)
 	}
 
-	if o.SerializationFlags&FetchFlagStatus != 0 {
-		w.Varint(o.ObjectStatus)
-	} else {
-		// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 27.
-		w.VarintBytes(o.ObjectPayload)
-	}
+	// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 27.
+	w.VarintBytes(o.ObjectPayload)
 }
 
 // Parse deserializes a FetchObject from r.
@@ -149,8 +149,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 		o.GroupIDDelta = delta
 	}
 
-	mode := FetchSubgroupIDMode(flags & FetchFlagSubgroupIDMode)
-	if mode == FetchSubgroupIDExplicit {
+	if o.hasSubgroupIDField() {
 		subgroupID, err := r.Varint()
 		if err != nil {
 			return err
@@ -182,20 +181,12 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 		o.Properties = props
 	}
 
-	if flags&FetchFlagStatus != 0 {
-		status, err := r.Varint()
-		if err != nil {
-			return err
-		}
-		o.ObjectStatus = status
-	} else {
-		// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 27.
-		payload, err := r.VarintBytes()
-		if err != nil {
-			return err
-		}
-		o.ObjectPayload = payload
+	// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 27.
+	payload, err := r.VarintBytes()
+	if err != nil {
+		return err
 	}
+	o.ObjectPayload = payload
 
 	return nil
 }
@@ -210,9 +201,19 @@ func (o *FetchObject) IsEndOfRangeGroup() bool {
 	return o.SerializationFlags == FetchEndOfRangeGroup
 }
 
-// HasStatus reports whether this object has a status field instead of payload.
-func (o *FetchObject) HasStatus() bool {
-	return o.SerializationFlags&FetchFlagStatus != 0
+// IsDatagram reports whether the Datagram bit (0x40) is set: the object was
+// published with Forwarding Preference "Datagram" and carries no Subgroup ID.
+func (o *FetchObject) IsDatagram() bool {
+	return o.SerializationFlags&FetchFlagDatagram != 0
+}
+
+// hasSubgroupIDField reports whether a Subgroup ID field is present on the
+// wire: the subgroup mode must be Explicit AND the Datagram bit must be
+// clear — §11.4.4.1 Table 9 says 0x40 means "ignore the two least
+// significant bits". Shared by Append and Parse so the encoder and decoder
+// cannot disagree on field presence.
+func (o *FetchObject) hasSubgroupIDField() bool {
+	return o.SubgroupMode() == FetchSubgroupIDExplicit && !o.IsDatagram()
 }
 
 // SubgroupMode returns the subgroup ID encoding mode from the two LSBs.
@@ -230,6 +231,9 @@ func (o *FetchObject) Validate() error {
 	}
 
 	// Values >= 128 that are not end-of-range markers are PROTOCOL_VIOLATION.
+	// Note: 0x40 with non-zero subgroup-mode LSBs stays valid — the publisher
+	// only SHOULD zero them and the subscriber MUST ignore them (§11.4.4.1),
+	// so rejecting the combination would itself be non-conformant.
 	if flags >= 128 {
 		return fmt.Errorf("moqt/message: fetch object has invalid serialization flags 0x%X", flags)
 	}
@@ -278,15 +282,8 @@ func (o *FetchObject) WithProperties(props []byte) *FetchObject {
 	return o
 }
 
-// WithPayload sets the object payload (STATUS flag is 0).
+// WithPayload sets the object payload.
 func (o *FetchObject) WithPayload(payload []byte) *FetchObject {
 	o.ObjectPayload = payload
-	return o
-}
-
-// WithStatus sets the STATUS flag and value.
-func (o *FetchObject) WithStatus(status uint64) *FetchObject {
-	o.SerializationFlags |= FetchFlagStatus
-	o.ObjectStatus = status
 	return o
 }

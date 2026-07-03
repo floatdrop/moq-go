@@ -294,24 +294,44 @@ func TestFetchObjectWithAllFields(t *testing.T) {
 	}
 }
 
-func TestFetchObjectWithStatus(t *testing.T) {
-	obj := NewFetchObject().
-		WithGroupIDDelta(5).
-		WithObjectIDDelta(2).
-		WithStatus(123)
+// TestFetchObjectDatagramBit exercises §11.4.4.1 Table 9: bit 0x40 marks a
+// Datagram-preference object — the payload is still present (FETCH objects
+// never carry an Object Status field) and the two subgroup-mode LSBs are
+// ignored, so no Subgroup ID field is written or read even when they spell
+// the "explicit" mode.
+func TestFetchObjectDatagramBit(t *testing.T) {
+	obj := &FetchObject{
+		// Datagram bit + explicit-subgroup LSBs: the LSBs must be ignored.
+		SerializationFlags: FetchFlagDatagram | uint64(FetchSubgroupIDExplicit) |
+			FetchFlagGroupIDDelta | FetchFlagObjectIDDelta,
+		GroupIDDelta:  5,
+		ObjectIDDelta: 2,
+		SubgroupID:    9, // must NOT reach the wire
+		ObjectPayload: []byte("payload"),
+	}
 
 	w := wire.NewWriter(nil)
 	obj.Append(w)
 	got := &FetchObject{}
-	if err := got.Parse(wire.NewReader(w.Bytes())); err != nil {
+	r := wire.NewReader(w.Bytes())
+	if err := got.Parse(r); err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
-
-	if !got.HasStatus() {
-		t.Error("HasStatus: got false, want true")
+	if !r.Empty() {
+		t.Errorf("trailing bytes after parse: %d left", r.Remaining())
 	}
-	if got.ObjectStatus != 123 {
-		t.Errorf("ObjectStatus: got %d, want 123", got.ObjectStatus)
+
+	if !got.IsDatagram() {
+		t.Error("IsDatagram: got false, want true")
+	}
+	if got.SubgroupID != 0 {
+		t.Errorf("SubgroupID: got %d, want 0 (field must be absent)", got.SubgroupID)
+	}
+	if got.GroupIDDelta != 5 || got.ObjectIDDelta != 2 {
+		t.Errorf("deltas: got (%d,%d), want (5,2)", got.GroupIDDelta, got.ObjectIDDelta)
+	}
+	if !bytes.Equal(got.ObjectPayload, []byte("payload")) {
+		t.Errorf("ObjectPayload: got %q, want %q", got.ObjectPayload, "payload")
 	}
 }
 

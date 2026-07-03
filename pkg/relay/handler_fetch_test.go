@@ -1,6 +1,7 @@
 package relay_test
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"reflect"
@@ -67,7 +68,6 @@ func fetchAndDrain(
 type decodedFetchObject struct {
 	group, object uint64
 	payload       []byte
-	status        uint64
 }
 
 // decodeFetchStream reverses the §11.4.4 delta encoding and returns
@@ -117,7 +117,6 @@ func decodeFetchStream(t *testing.T, fs *session.IncomingFetchStream, order mess
 			group:   g,
 			object:  o,
 			payload: fo.ObjectPayload,
-			status:  fo.ObjectStatus,
 		})
 		prevGroup = g
 		prevObject = o
@@ -190,6 +189,146 @@ func publishAndCache(t *testing.T) (*session.Session, *session.Session, uint64) 
 	go drainAllStreams(t.Context(), subSess)
 
 	return pubSess, subSess, publisherAlias
+}
+
+// TestFetch_DatagramObjectRoundTrips is the regression test for the §11.4.4.1
+// Datagram bit (0x40): an object published as an OBJECT_DATAGRAM and served
+// from the relay cache via FETCH must arrive with its payload intact and the
+// Datagram bit set — 0x40 marks the wire shape, it does NOT mean "Object
+// Status instead of payload" (FETCH objects carry no status field, §11.2.1.1).
+func TestFetch_DatagramObjectRoundTrips(t *testing.T) {
+	t.Parallel()
+	pubSess, subSess, publisherAlias := publishAndCache(t)
+
+	// The forwarded copy doubles as the sync point: once the subscriber
+	// holds it, the relay has also written the datagram to the cache.
+	resCh := make(chan error, 1)
+	go func() {
+		_, err := subSess.ReceiveDatagram(t.Context())
+		resCh <- err
+	}()
+	if err := pubSess.SendDatagram(&message.ObjectDatagram{
+		Type:          0x08, // DEFAULT_PRIORITY only — Object ID present, no Properties, no Status
+		TrackAlias:    publisherAlias,
+		GroupID:       3,
+		ObjectID:      5,
+		ObjectPayload: []byte("dg-payload"),
+	}); err != nil {
+		t.Fatalf("SendDatagram: %v", err)
+	}
+	select {
+	case err := <-resCh:
+		if err != nil {
+			t.Fatalf("subscriber ReceiveDatagram: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay did not forward the datagram within deadline")
+	}
+
+	fetchSess := dialAnotherClient(t, pubSess)
+	reqStream, err := fetchSess.Fetch(t.Context(), &message.Fetch{
+		FetchType: message.FetchTypeStandalone,
+		Standalone: &message.StandaloneFetch{
+			Namespace:     wire.TrackNamespace{[]byte("video")},
+			Name:          []byte("cam1"),
+			StartLocation: message.Location{Group: 3, Object: 5},
+			EndLocation:   message.Location{Group: 3, Object: 6}, // exclusive
+		},
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	defer reqStream.Close()
+
+	ds, err := fetchSess.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	fs, isFetch := ds.(*session.IncomingFetchStream)
+	if !isFetch {
+		t.Fatalf("got %T, want *IncomingFetchStream", ds)
+	}
+
+	obj, err := fs.ReadDecoded()
+	if err != nil {
+		t.Fatalf("ReadDecoded: %v", err)
+	}
+	if obj.GroupID != 3 || obj.ObjectID != 5 {
+		t.Errorf("Location = (%d, %d), want (3, 5)", obj.GroupID, obj.ObjectID)
+	}
+	if !obj.Datagram {
+		t.Error("Datagram bit not set on a datagram-preference object")
+	}
+	if obj.SubgroupID != 0 {
+		t.Errorf("SubgroupID = %d, want 0 (datagram objects have none)", obj.SubgroupID)
+	}
+	if string(obj.Payload) != "dg-payload" {
+		t.Errorf("payload = %q, want %q (0x40 must not drop the payload)", obj.Payload, "dg-payload")
+	}
+	if _, err := fs.ReadDecoded(); !errors.Is(err, io.EOF) {
+		t.Errorf("expected EOF after the single object, got %v", err)
+	}
+}
+
+// TestFetch_StatusMarkersNotServed pins §11.2.1.1 for the relay's FETCH
+// serializer: cached End-of-Group status markers are never serialized into a
+// FETCH response (the status field does not exist in FETCH objects), while a
+// zero-length Normal object (Status 0) is a real object and IS served.
+func TestFetch_StatusMarkersNotServed(t *testing.T) {
+	t.Parallel()
+	pubSess, _, publisherAlias := publishAndCache(t)
+
+	sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDExplicit,
+		TrackAlias:     publisherAlias,
+		GroupID:        0,
+		SubgroupID:     0,
+	})
+	if err != nil {
+		t.Fatalf("OpenSubgroup: %v", err)
+	}
+	// Objects 0-1 carry payloads, object 2 is a zero-length Normal object,
+	// object 3 is an End-of-Group status marker.
+	for _, payload := range [][]byte{[]byte("A"), []byte("B"), {}} {
+		if err := sg.WriteObject(&message.SubgroupObject{Payload: payload}); err != nil {
+			t.Fatalf("WriteObject: %v", err)
+		}
+	}
+	if err := sg.WriteObject(&message.SubgroupObject{
+		ObjectStatus: message.ObjectStatusEndOfGroup,
+	}); err != nil {
+		t.Fatalf("WriteObject marker: %v", err)
+	}
+	if err := sg.Close(); err != nil {
+		t.Fatalf("sg.Close: %v", err)
+	}
+
+	// Give the relay a beat to drain the fanout into the cache.
+	time.Sleep(50 * time.Millisecond)
+
+	fetchSess := dialAnotherClient(t, pubSess)
+	_, objs := fetchAndDrain(t,
+		fetchSess,
+		wire.TrackNamespace{[]byte("video")},
+		[]byte("cam1"),
+		message.Location{Group: 0, Object: 0},
+		message.Location{Group: 0, Object: 4}, // exclusive: covers 0..3 incl. the marker
+		message.GroupOrderAscending,
+	)
+
+	want := []decodedFetchObject{
+		{group: 0, object: 0, payload: []byte("A")},
+		{group: 0, object: 1, payload: []byte("B")},
+		{group: 0, object: 2, payload: []byte{}},
+	}
+	if len(objs) != len(want) {
+		t.Fatalf("got %d objects, want %d (marker must be skipped): %+v", len(objs), len(want), objs)
+	}
+	for i, w := range want {
+		if objs[i].group != w.group || objs[i].object != w.object || !bytes.Equal(objs[i].payload, w.payload) {
+			t.Errorf("obj[%d] = %+v, want %+v", i, objs[i], w)
+		}
+	}
 }
 
 // TestFetch_FromCacheAscending pins the 7d happy path: publisher emits
