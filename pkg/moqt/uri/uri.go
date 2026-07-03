@@ -100,8 +100,12 @@ func Parse(raw string) (*URI, error) {
 		Authority: u.Host,
 		Host:      host,
 		Port:      port,
-		Path:      u.Path,
-		RawQuery:  u.RawQuery,
+		// EscapedPath, not Path: the struct carries the RAW path-abempty
+		// component. url.URL.Path is percent-DECODED — using it would turn
+		// "/a%3Fb" into "/a?b", making the §3.1.4 PATH Setup Option
+		// ambiguous and String()/HTTPSURL() emit invalid URIs.
+		Path:     u.EscapedPath(),
+		RawQuery: u.RawQuery,
 	}
 
 	// A '#' in the raw URI introduces a fragment component (§3.1.2). When

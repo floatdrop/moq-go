@@ -169,3 +169,23 @@ func TestString_RoundTrips(t *testing.T) {
 		}
 	}
 }
+
+// TestParse_PercentEncodedPathStaysRaw pins that URI.Path carries the RAW
+// path-abempty component: percent-escapes survive parsing, so the §3.1.4
+// PATH Setup Option stays unambiguous and String()/HTTPSURL() emit valid
+// URIs.
+func TestParse_PercentEncodedPathStaysRaw(t *testing.T) {
+	u, err := uri.Parse("moqt://relay.example/a%3Fb/c%20d?x=1")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if got, want := u.Path, "/a%3Fb/c%20d"; got != want {
+		t.Fatalf("Path = %q, want %q (raw, not decoded)", got, want)
+	}
+	if got, want := u.PathAndQuery(), "/a%3Fb/c%20d?x=1"; got != want {
+		t.Fatalf("PathAndQuery = %q, want %q", got, want)
+	}
+	if got, want := u.String(), "moqt://relay.example/a%3Fb/c%20d?x=1"; got != want {
+		t.Fatalf("String = %q, want %q", got, want)
+	}
+}
