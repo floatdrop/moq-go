@@ -345,18 +345,30 @@ func (r *TrackRegistry) AddDownstream(fullName track.FullTrackName, sub *Downstr
 // CopyDownstream, or we snapshot the post-update Largest. Either way,
 // every object the publisher has emitted is either covered by FETCH
 // (via the snapshot) or delivered via live (via Downstream inclusion).
+// AddDownstreamSnapshotLargest never creates an entry and requires at least
+// one upstream to still be registered: ok=false means the track's last
+// upstream vanished between the caller's establish check and this call
+// (the §9.4 TOCTOU) — registering the downstream anyway would resurrect a
+// sourceless entry whose subscriber then hangs with neither objects nor
+// PUBLISH_DONE. The caller retries the establish step or rejects.
 func (r *TrackRegistry) AddDownstreamSnapshotLargest(
 	fullName track.FullTrackName,
 	sub *DownstreamSub,
-) (entry *TrackEntry, largest message.Location, hasLargest bool) {
+) (entry *TrackEntry, largest message.Location, hasLargest, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	entry = r.getOrCreateLocked(fullName)
+	entry, exists := r.tracks[fullName.Key()]
+	if !exists {
+		return nil, message.Location{}, false, false
+	}
 	entry.mu.Lock()
 	defer entry.mu.Unlock()
+	if len(entry.Upstream) == 0 {
+		return nil, message.Location{}, false, false
+	}
 	entry.Downstream = append(entry.Downstream, sub)
 	entry.downstreamGen++
-	return entry, entry.LargestObject, entry.HasLargestObject
+	return entry, entry.LargestObject, entry.HasLargestObject, true
 }
 
 // RemoveUpstream removes the upstream subscription with the given ID from
@@ -433,15 +445,23 @@ func (r *TrackRegistry) RemoveUpstream(
 // RemoveDownstream removes the downstream subscription with the given ID
 // from the entry for fullName. The return contract mirrors
 // [TrackRegistry.RemoveUpstream]: (removed, downstreamEmpty, entryDeleted).
+//
+// When the removed subscription was the entry's LAST downstream, the
+// relay's on-demand upstream subscriptions (§9.4 aggregation) have no
+// consumers left: they are stripped from the entry in the same critical
+// section — so a concurrent SUBSCRIBE cannot latch onto a dying upstream —
+// and torn down via [UpstreamSub.CloseOnDemand] after the locks are
+// released. PUBLISH-fed upstreams are untouched (their stream belongs to
+// the publisher; future subscribers reuse it).
 func (r *TrackRegistry) RemoveDownstream(
 	fullName track.FullTrackName,
 	subID uint64,
 ) (removed, downstreamEmpty, entryDeleted bool) {
 	key := fullName.Key()
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	entry, ok := r.tracks[key]
 	if !ok {
+		r.mu.Unlock()
 		return false, false, false
 	}
 
@@ -454,16 +474,52 @@ func (r *TrackRegistry) RemoveDownstream(
 	downstreamEmpty = len(entry.Downstream) == 0
 	if !removed {
 		entry.mu.Unlock()
+		r.mu.Unlock()
 		return false, downstreamEmpty, false
 	}
-	allEmpty := downstreamEmpty && len(entry.Upstream) == 0
+
+	var stranded []*UpstreamSub
+	hadUpstream := len(entry.Upstream) > 0
+	if downstreamEmpty {
+		stranded = stripOnDemandLocked(entry)
+	}
+	upstreamEmpty := len(entry.Upstream) == 0
+	allEmpty := downstreamEmpty && upstreamEmpty
 	entry.mu.Unlock()
 
 	if allEmpty {
 		delete(r.tracks, key)
 		entryDeleted = true
 	}
+	r.mu.Unlock()
+
+	// Stream I/O and discovery calls happen outside the registry locks.
+	for _, u := range stranded {
+		u.CloseOnDemand()
+	}
+	if hadUpstream && upstreamEmpty {
+		r.unpublishTrackFromDiscovery(entry)
+	}
 	return true, downstreamEmpty, entryDeleted
+}
+
+// stripOnDemandLocked removes every OnDemand upstream from entry and returns
+// them for teardown; the caller must hold entry.mu and must CloseOnDemand
+// the returned subs only after releasing the registry locks (stream I/O).
+//
+// Deliberate trade-off: when this empties the entry, the entry — including
+// its object cache and LARGEST_OBJECT watermark — is deleted with it, so a
+// FETCH arriving after the last subscriber left cold-starts via a fresh
+// upstream instead of hitting warm cache. The §9.4 aggregation exists to
+// serve live downstreams, not to keep publishers streaming into a void.
+func stripOnDemandLocked(entry *TrackEntry) (stranded []*UpstreamSub) {
+	entry.Upstream = slices.DeleteFunc(entry.Upstream, func(u *UpstreamSub) bool {
+		if u.OnDemand {
+			stranded = append(stranded, u)
+		}
+		return u.OnDemand
+	})
+	return stranded
 }
 
 // RemoveSession bulk-evicts every UpstreamSub and DownstreamSub owned by
@@ -490,7 +546,10 @@ func (r *TrackRegistry) RemoveSession(sess *session.Session) (upstreamRemoved, d
 		entry       *TrackEntry
 		downstreams []*DownstreamSub
 	}
-	var orphans []orphaned
+	var (
+		orphans  []orphaned
+		stranded []*UpstreamSub
+	)
 
 	for key, entry := range r.tracks {
 		entry.mu.Lock()
@@ -519,7 +578,26 @@ func (r *TrackRegistry) RemoveSession(sess *session.Session) (upstreamRemoved, d
 		entry.Downstream = slices.DeleteFunc(entry.Downstream, func(s *DownstreamSub) bool {
 			return s.Session == sess
 		})
-		downstreamRemoved += beforeD - len(entry.Downstream)
+		removedHereD := beforeD - len(entry.Downstream)
+		downstreamRemoved += removedHereD
+
+		// The dying session may have been a track's last downstream: the
+		// relay's on-demand upstream subscriptions on OTHER sessions then
+		// have no consumers left — strip them (same rule as
+		// [TrackRegistry.RemoveDownstream]) and tear them down after the
+		// locks drop. Gated on removedHereD so a disconnect never touches
+		// tracks this session had no downstream on: a zero-downstream
+		// entry may be another handler's in-flight registration (upstream
+		// established, downstream not yet added). Upstreams on sess itself
+		// were already removed above.
+		if removedHereD > 0 && len(entry.Downstream) == 0 && len(entry.Upstream) > 0 {
+			if s := stripOnDemandLocked(entry); len(s) > 0 {
+				stranded = append(stranded, s...)
+				if len(entry.Upstream) == 0 {
+					orphans = append(orphans, orphaned{entry: entry})
+				}
+			}
+		}
 
 		empty := len(entry.Upstream) == 0 && len(entry.Downstream) == 0
 		entry.mu.Unlock()
@@ -529,6 +607,9 @@ func (r *TrackRegistry) RemoveSession(sess *session.Session) (upstreamRemoved, d
 	}
 	r.mu.Unlock()
 
+	for _, u := range stranded {
+		u.CloseOnDemand()
+	}
 	for _, o := range orphans {
 		r.unpublishTrackFromDiscovery(o.entry)
 		for _, sub := range o.downstreams {

@@ -204,6 +204,14 @@ type UpstreamSub struct {
 	// live objects and does not serve FETCH.
 	FetchCapable bool
 
+	// OnDemand marks an upstream subscription the relay itself opened via
+	// SUBSCRIBE to serve downstream subscribers (§9.4 aggregation). Such a
+	// subscription exists only for its downstreams: when the last one
+	// leaves, the registry tears it down ([UpstreamSub.CloseOnDemand]) so
+	// the publisher stops streaming into a void. It stays false for
+	// PUBLISH-fed upstreams, whose stream is owned by the publisher.
+	OnDemand bool
+
 	// updMu serializes REQUEST_UPDATE writes on Stream and guards the
 	// waiter queue. It is deliberately held across the stream write:
 	// §10.9 responses arrive in request order, so the waiter queue order
@@ -364,6 +372,28 @@ func (u *UpstreamSub) WriteMessage(msg message.Message) error {
 	u.updMu.Lock()
 	defer u.updMu.Unlock()
 	return message.Marshal(u.Stream, msg)
+}
+
+// CloseOnDemand tears down an on-demand upstream subscription after its
+// last downstream left: pending updates fail fast, the read side is reset,
+// and the send side is FIN'd — closing the request stream is how a
+// subscriber ends a subscription (§10.7). The stream's reader goroutine
+// observes the reset and exits, and the publisher stops streaming into a
+// void. Idempotent; must be called without registry locks held (stream
+// I/O).
+func (u *UpstreamSub) CloseOnDemand() {
+	u.Terminate()
+	u.CloseUpdates()
+	if u.Stream == nil {
+		return
+	}
+	// Serialize with WriteMessage / Update: the SendStream contract says
+	// racing Write with Close is undefined, and the stream's reader may be
+	// mid-ack of a peer REQUEST_UPDATE under updMu right now.
+	u.updMu.Lock()
+	defer u.updMu.Unlock()
+	u.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
+	_ = u.Stream.Close()
 }
 
 // NewUpstreamSub constructs an UpstreamSub in [SubEstablished] with the given

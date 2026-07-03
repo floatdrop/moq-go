@@ -461,6 +461,7 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session) {
 		r.cfg.Authorizer, r.cfg.Metrics, r.fetch, r.upstreams,
 		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,
+		r.handlers.Go,
 	)
 	if err := handler.run(ctx); err != nil {
 		r.log.LogAttrs(ctx, slog.LevelDebug, "relay session handler returned",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -38,14 +39,15 @@ type sessionHandler struct {
 	// limiter enforces the §13.1 / §13.7.1 per-session resource caps.
 	limiter sessionLimiter
 
-	// subID allocates relay-internal subscription IDs for the UpstreamSub /
-	// DownstreamSub records this handler installs into the registry. Per-handler
-	// because IDs only need to be unique within a TrackEntry's slices.
-	subIDMu sync.Mutex
-	subID   uint64
-
 	// wg tracks per-request goroutines spawned by the dispatch loop.
 	wg sync.WaitGroup
+
+	// relayGo runs fn on a RELAY-scoped goroutine (joined by Relay.Stop,
+	// not by this handler's run). Used for work whose lifetime must outlive
+	// this session — e.g. the reader of an on-demand upstream stream, which
+	// serves every downstream subscriber of the track, not just the one on
+	// this session (§9.4 aggregation).
+	relayGo func(func())
 
 	// joinLocs maps a downstream SUBSCRIBE's Request ID to the track
 	// name and §10.2.11 LARGEST_OBJECT snapshot captured when the relay
@@ -82,6 +84,7 @@ func newSessionHandler(
 	maxFanoutLag time.Duration,
 	maxSubsPerSession int,
 	maxNamespaceReqsPerSession int,
+	relayGo func(func()),
 ) *sessionHandler {
 	return &sessionHandler{
 		sess:                sess,
@@ -97,6 +100,7 @@ func newSessionHandler(
 		maxFanoutLag:        maxFanoutLag,
 		limiter:             sessionLimiter{maxSubs: maxSubsPerSession, maxNS: maxNamespaceReqsPerSession},
 		joinLocs:            make(map[uint64]joiningLocation),
+		relayGo:             relayGo,
 	}
 }
 
@@ -136,13 +140,17 @@ func (h *sessionHandler) handleInboundGoaway(ctx context.Context) {
 	_ = h.sess.Close(moqt.SessionGoawayTimeout, "inbound GOAWAY timeout")
 }
 
-// allocSubID returns a fresh subscription ID for this handler. Used when
+// subIDCounter allocates process-globally unique subscription IDs. It MUST
+// be global, not per-handler: a TrackEntry aggregates subscriptions from
+// many sessions (§9.4), and the registry removes by ID — two handlers'
+// per-handler counters would collide, so one subscriber unsubscribing would
+// silently delete another session's subscription from the same track.
+var subIDCounter atomic.Uint64
+
+// allocSubID returns a fresh, process-unique subscription ID. Used when
 // instantiating registry.UpstreamSub / registry.DownstreamSub from inside the request handlers.
 func (h *sessionHandler) allocSubID() uint64 {
-	h.subIDMu.Lock()
-	defer h.subIDMu.Unlock()
-	h.subID++
-	return h.subID
+	return subIDCounter.Add(1)
 }
 
 // run blocks until the session ends, returning nil on a clean close (peer or

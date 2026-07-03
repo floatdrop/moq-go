@@ -54,37 +54,6 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	// an upstream already exists, is evaluated against it as an Established
 	// subscription below.
 	newGroupReqParam, hasNewGroupReq := msg.Parameters.Find(message.ParamNewGroupRequest)
-	reusedUpstream := false
-
-	entry, ok := h.tracks.Get(fullName.Key())
-	if !ok || !hasEstablishedUpstream(entry) {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE no established upstream, trying on-demand",
-			slog.Bool("entry_exists", ok))
-		// Try to establish an upstream subscription against a local
-		// publisher that has advertised the namespace.
-		// The established entry is fetched again below via
-		// AddDownstreamSnapshotLargest, so only the side effect (registering
-		// the upstream) and the established check matter here.
-		var extra message.Parameters
-		if hasNewGroupReq {
-			extra = message.Parameters{message.NewGroupRequestParam(newGroupReqParam.Varint)}
-		}
-		_, established, err := h.subscribeUpstream(ctx, fullName, extra)
-		if err != nil {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream subscribe failed",
-				slog.String("err", err.Error()))
-			_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no upstream for track")
-			return
-		}
-		if !established {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE rejected: no publisher for namespace")
-			_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no publisher for namespace")
-			return
-		}
-	} else {
-		reusedUpstream = true
-		h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE serving from existing upstream")
-	}
 
 	// Allocate the Track Alias the relay uses when publishing this track
 	// downstream. Per §11.1 the outbound alias space is independent of the
@@ -103,13 +72,66 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		return
 	}
 
-	// Atomically append sub to the entry's Downstream AND snapshot the
-	// current LargestObject under one entry.mu acquisition. The atomic
-	// pairing closes the race where a publisher write between separate
-	// Add + GetLargest calls would update LargestObject + cache the
-	// object without delivering it to us via live fanout — leaving a
-	// gap that neither live nor Joining FETCH covers.
-	entry, snapshotLargest, snapshotHas := h.tracks.AddDownstreamSnapshotLargest(fullName, sub)
+	// Establish (or reuse) an upstream and register the downstream on it.
+	// Two attempts: AddDownstreamSnapshotLargest refuses to register on an
+	// entry whose last upstream vanished between the establish check and
+	// the registration (the §9.4 TOCTOU) — one retry re-runs the on-demand
+	// establish against the fresh state.
+	var (
+		entry           *registry.TrackEntry
+		snapshotLargest message.Location
+		snapshotHas     bool
+		reusedUpstream  bool
+		added           bool
+	)
+	for range 2 {
+		e, ok := h.tracks.Get(fullName.Key())
+		if !ok || !hasEstablishedUpstream(e) {
+			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE no established upstream, trying on-demand",
+				slog.Bool("entry_exists", ok))
+			// Try to establish an upstream subscription against a local
+			// publisher that has advertised the namespace. The established
+			// entry is fetched again below via AddDownstreamSnapshotLargest,
+			// so only the side effect (registering the upstream) and the
+			// established check matter here.
+			var extra message.Parameters
+			if hasNewGroupReq {
+				extra = message.Parameters{message.NewGroupRequestParam(newGroupReqParam.Varint)}
+			}
+			_, established, err := h.subscribeUpstream(ctx, fullName, extra)
+			if err != nil {
+				h.log.LogAttrs(ctx, slog.LevelDebug, "upstream subscribe failed",
+					slog.String("err", err.Error()))
+				_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no upstream for track")
+				return
+			}
+			if !established {
+				h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE rejected: no publisher for namespace")
+				_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no publisher for namespace")
+				return
+			}
+			reusedUpstream = false
+		} else {
+			reusedUpstream = true
+			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE serving from existing upstream")
+		}
+
+		// Atomically append sub to the entry's Downstream AND snapshot the
+		// current LargestObject under one entry.mu acquisition. The atomic
+		// pairing closes the race where a publisher write between separate
+		// Add + GetLargest calls would update LargestObject + cache the
+		// object without delivering it to us via live fanout — leaving a
+		// gap that neither live nor Joining FETCH covers.
+		entry, snapshotLargest, snapshotHas, added = h.tracks.AddDownstreamSnapshotLargest(fullName, sub)
+		if added {
+			break
+		}
+	}
+	if !added {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE rejected: upstream vanished during registration")
+		_ = req.RejectError(moqt.RequestDoesNotExist, "relay: upstream vanished")
+		return
+	}
 	sub.SetLargestAtSubscribe(snapshotLargest, snapshotHas)
 
 	h.metrics.SubscriptionOpened()
@@ -458,14 +480,27 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// This upstream is a relay/origin we SUBSCRIBE'd on demand, so it is
 	// expected to answer FETCH — eligible for §9.4 stitch backfill.
 	upstreamSub.FetchCapable = true
+	// Mark it on-demand so the registry tears it down when its last
+	// downstream leaves (see [registry.TrackRegistry.RemoveDownstream]).
+	upstreamSub.OnDemand = true
 	entry, _ := h.tracks.AddUpstream(fullName, upstreamSub, registry.WithProperties(upstreamStream.OK.TrackProperties))
 
-	// Keep the upstream stream alive until the publisher cancels it (FIN/reset)
-	// or this handler shuts down, then unregister. The unregister runs under
-	// h.spawn so run()'s wg join waits for it.
-	h.spawn(func() {
-		h.readUpstreamMessages(ctx, upstreamSub)
+	// The reader's lifetime is tied to the UPSTREAM stream, not to the
+	// downstream subscriber whose SUBSCRIBE happened to trigger this
+	// subscription — other sessions' subscribers share it (§9.4), so it
+	// must survive this handler's teardown. It runs relay-scoped (joined
+	// by Relay.Stop) with the stream's own context: the ctx dies when the
+	// upstream stream or session ends, and Stop force-closes sessions,
+	// which errors the reader's Parse either way.
+	h.relayGo(func() {
+		h.readUpstreamMessages(upstreamStream.Context(), upstreamSub)
 		h.tracks.RemoveUpstream(fullName, upstreamSub.ID)
+		// session.Subscribe registered the SUBSCRIBE_OK's Track Alias for
+		// inbound routing; drop it with the subscription so subscriber
+		// churn on a long-lived (pooled) upstream session doesn't accrete
+		// aliases (§11.1) — a peer reusing a retired alias would otherwise
+		// trip the duplicate-alias session error.
+		sess.UnregisterInboundTrackAlias(upstreamStream.OK.TrackAlias)
 	})
 
 	return entry, true, nil

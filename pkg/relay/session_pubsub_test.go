@@ -8,6 +8,7 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
@@ -243,6 +244,165 @@ func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 	// reply.
 	if got := string(subStream.OK.TrackProperties); got != "upstream props" {
 		t.Fatalf("downstream TrackProperties = %q, want %q", got, "upstream props")
+	}
+}
+
+// acceptUpstreamSubscribe runs the publisher side of one on-demand upstream
+// SUBSCRIBE: accept the relay's request, reply SUBSCRIBE_OK with the given
+// alias, then drain follow-ups. The returned channel closes when the relay
+// ends the subscription (reset / FIN errors the drain).
+func acceptUpstreamSubscribe(t *testing.T, pubSess *session.Session, alias uint64) <-chan struct{} {
+	t.Helper()
+	ended := make(chan struct{})
+	go func() {
+		defer close(ended)
+		req, err := pubSess.AcceptRequest(t.Context())
+		if err != nil {
+			return
+		}
+		if err := req.Reply(&message.SubscribeOK{TrackAlias: alias}); err != nil {
+			t.Errorf("publisher SubscribeOK reply: %v", err)
+			return
+		}
+		for {
+			if _, err := message.Parse(req.Stream); err != nil {
+				return
+			}
+		}
+	}()
+	return ended
+}
+
+// TestSubscribe_UpstreamSurvivesInitiatingSubscriber is the §9.4 aggregation
+// lifetime test: subscriber A triggers the on-demand upstream SUBSCRIBE,
+// subscriber B reuses it, then A's whole session goes away. The upstream
+// subscription serves B, so it must survive — B keeps receiving objects and
+// does NOT get a spurious PUBLISH_DONE "upstream gone".
+func TestSubscribe_UpstreamSurvivesInitiatingSubscriber(t *testing.T) {
+	t.Parallel()
+	closed := &recordingMetrics{}
+	pubSess, teardown := connectRelay(t, relay.Config{Metrics: closed})
+	defer teardown()
+
+	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+	})
+	if err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	defer pubNSStream.Close()
+
+	const upstreamAlias = uint64(77)
+	acceptUpstreamSubscribe(t, pubSess, upstreamAlias)
+
+	subA := dialAnotherClient(t, pubSess)
+	subAStream, err := subA.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("subscriber A Subscribe: %v", err)
+	}
+	defer subAStream.Close()
+
+	subB := dialAnotherClient(t, pubSess)
+	subBStream, err := subB.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("subscriber B Subscribe: %v", err)
+	}
+	defer subBStream.Close()
+
+	// A leaves entirely. The relay must NOT tear the upstream down — B
+	// still depends on it. Wait until the relay has actually evicted A's
+	// subscription (SubscriptionClosed fires in handleSubscribe's defer)
+	// so the publish below exercises the post-removal state.
+	_ = subA.Close(0, "subscriber A leaving")
+	waitFor(t, 2*time.Second, func() bool { return closed.subsClosed.Load() >= 1 },
+		"relay never evicted subscriber A's subscription")
+
+	// B must still be able to receive: publish one object upstream and
+	// expect it on B's data path. B's acceptor starts FIRST — the in-process
+	// pipes are unbuffered, so the relay's fanout write to B completes only
+	// once B reads.
+	got := make(chan string, 1)
+	go func() {
+		ds, err := subB.AcceptDataStream(t.Context())
+		if err != nil {
+			return
+		}
+		sgIn, ok := ds.(*session.IncomingSubgroupStream)
+		if !ok {
+			return
+		}
+		obj, err := sgIn.ReadObject()
+		if err != nil {
+			return
+		}
+		got <- string(obj.Payload)
+	}()
+
+	sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDExplicit,
+		TrackAlias:     upstreamAlias,
+		GroupID:        0,
+		SubgroupID:     0,
+	})
+	if err != nil {
+		t.Fatalf("OpenSubgroup: %v", err)
+	}
+	if err := sg.WriteObject(&message.SubgroupObject{Payload: []byte("alive")}); err != nil {
+		t.Fatalf("WriteObject: %v", err)
+	}
+
+	select {
+	case payload := <-got:
+		if payload != "alive" {
+			t.Fatalf("subscriber B got %q, want %q", payload, "alive")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber B received nothing after A left — upstream was torn down with A")
+	}
+}
+
+// TestSubscribe_LastDownstreamTearsDownUpstream pins the inverse lifetime
+// rule: when the LAST downstream subscriber of an on-demand upstream leaves,
+// the relay ends its upstream subscription (closes the request stream,
+// §10.7) instead of letting the publisher stream into a void forever.
+func TestSubscribe_LastDownstreamTearsDownUpstream(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+	})
+	if err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	defer pubNSStream.Close()
+
+	subscriptionEnded := acceptUpstreamSubscribe(t, pubSess, 77)
+
+	subSess := dialAnotherClient(t, pubSess)
+	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+
+	// The only downstream unsubscribes (FINs its request stream). The relay
+	// must propagate the teardown upstream.
+	_ = subStream.Close()
+
+	select {
+	case <-subscriptionEnded:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publisher's subscription still open 2s after the last downstream left")
 	}
 }
 
