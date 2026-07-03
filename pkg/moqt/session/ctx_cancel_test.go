@@ -143,3 +143,28 @@ func serverOf(t *testing.T, aConn, bConn session.Conn) *session.Session {
 	})
 	return bSess
 }
+
+// TestSessionErrPublishedBeforeDone pins the <-Done(); Err() contract: the
+// close cause is visible (and race-free under -race) the moment Done fires,
+// and carries the actual §3.5 code and reason — not the transport close
+// result, which is nil in the common case.
+func TestSessionErrPublishedBeforeDone(t *testing.T) {
+	t.Parallel()
+	aConn, bConn := sessiontest.NewConnPair()
+	bSess := serverOf(t, aConn, bConn)
+
+	go bSess.Close(0x3 /* PROTOCOL_VIOLATION */, "test cause")
+
+	<-bSess.Done()
+	err := bSess.Err()
+	if err == nil {
+		t.Fatal("Err() = nil after non-clean close, want the close cause")
+	}
+	var closed *session.ClosedError
+	if !errors.As(err, &closed) {
+		t.Fatalf("Err() = %T, want *ClosedError", err)
+	}
+	if closed.Code != 0x3 || closed.Reason != "test cause" {
+		t.Fatalf("cause = %#x %q, want 0x3 %q", uint64(closed.Code), closed.Reason, "test cause")
+	}
+}

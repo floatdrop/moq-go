@@ -8,6 +8,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -110,7 +111,9 @@ type Session struct {
 	tokenVerifier TokenVerifier
 
 	closeOnce sync.Once
-	closeErr  error
+	// closeErr holds the *ClosedError cause; atomic because Err may
+	// be called at any time, not only after Done fires.
+	closeErr atomic.Pointer[ClosedError]
 	// done is closed when the session terminates for any reason.
 	done chan struct{}
 }
@@ -180,14 +183,44 @@ func (s *Session) AllocRequestID() uint64 {
 // Done returns a channel that is closed when the session has terminated.
 func (s *Session) Done() <-chan struct{} { return s.done }
 
-// Err returns the close cause, or nil if the session was closed cleanly.
-func (s *Session) Err() error { return s.closeErr }
+// Err returns the close cause — a *ClosedError carrying the §3.5
+// error code and reason of the first Close call — or nil when the session
+// was closed cleanly (SessionNoError) or is still open. The value is
+// published before Done is closed, so the natural pattern
+// <-sess.Done(); sess.Err() is race-free.
+func (s *Session) Err() error {
+	// Explicit nil check: returning a nil *ClosedError directly
+	// would produce a non-nil error interface.
+	if e := s.closeErr.Load(); e != nil {
+		return e
+	}
+	return nil
+}
+
+// ClosedError is the close cause stored by [Session.Close] and
+// returned by [Session.Err] for a non-clean close.
+type ClosedError struct {
+	Code   moqt.SessionErrorCode
+	Reason string
+}
+
+func (e *ClosedError) Error() string {
+	return fmt.Sprintf("moqt/session: closed with code %#x: %s", uint64(e.Code), e.Reason)
+}
 
 // Close terminates the session, cancelling the control streams and closing
 // the underlying connection with the given code (§3.5). Calling Close more
-// than once is safe; only the first call's code takes effect.
+// than once is safe; only the first call's code takes effect. The returned
+// error is the transport's close error (nil in the common case), NOT the
+// close cause — that is what [Session.Err] reports.
 func (s *Session) Close(code moqt.SessionErrorCode, reason string) error {
+	var transportErr error
 	s.closeOnce.Do(func() {
+		// Publish the cause BEFORE closing done: Err must be safe to call
+		// the moment Done fires.
+		if code != moqt.SessionNoError {
+			s.closeErr.Store(&ClosedError{Code: code, Reason: reason})
+		}
 		close(s.done)
 		// CancelRead first so the recv loop unblocks. The control stream
 		// must not be FIN'd cleanly during session lifetime (§3.3); we
@@ -198,7 +231,7 @@ func (s *Session) Close(code moqt.SessionErrorCode, reason string) error {
 		if s.sendCtrl != nil {
 			s.sendCtrl.CancelWrite(uint64(moqt.StreamResetSessionClosed))
 		}
-		s.closeErr = s.conn.CloseWithError(uint64(code), reason)
+		transportErr = s.conn.CloseWithError(uint64(code), reason)
 	})
-	return s.closeErr
+	return transportErr
 }
