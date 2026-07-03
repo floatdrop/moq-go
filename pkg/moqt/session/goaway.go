@@ -2,8 +2,10 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 )
 
@@ -103,6 +105,22 @@ func (s *Session) SendGoaway(timeout time.Duration, newURI string) error {
 // policy that belongs to the application, which receives the full message
 // (Request ID included) via PeerGoaway / OnGoaway and can drive the re-issue.
 func (s *Session) handleGoaway(m *message.Goaway) error {
+	// §10.4: the optional Request ID names "the smallest peer Request ID
+	// that was not or might not have been processed" — a request WE sent,
+	// so it must carry our parity (client even, server odd). "If the parity
+	// of the Request ID does not match the receiver's parity, the endpoint
+	// MUST close the session with INVALID_REQUEST_ID."
+	if m.HasRequestID {
+		wantOdd := s.role == roleServer
+		if (m.RequestID%2 == 1) != wantOdd {
+			return &sessionCloseError{
+				code: moqt.SessionInvalidRequestID,
+				msg: fmt.Sprintf("GOAWAY Request ID %d does not match receiver parity (%s)",
+					m.RequestID, s.role),
+			}
+		}
+	}
+
 	s.mu.Lock()
 	if s.goawayReceived != nil {
 		s.mu.Unlock()
