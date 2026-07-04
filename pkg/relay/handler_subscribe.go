@@ -171,10 +171,13 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		}
 	}
 	properties := entry.GetProperties()
-	// sub.WriteMessage, not req.Reply: the sub is registered, so a registry
-	// teardown goroutine could write PUBLISH_DONE concurrently — every write
-	// on this stream must go through the sub's write lock from here on.
-	if err := sub.WriteMessage(&message.SubscribeOK{
+	// sub.WriteSubscribeOK, not req.Reply: the sub is registered, so a
+	// registry teardown goroutine can already reach it — every write on this
+	// stream must go through the sub's write lock from here on, and the
+	// OK/termination race must resolve to exactly one §10.7 response
+	// (a terminator that wins answers with REQUEST_ERROR and this write is
+	// skipped; see [registry.DownstreamSub.WriteSubscribeOK]).
+	if err := sub.WriteSubscribeOK(&message.SubscribeOK{
 		TrackAlias:      alias,
 		Parameters:      okParams,
 		TrackProperties: properties,

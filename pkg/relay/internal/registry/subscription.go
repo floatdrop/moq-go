@@ -463,6 +463,14 @@ type DownstreamSub struct {
 	// SubscriberEntry's writeMu.
 	writeMu sync.Mutex
 
+	// okSent records that the §10.7 SUBSCRIBE_OK response went out on the
+	// stream (guarded by writeMu). A termination racing the subscribe
+	// handler consults it to answer the request correctly: the peer must
+	// receive exactly one SUBSCRIBE_OK / REQUEST_ERROR before any
+	// PUBLISH_DONE — a PUBLISH_DONE with no prior response leaves the
+	// request permanently unanswered on the subscriber side.
+	okSent bool
+
 	// Filter is the §5.1.2 filter the subscriber declared. The fanout
 	// consults it on every object to decide whether to forward. nil
 	// means "no filter installed" — the relay treats the subscription
@@ -703,6 +711,15 @@ func GroupOutOfRange(group uint64, f *message.SubscriptionFilter) bool {
 // loop sees EOF and exits, and its defer evicts the [DownstreamSub]
 // from the [TrackRegistry].
 //
+// If the SUBSCRIBE_OK never went out — the sub is registered (and thus
+// reachable by teardown) before the handler replies, so a terminator can
+// win that race — a PUBLISH_DONE would leave the SUBSCRIBE without the
+// single SUBSCRIBE_OK / REQUEST_ERROR response §10.7 requires. In that
+// case the termination answers the request with REQUEST_ERROR
+// (DOES_NOT_EXIST: the track's source vanished before the subscription
+// was established) instead, and [DownstreamSub.WriteSubscribeOK] refuses
+// to send the stale OK afterwards.
+//
 // The Terminate latch prevents double-termination: the first caller
 // flips the state and writes the message; subsequent calls return
 // without I/O. Safe to call concurrently from any goroutine.
@@ -723,12 +740,43 @@ func (d *DownstreamSub) TerminateWithPublishDone(code moqt.PublishDoneCode, reas
 	}
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
-	_ = message.Marshal(d.Stream, &message.PublishDone{
-		StatusCode:  code,
-		StreamCount: streamCount,
-		ErrorReason: reason,
-	})
+	if !d.okSent {
+		_ = message.Marshal(d.Stream, &message.RequestError{
+			ErrorCode:   moqt.RequestDoesNotExist,
+			ErrorReason: reason,
+		})
+		// Mirror [session.Request.RejectError]: the losing subscribe
+		// handler returns without ever entering its follow-up read loop,
+		// so cancel the read side too — otherwise bytes the peer sends
+		// before seeing the rejection queue in the transport forever.
+		d.Stream.CancelRead(uint64(moqt.StreamResetInternalError))
+	} else {
+		_ = message.Marshal(d.Stream, &message.PublishDone{
+			StatusCode:  code,
+			StreamCount: streamCount,
+			ErrorReason: reason,
+		})
+	}
 	_ = d.Stream.Close()
+}
+
+// WriteSubscribeOK writes the §10.7 SUBSCRIBE_OK response under the write
+// lock and records that the request now has its response, so a later
+// termination emits PUBLISH_DONE (§10.11) rather than a second response.
+// If a termination won the race first, it returns
+// [ErrSubscriptionTerminated] without writing — the terminator already
+// answered the request with REQUEST_ERROR.
+func (d *DownstreamSub) WriteSubscribeOK(msg *message.SubscribeOK) error {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	if d.IsTerminated() {
+		return ErrSubscriptionTerminated
+	}
+	if err := message.Marshal(d.Stream, msg); err != nil {
+		return err
+	}
+	d.okSent = true
+	return nil
 }
 
 // WriteMessage marshals a control message onto the downstream request stream
