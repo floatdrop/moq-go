@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -259,13 +260,38 @@ func (s *OutgoingFetchStream) Cancel(code moqt.StreamResetCode) {
 // Close to FIN the stream once all objects have been written, or Cancel to
 // reset.
 func (s *Session) OpenSubgroup(h message.SubgroupHeader) (*OutgoingSubgroupStream, error) {
+	return s.OpenSubgroupContext(context.Background(), h)
+}
+
+// OpenSubgroupContext is [Session.OpenSubgroup] with a cancellation bound on
+// the header write: writing the SUBGROUP_HEADER blocks on the receiver's
+// flow control, so a peer that stops reading can wedge the caller
+// indefinitely. Cancelling ctx resets the nascent stream and unblocks the
+// write. ctx does not govern the returned stream's later writes — bound
+// those separately (e.g. a context.AfterFunc calling Cancel).
+func (s *Session) OpenSubgroupContext(
+	ctx context.Context,
+	h message.SubgroupHeader,
+) (*OutgoingSubgroupStream, error) {
 	dst, err := s.conn.OpenUniStream()
 	if err != nil {
 		return nil, err
 	}
+	stop := context.AfterFunc(ctx, func() {
+		dst.CancelWrite(uint64(moqt.StreamResetCancelled))
+	})
 	if err := message.WriteSubgroupHeader(dst, h); err != nil {
+		stop()
 		dst.CancelWrite(uint64(moqt.StreamResetInternalError))
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("moqt/session: write SUBGROUP_HEADER: %w", ctx.Err())
+		}
 		return nil, fmt.Errorf("moqt/session: write SUBGROUP_HEADER: %w", err)
+	}
+	if !stop() {
+		// The AfterFunc already ran: ctx was cancelled while (or just
+		// after) the header write went through — the stream is reset.
+		return nil, fmt.Errorf("moqt/session: write SUBGROUP_HEADER: %w", ctx.Err())
 	}
 	return &OutgoingSubgroupStream{header: h, dst: dst}, nil
 }
