@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
@@ -66,8 +67,15 @@ func (h *sessionHandler) handlePublishNamespace(
 
 	// Block until the publisher cancels (request stream FIN/reset) or our
 	// ctx is cancelled. Per §6.2 the bidi stream is the publisher's
-	// keepalive for the advertisement.
-	session.DrainAndWait(ctx, req.Stream)
+	// keepalive for the advertisement; NAMESPACE / NAMESPACE_DONE
+	// follow-ups from the publisher need no action (the §9.5 fanout keys
+	// off tracks, not per-namespace sub-announcements), but REQUEST_UPDATEs
+	// must be validated and answered. This handler goroutine is the only
+	// writer on the publisher's stream after the REQUEST_OK above, so the
+	// acks write directly.
+	h.serveNamespaceFollowups(ctx, req.Stream, func(m message.Message) error {
+		return message.Marshal(req.Stream, m)
+	})
 
 	// Emit NAMESPACE_DONE to every subscriber we previously notified.
 	// Use the registry's CopySubscribers to refilter (handles subscribers
@@ -141,7 +149,10 @@ func (h *sessionHandler) handleSubscribeNamespace(
 		}
 	}
 
-	session.DrainAndWait(ctx, req.Stream)
+	// REQUEST_OK acks go through entry.WriteMessage so they serialise with
+	// the NAMESPACE / NAMESPACE_DONE notifications concurrent publisher
+	// handlers write to this stream.
+	h.serveNamespaceFollowups(ctx, req.Stream, entry.WriteMessage)
 }
 
 // handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.19):
@@ -177,7 +188,51 @@ func (h *sessionHandler) handleSubscribeTracks(
 	entry := h.names.RegisterSubscriber(msg.TrackNamespacePrefix, h.sess, req.Stream, true /* wantsTracks */)
 	defer h.names.UnregisterSubscriber(entry)
 
-	session.DrainAndWait(ctx, req.Stream)
+	// REQUEST_OK acks go through entry.WriteMessage so they serialise with
+	// the PUBLISH_BLOCKED notifications concurrent PUBLISH handlers write
+	// to this stream (emitPublishBlocked).
+	h.serveNamespaceFollowups(ctx, req.Stream, entry.WriteMessage)
+}
+
+// serveNamespaceFollowups holds a namespace request stream open (the §6.1 /
+// §6.2 keepalive previously provided by session.DrainAndWait) while actually
+// parsing the follow-ups: a peer REQUEST_UPDATE consumes a §10.1 Request ID
+// (validated; violations are session-fatal), may carry §10.2.2 token
+// parameters, and must be answered with the single REQUEST_OK §10.9 mandates
+// — the relay keeps no mutable per-namespace-request parameters, so the
+// update is acknowledged without further action. write supplies the
+// stream's serialized writer (namespace streams are also written by
+// concurrent notification fanouts). Other follow-ups (NAMESPACE,
+// NAMESPACE_DONE, …) need no response and are ignored here.
+func (h *sessionHandler) serveNamespaceFollowups(
+	ctx context.Context,
+	stream session.Stream,
+	write func(message.Message) error,
+) {
+	readRequestStream(ctx, stream, func(m message.Message) bool {
+		upd, ok := m.(*message.RequestUpdate)
+		if !ok {
+			return true
+		}
+		if !h.handleFollowupRequestID(ctx, upd) {
+			return false
+		}
+		if !h.handleFollowupTokens(ctx, upd) {
+			return false
+		}
+		if err := write(&message.RequestOK{}); err != nil {
+			h.log.LogAttrs(ctx, slog.LevelDebug, "namespace REQUEST_UPDATE_OK write failed",
+				slog.String("err", err.Error()))
+			// The handler unregisters the namespace state when this loop
+			// returns; reset the read side so the peer learns reads
+			// stopped rather than writing follow-ups into a void. (The
+			// send side is left to the stream's owner — closing it here
+			// could race a concurrent notification fanout write.)
+			stream.CancelRead(uint64(moqt.StreamResetInternalError))
+			return false
+		}
+		return true
+	})
 }
 
 // namespaceMessageFor constructs a NAMESPACE wire message announcing the

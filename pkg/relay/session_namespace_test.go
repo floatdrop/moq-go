@@ -251,3 +251,49 @@ func dialAnotherClientWithLimits(t *testing.T, existing *session.Session, client
 	pipeListenerClientsMu.Unlock()
 	return sess
 }
+
+// TestNamespaceStreams_AnswerRequestUpdate pins §10.9 on the namespace
+// request streams: the relay previously held them open with a drain that
+// discarded follow-ups unparsed, so a peer's REQUEST_UPDATE was never
+// answered (the peer blocked until its ctx expired) and its §10.1 Request ID
+// was never accounted for. Both the PUBLISH_NAMESPACE and the
+// SUBSCRIBE_NAMESPACE streams must now reply REQUEST_OK.
+func TestNamespaceStreams_AnswerRequestUpdate(t *testing.T) {
+	t.Parallel()
+
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	nsPub, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+	})
+	if err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	defer nsPub.Close()
+
+	subSess := dialAnotherClient(t, pubSess)
+	nsSub, err := subSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
+		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+	})
+	if err != nil {
+		t.Fatalf("SubscribeNamespace: %v", err)
+	}
+	defer nsSub.Close()
+	// Drain the initial NAMESPACE backlog announcement so UpdateRequest's
+	// direct response read below cannot mistake it for the reply.
+	if m, err := message.Parse(nsSub); err != nil {
+		t.Fatalf("read initial NAMESPACE: %v", err)
+	} else if _, ok := m.(*message.Namespace); !ok {
+		t.Fatalf("initial message is %T, want *message.Namespace", m)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	if _, err := pubSess.UpdateRequest(ctx, nsPub.Stream, nil); err != nil {
+		t.Fatalf("PUBLISH_NAMESPACE REQUEST_UPDATE unanswered (§10.9): %v", err)
+	}
+	if _, err := subSess.UpdateRequest(ctx, nsSub.Stream, nil); err != nil {
+		t.Fatalf("SUBSCRIBE_NAMESPACE REQUEST_UPDATE unanswered (§10.9): %v", err)
+	}
+}
