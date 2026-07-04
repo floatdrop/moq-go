@@ -79,12 +79,17 @@ type Session struct {
 	goawayHandler func(*message.Goaway)
 	goawayFired   bool
 
-	// Inbound Request ID high-water mark (§10.1). Protected by mu.
-	// peerRequestIDSeen is false until the first inbound Request ID arrives.
-	// Once set, every subsequent inbound ID must be strictly greater than
-	// peerRequestIDMax (peer increments by 2 per request).
+	// Inbound Request ID tracking (§10.1). Protected by mu.
+	// peerRequestIDSeen is false until the first inbound Request ID arrives;
+	// peerRequestIDMax is the high-water mark. The peer allocates IDs in +2
+	// increments, but requests ride separate QUIC streams and can be
+	// DELIVERED out of order, so an ID below the mark is not automatically a
+	// duplicate: peerRequestIDGaps holds the not-yet-seen IDs below the mark
+	// (bounded by maxTrackedRequestIDGaps) that a late-delivered request may
+	// still legitimately claim. See [Session.CheckPeerRequestID].
 	peerRequestIDSeen bool
 	peerRequestIDMax  uint64
+	peerRequestIDGaps map[uint64]struct{}
 
 	// Inbound Track Alias → track.Key mapping (§11.1). Protected by mu.
 	// Populated via RegisterInboundTrackAlias when the peer assigns an alias

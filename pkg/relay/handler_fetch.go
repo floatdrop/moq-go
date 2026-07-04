@@ -118,6 +118,11 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Request, out *session.OutgoingFetchStream) {
 	readRequestStream(ctx, req.Stream, func(m message.Message) bool {
 		if upd, ok := m.(*message.RequestUpdate); ok {
+			// §10.1: the update consumes a Request ID; a parity or
+			// duplicate violation is session-fatal.
+			if !h.handleFollowupRequestID(ctx, upd) {
+				return false
+			}
 			// §10.2.2: an update may REGISTER/DELETE token aliases;
 			// a cache fault there is session-fatal.
 			if !h.handleFollowupTokens(ctx, upd) {

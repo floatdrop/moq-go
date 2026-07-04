@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -31,11 +32,12 @@ func (e *ErrRequestIDParityViolation) Error() string {
 	)
 }
 
-// ErrDuplicateRequestID is returned by AcceptRequest when the peer sends a
-// Request ID that is not strictly greater than the previous one per §10.1
-// ("each endpoint increments its Request ID by 2 for each new request").
-// This covers both exact duplicates and out-of-order reuse.
-// The caller MUST close the session with SessionInvalidRequestID.
+// ErrDuplicateRequestID is returned by [Session.CheckPeerRequestID] (and thus
+// AcceptRequest) when the peer reuses a Request ID (§10.1: "a duplicate
+// Request ID" MUST close the session with INVALID_REQUEST_ID). Cross-stream
+// delivery reordering is tolerated — an ID below the high-water mark counts
+// as a duplicate only once every unseen ID it could have been is accounted
+// for. The caller MUST close the session with SessionInvalidRequestID.
 type ErrDuplicateRequestID struct {
 	RequestID uint64
 	MaxSeen   uint64
@@ -43,7 +45,7 @@ type ErrDuplicateRequestID struct {
 
 func (e *ErrDuplicateRequestID) Error() string {
 	return fmt.Sprintf(
-		"moqt/session: peer Request ID %d is not greater than previous %d — INVALID_REQUEST_ID",
+		"moqt/session: peer Request ID %d already consumed (high-water mark %d) — INVALID_REQUEST_ID",
 		e.RequestID,
 		e.MaxSeen,
 	)
@@ -128,38 +130,12 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 			return nil, fmt.Errorf("moqt/session: parse request first message: %w", err)
 		}
 
-		// §10.1: client generates even Request IDs (starting at 0), server
-		// generates odd ones (starting at 1). The peer's IDs must have the
-		// opposite parity to ours. If we are the server (odd), the peer (client)
-		// must send even IDs; if we are the client (even), the peer (server) must
-		// send odd IDs.
+		// §10.1 parity + duplicate enforcement, shared with the follow-up
+		// REQUEST_UPDATE path — see [Session.CheckPeerRequestID].
 		if m, ok := msg.(message.WithRequestID); ok {
-			rid := m.GetRequestID()
-			// peerMustBeEven is true when we are the server (our IDs are odd).
-			peerMustBeEven := s.role == roleServer
-			if peerMustBeEven && rid%2 != 0 {
+			if err := s.CheckPeerRequestID(m.GetRequestID()); err != nil {
 				resetStream(stream)
-				return nil, &ErrRequestIDParityViolation{RequestID: rid, ExpectedEven: true}
-			}
-			if !peerMustBeEven && rid%2 != 1 {
-				resetStream(stream)
-				return nil, &ErrRequestIDParityViolation{RequestID: rid, ExpectedEven: false}
-			}
-
-			// §10.1: "each endpoint increments its Request ID by 2 for each new
-			// request" — IDs must be strictly monotonically increasing. A
-			// duplicate or out-of-order ID is a protocol violation.
-			s.mu.Lock()
-			seen := s.peerRequestIDSeen
-			maxSeen := s.peerRequestIDMax
-			if !seen || rid > maxSeen {
-				s.peerRequestIDSeen = true
-				s.peerRequestIDMax = rid
-				s.mu.Unlock()
-			} else {
-				s.mu.Unlock()
-				resetStream(stream)
-				return nil, &ErrDuplicateRequestID{RequestID: rid, MaxSeen: maxSeen}
+				return nil, err
 			}
 		}
 
@@ -186,6 +162,108 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 		}
 
 		return &Request{Stream: stream, First: msg, Tokens: tokens, s: s}, nil
+	}
+}
+
+// maxTrackedRequestIDGaps bounds [Session.CheckPeerRequestID]'s memory for
+// below-the-mark Request IDs that may still legitimately arrive late. A
+// conforming peer creates gaps only through delivery reordering of in-flight
+// requests (it allocates in +2 increments), so the bound is far above any
+// realistic reorder window; when it overflows, the lowest (oldest) gaps are
+// evicted first — they are the least plausible late arrivals — and a later
+// arrival for an evicted one reads as a duplicate.
+const maxTrackedRequestIDGaps = 1024
+
+// evictLowestGapsLocked removes the n smallest Request IDs from gaps, keeping
+// the newest entries claimable when the cap forces a choice. O(cap log cap),
+// and only runs on a jump that overflows the cap. Caller holds s.mu.
+func evictLowestGapsLocked(gaps map[uint64]struct{}, n int) {
+	ids := make([]uint64, 0, len(gaps))
+	for id := range gaps {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	for _, id := range ids[:min(n, len(ids))] {
+		delete(gaps, id)
+	}
+}
+
+// CheckPeerRequestID validates one inbound Request ID per §10.1 and records
+// it. It applies to every peer message that consumes a Request ID — the
+// first message of a request stream (AcceptRequest calls this) and follow-up
+// REQUEST_UPDATEs ([RequestBroker.Serve] and relay follow-up readers call it
+// for those).
+//
+// Two violations are session-fatal per §10.1, and the caller MUST close the
+// session with [moqt.SessionInvalidRequestID] (AcceptRequest instead returns
+// the error to its caller, which owns that decision):
+//
+//   - wrong parity for the sender (*ErrRequestIDParityViolation);
+//   - a duplicate ID (*ErrDuplicateRequestID).
+//
+// An ID below the high-water mark is NOT automatically a duplicate: the peer
+// allocates in +2 increments, but requests ride separate QUIC streams and
+// can be delivered out of order, so each unseen ID below the mark stays
+// claimable exactly once.
+func (s *Session) CheckPeerRequestID(rid uint64) error {
+	// §10.1: the client generates even Request IDs (starting at 0), the
+	// server odd ones (starting at 1); peerMustBeEven is true when we are
+	// the server.
+	peerMustBeEven := s.role == roleServer
+	if peerMustBeEven && rid%2 != 0 {
+		return &ErrRequestIDParityViolation{RequestID: rid, ExpectedEven: true}
+	}
+	if !peerMustBeEven && rid%2 != 1 {
+		return &ErrRequestIDParityViolation{RequestID: rid, ExpectedEven: false}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.peerRequestIDSeen || rid > s.peerRequestIDMax {
+		s.recordRequestIDGapsLocked(rid, peerMustBeEven)
+		s.peerRequestIDSeen = true
+		s.peerRequestIDMax = rid
+		return nil
+	}
+	if _, open := s.peerRequestIDGaps[rid]; open {
+		delete(s.peerRequestIDGaps, rid)
+		return nil
+	}
+	return &ErrDuplicateRequestID{RequestID: rid, MaxSeen: s.peerRequestIDMax}
+}
+
+// recordRequestIDGapsLocked records the peer Request IDs an advance of the
+// high-water mark to rid skips over, as claimable reorder gaps. The peer's
+// sequence starts at its parity base (§10.1: client 0, server 1), so on the
+// very first observation everything below rid is potentially in flight. All
+// new gaps are newer than every existing entry (which lie below the previous
+// mark), so keeping the newest cap-many claimable means inserting at most
+// cap new gaps (newest first) and evicting the lowest old entries to make
+// room. Caller holds s.mu.
+func (s *Session) recordRequestIDGapsLocked(rid uint64, peerMustBeEven bool) {
+	lo := uint64(0)
+	if !peerMustBeEven {
+		lo = 1
+	}
+	if s.peerRequestIDSeen {
+		lo = s.peerRequestIDMax + 2
+	}
+	if rid <= lo {
+		return
+	}
+	newGaps := maxTrackedRequestIDGaps
+	if d := (rid - lo) / 2; d < maxTrackedRequestIDGaps {
+		newGaps = int(d)
+	}
+	if excess := len(s.peerRequestIDGaps) + newGaps - maxTrackedRequestIDGaps; excess > 0 {
+		evictLowestGapsLocked(s.peerRequestIDGaps, excess)
+	}
+	if s.peerRequestIDGaps == nil {
+		s.peerRequestIDGaps = make(map[uint64]struct{})
+	}
+	for id, n := rid, 0; n < newGaps; n++ {
+		id -= 2
+		s.peerRequestIDGaps[id] = struct{}{}
 	}
 }
 

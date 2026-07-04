@@ -16,9 +16,9 @@ import (
 // TestRequestUpdate_PriorityChangeReturnsOK pins the §10.9 control-plane
 // contract: a REQUEST_UPDATE carrying a well-formed parameter change (here
 // SUBSCRIBER_PRIORITY) on an established SUBSCRIBE stream is answered with
-// exactly one REQUEST_OK. The Request ID on the update reuses the original
-// SUBSCRIBE's Request ID — REQUEST_UPDATE rides the original bidi stream and
-// does NOT consume a new ID.
+// exactly one REQUEST_OK. The update rides the original bidi stream but
+// consumes a fresh Request ID from the sender's space (§10.1), which
+// Subscription.Update allocates.
 func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 	t.Parallel()
 
@@ -46,8 +46,7 @@ func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 	}
 	defer subStream.Close()
 
-	// REQUEST_UPDATE reuses the SUBSCRIBE's Request ID (assigned by the
-	// session inside Subscribe).
+	// UpdateRequest allocates the update's own Request ID (§10.1).
 	ok, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.SubscriberPriorityParam(42)})
 	if err != nil {
@@ -355,4 +354,48 @@ func TestRequestUpdate_FetchMalformedRejected(t *testing.T) {
 	_, err = fetchSess.UpdateRequest(t.Context(), reqStream,
 		message.Parameters{message.ByteParam(message.ParamGroupOrder, 0x05)})
 	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
+}
+
+// TestRequestUpdate_InvalidRequestIDClosesSession pins the §10.1 receiver
+// rule on follow-ups: a REQUEST_UPDATE consumes a Request ID from the
+// sender's space, so one whose ID has the wrong parity for the sender (a
+// client must use even IDs; here it sends an odd one) is a session-fatal
+// INVALID_REQUEST_ID, not a per-request error.
+func TestRequestUpdate_InvalidRequestIDClosesSession(t *testing.T) {
+	t.Parallel()
+
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
+		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Name:       []byte("cam1"),
+		TrackAlias: 7,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer pubStream.Close()
+
+	subSess := dialAnotherClient(t, pubSess)
+	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer subStream.Close()
+
+	// Raw wrong-parity update: the subscriber is a client (even IDs), so an
+	// odd ID violates §10.1 and the relay must close the whole session.
+	if err := message.Marshal(subStream, &message.RequestUpdate{RequestID: 3}); err != nil {
+		t.Fatalf("write REQUEST_UPDATE: %v", err)
+	}
+
+	select {
+	case <-subSess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("session not closed after wrong-parity REQUEST_UPDATE (§10.1)")
+	}
 }

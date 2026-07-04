@@ -270,13 +270,20 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 			return err
 		}
 
-		switch msg.(type) {
+		switch m := msg.(type) {
 		case *message.RequestOK, *message.RequestError:
 			if b.route(msg) {
 				continue
 			}
 			// Unsolicited response — surface via onMsg below.
 		case *message.RequestUpdate:
+			// §10.1: a REQUEST_UPDATE consumes a Request ID from the
+			// sender's space; a wrong-parity or duplicate ID is
+			// session-fatal.
+			if err := b.sess.CheckPeerRequestID(m.RequestID); err != nil {
+				_ = b.sess.Close(moqt.SessionInvalidRequestID, err.Error())
+				return err
+			}
 			// §10.9: the receiver of a REQUEST_UPDATE "MUST respond with
 			// exactly one REQUEST_OK or REQUEST_ERROR". The broker keeps
 			// no mutable per-request parameters, so the update is

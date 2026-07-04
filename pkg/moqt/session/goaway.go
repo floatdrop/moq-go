@@ -71,14 +71,20 @@ func (s *Session) SendGoaway(timeout time.Duration, newURI string) error {
 	s.goawaySent = true
 
 	// §10.4: Request ID is "the smallest Request ID that was not or might
-	// not have been processed." If we have seen at least one inbound
-	// Request ID, the next unprocessed one is peerRequestIDMax + 2 (peer
-	// increments by 2 per §10.1). If no inbound requests have arrived, use
-	// the per-role minimum: 0 when we are the server (peer is client,
+	// not have been processed." With at least one inbound Request ID seen,
+	// that is normally peerRequestIDMax + 2 (peer increments by 2 per
+	// §10.1) — unless delivery reordering left open gaps below the mark
+	// ([Session.CheckPeerRequestID]): a gap is a peer request we have NOT
+	// processed, so the smallest open gap is the honest watermark and the
+	// peer must re-issue from there. If no inbound requests have arrived,
+	// use the per-role minimum: 0 when we are the server (peer is client,
 	// even IDs) or 1 when we are the client (peer is server, odd IDs).
 	var watermark uint64
 	if s.peerRequestIDSeen {
 		watermark = s.peerRequestIDMax + 2
+		for id := range s.peerRequestIDGaps {
+			watermark = min(watermark, id)
+		}
 	} else if s.role == roleClient {
 		watermark = 1
 	}

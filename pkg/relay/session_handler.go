@@ -453,6 +453,23 @@ func (h *sessionHandler) rejectTokenDenied(ctx context.Context, req *session.Req
 	}
 }
 
+// handleFollowupRequestID validates a peer REQUEST_UPDATE's Request ID —
+// §10.1: an update consumes an ID from the sender's space, and the readers
+// that parse follow-ups directly bypass AcceptRequest's checking. A
+// wrong-parity or duplicate ID is session-fatal (INVALID_REQUEST_ID);
+// returns false when the session was closed, in which case the caller's
+// read loop should stop.
+func (h *sessionHandler) handleFollowupRequestID(ctx context.Context, upd *message.RequestUpdate) bool {
+	err := h.sess.CheckPeerRequestID(upd.RequestID)
+	if err == nil {
+		return true
+	}
+	h.log.LogAttrs(ctx, slog.LevelDebug, "relay closing session on follow-up Request ID violation",
+		slog.String("err", err.Error()))
+	_ = h.sess.Close(moqt.SessionInvalidRequestID, err.Error())
+	return false
+}
+
 // handleFollowupTokens routes a follow-up message's AUTHORIZATION_TOKEN
 // parameters through the session token cache — §10.2.2 allows REQUEST_UPDATE
 // to REGISTER or DELETE aliases, and the readers that parse follow-ups

@@ -52,7 +52,8 @@ func TestServeRequestStreamAnswersRequestUpdate(t *testing.T) {
 	}
 
 	// Send a REQUEST_UPDATE follow-up and await the mandated REQUEST_OK.
-	if err := message.Marshal(req.Stream, &message.RequestUpdate{}); err != nil {
+	// The server side allocates odd Request IDs (§10.1); the update consumes one.
+	if err := message.Marshal(req.Stream, &message.RequestUpdate{RequestID: 1}); err != nil {
 		t.Fatalf("write REQUEST_UPDATE: %v", err)
 	}
 	type parsed struct {

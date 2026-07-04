@@ -240,9 +240,11 @@ func TestAcceptRequestDuplicateID(t *testing.T) {
 	}
 }
 
-// TestAcceptRequestOutOfOrderID verifies that a Request ID that is not greater
-// than the previous one is rejected, even if it is not an exact duplicate.
-// §10.1 mandates strict monotonic increase ("increments by 2 for each new request").
+// TestAcceptRequestOutOfOrderID verifies §10.1's receiver rules under
+// cross-stream delivery reordering: an ID below the high-water mark is NOT a
+// violation the first time it arrives — the peer allocates in +2 increments,
+// but requests ride separate QUIC streams and can be delivered out of order —
+// while claiming the same ID a second time is a fatal duplicate.
 func TestAcceptRequestOutOfOrderID(t *testing.T) {
 	ctx := t.Context()
 	client, server := openPair(t)
@@ -253,11 +255,17 @@ func TestAcceptRequestOutOfOrderID(t *testing.T) {
 		Namespace: wire.TrackNamespace{[]byte("test")},
 		Name:      []byte("track"),
 	}
-	// Second request with ID=2 — out-of-order (less than 4).
+	// Second request with ID=2 — delivered out of order (less than 4).
 	oooSub := &message.Subscribe{
 		RequestID: 2,
 		Namespace: wire.TrackNamespace{[]byte("test")},
 		Name:      []byte("track2"),
+	}
+	// Third request reusing ID=2 — a true duplicate.
+	dupSub := &message.Subscribe{
+		RequestID: 2,
+		Namespace: wire.TrackNamespace{[]byte("test")},
+		Name:      []byte("track3"),
 	}
 
 	var (
@@ -266,6 +274,7 @@ func TestAcceptRequestOutOfOrderID(t *testing.T) {
 		secondErr error
 	)
 
+	var thirdErr error
 	wg.Go(func() {
 		req, err := server.AcceptRequest(ctx)
 		firstErr = err
@@ -273,7 +282,12 @@ func TestAcceptRequestOutOfOrderID(t *testing.T) {
 			return
 		}
 		_ = req.RejectError(moqt.RequestDoesNotExist, "ok")
-		_, secondErr = server.AcceptRequest(ctx)
+		req, secondErr = server.AcceptRequest(ctx)
+		if secondErr != nil {
+			return
+		}
+		_ = req.RejectError(moqt.RequestDoesNotExist, "ok")
+		_, thirdErr = server.AcceptRequest(ctx)
 	})
 
 	wg.Go(func() {
@@ -288,7 +302,14 @@ func TestAcceptRequestOutOfOrderID(t *testing.T) {
 		if err != nil {
 			return
 		}
+		_, _ = message.Parse(s2)
 		_ = s2.Close()
+
+		s3, err := session.OpenRequestForTest(client, dupSub)
+		if err != nil {
+			return
+		}
+		_ = s3.Close()
 	})
 
 	wg.Wait()
@@ -296,10 +317,13 @@ func TestAcceptRequestOutOfOrderID(t *testing.T) {
 	if firstErr != nil {
 		t.Fatalf("first AcceptRequest: %v", firstErr)
 	}
+	if secondErr != nil {
+		t.Fatalf("reordered AcceptRequest: %v (out-of-order delivery must be tolerated)", secondErr)
+	}
 
 	var dupErr *session.ErrDuplicateRequestID
-	if !errors.As(secondErr, &dupErr) {
-		t.Fatalf("second AcceptRequest error = %v (%T), want *session.ErrDuplicateRequestID", secondErr, secondErr)
+	if !errors.As(thirdErr, &dupErr) {
+		t.Fatalf("third AcceptRequest error = %v (%T), want *session.ErrDuplicateRequestID", thirdErr, thirdErr)
 	}
 	if dupErr.RequestID != 2 {
 		t.Errorf("ErrDuplicateRequestID.RequestID = %d, want 2", dupErr.RequestID)
