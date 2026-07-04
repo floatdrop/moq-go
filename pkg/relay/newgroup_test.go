@@ -93,7 +93,7 @@ func TestNewGroupRequest_ForwardedUpstreamOnUpdate(t *testing.T) {
 
 	// No objects published yet, so the largest group is 0 and a request for
 	// group 5 is forwarded upstream.
-	if _, err := subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+	if _, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.NewGroupRequestParam(5)}); err != nil {
 		t.Fatalf("UpdateRequest(NEW_GROUP_REQUEST=5): %v", err)
 	}
@@ -167,7 +167,7 @@ func TestNewGroupRequest_BackToBackUpdatesSurvive(t *testing.T) {
 
 	for i, want := range []uint64{5, 8} { // 8 > 5: not covered by the outstanding request
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
-		_, err := subSess.UpdateRequest(ctx, subStream, subMsg.RequestID,
+		_, err := subSess.UpdateRequest(ctx, subStream,
 			message.Parameters{message.NewGroupRequestParam(want)})
 		cancel()
 		if err != nil {
@@ -218,7 +218,7 @@ func TestNewGroupRequest_NotForwardedWithoutDynamicGroups(t *testing.T) {
 	}
 	defer subStream.Close()
 
-	if _, err := subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+	if _, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.NewGroupRequestParam(5)}); err != nil {
 		t.Fatalf("UpdateRequest(NEW_GROUP_REQUEST=5): %v", err)
 	}

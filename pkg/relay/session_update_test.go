@@ -48,7 +48,7 @@ func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 
 	// REQUEST_UPDATE reuses the SUBSCRIBE's Request ID (assigned by the
 	// session inside Subscribe).
-	ok, err := subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+	ok, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.SubscriberPriorityParam(42)})
 	if err != nil {
 		t.Fatalf("UpdateRequest: %v", err)
@@ -92,7 +92,7 @@ func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 
 	// 0x05 is neither Ascending (0x1) nor Descending (0x2): installSubscribeParams
 	// rejects it, so the relay answers REQUEST_ERROR.
-	_, err = subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+	_, err = subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.ByteParam(message.ParamGroupOrder, 0x05)})
 	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
 
@@ -172,7 +172,7 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 	}()
 
 	// Pause: Forward State 0.
-	if _, err := subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+	if _, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.ForwardParam(false)}); err != nil {
 		t.Fatalf("UpdateRequest(Forward=0): %v", err)
 	}
@@ -204,7 +204,7 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 	}
 
 	// Resume: Forward State 1.
-	if _, err := subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+	if _, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.ForwardParam(true)}); err != nil {
 		t.Fatalf("UpdateRequest(Forward=1): %v", err)
 	}
@@ -242,7 +242,7 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 	// update was never processed. A third update must still get REQUEST_OK.
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	if _, err := subSess.UpdateRequest(ctx, subStream, subMsg.RequestID,
+	if _, err := subSess.UpdateRequest(ctx, subStream,
 		message.Parameters{message.SubscriberPriorityParam(17)}); err != nil {
 		t.Fatalf("UpdateRequest after Forward resume (update loop wedged?): %v", err)
 	}
@@ -297,7 +297,7 @@ func TestRequestUpdate_FetchValidUpdateReturnsOK(t *testing.T) {
 
 	// REQUEST_UPDATE reuses the FETCH's Request ID (assigned by the session
 	// inside Fetch) and rides the original bidi request stream.
-	ok, err := fetchSess.UpdateRequest(t.Context(), reqStream, fetchMsg.RequestID,
+	ok, err := fetchSess.UpdateRequest(t.Context(), reqStream,
 		message.Parameters{message.GroupOrderParam(message.GroupOrderDescending)})
 	if err != nil {
 		t.Fatalf("UpdateRequest: %v", err)
@@ -352,7 +352,7 @@ func TestRequestUpdate_FetchMalformedRejected(t *testing.T) {
 
 	// 0x05 is neither Ascending (0x1) nor Descending (0x2):
 	// validateFetchUpdateParams rejects it, so the relay answers REQUEST_ERROR.
-	_, err = fetchSess.UpdateRequest(t.Context(), reqStream, fetchMsg.RequestID,
+	_, err = fetchSess.UpdateRequest(t.Context(), reqStream,
 		message.Parameters{message.ByteParam(message.ParamGroupOrder, 0x05)})
 	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
 }

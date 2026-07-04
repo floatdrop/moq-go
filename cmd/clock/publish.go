@@ -2,17 +2,14 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/lmittmann/tint"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
-	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
@@ -34,39 +31,19 @@ func publish(ctx context.Context, addr string) error {
 	}
 	slog.InfoContext(ctx, "PUBLISH_OK", "alias", pub.TrackAlias())
 
-	// Serve the publish request stream: reading follow-ups directly (instead
-	// of via AcceptRequest) obliges us to route AUTHORIZATION_TOKEN
-	// parameters through the session token cache (§10.2.2) and to answer
-	// every REQUEST_UPDATE with exactly one REQUEST_OK / REQUEST_ERROR
-	// (§10.9) — accepted here without applying any parameters. pubMu
-	// serializes those replies against the shutdown PUBLISH_DONE below:
-	// the Stream contract leaves concurrent writes undefined.
-	var pubMu sync.Mutex
+	// Serve the publish request stream through its broker: subscriber
+	// REQUEST_UPDATEs are answered with the mandated REQUEST_OK (§10.9),
+	// AUTHORIZATION_TOKEN parameters go through the session token cache
+	// (§10.2.2), and — with the broker attached — the shutdown
+	// [session.Publication.Done] below is automatically serialized against
+	// those replies.
 	go func() {
-		for {
-			msg, err := message.Parse(pub)
-			if err != nil {
-				slog.DebugContext(ctx, "publish request stream closed", tint.Err(err))
-				return
-			}
-			if _, err := sess.ProcessFollowupTokens(msg); err != nil {
-				slog.WarnContext(ctx, "publish token processing failed", tint.Err(err))
-				if tce, ok := errors.AsType[*session.TokenCacheError](err); ok {
-					_ = sess.Close(tce.Code, tce.Error())
-				}
-				return
-			}
-			if _, ok := msg.(*message.RequestUpdate); ok {
-				pubMu.Lock()
-				err := message.Marshal(pub, &message.RequestOK{})
-				pubMu.Unlock()
-				if err != nil {
-					slog.DebugContext(ctx, "publish REQUEST_UPDATE_OK write failed", tint.Err(err))
-					return
-				}
-				continue
-			}
+		err := pub.Broker().Serve(ctx, func(msg message.Message) bool {
 			slog.DebugContext(ctx, "publish request stream message", "type", fmt.Sprintf("%T", msg))
+			return true
+		})
+		if err != nil {
+			slog.DebugContext(ctx, "publish request stream closed", tint.Err(err))
 		}
 	}()
 
@@ -78,9 +55,7 @@ func publish(ctx context.Context, addr string) error {
 		select {
 		case <-ctx.Done():
 			slog.InfoContext(ctx, "shutting down, sending PUBLISH_DONE")
-			pubMu.Lock()
 			_ = pub.Done(moqt.PublishDoneTrackEnded, "")
-			pubMu.Unlock()
 			return nil
 
 		case t := <-ticker.C:

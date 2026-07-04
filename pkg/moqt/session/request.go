@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -204,8 +206,10 @@ func rejectStreamWithError(stream Stream, code moqt.RequestErrorCode, reason str
 
 // requestHandle is the state every requester-side typed handle embeds: the
 // still-open bidi request stream (close it to end the request), the owning
-// session, and the §10.1 Request ID that follow-up REQUEST_UPDATEs must
-// reuse. Embedding it provides the shared Update method.
+// session, and the §10.1 Request ID of the request the stream carries (used
+// where a follow-on message must reference the original request, e.g. the
+// FETCH_HEADER a FetchResponder opens). Embedding it provides the shared
+// Update and Broker methods.
 type requestHandle struct {
 	// Stream is the request stream, still open for follow-up traffic.
 	// Close it to end the request.
@@ -213,15 +217,51 @@ type requestHandle struct {
 
 	s         *Session
 	requestID uint64
+
+	brokerOnce sync.Once
+	broker     atomic.Pointer[RequestBroker]
+}
+
+// Broker returns this request's [RequestBroker], creating it on first call.
+// Use it when the request outlives its initial response and follow-up
+// traffic must coexist with updates: run [RequestBroker.Serve] to own the
+// stream's reads, and route writes through the broker. Once created, the
+// handle's own Update (and terminal writes like [Publication.Done]) go
+// through the broker automatically, so they stay safe alongside Serve.
+func (h *requestHandle) Broker() *RequestBroker {
+	h.brokerOnce.Do(func() {
+		h.broker.Store(h.s.NewRequestBroker(h.Stream))
+	})
+	return h.broker.Load()
 }
 
 // Update sends a REQUEST_UPDATE (§10.9) on the request stream and awaits the
 // single REQUEST_OK / REQUEST_ERROR the spec mandates. params carries only
 // the fields to change; any parameter omitted keeps its prior value on the
-// peer. It is [Session.UpdateRequest] with this request's stream and Request
-// ID filled in.
+// peer.
+//
+// With no [requestHandle.Broker] attached this is [Session.UpdateRequest] —
+// it reads the response directly, so it must be the stream's only reader.
+// With a broker attached it delegates to [RequestBroker.Update], whose
+// response arrives via the broker's Serve loop.
 func (h *requestHandle) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
-	return h.s.UpdateRequest(ctx, h.Stream, h.requestID, params)
+	if b := h.broker.Load(); b != nil {
+		return b.Update(ctx, params)
+	}
+	return h.s.UpdateRequest(ctx, h.Stream, params)
+}
+
+// writeThenClose writes msg and FINs the send side, routing through the
+// attached broker's write lock when one exists — the shared backend of
+// terminal handle methods like [Publication.Done].
+func (h *requestHandle) writeThenClose(msg message.Message) error {
+	if b := h.broker.Load(); b != nil {
+		return b.writeThenClose(msg)
+	}
+	if err := message.Marshal(h.Stream, msg); err != nil {
+		return err
+	}
+	return h.Stream.Close()
 }
 
 // openRequest opens a new outbound bidirectional stream and writes first as
@@ -341,9 +381,11 @@ func awaitRequestResponse[OK message.Message, R any](
 
 // UpdateRequest sends a REQUEST_UPDATE (§10.9) on an already-established
 // request stream and awaits the single REQUEST_OK / REQUEST_ERROR the spec
-// mandates in response. requestID MUST be the Request ID of the original
-// request the stream carries — REQUEST_UPDATE rides the original bidi stream
-// and does NOT consume a new Request ID. params carries only the fields the
+// mandates in response. The update rides the original bidi stream — the
+// stream, not the ID, names the request being modified — but per §10.1 the
+// REQUEST_UPDATE itself consumes a fresh Request ID from this endpoint's
+// space, which the session allocates here (a reused ID is a duplicate the
+// peer must treat as session-fatal). params carries only the fields the
 // caller wants to change; any parameter omitted keeps its prior value on the
 // peer (§10.9).
 //
@@ -356,15 +398,15 @@ func awaitRequestResponse[OK message.Message, R any](
 // run concurrently with any other reader of the same stream ([DrainAndWait],
 // a PUBLISH_DONE-draining loop, another UpdateRequest) — a concurrent reader
 // races it for the response and can swallow it, blocking this call until ctx
-// expires.
+// expires. When the stream needs a standing reader, use [RequestBroker.Serve]
+// and [RequestBroker.Update] instead.
 func (s *Session) UpdateRequest(
 	ctx context.Context,
 	stream Stream,
-	requestID uint64,
 	params message.Parameters,
 ) (*message.RequestOK, error) {
 	if err := message.Marshal(stream, &message.RequestUpdate{
-		RequestID:  requestID,
+		RequestID:  s.AllocRequestID(),
 		Parameters: params,
 	}); err != nil {
 		return nil, fmt.Errorf("moqt/session: write REQUEST_UPDATE: %w", err)
@@ -373,14 +415,7 @@ func (s *Session) UpdateRequest(
 	if err != nil {
 		return nil, fmt.Errorf("moqt/session: read REQUEST_UPDATE response: %w", err)
 	}
-	switch r := resp.(type) {
-	case *message.RequestOK:
-		return r, nil
-	case *message.RequestError:
-		return nil, &RequestRejectedError{Code: r.ErrorCode, Reason: r.ErrorReason}
-	default:
-		return nil, fmt.Errorf("moqt/session: unexpected %s in REQUEST_UPDATE response", resp.Type())
-	}
+	return mapUpdateResponse(resp)
 }
 
 // Reply marshals a response message onto the request's bidi stream. The
@@ -431,7 +466,11 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 	if err := message.Marshal(r.Stream, ok); err != nil {
 		return nil, fmt.Errorf("moqt/session: write SUBSCRIBE_OK: %w", err)
 	}
-	return &Publication{Stream: r.Stream, s: r.s, alias: ok.TrackAlias}, nil
+	sub, _ := r.First.(*message.Subscribe) // checked above
+	return &Publication{
+		requestHandle: requestHandle{Stream: r.Stream, s: r.s, requestID: sub.RequestID},
+		alias:         ok.TrackAlias,
+	}, nil
 }
 
 // AcceptPublish accepts an inbound PUBLISH (§10.10): it registers the

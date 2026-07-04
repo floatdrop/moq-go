@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
@@ -87,10 +86,10 @@ type Subscription struct {
 	ID uint64
 
 	// RequestID is the MOQT Request ID (§10.1) of the SUBSCRIBE / PUBLISH
-	// that opened this subscription's request stream. It is the ID the
-	// relay must reuse when sending REQUEST_UPDATE (§10.9) on the same
-	// stream — REQUEST_UPDATE rides the original stream and does not
-	// consume a new Request ID. Set once at construction; read-only.
+	// that opened this subscription's request stream, kept for identity
+	// and diagnostics. (A REQUEST_UPDATE rides the same stream but consumes
+	// a fresh ID from the sender's space, §10.1 — the stream, not the ID,
+	// names the request being updated.) Set once at construction; read-only.
 	RequestID uint64
 
 	// Session is the MOQT session that owns this subscription's request
@@ -212,188 +211,61 @@ type UpstreamSub struct {
 	// PUBLISH-fed upstreams, whose stream is owned by the publisher.
 	OnDemand bool
 
-	// updMu serializes REQUEST_UPDATE writes on Stream and guards the
-	// waiter queue. It is deliberately held across the stream write:
-	// §10.9 responses arrive in request order, so the waiter queue order
-	// must match the write order.
-	updMu sync.Mutex
-
-	// updWaiters holds one channel per in-flight [UpstreamSub.Update],
-	// oldest first. The stream's reader goroutine answers the head waiter
-	// on REQUEST_OK and every waiter on REQUEST_ERROR (§10.9 coalescing)
-	// via RouteUpdateResponse.
-	updWaiters []chan updateResult
-
-	// updClosed is latched by CloseUpdates once the stream's reader has
-	// exited; subsequent Update calls fail immediately instead of queueing
-	// a waiter nothing will ever answer.
-	updClosed bool
+	// Broker owns the request stream's read side (via
+	// [session.RequestBroker.Serve], run by the relay's per-upstream reader
+	// goroutine) and serializes every relay write on the stream — §10.9
+	// REQUEST_UPDATEs via [UpstreamSub.Update] and other control messages
+	// via [UpstreamSub.WriteMessage] must not interleave. nil only for
+	// literal-constructed test fixtures; [NewUpstreamSub] always builds one.
+	Broker *session.RequestBroker
 }
-
-// updateResult carries one §10.9 response to a waiting Update call.
-type updateResult struct {
-	ok  *message.RequestOK
-	err error
-}
-
-// ErrUpstreamClosed is returned by [UpstreamSub.Update] when the upstream
-// request stream's reader has exited (publisher FIN/reset or session
-// shutdown) — no further REQUEST_UPDATE can be answered.
-var ErrUpstreamClosed = errors.New("registry: upstream request stream closed")
 
 // updateResponseTimeout bounds the wait for the §10.9 REQUEST_OK /
 // REQUEST_ERROR after Update writes a REQUEST_UPDATE. A conforming peer
-// always answers; the bound keeps a peer that never does (this repo's own
-// demo publishers drain their PUBLISH streams without replying) from
-// wedging the dispatch loop the Update call runs on.
+// always answers; the bound keeps a peer that never does from wedging the
+// dispatch loop the Update call runs on.
 const updateResponseTimeout = 5 * time.Second
 
 // Update sends a REQUEST_UPDATE (§10.9) on the upstream request stream and
 // awaits the single REQUEST_OK / REQUEST_ERROR the spec mandates, bounded
 // by [updateResponseTimeout] (tightened further by any earlier deadline on
-// ctx).
-//
-// This is the relay-side replacement for [session.Session.UpdateRequest]:
-// that helper reads the response off the stream directly, which cannot
-// coexist with the relay's per-stream reader goroutine (two concurrent
-// readers race for the response — the reader must own ALL reads). Instead,
-// Update queues a waiter and the reader hands the response back through
-// RouteUpdateResponse.
-//
-// A REQUEST_ERROR is surfaced as a [session.RequestRejectedError]. On
-// timeout the waiter is removed from the queue so an upstream that never
-// answers cannot permanently shift response routing for later updates.
-//
-// Known limitation: the REQUEST_UPDATE write itself runs under updMu and is
-// not ctx-bounded — a peer that stalls stream flow control blocks Update
-// (and the stream's reader) until the session dies and errors the write.
+// ctx). It delegates to the sub's [session.RequestBroker]; the response is
+// delivered by the relay's per-upstream Serve loop. A REQUEST_ERROR is
+// surfaced as a [session.RequestRejectedError]; a closed stream as
+// [session.ErrRequestStreamClosed].
 func (u *UpstreamSub) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
+	if u.Broker == nil {
+		return nil, session.ErrRequestStreamClosed
+	}
 	ctx, cancel := context.WithTimeout(ctx, updateResponseTimeout)
 	defer cancel()
-
-	ch := make(chan updateResult, 1)
-
-	u.updMu.Lock()
-	if u.updClosed {
-		u.updMu.Unlock()
-		return nil, ErrUpstreamClosed
-	}
-	// Write while holding updMu: it serializes writers on the stream AND
-	// keeps the waiter queue order equal to the write order, which is what
-	// lets the reader pair each §10.9 response with its update.
-	err := message.Marshal(u.Stream, &message.RequestUpdate{
-		RequestID:  u.RequestID,
-		Parameters: params,
-	})
-	if err == nil {
-		u.updWaiters = append(u.updWaiters, ch)
-	}
-	u.updMu.Unlock()
-	if err != nil {
-		return nil, fmt.Errorf("registry: write REQUEST_UPDATE: %w", err)
-	}
-
-	select {
-	case res := <-ch:
-		return res.ok, res.err
-	case <-ctx.Done():
-		// Remove our waiter so a peer that never answers doesn't leave a
-		// stale head absorbing the NEXT update's response forever. (If the
-		// response is merely late, routing for updates written after this
-		// removal shifts by one — the lesser evil versus permanent
-		// poisoning; conforming peers answer well within the bound.)
-		u.updMu.Lock()
-		if i := slices.Index(u.updWaiters, ch); i >= 0 {
-			u.updWaiters = slices.Delete(u.updWaiters, i, i+1)
-		}
-		u.updMu.Unlock()
-		return nil, ctx.Err()
-	}
-}
-
-// RouteUpdateResponse delivers a REQUEST_OK / REQUEST_ERROR read off the
-// upstream request stream to in-flight Update calls: a REQUEST_OK answers
-// the oldest waiter; a REQUEST_ERROR answers ALL of them, because §10.9
-// lets the peer coalesce pipelined updates and "only a single REQUEST_ERROR
-// will be sent" for the batch. It reports whether any waiter consumed the
-// message; false means none was pending (an unsolicited response the caller
-// may log and drop).
-func (u *UpstreamSub) RouteUpdateResponse(msg message.Message) bool {
-	u.updMu.Lock()
-	if len(u.updWaiters) == 0 {
-		u.updMu.Unlock()
-		return false
-	}
-	var recipients []chan updateResult
-	if _, isErr := msg.(*message.RequestError); isErr {
-		recipients = u.updWaiters
-		u.updWaiters = nil
-	} else {
-		recipients = u.updWaiters[:1]
-		u.updWaiters = u.updWaiters[1:]
-	}
-	u.updMu.Unlock()
-
-	var res updateResult
-	switch m := msg.(type) {
-	case *message.RequestOK:
-		res = updateResult{ok: m}
-	case *message.RequestError:
-		res = updateResult{err: &session.RequestRejectedError{Code: m.ErrorCode, Reason: m.ErrorReason}}
-	default:
-		res = updateResult{err: fmt.Errorf("registry: unexpected %s in REQUEST_UPDATE response", msg.Type())}
-	}
-	for _, ch := range recipients {
-		ch <- res
-	}
-	return true
-}
-
-// CloseUpdates latches the broker shut and fails every pending and future
-// Update with [ErrUpstreamClosed]. Idempotent; the stream's reader calls it
-// on exit and teardown paths call it defensively.
-func (u *UpstreamSub) CloseUpdates() {
-	u.updMu.Lock()
-	waiters := u.updWaiters
-	u.updWaiters = nil
-	u.updClosed = true
-	u.updMu.Unlock()
-	for _, ch := range waiters {
-		ch <- updateResult{err: ErrUpstreamClosed}
-	}
+	return u.Broker.Update(ctx, params)
 }
 
 // WriteMessage marshals a control message onto the upstream request stream
-// under the same lock that serializes Update's REQUEST_UPDATE writes.
-// session.Stream does not serialize concurrent writers, so every relay
-// write on this stream after the request is accepted must go through here
-// or Update.
+// under the broker's write lock — the same lock that serializes Update's
+// REQUEST_UPDATE writes. session.Stream does not serialize concurrent
+// writers, so every relay write on this stream after the request is
+// accepted must go through here or Update.
 func (u *UpstreamSub) WriteMessage(msg message.Message) error {
-	u.updMu.Lock()
-	defer u.updMu.Unlock()
-	return message.Marshal(u.Stream, msg)
+	if u.Broker == nil {
+		return session.ErrRequestStreamClosed
+	}
+	return u.Broker.WriteMessage(msg)
 }
 
 // CloseOnDemand tears down an on-demand upstream subscription after its
 // last downstream left: pending updates fail fast, the read side is reset,
 // and the send side is FIN'd — closing the request stream is how a
-// subscriber ends a subscription (§10.7). The stream's reader goroutine
-// observes the reset and exits, and the publisher stops streaming into a
-// void. Idempotent; must be called without registry locks held (stream
-// I/O).
+// subscriber ends a subscription (§10.7). The broker's Serve loop observes
+// the reset and exits, and the publisher stops streaming into a void.
+// Idempotent; must be called without registry locks held (stream I/O).
 func (u *UpstreamSub) CloseOnDemand() {
 	u.Terminate()
-	u.CloseUpdates()
-	if u.Stream == nil {
+	if u.Broker == nil {
 		return
 	}
-	// Serialize with WriteMessage / Update: the SendStream contract says
-	// racing Write with Close is undefined, and the stream's reader may be
-	// mid-ack of a peer REQUEST_UPDATE under updMu right now.
-	u.updMu.Lock()
-	defer u.updMu.Unlock()
-	u.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
-	_ = u.Stream.Close()
+	u.Broker.Close(moqt.StreamResetCancelled)
 }
 
 // NewUpstreamSub constructs an UpstreamSub in [SubEstablished] with the given
@@ -402,9 +274,7 @@ func (u *UpstreamSub) CloseOnDemand() {
 // subscription is live from construction.
 //
 // requestID is the §10.1 Request ID of the SUBSCRIBE / PUBLISH that opened
-// the request stream; [UpstreamSub.Update] reuses it on every REQUEST_UPDATE,
-// so passing the wrong value silently corrupts §10.9 update routing at the
-// peer — hence a constructor argument rather than a set-later field.
+// the request stream, recorded for identity and diagnostics.
 //
 // The Forward State starts at 1: per §10.7 a SUBSCRIBE (or accepted PUBLISH)
 // that omits the FORWARD parameter implies Forward State 1, and the relay's
@@ -427,6 +297,7 @@ func NewUpstreamSub(
 			TrackAlias:   trackAlias,
 			forwardState: 1,
 		},
+		Broker: sess.NewRequestBroker(stream),
 	}
 }
 

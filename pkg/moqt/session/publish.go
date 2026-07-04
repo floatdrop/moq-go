@@ -18,12 +18,19 @@ import (
 // (answering an inbound SUBSCRIBE) — in both cases this endpoint is the one
 // sending objects.
 type Publication struct {
-	// Stream is the PUBLISH request stream, still open for follow-up
-	// traffic: PUBLISH_DONE, REQUEST_UPDATE, etc. Close it to FIN the
-	// publication.
-	Stream
+	// requestHandle carries the request stream — still open for follow-up
+	// traffic: PUBLISH_DONE, REQUEST_UPDATE, etc.; Close it to FIN the
+	// publication — and provides Update and Broker. Serving subscriber
+	// REQUEST_UPDATEs on a long-lived publication is what
+	// [requestHandle.Broker] + [RequestBroker.Serve] are for.
+	//
+	// §10.9 permits REQUEST_UPDATE only from the request's sender, plus
+	// the subscriber of a PUBLISH-established subscription — so Update is
+	// valid on a Publication from [Session.Publish] (this side sent the
+	// PUBLISH) but NOT on one from [Request.AcceptSubscribe], where this
+	// side is the publisher answering the peer's SUBSCRIBE.
+	requestHandle
 
-	s     *Session
 	alias uint64
 
 	// subgroupCount counts subgroup streams opened via OpenSubgroup, used as
@@ -61,14 +68,14 @@ func (p *Publication) OpenSubgroup(h message.SubgroupHeader) (*OutgoingSubgroupS
 // [Session.OpenSubgroup] directly are not counted — send PUBLISH_DONE yourself
 // via message.Marshal if you need a different count).
 func (p *Publication) Done(code moqt.PublishDoneCode, reason string) error {
-	if err := message.Marshal(p.Stream, &message.PublishDone{
+	if err := p.writeThenClose(&message.PublishDone{
 		StatusCode:  code,
 		StreamCount: p.subgroupCount.Load(),
 		ErrorReason: reason,
 	}); err != nil {
 		return fmt.Errorf("moqt/session: write PUBLISH_DONE: %w", err)
 	}
-	return p.Stream.Close()
+	return nil
 }
 
 // IncomingPublication is the receiving side of a publisher-initiated PUBLISH
@@ -113,7 +120,10 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 	}
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, _ *message.RequestOK) (*Publication, error) {
-			return &Publication{Stream: stream, s: s, alias: m.TrackAlias}, nil
+			return &Publication{
+				requestHandle: requestHandle{Stream: stream, s: s, requestID: m.RequestID},
+				alias:         m.TrackAlias,
+			}, nil
 		})
 }
 

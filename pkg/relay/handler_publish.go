@@ -65,14 +65,14 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		return
 	}
 
-	// §10.9: a later upstream REQUEST_UPDATE rides this PUBLISH stream and
-	// must reuse the PUBLISH's Request ID.
+	// A later upstream REQUEST_UPDATE rides this PUBLISH stream (§10.9),
+	// consuming a fresh Request ID from the relay's own space (§10.1);
+	// the PUBLISH's ID is recorded for identity/diagnostics.
 	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias, msg.RequestID)
 	h.tracks.AddUpstream(fullName, sub, registry.WithProperties(msg.TrackProperties))
 	defer func() {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH stream ended, removing upstream",
 			slog.String("name", string(msg.Name)))
-		sub.CloseUpdates()
 		h.tracks.RemoveUpstream(fullName, sub.ID)
 		h.sess.UnregisterInboundTrackAlias(msg.TrackAlias)
 	}()
@@ -132,7 +132,7 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	// Block until the publisher tears the stream down, routing §10.9
 	// responses to any upstream REQUEST_UPDATE the relay sends meanwhile
 	// (e.g. NEW_GROUP_REQUEST propagation).
-	h.readUpstreamMessages(ctx, sub)
+	h.serveUpstreamStream(ctx, sub)
 
 	// The publication ended (publisher FIN/reset). FIN every forwarded
 	// PUBLISH stream so each subscriber sees the publication terminate.

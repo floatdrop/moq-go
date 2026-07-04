@@ -474,8 +474,9 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// Register the upstream subscription on the upstream session as an
 	// registry.UpstreamSub. The upstream's TrackAlias is the alias the upstream peer
 	// assigned in SUBSCRIBE_OK; we use it for the fanout's alias remapping.
-	// The SUBSCRIBE's Request ID (assigned inside sess.Subscribe) is what a
-	// later upstream REQUEST_UPDATE must reuse (§10.9).
+	// The SUBSCRIBE's Request ID (assigned inside sess.Subscribe) is recorded
+	// for identity; a later upstream REQUEST_UPDATE rides this stream but
+	// consumes its own fresh ID (§10.1).
 	upstreamSub := registry.NewUpstreamSub(
 		h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias, subMsg.RequestID)
 	upstreamSub.SetFilter(filter)
@@ -495,7 +496,7 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// upstream stream or session ends, and Stop force-closes sessions,
 	// which errors the reader's Parse either way.
 	h.relayGo(func() {
-		h.readUpstreamMessages(upstreamStream.Context(), upstreamSub)
+		h.serveUpstreamStream(upstreamStream.Context(), upstreamSub)
 		h.tracks.RemoveUpstream(fullName, upstreamSub.ID)
 		// session.Subscribe registered the SUBSCRIBE_OK's Track Alias for
 		// inbound routing; drop it with the subscription so subscriber
@@ -508,51 +509,38 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	return entry, true, nil
 }
 
-// readUpstreamMessages owns ALL reads on an upstream request stream (the
-// relay's on-demand SUBSCRIBE to a publisher, or an accepted PUBLISH). It
-// routes the §10.9 REQUEST_OK / REQUEST_ERROR responses to in-flight
-// [registry.UpstreamSub.Update] calls and answers peer-sent REQUEST_UPDATEs
-// with the single REQUEST_OK §10.9 mandates; other follow-ups need no
-// action (PUBLISH_DONE precedes the FIN that ends this loop). It returns
-// when the publisher tears the stream down (EOF / reset) or ctx is
-// cancelled.
+// serveUpstreamStream owns ALL reads on an upstream request stream (the
+// relay's on-demand SUBSCRIBE to a publisher, or an accepted PUBLISH) via
+// the sub's [session.RequestBroker]: §10.9 responses route to in-flight
+// [registry.UpstreamSub.Update] calls, peer REQUEST_UPDATEs are answered
+// with the single mandated REQUEST_OK, and AUTHORIZATION_TOKEN parameters
+// go through the session token cache (§10.2.2) — all inside Serve. Other
+// follow-ups need no action (PUBLISH_DONE precedes the FIN that ends the
+// loop); unsolicited responses are logged. It returns when the publisher
+// tears the stream down (EOF / reset) or ctx is cancelled.
 //
 // Do NOT read the stream anywhere else (e.g. [session.DrainAndWait] or
-// [session.Session.UpdateRequest]) while this loop runs: a second reader
-// races it for the §10.9 response.
-func (h *sessionHandler) readUpstreamMessages(ctx context.Context, up *registry.UpstreamSub) {
-	defer up.CloseUpdates()
-	readRequestStream(ctx, up.Stream, func(m message.Message) bool {
+// [session.Session.UpdateRequest]) while this runs: a second reader races
+// the broker for the §10.9 responses.
+func (h *sessionHandler) serveUpstreamStream(ctx context.Context, up *registry.UpstreamSub) {
+	err := up.Broker.Serve(ctx, func(m message.Message) bool {
 		switch m.(type) {
 		case *message.RequestOK, *message.RequestError:
-			if !up.RouteUpdateResponse(m) {
-				h.log.LogAttrs(ctx, slog.LevelDebug,
-					"unsolicited response on upstream request stream",
-					slog.Uint64("sub_id", up.ID))
-			}
-		case *message.RequestUpdate:
-			// §10.2.2: an update may REGISTER/DELETE token aliases;
-			// a cache fault there is session-fatal.
-			if !h.handleFollowupTokens(ctx, m) {
-				return false
-			}
-			// §10.9: the receiver of a REQUEST_UPDATE "MUST respond
-			// with exactly one REQUEST_OK or REQUEST_ERROR". The relay
-			// keeps no mutable per-publication parameters, so the
-			// update is acknowledged without further action (same
-			// policy as handleFetchUpdate for a finished FETCH).
-			if err := up.WriteMessage(&message.RequestOK{}); err != nil {
-				h.log.LogAttrs(ctx, slog.LevelDebug,
-					"REQUEST_UPDATE ack on upstream stream failed",
-					slog.String("err", err.Error()))
-			}
+			// Serve only hands responses here when no Update was pending.
+			h.log.LogAttrs(ctx, slog.LevelDebug,
+				"unsolicited response on upstream request stream",
+				slog.Uint64("sub_id", up.ID))
 		default:
 			// PUBLISH_DONE and other follow-ups: the publisher FINs
-			// the stream afterwards, which ends this loop and lets
+			// the stream afterwards, which ends the loop and lets
 			// the caller unregister the upstream.
 		}
 		return true
 	})
+	if err != nil && ctx.Err() == nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream request stream reader ended",
+			slog.Uint64("sub_id", up.ID), slog.String("err", err.Error()))
+	}
 }
 
 // hasEstablishedUpstream reports whether the entry has at least one upstream

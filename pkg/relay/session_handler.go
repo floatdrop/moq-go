@@ -486,8 +486,10 @@ func (h *sessionHandler) handleFollowupTokens(ctx context.Context, msg message.M
 // filling flow control into a void.
 //
 // This is the single scaffolding under readSubscribeUpdates,
-// readFetchUpdates, and readUpstreamMessages; the three differ only in
-// their per-message dispatch.
+// readFetchUpdates — the responder-side follow-up loops, which differ only
+// in their per-message dispatch. (Requester-side upstream streams use
+// [session.RequestBroker.Serve] instead, which additionally routes §10.9
+// responses to in-flight Update calls.)
 func readRequestStream(ctx context.Context, stream session.Stream, onMsg func(message.Message) bool) {
 	done := make(chan struct{})
 	go func() {

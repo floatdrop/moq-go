@@ -296,7 +296,8 @@ func ExampleIncomingFetchStream() {
 }
 
 // Updating a live request (§10.9). REQUEST_UPDATE rides the original
-// request's bidi stream and consumes no new Request ID. Only the parameters
+// request's bidi stream (which is what names the request being modified)
+// and consumes a fresh Request ID of its own (§10.1). Only the parameters
 // you include change; omitted ones keep their prior value on the peer.
 // [Subscription.Update] (and the FetchRequest equivalent) fills in the stream
 // and Request ID; [Session.UpdateRequest] is the lower-level form for when you
@@ -310,6 +311,37 @@ func ExampleSession_UpdateRequest() {
 		return err // *session.RequestRejectedError on REQUEST_ERROR
 	}
 	_ = raisePriority
+}
+
+// Serving a long-lived request stream. Update (without a broker) reads its
+// response directly off the stream, so it cannot coexist with any other
+// reader — a publisher that must answer subscriber REQUEST_UPDATEs (§10.9),
+// or a subscriber that both watches for PUBLISH_DONE and sends updates,
+// needs exactly one reader owning the stream. The handle's [RequestBroker]
+// is that reader: Serve answers peer updates with REQUEST_OK, resolves
+// AUTHORIZATION_TOKEN parameters (§10.2.2), and routes responses to Update
+// calls, which — like Done — automatically go through the broker once it is
+// attached.
+func ExampleRequestBroker() {
+	var sess *session.Session
+	ctx := context.Background()
+
+	pub, err := sess.Publish(ctx, &message.Publish{
+		Namespace: wire.Namespace("moq-example"),
+		Name:      []byte("clock"),
+	})
+	if err != nil {
+		return
+	}
+	go func() {
+		_ = pub.Broker().Serve(ctx, func(m message.Message) bool {
+			fmt.Printf("follow-up: %T\n", m) // e.g. an UNSUBSCRIBE-style FIN precursor
+			return true                      // keep serving
+		})
+	}()
+
+	// ... publish objects; Done stays safe alongside Serve's replies.
+	_ = pub.Done(moqt.PublishDoneTrackEnded, "")
 }
 
 // Ending a publication (§10.11): Publication.Done writes PUBLISH_DONE on the

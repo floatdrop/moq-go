@@ -27,7 +27,10 @@ import (
 //
 // DrainAndWait is concurrency-safe in the trivial sense that the inner
 // goroutine is owned by this call; do not invoke it concurrently with other
-// readers of the same Stream.
+// readers of the same Stream. In particular it discards §10.9 responses, so
+// it cannot be combined with Update on the same stream — when a request
+// needs both a lifetime keepalive AND updates or follow-up handling, run
+// [RequestBroker.Serve] (via the handle's Broker method) instead.
 func DrainAndWait(ctx context.Context, s Stream) {
 	done := make(chan struct{})
 	go func() {

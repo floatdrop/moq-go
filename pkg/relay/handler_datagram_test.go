@@ -301,7 +301,7 @@ func TestDatagram_PausedSubscriptionReceivesNothing(t *testing.T) {
 	}
 
 	// Pause, then publish: nothing may arrive.
-	if _, err := subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+	if _, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.ForwardParam(false)}); err != nil {
 		t.Fatalf("UpdateRequest(Forward=0): %v", err)
 	}
@@ -313,7 +313,7 @@ func TestDatagram_PausedSubscriptionReceivesNothing(t *testing.T) {
 	}
 
 	// Resume, then publish: delivery restored.
-	if _, err := subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+	if _, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.ForwardParam(true)}); err != nil {
 		t.Fatalf("UpdateRequest(Forward=1): %v", err)
 	}

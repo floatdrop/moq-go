@@ -133,6 +133,7 @@ grouped here by the file they live in:
 | Route inbound requests (server side) | `ExampleRequestMux` |
 | Joining / standalone FETCH | `ExampleSession_Fetch`, `ExampleSession_Fetch_standalone`, `ExampleIncomingFetchStream` |
 | Update a live request | `ExampleSession_UpdateRequest` |
+| Serve a long-lived request stream (updates + follow-ups) | `ExampleRequestBroker` |
 | End a publication | `Example_endingAPublication` |
 | Stream exhaustion (PUBLISH_BLOCKED) | `ExampleSession_OpenPublish`, `ExampleSession_ReadPublishBlocked` |
 | Announce / discover namespaces | `ExampleSession_PublishNamespace`, `ExampleSession_SubscribeNamespace` |

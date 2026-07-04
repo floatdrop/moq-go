@@ -1,7 +1,6 @@
 package main
 
 import (
-	"sync"
 	"testing"
 	"time"
 
@@ -43,8 +42,7 @@ func TestServeRequestStreamAnswersRequestUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
-	var pubMu sync.Mutex
-	go serveRequestStream(pubSess, "video", pub, &pubMu)
+	go servePublication(ctx, "video", pub)
 
 	var req *session.Request
 	select {

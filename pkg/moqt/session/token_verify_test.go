@@ -382,7 +382,7 @@ func TestProcessFollowupTokensRegistersAlias(t *testing.T) {
 	// ProcessFollowupTokens, then acks per §10.9.
 	updDone := make(chan error, 1)
 	go func() {
-		_, err := client.UpdateRequest(t.Context(), clientStream, sub.RequestID, message.Parameters{
+		_, err := client.UpdateRequest(t.Context(), clientStream, message.Parameters{
 			message.AuthorizationTokenParam(message.Token{
 				AliasType:  message.AliasTypeRegister,
 				TokenAlias: 7,

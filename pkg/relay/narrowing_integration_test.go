@@ -102,7 +102,7 @@ func TestFanout_NarrowingUpdateResetsOutOfRangeStream(t *testing.T) {
 	}
 
 	// Narrow the End Group to 0 — group 2 is now out of range.
-	if _, err := subSess.UpdateRequest(t.Context(), subStream, subMsg.RequestID,
+	if _, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{
 			message.SubscriptionFilterParam(&message.SubscriptionFilter{
 				Type:          message.FilterAbsoluteRange,

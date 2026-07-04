@@ -3,11 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/lmittmann/tint"
@@ -65,8 +62,7 @@ func publish(ctx context.Context, addr string) error {
 		return fmt.Errorf("PUBLISH catalog: %w", err)
 	}
 	slog.InfoContext(ctx, "catalog PUBLISH_OK", "alias", catAlias)
-	var catMu sync.Mutex
-	go serveRequestStream(sess, "catalog", catStream, &catMu)
+	go servePublication(ctx, "catalog", catStream)
 
 	// The catalog track is single-object-per-group: one Object at group 0, no Properties.
 	if err := emitSubgroup(sess, catAlias, 0, nil, catalogBytes); err != nil {
@@ -85,8 +81,7 @@ func publish(ctx context.Context, addr string) error {
 		return fmt.Errorf("PUBLISH video: %w", err)
 	}
 	slog.InfoContext(ctx, "video PUBLISH_OK", "alias", vidAlias)
-	var vidMu sync.Mutex
-	go serveRequestStream(sess, "video", vidStream, &vidMu)
+	go servePublication(ctx, "video", vidStream)
 
 	seq := msf.NewGroupSequencer()
 	ticker := time.NewTicker(time.Second)
@@ -96,12 +91,8 @@ func publish(ctx context.Context, addr string) error {
 		select {
 		case <-ctx.Done():
 			slog.InfoContext(ctx, "shutting down, sending PUBLISH_DONE")
-			catMu.Lock()
 			_ = catStream.Done(moqt.PublishDoneTrackEnded, "")
-			catMu.Unlock()
-			vidMu.Lock()
 			_ = vidStream.Done(moqt.PublishDoneTrackEnded, "")
-			vidMu.Unlock()
 			return nil
 
 		case t := <-ticker.C:
@@ -147,44 +138,19 @@ func emitSubgroup(sess *session.Session, alias, groupID uint64, props, payload [
 	return sg.Close()
 }
 
-// serveRequestStream reads the follow-ups on an established PUBLISH request
-// stream until the peer tears it down. Two obligations come with reading
-// follow-ups directly (instead of via AcceptRequest): AUTHORIZATION_TOKEN
-// parameters must go through the session token cache (§10.2.2), and every
-// REQUEST_UPDATE must be answered with exactly one REQUEST_OK /
-// REQUEST_ERROR (§10.9) — the demo accepts updates without applying any
-// parameters.
-//
-// writeMu serializes the REQUEST_OK replies against the main goroutine's
-// shutdown PUBLISH_DONE on the same stream: the Stream contract leaves
-// concurrent writes (and a Write racing Close) undefined.
-func serveRequestStream(sess *session.Session, label string, stream io.ReadWriter, writeMu *sync.Mutex) {
-	for {
-		msg, err := message.Parse(stream)
-		if err != nil {
-			slog.Debug("publish request stream closed", slog.String("track", label), tint.Err(err))
-			return
-		}
-		if _, err := sess.ProcessFollowupTokens(msg); err != nil {
-			slog.Warn("publish request stream token processing failed",
-				slog.String("track", label), tint.Err(err))
-			if tce, ok := errors.AsType[*session.TokenCacheError](err); ok {
-				_ = sess.Close(tce.Code, tce.Error())
-			}
-			return
-		}
-		if _, ok := msg.(*message.RequestUpdate); ok {
-			writeMu.Lock()
-			err := message.Marshal(stream, &message.RequestOK{})
-			writeMu.Unlock()
-			if err != nil {
-				slog.Debug("publish REQUEST_UPDATE_OK write failed",
-					slog.String("track", label), tint.Err(err))
-				return
-			}
-			continue
-		}
-		slog.Debug("publish request stream message",
+// servePublication runs the publication's request-stream broker: it answers
+// subscriber REQUEST_UPDATEs with the mandated REQUEST_OK (§10.9), routes
+// AUTHORIZATION_TOKEN parameters through the session token cache (§10.2.2),
+// and logs other follow-ups. With the broker attached, the main goroutine's
+// [session.Publication.Done] is automatically serialized against these
+// replies.
+func servePublication(ctx context.Context, label string, pub *session.Publication) {
+	err := pub.Broker().Serve(ctx, func(msg message.Message) bool {
+		slog.DebugContext(ctx, "publish request stream message",
 			"track", label, "type", fmt.Sprintf("%T", msg))
+		return true
+	})
+	if err != nil {
+		slog.DebugContext(ctx, "publish request stream closed", slog.String("track", label), tint.Err(err))
 	}
 }
