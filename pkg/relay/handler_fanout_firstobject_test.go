@@ -230,3 +230,132 @@ func TestFanout_FirstObjectBitNotInvented(t *testing.T) {
 		t.Errorf("stream end: %v, want io.EOF", caps[0].Err)
 	}
 }
+
+// TestFanout_ResolvesImplicitFirstObjectSubgroupID pins the §11.4.2
+// mode-0b01 resolution at ingest: a SUBGROUP_HEADER whose Subgroup ID is
+// implied by its first object (here ID 5) must be attributed to subgroup 5
+// everywhere — the forwarded header (rewritten to the explicit form, since
+// the fanout re-encodes object deltas) and the cached objects a later FETCH
+// serves. Previously the whole pipeline filed such subgroups under ID 0.
+func TestFanout_ResolvesImplicitFirstObjectSubgroupID(t *testing.T) {
+	t.Parallel()
+	pub, sub := firstObjectTopology(t, nil)
+	writeSubgroupObjects(t, pub, message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDImplicitFirstObject,
+		TrackAlias:     7,
+		GroupID:        0,
+	}, []uint64{5, 6})
+
+	caps := captureSubgroups(t, sub, 1)
+	c := caps[0]
+	if c.Header.SubgroupIDMode != message.SubgroupIDExplicit || c.Header.SubgroupID != 5 {
+		t.Errorf("forwarded header mode=%v id=%d, want explicit Subgroup ID 5",
+			c.Header.SubgroupIDMode, c.Header.SubgroupID)
+	}
+	if len(c.Objects) != 2 || c.Objects[0] != 5 {
+		t.Errorf("objects = %v, want [5 6]", c.Objects)
+	}
+
+	// The cache must file the objects under subgroup 5 too: FETCH the range
+	// back and check the decoded Subgroup IDs.
+	fetchReq, err := sub.Fetch(t.Context(), &message.Fetch{
+		FetchType: message.FetchTypeStandalone,
+		Standalone: &message.StandaloneFetch{
+			Namespace:     wire.TrackNamespace{[]byte("video")},
+			Name:          []byte("cam1"),
+			StartLocation: message.Location{Group: 0, Object: 0},
+			EndLocation:   message.Location{Group: 0, Object: 7},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	defer fetchReq.Close()
+
+	ds, err := sub.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	fs, ok := ds.(*session.IncomingFetchStream)
+	if !ok {
+		t.Fatalf("AcceptDataStream returned %T", ds)
+	}
+	seen := 0
+	for {
+		o, err := fs.ReadDecoded()
+		if err != nil {
+			break // io.EOF on FIN
+		}
+		if o.EndOfNonExistentRange || o.EndOfUnknownRange {
+			continue
+		}
+		if o.SubgroupID != 5 {
+			t.Errorf("FETCH object {%d,%d} has SubgroupID %d, want 5",
+				o.GroupID, o.ObjectID, o.SubgroupID)
+		}
+		seen++
+	}
+	if seen != 2 {
+		t.Errorf("FETCH returned %d objects, want 2", seen)
+	}
+}
+
+// TestFanout_ImplicitFirstObjectEdgeStreams pins the mode-0b01 pre-read's
+// edge behaviour: a terminal-status first object still drives the §11.4.3
+// post-terminal enforcement through the pending handoff, and an empty 0b01
+// stream (whose Subgroup ID never resolves) leaves no state behind — a
+// following normal subgroup fans out untouched.
+func TestFanout_ImplicitFirstObjectEdgeStreams(t *testing.T) {
+	t.Parallel()
+	pub, sub := firstObjectTopology(t, nil)
+
+	// An empty 0b01 stream: FIN before any object.
+	empty, err := pub.OpenSubgroup(message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDImplicitFirstObject,
+		TrackAlias:     7,
+		GroupID:        0,
+	})
+	if err != nil {
+		t.Fatalf("OpenSubgroup(empty): %v", err)
+	}
+	if err := empty.Close(); err != nil {
+		t.Fatalf("empty Close: %v", err)
+	}
+
+	// A 0b01 stream whose FIRST object is an EndOfGroup marker (empty
+	// payload, status 0x3) at ID 4, followed by a §11.4.3-violating second
+	// object. The marker must resolve the Subgroup ID (4), be forwarded,
+	// and set the terminal latch so the violation resets the stream.
+	term, err := pub.OpenSubgroup(message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDImplicitFirstObject,
+		TrackAlias:     7,
+		GroupID:        1,
+	})
+	if err != nil {
+		t.Fatalf("OpenSubgroup(terminal): %v", err)
+	}
+	if err := term.WriteObject(&message.SubgroupObject{
+		ObjectIDDelta: 4, // absolute: first object
+		ObjectStatus:  message.ObjectStatusEndOfGroup,
+	}); err != nil {
+		t.Fatalf("write terminal marker: %v", err)
+	}
+	// §11.4.3 violation: an object after the terminal marker. The relay may
+	// reset the inbound stream while this write is in flight; an error here
+	// is acceptable.
+	_ = term.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Payload: []byte("x")})
+
+	caps := captureSubgroups(t, sub, 1)
+	c := caps[0]
+	if c.Header.GroupID != 1 || c.Header.SubgroupID != 4 ||
+		c.Header.SubgroupIDMode != message.SubgroupIDExplicit {
+		t.Errorf("header = group %d subgroup %d mode %v, want group 1, explicit subgroup 4",
+			c.Header.GroupID, c.Header.SubgroupID, c.Header.SubgroupIDMode)
+	}
+	if len(c.Objects) != 1 || c.Objects[0] != 4 {
+		t.Errorf("objects = %v, want just the terminal marker at 4", c.Objects)
+	}
+	if errors.Is(c.Err, io.EOF) {
+		t.Error("outbound stream FIN'd; a post-terminal violation must reset it")
+	}
+}

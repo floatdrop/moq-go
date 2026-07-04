@@ -65,6 +65,52 @@ type subgroupWriterSet struct {
 	resetCode moqt.StreamResetCode
 }
 
+// resolveImplicitSubgroupID handles §11.4.2 SUBGROUP_ID_MODE 0b01, where the
+// Subgroup ID equals the stream's first Object ID: it reads the first object
+// and rewrites hdr in place to the explicit form. The returned pending
+// object must be processed as the stream's first (its delta is the absolute
+// ID). Headers in any other mode pass through untouched with (nil, true).
+//
+// ok=false means the stream ended before its identity resolved — an empty
+// 0b01 stream (clean EOF) has nothing to forward, and a read error means the
+// stream died; there is no subgroup state to join or tear down yet, so the
+// caller just returns.
+func (h *sessionHandler) resolveImplicitSubgroupID(
+	ctx context.Context,
+	stream *session.IncomingSubgroupStream,
+	hdr *message.SubgroupHeader,
+) (pending *message.SubgroupObject, ok bool) {
+	if hdr.SubgroupIDMode != message.SubgroupIDImplicitFirstObject {
+		return nil, true
+	}
+	if hdr.ReplayingSubgroup {
+		// §11.4.2's receiver rule is mechanical (Subgroup ID = first
+		// object on the stream), but on a replay the first object is not
+		// necessarily the subgroup's first — the implied ID is only as
+		// reliable as the sender. Worth a trace when it leads to
+		// mis-keyed subgroups.
+		h.log.LogAttrs(ctx, slog.LevelDebug,
+			"fanout: implicit-first-object Subgroup ID on a replay stream",
+			slog.Uint64("group", hdr.GroupID))
+	}
+	obj, err := stream.ReadObject()
+	if err != nil {
+		if !errors.Is(err, io.EOF) {
+			h.log.LogAttrs(ctx, slog.LevelDebug,
+				"fanout: inbound stream ended before first-object Subgroup ID resolved",
+				slog.String("err", err.Error()))
+			// Stop a publisher still writing into a stream nobody reads
+			// (a STOP_SENDING on an already-reset stream is a transport
+			// no-op).
+			stream.Cancel(moqt.StreamResetInternalError)
+		}
+		return nil, false
+	}
+	hdr.SubgroupID = obj.ObjectIDDelta // first object: the delta IS the absolute ID
+	hdr.SubgroupIDMode = message.SubgroupIDExplicit
+	return obj, true
+}
+
 // runFanout is the subgroup-stream fanout entry point. One inbound
 // SUBGROUP_HEADER stream produces one or more outbound SUBGROUP_HEADER
 // streams per downstream subscriber, with the publisher's Track Alias
@@ -106,6 +152,16 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fanout: track entry gone, dropping stream",
 			slog.Uint64("alias", hdr.TrackAlias))
 		stream.Cancel(moqt.StreamResetInternalError)
+		return
+	}
+
+	// §11.4.2 mode 0b01: the Subgroup ID is implied by the stream's FIRST
+	// object's ID. Everything from here on keys on hdr.SubgroupID — the
+	// shared-subgroup key, the cache (and thus FETCH responses), and the
+	// outbound header template — so resolve it before touching any of that.
+	// The pre-read object is fed through the normal loop below.
+	pending, ok := h.resolveImplicitSubgroupID(ctx, stream, &hdr)
+	if !ok {
 		return
 	}
 
@@ -202,7 +258,13 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	)
 
 	for {
-		obj, err := stream.ReadObject()
+		// The first object of a mode-0b01 stream was already read during
+		// Subgroup ID resolution above.
+		obj, err := pending, error(nil)
+		pending = nil
+		if obj == nil {
+			obj, err = stream.ReadObject()
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return // clean end of stream — last contributor will FIN.
@@ -216,6 +278,10 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			}
 			h.log.LogAttrs(ctx, slog.LevelDebug, "fanout: inbound ReadObject failed",
 				slog.String("err", err.Error()))
+			// A malformed object (not a transport reset) leaves the
+			// publisher still writing; stop it. On an already-reset
+			// stream the STOP_SENDING is a transport no-op.
+			stream.Cancel(moqt.StreamResetInternalError)
 			inboundReset = true
 			return
 		}
@@ -516,11 +582,9 @@ func (w *subgroupWriter) run() {
 		hdr.ReplayingSubgroup = !first
 		if !first && hdr.SubgroupIDMode == message.SubgroupIDImplicitFirstObject {
 			// A replay stream's first object would imply the wrong ID, so
-			// spell the Subgroup ID out. hdr.SubgroupID is what the whole
-			// fanout pipeline (subgroup key, cache, FETCH) attributes to
-			// this subgroup — 0 for inbound 0b01 headers, a pre-existing
-			// limitation tracked as its own fix (resolve the ID from the
-			// inbound stream's first object at ingest).
+			// spell the Subgroup ID out. (Defensive: runFanout resolves
+			// 0b01 headers to the explicit form at ingest, so the template
+			// should never carry this mode here.)
 			hdr.SubgroupIDMode = message.SubgroupIDExplicit
 		}
 		fresh, err := w.sub.Session.OpenSubgroupContext(w.ctx, hdr)
