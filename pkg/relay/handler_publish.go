@@ -51,25 +51,32 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		return
 	}
 
-	// Reply BEFORE registering the upstream: once AddUpstream makes the sub
-	// visible, another session's propagation path may call
-	// [registry.UpstreamSub.Update], which writes to this same stream —
-	// session.Stream does not serialize concurrent writers, so the
-	// REQUEST_OK below must be the last unserialized write. (It also keeps
-	// the wire order sane: the publisher sees its PUBLISH accepted before
-	// any relay-initiated REQUEST_UPDATE.)
-	if err := req.Reply(&message.RequestOK{}); err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH REQUEST_OK write failed",
-			slog.String("err", err.Error()))
-		h.sess.UnregisterInboundTrackAlias(msg.TrackAlias)
-		return
-	}
-
 	// A later upstream REQUEST_UPDATE rides this PUBLISH stream (§10.9),
 	// consuming a fresh Request ID from the relay's own space (§10.1);
 	// the PUBLISH's ID is recorded for identity/diagnostics.
 	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias, msg.RequestID)
-	h.tracks.AddUpstream(fullName, sub, registry.WithProperties(msg.TrackProperties))
+
+	// Register the upstream and reply REQUEST_OK atomically under the
+	// stream's broker write lock. Both orderings matter:
+	//
+	//   - Registration must complete before the peer can observe the OK: a
+	//     publisher that received its OK may immediately be subscribed to
+	//     via another session, and that SUBSCRIBE must find the track (the
+	//     pre-broker code replied first, leaving a visibility window that
+	//     rejected prompt subscribers with DOES_NOT_EXIST).
+	//   - The OK must still be the stream's next message: registration
+	//     makes the sub reachable by §9.2 / §10.2.13 propagation, whose
+	//     REQUEST_UPDATE writes serialize behind the OK on the same lock.
+	if err := sub.Broker.WriteMessageAfterSetup(func() error {
+		h.tracks.AddUpstream(fullName, sub, registry.WithProperties(msg.TrackProperties))
+		return nil
+	}, &message.RequestOK{}); err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH REQUEST_OK write failed",
+			slog.String("err", err.Error()))
+		h.tracks.RemoveUpstream(fullName, sub.ID)
+		h.sess.UnregisterInboundTrackAlias(msg.TrackAlias)
+		return
+	}
 	defer func() {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH stream ended, removing upstream",
 			slog.String("name", string(msg.Name)))

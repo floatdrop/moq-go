@@ -150,6 +150,25 @@ func (b *RequestBroker) WriteMessage(msg message.Message) error {
 	return message.Marshal(b.stream, msg)
 }
 
+// WriteMessageAfterSetup runs setup and then marshals msg, both under the
+// write lock. It exists for responder-side visibility ordering: setup
+// typically publishes state that lets other goroutines write to this stream
+// through the broker (e.g. a relay registering an upstream subscription
+// that a concurrent propagation path may immediately Update). Running both
+// under the lock guarantees that msg is the stream's next message — a write
+// triggered by the new visibility serializes behind it — while the peer
+// cannot observe msg before setup completed. A setup error aborts the
+// write. setup must not use the broker or write to the stream itself, and
+// must not acquire locks that stream writers hold while using the broker.
+func (b *RequestBroker) WriteMessageAfterSetup(setup func() error, msg message.Message) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if err := setup(); err != nil {
+		return err
+	}
+	return message.Marshal(b.stream, msg)
+}
+
 // writeThenClose marshals msg and FINs the send side under the write lock —
 // the broker-aware backend of terminal handle methods like
 // [Publication.Done].
