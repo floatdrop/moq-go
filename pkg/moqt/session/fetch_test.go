@@ -41,9 +41,10 @@ func TestFetchRoundTrip(t *testing.T) {
 
 	mkObj := func(objectIDDelta uint64, payload string) *message.FetchObject {
 		return &message.FetchObject{
-			SerializationFlags: message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta,
-			ObjectIDDelta:      objectIDDelta,
-			ObjectPayload:      []byte(payload),
+			SerializationFlags: message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta |
+				message.FetchFlagPriority,
+			ObjectIDDelta: objectIDDelta,
+			ObjectPayload: []byte(payload),
 		}
 	}
 	obj1 := mkObj(0, "frame-1")

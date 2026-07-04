@@ -214,11 +214,20 @@ type IncomingFetchStream struct {
 	// Decoder state used by ReadDecoded — running absolute values
 	// carried across objects so each call only has to apply the
 	// current object's deltas.
+	//
+	// decHavePrev means a prior Group/Object ID exists — a real object OR
+	// a §11.4.4.2 End-of-Range marker (markers ARE the prior for the
+	// Group/Object dimension). decHaveActual means a real object was
+	// decoded: only then do a prior Subgroup ID and prior Priority exist —
+	// §11.4.4.2: "If there was no prior Object, using a flag that
+	// references the prior Subgroup ID [or Priority] is a
+	// PROTOCOL_VIOLATION."
 	decPrevGroup    uint64
 	decPrevObject   uint64
 	decPrevSubgroup uint64
 	decPrevPriority uint8
 	decHavePrev     bool
+	decHaveActual   bool
 }
 
 func (s *IncomingFetchStream) isDataStream() {}
@@ -293,10 +302,15 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		return nil, err
 	}
 
-	// §11.4.4.2: end-of-range markers carry absolute Group/Object IDs
-	// in the otherwise-delta fields. They do not advance the decoder's
-	// running state (they describe absence, not a real object).
+	// §11.4.4.2: end-of-range markers carry absolute Group/Object IDs in
+	// the otherwise-delta fields — and those values become the "prior
+	// Group ID and prior Object ID" for the next object. The prior
+	// Subgroup ID / Priority stay those of the last ACTUAL object
+	// (decHaveActual tracks whether one exists).
 	if raw.IsEndOfRangeObject() || raw.IsEndOfRangeGroup() {
+		s.decPrevGroup = raw.GroupIDDelta
+		s.decPrevObject = raw.ObjectIDDelta
+		s.decHavePrev = true
 		return &DecodedFetchObject{
 			GroupID:               raw.GroupIDDelta,
 			ObjectID:              raw.ObjectIDDelta,
@@ -311,29 +325,41 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		Payload:    raw.ObjectPayload,
 	}
 
+	// §11.4.4 / §11.4.4.2: flags that reference the prior Object's
+	// Subgroup ID or Priority are a PROTOCOL_VIOLATION until a real object
+	// has been decoded — the very first object, and any object whose only
+	// predecessor is an End-of-Range marker, must spell both out. (When
+	// the Datagram bit is set the subgroup mode bits are ignored,
+	// §11.4.4.1.)
+	if !s.decHaveActual {
+		if !raw.IsDatagram() {
+			if m := raw.SubgroupMode(); m == message.FetchSubgroupIDPrior ||
+				m == message.FetchSubgroupIDPriorPlusOne {
+				return nil, fmt.Errorf(
+					"moqt/session: fetch object references prior subgroup with no prior object (flags 0x%X)",
+					raw.SerializationFlags)
+			}
+		}
+		if raw.SerializationFlags&message.FetchFlagPriority == 0 {
+			return nil, fmt.Errorf(
+				"moqt/session: fetch object references prior priority with no prior object (flags 0x%X)",
+				raw.SerializationFlags)
+		}
+	}
+
 	// Group / Object reconstruction.
 	switch {
 	case !s.decHavePrev:
 		// §11.4.4: the first object MUST include both a Group ID Delta and
 		// an Object ID Delta (its absolute IDs). If it instead uses a flag
 		// that references the prior object, that is a PROTOCOL_VIOLATION.
+		// (An End-of-Range marker counts as a prior for this dimension —
+		// decHavePrev is already true then.)
 		if raw.SerializationFlags&message.FetchFlagGroupIDDelta == 0 ||
 			raw.SerializationFlags&message.FetchFlagObjectIDDelta == 0 {
 			return nil, fmt.Errorf(
 				"moqt/session: first fetch object missing Group/Object ID delta (flags 0x%X)",
 				raw.SerializationFlags)
-		}
-		// A first object cannot reference the prior object's Subgroup ID.
-		// The "prior" and "prior+1" modes do exactly that; only "zero" and
-		// "explicit" are valid here. When the Datagram bit (0x40) is set the
-		// subgroup bits are ignored (§11.4.4.1), so skip the check then.
-		if !raw.IsDatagram() {
-			if m := raw.SubgroupMode(); m == message.FetchSubgroupIDPrior ||
-				m == message.FetchSubgroupIDPriorPlusOne {
-				return nil, fmt.Errorf(
-					"moqt/session: first fetch object references prior subgroup (flags 0x%X)",
-					raw.SerializationFlags)
-			}
 		}
 		// First object: deltas carry absolute IDs (§11.4.4).
 		d.GroupID = raw.GroupIDDelta
@@ -389,6 +415,7 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 	s.decPrevObject = d.ObjectID
 	s.decPrevPriority = d.PublisherPriority
 	s.decHavePrev = true
+	s.decHaveActual = true
 
 	return d, nil
 }

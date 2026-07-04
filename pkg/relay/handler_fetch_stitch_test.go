@@ -161,7 +161,8 @@ func writeFetchGroupRange(out *session.OutgoingFetchStream, startG, endG uint64)
 		fo := &message.FetchObject{}
 		fo.SerializationFlags |= message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta
 		if first {
-			fo.GroupIDDelta = g // absolute group ID of the first object
+			fo.GroupIDDelta = g                                // absolute group ID of the first object
+			fo.SerializationFlags |= message.FetchFlagPriority // first object spells priority out
 			first = false
 		} else {
 			fo.GroupIDDelta = 0 // consecutive group

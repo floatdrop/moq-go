@@ -199,10 +199,11 @@ func TestFetchObjectRoundTrip(t *testing.T) {
 
 	hdr := message.FetchHeader{RequestID: 0}
 	obj := &message.FetchObject{
-		SerializationFlags: message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta,
-		GroupIDDelta:       3,
-		ObjectIDDelta:      1,
-		ObjectPayload:      []byte("fetch-payload"),
+		SerializationFlags: message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta |
+			message.FetchFlagPriority,
+		GroupIDDelta:  3,
+		ObjectIDDelta: 1,
+		ObjectPayload: []byte("fetch-payload"),
 	}
 
 	writeErr := make(chan error, 1)
@@ -657,6 +658,7 @@ func TestIncomingFetchStream_ReadDecoded_Descending(t *testing.T) {
 			// First object: abs (G=10, O=0)
 			SerializationFlags: message.FetchFlagGroupIDDelta |
 				message.FetchFlagObjectIDDelta |
+				message.FetchFlagPriority |
 				uint64(message.FetchSubgroupIDExplicit),
 			GroupIDDelta:  10,
 			ObjectIDDelta: 0,
@@ -721,9 +723,10 @@ func TestIncomingFetchStream_ReadDecoded_Descending(t *testing.T) {
 
 // TestIncomingFetchStream_ReadDecoded_EndOfRange verifies that
 // §11.4.4.2 absence markers surface via EndOfNonExistentRange /
-// EndOfUnknownRange and do NOT advance the decoder's state — a
-// subsequent real object's deltas still resolve against the last real
-// object's IDs.
+// EndOfUnknownRange and BECOME the prior Group/Object ID for the next
+// object ("Prior Group ID and prior Object ID: The values from the End of
+// Range indicator"), while the prior Subgroup ID and Priority stay those
+// of the last actual object.
 func TestIncomingFetchStream_ReadDecoded_EndOfRange(t *testing.T) {
 	cli, srv := openPair(t)
 	ctx := t.Context()
@@ -733,11 +736,13 @@ func TestIncomingFetchStream_ReadDecoded_EndOfRange(t *testing.T) {
 		{
 			SerializationFlags: message.FetchFlagGroupIDDelta |
 				message.FetchFlagObjectIDDelta |
+				message.FetchFlagPriority |
 				uint64(message.FetchSubgroupIDExplicit),
-			GroupIDDelta:  5,
-			ObjectIDDelta: 0,
-			SubgroupID:    0,
-			ObjectPayload: []byte("real"),
+			GroupIDDelta:      5,
+			ObjectIDDelta:     0,
+			SubgroupID:        9,
+			PublisherPriority: 42,
+			ObjectPayload:     []byte("real"),
 		},
 		// End-of-non-existent-range marker carrying abs {7, 3}.
 		{
@@ -745,9 +750,10 @@ func TestIncomingFetchStream_ReadDecoded_EndOfRange(t *testing.T) {
 			GroupIDDelta:       7,
 			ObjectIDDelta:      3,
 		},
-		// Another real object — same group as the first real (5),
-		// consecutive object — confirming the marker didn't bump
-		// the decoder's prev state.
+		// A real object after the marker with no deltas: per §11.4.4.2 its
+		// prior Group/Object IDs are the MARKER's values, so it decodes as
+		// {7, 4}; its prior Subgroup (mode Prior) and Priority (flag
+		// absent) come from the last ACTUAL object.
 		{
 			SerializationFlags: uint64(message.FetchSubgroupIDPrior),
 			ObjectPayload:      []byte("real2"),
@@ -790,10 +796,17 @@ func TestIncomingFetchStream_ReadDecoded_EndOfRange(t *testing.T) {
 		t.Errorf("second: marker carries {%d,%d}, want {7,3}", o2.GroupID, o2.ObjectID)
 	}
 
-	o3, _ := in.ReadDecoded()
-	if o3.GroupID != 5 || o3.ObjectID != 1 || string(o3.Payload) != "real2" {
-		t.Errorf("third: got {%d,%d} payload=%q, want {5,1} \"real2\" (marker must not bump state)",
+	o3, err := in.ReadDecoded()
+	if err != nil {
+		t.Fatalf("third ReadDecoded: %v", err)
+	}
+	if o3.GroupID != 7 || o3.ObjectID != 4 || string(o3.Payload) != "real2" {
+		t.Errorf("third: got {%d,%d} payload=%q, want {7,4} \"real2\" (marker IS the prior, §11.4.4.2)",
 			o3.GroupID, o3.ObjectID, o3.Payload)
+	}
+	if o3.SubgroupID != 9 || o3.PublisherPriority != 42 {
+		t.Errorf("third: subgroup/priority = %d/%d, want 9/42 (inherited from the last ACTUAL object)",
+			o3.SubgroupID, o3.PublisherPriority)
 	}
 
 	if err := <-writeErr; err != nil {
@@ -880,4 +893,98 @@ func TestIncomingFetchStream_ReadDecoded_FirstObjectViolations(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestIncomingFetchStream_ReadDecoded_MarkerFirst pins the §11.4.4.2 rules
+// when an End-of-Range marker is the FIRST element on the stream: the marker
+// supplies the prior Group/Object IDs, so the following object may omit the
+// deltas — but with no prior ACTUAL object it must not reference the prior
+// Subgroup ID or Priority.
+func TestIncomingFetchStream_ReadDecoded_MarkerFirst(t *testing.T) {
+	write := func(t *testing.T, objs []*message.FetchObject) *session.IncomingFetchStream {
+		t.Helper()
+		cli, srv := openPair(t)
+		writeErr := make(chan error, 1)
+		go func() {
+			outStream, err := cli.OpenFetchStream(message.FetchHeader{RequestID: 0})
+			if err != nil {
+				writeErr <- err
+				return
+			}
+			for _, o := range objs {
+				if err := outStream.WriteObject(o); err != nil {
+					writeErr <- err
+					return
+				}
+			}
+			writeErr <- outStream.Close()
+		}()
+		ds, err := srv.AcceptDataStream(t.Context())
+		if err != nil {
+			t.Fatalf("AcceptDataStream: %v", err)
+		}
+		t.Cleanup(func() {
+			if err := <-writeErr; err != nil {
+				t.Errorf("writer: %v", err)
+			}
+		})
+		return ds.(*session.IncomingFetchStream)
+	}
+
+	marker := &message.FetchObject{
+		SerializationFlags: message.FetchEndOfRangeObject,
+		GroupIDDelta:       3, // absolute Group ID
+		ObjectIDDelta:      6, // absolute Object ID
+	}
+
+	t.Run("object after leading marker uses it as prior", func(t *testing.T) {
+		in := write(t, []*message.FetchObject{marker, {
+			// No deltas: prior = the marker → {3, 7}. Subgroup and
+			// priority are spelled out (no prior actual object exists).
+			SerializationFlags: message.FetchFlagPriority |
+				uint64(message.FetchSubgroupIDExplicit),
+			SubgroupID:        2,
+			PublisherPriority: 5,
+			ObjectPayload:     []byte("after"),
+		}})
+
+		if m, err := in.ReadDecoded(); err != nil || !m.EndOfNonExistentRange {
+			t.Fatalf("marker read: %v %+v", err, m)
+		}
+		obj, err := in.ReadDecoded()
+		if err != nil {
+			t.Fatalf("object after leading marker: %v", err)
+		}
+		if obj.GroupID != 3 || obj.ObjectID != 7 {
+			t.Errorf("decoded {%d,%d}, want {3,7} (marker as prior)", obj.GroupID, obj.ObjectID)
+		}
+	})
+
+	t.Run("prior-subgroup mode with no prior object is a violation", func(t *testing.T) {
+		in := write(t, []*message.FetchObject{marker, {
+			SerializationFlags: message.FetchFlagPriority |
+				uint64(message.FetchSubgroupIDPrior),
+			PublisherPriority: 5,
+			ObjectPayload:     []byte("bad"),
+		}})
+		if _, err := in.ReadDecoded(); err != nil {
+			t.Fatalf("marker read: %v", err)
+		}
+		if _, err := in.ReadDecoded(); err == nil {
+			t.Error("expected prior-subgroup violation, got nil")
+		}
+	})
+
+	t.Run("absent priority with no prior object is a violation", func(t *testing.T) {
+		in := write(t, []*message.FetchObject{marker, {
+			SerializationFlags: uint64(message.FetchSubgroupIDZero),
+			ObjectPayload:      []byte("bad"),
+		}})
+		if _, err := in.ReadDecoded(); err != nil {
+			t.Fatalf("marker read: %v", err)
+		}
+		if _, err := in.ReadDecoded(); err == nil {
+			t.Error("expected prior-priority violation, got nil")
+		}
+	})
 }
