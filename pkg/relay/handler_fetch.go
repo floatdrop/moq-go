@@ -2,7 +2,9 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"time"
@@ -23,14 +25,14 @@ const defaultUpstreamFetchTimeout = 5 * time.Second
 
 // handleFetch implements FETCH (§9.4, §10.12): validate the requested range,
 // reply FETCH_OK, open a FETCH_HEADER uni-stream, and serialise the cached
-// objects in the requested group order. Gaps in the response stream are how the
-// spec signals "objects do not exist" (§11.4.4, §3553).
+// objects in the requested group order. Gaps in the response stream are how
+// the spec signals "objects do not exist" (§11.4.4).
 //
 // The below-floor portion of the range — objects the relay evicted or never
 // cached — is stitched from an upstream FETCH when one is reachable; see
-// [sessionHandler.stitchedFetchObjects]. Otherwise the relay emits what it has
-// and leaves the rest as gaps, which §3553 lets the subscriber read as
-// non-existence.
+// [sessionHandler.stitchedFetchObjects]. Whatever no source could vouch for
+// is covered by §11.4.4.2 End of Unknown Range markers, so a gap always means
+// authoritative non-existence.
 func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, msg *message.Fetch) {
 	if err := h.auth.AuthorizeFetch(ctx, h.sess, msg); err != nil {
 		h.rejectAuth(ctx, req, "Fetch", err)
@@ -102,8 +104,11 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 		return
 	}
 
+	// Serve (and account for) only the range FETCH_OK announced: everything
+	// past the capped EndLocation is outside the response by definition, so
+	// neither objects nor §11.4.4.2 unknown markers may reference it.
 	h.serveFetchObjects(ctx, req, "standalone", msg.RequestID, entry, fullName,
-		sf.StartLocation, sf.EndLocation, order, fillTimeout)
+		sf.StartLocation, endLocation, order, fillTimeout)
 }
 
 // readFetchUpdates is the follow-up dispatch loop for an established FETCH:
@@ -364,9 +369,11 @@ func capFetchEndLocation(requested, largest message.Location) message.Location {
 // fetches [requestStart, floor) from an established upstream, and concatenates
 // it with the cached part — the two are disjoint by Location, so the result is
 // correctly ordered. With no FETCH-able upstream (or on error/timeout) it
-// degrades to serving what the cache has. Upstream-fetched objects are NOT
-// cached back: the FIFO ring is keyed by arrival, so old backfill would evict
-// live objects.
+// serves what the cache has and covers the below-floor remainder with a
+// §11.4.4.2 End of Unknown Range marker, since a plain gap would falsely
+// assert non-existence (§11.4.4). Upstream-fetched objects are NOT cached
+// back: the FIFO ring is keyed by arrival, so old backfill would evict live
+// objects.
 func (h *sessionHandler) stitchedFetchObjects(
 	ctx context.Context,
 	entry *registry.TrackEntry,
@@ -397,13 +404,23 @@ func (h *sessionHandler) stitchedFetchObjects(
 
 	up := h.pickFetchUpstream(entry)
 	if up == nil {
-		return cacheObjs // no reachable upstream — gaps stay gaps (§3553)
+		// No reachable upstream: the below-floor sub-range has unknown
+		// status, not ground-truth non-existence. A plain gap in a
+		// FIN-terminated response asserts the latter (§11.4.4), so cover
+		// the sub-range with an End of Unknown Range marker instead
+		// (§10.2.5: report unavailable Objects "as Unknown gaps").
+		return mergeFetchObjects(order,
+			unknownWholeRange(requestStart, upEndIncl, order), cacheObjs)
 	}
 
 	upstreamObjs := h.fetchUpstreamRange(
-		ctx, up, fullName, requestStart, exclusiveFetchEnd(upEndIncl), order, fillTimeout,
+		ctx, up, fullName, requestStart, upEndIncl, order, fillTimeout,
 	)
 	if len(upstreamObjs) == 0 {
+		// A clean-FIN, uncapped, empty upstream response: the upstream
+		// authoritatively asserted the whole sub-range non-existent, which
+		// a plain gap encodes exactly. (Every unknown outcome returns at
+		// least a marker element.)
 		return cacheObjs
 	}
 	return mergeFetchObjects(order, upstreamObjs, cacheObjs)
@@ -426,20 +443,39 @@ func (h *sessionHandler) pickFetchUpstream(entry *registry.TrackEntry) *registry
 	return nil
 }
 
-// fetchUpstreamRange issues a standalone FETCH for [start, wireEnd] on the
-// upstream's session, awaits the response stream via the relay's fetch router,
-// and returns the decoded objects (absence markers skipped). Any error, or a
-// timeout bounded by fillTimeout, yields nil so the caller degrades to
-// cache-only. The objects are returned in the requested group order because
-// the upstream FETCH carries the same GROUP_ORDER parameter.
+// fetchUpstreamRange issues a standalone FETCH for the inclusive range
+// [start, endIncl] on the upstream's session, awaits the response stream via
+// the relay's fetch router, and returns the decoded objects in the requested
+// group order (the upstream FETCH carries the same GROUP_ORDER parameter).
+//
+// The returned slice preserves what the upstream did and did not vouch for,
+// so the downstream response stays truthful under §11.4.4's gap rule (a gap
+// in a FIN-terminated response asserts non-existence):
+//
+//   - Upstream End of Unknown Range markers (§11.4.4.2, 0x10C) are kept as
+//     [cache.CachedObject] marker elements and re-emitted downstream.
+//   - End of Non-Existent Range markers (0x8C) are dropped: a plain gap in
+//     our FIN-terminated response is the semantically equivalent encoding
+//     (§9.1 lets relays re-represent missing ranges), and §11.4.4.2 prefers
+//     it outside known/unknown splits.
+//   - When the upstream vouches for less than the whole sub-range — FETCH
+//     rejected, response timeout, a mid-stream error (no FIN, so its gaps
+//     assert nothing), or a clean FIN whose FETCH_OK EndLocation was capped
+//     below endIncl — the unvouched-for remainder is covered by an unknown
+//     marker. The mid-stream-error and descending capped cases collapse to
+//     "whole sub-range unknown": exact per-gap markers are inexpressible in
+//     §11.4.4's delta encoding wherever the element after a marker would be
+//     a same-group, lower-Object-ID transition.
 func (h *sessionHandler) fetchUpstreamRange(
 	ctx context.Context,
 	up *registry.UpstreamSub,
 	fullName track.FullTrackName,
-	start, wireEnd message.Location,
+	start, endIncl message.Location,
 	order message.GroupOrder,
 	fillTimeout time.Duration,
 ) []*cache.CachedObject {
+	unknownWhole := unknownWholeRange(start, endIncl, order)
+
 	params := message.Parameters{}
 	if order == message.GroupOrderDescending {
 		params = append(params, message.GroupOrderParam(message.GroupOrderDescending))
@@ -450,15 +486,15 @@ func (h *sessionHandler) fetchUpstreamRange(
 			Namespace:     fullName.Namespace,
 			Name:          fullName.Name,
 			StartLocation: start,
-			EndLocation:   wireEnd,
+			EndLocation:   exclusiveFetchEnd(endIncl),
 		},
 		Parameters: params,
 	}
 
 	// Bound the upstream round-trip so a silent or non-FETCH-answering
-	// upstream degrades to cache-only instead of wedging the downstream
-	// handler. FILL_TIMEOUT, when present, is the subscriber's explicit
-	// budget; otherwise fall back to a default.
+	// upstream degrades to cache-plus-unknown-gap instead of wedging the
+	// downstream handler. FILL_TIMEOUT, when present, is the subscriber's
+	// explicit budget; otherwise fall back to a default.
 	budget := fillTimeout
 	if budget <= 0 {
 		budget = defaultUpstreamFetchTimeout
@@ -466,13 +502,13 @@ func (h *sessionHandler) fetchUpstreamRange(
 	fctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 
-	stream, err := up.Session.Fetch(fctx, fmsg)
+	fr, err := up.Session.Fetch(fctx, fmsg)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH failed",
 			slog.String("err", err.Error()))
-		return nil
+		return unknownWhole
 	}
-	defer stream.Close()
+	defer fr.Close()
 
 	// The upstream echoes our Request ID in the response's FETCH_HEADER, so
 	// the body stream lands on the upstream session's data loop keyed by
@@ -486,20 +522,51 @@ func (h *sessionHandler) fetchUpstreamRange(
 	case fs = <-ch:
 	case <-fctx.Done():
 		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH response timed out")
-		return nil
+		return unknownWhole
 	}
 	if fs == nil {
-		return nil
+		return unknownWhole
 	}
+	// ReadDecoded needs the response's group order to resolve cross-group
+	// deltas (§11.4.4.1); the upstream serves in the order our FETCH asked
+	// for.
+	fs.GroupOrder = order
 
-	var out []*cache.CachedObject
+	var (
+		out      []*cache.CachedObject
+		prevLoc  message.Location
+		havePrev bool
+	)
 	for {
 		obj, err := fs.ReadDecoded()
-		if err != nil {
-			break // io.EOF on clean FIN; a partial read keeps what arrived
+		if errors.Is(err, io.EOF) {
+			break // clean FIN: the upstream's gaps are authoritative (§11.4.4)
 		}
-		if obj.EndOfNonExistentRange || obj.EndOfUnknownRange {
-			continue // §11.4.4.2 absence markers carry no payload
+		if err != nil {
+			// No FIN (or a FIN mid-object), so the gaps in what arrived
+			// assert nothing; declare the whole sub-range unknown rather
+			// than serve partial objects whose gaps would read as
+			// non-existence.
+			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH stream failed mid-read",
+				slog.String("err", err.Error()))
+			return unknownWhole
+		}
+		if obj.EndOfNonExistentRange {
+			// Dropped: a plain gap in our FIN-terminated response is the
+			// semantically equivalent encoding (§9.1).
+			continue
+		}
+		loc := message.Location{Group: obj.GroupID, Object: obj.ObjectID}
+		if !upstreamFetchElemOK(loc, prevLoc, havePrev, start, endIncl, order,
+			obj.EndOfUnknownRange) {
+			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH element out of range or order",
+				slog.Uint64("group", loc.Group), slog.Uint64("object", loc.Object))
+			return unknownWhole
+		}
+		prevLoc, havePrev = loc, true
+		if obj.EndOfUnknownRange {
+			out = append(out, unknownRangeMarker(loc))
+			continue
 		}
 		// The §11.4.4.1 Datagram bit carries the original wire shape
 		// across this relay hop, so the object is re-emitted downstream
@@ -520,7 +587,77 @@ func (h *sessionHandler) fetchUpstreamRange(
 			Payload:           obj.Payload,
 		})
 	}
+
+	// A clean FIN asserts gaps only up to the FETCH_OK EndLocation (§11.4.4).
+	// If the upstream capped it below our sub-range end (§10.12: End beyond
+	// its Largest), the remainder has unknown status.
+	if authEnd := inclusiveFetchEnd(fr.OK.EndLocation); authEnd.Less(endIncl) {
+		if order == message.GroupOrderDescending {
+			// The unknown remainder precedes every object in descending
+			// stream order, and a leading marker cannot in general be
+			// followed by a same-group object with a lower ID (see the
+			// doc comment) — fall back to whole-sub-range unknown.
+			return unknownWhole
+		}
+		out = append(out, unknownRangeMarker(endIncl))
+	}
 	return out
+}
+
+// upstreamFetchElemOK validates one kept element of an upstream FETCH
+// response before it is re-serialized downstream. Every element must lie
+// inside the requested sub-range [start, endIncl] — the merge with the
+// cached part relies on Location disjointness — and an object must advance
+// from the previous kept element the way §11.4.4's delta encoding can
+// express: within a group, Object IDs strictly ascend; across groups, the
+// Group ID moves in the response's order direction. Unknown-range markers
+// carry absolute IDs and merely re-anchor the encoding, so only the range
+// check applies to them. A violation means the upstream is nonconformant;
+// trusting the element would corrupt the downstream delta stream (e.g. flip
+// its group-direction inference), so the caller discards the response.
+func upstreamFetchElemOK(
+	loc, prev message.Location,
+	havePrev bool,
+	start, endIncl message.Location,
+	order message.GroupOrder,
+	isMarker bool,
+) bool {
+	if loc.Less(start) || endIncl.Less(loc) {
+		return false
+	}
+	if isMarker || !havePrev {
+		return true
+	}
+	if loc.Group == prev.Group {
+		return prev.Object < loc.Object
+	}
+	if order == message.GroupOrderDescending {
+		return loc.Group < prev.Group
+	}
+	return prev.Group < loc.Group
+}
+
+// unknownRangeMarker returns the serve-path element that streamFetchObjects
+// serializes as a §11.4.4.2 End of Unknown Range (0x10C) marker at loc.
+func unknownRangeMarker(loc message.Location) *cache.CachedObject {
+	return &cache.CachedObject{
+		GroupID:           loc.Group,
+		ObjectID:          loc.Object,
+		EndOfUnknownRange: true,
+	}
+}
+
+// unknownWholeRange declares the whole inclusive sub-range [start, endIncl]
+// unknown with a single marker, positioned for the response's stream order.
+// The marker Location is the range's far end in stream direction (endIncl
+// when ascending, start when descending), so §11.4.4.2's "between the last
+// serialized Object, if any, and this Location, inclusive" coverage spans
+// the sub-range.
+func unknownWholeRange(start, endIncl message.Location, order message.GroupOrder) []*cache.CachedObject {
+	if order == message.GroupOrderDescending {
+		return []*cache.CachedObject{unknownRangeMarker(start)}
+	}
+	return []*cache.CachedObject{unknownRangeMarker(endIncl)}
 }
 
 // mergeFetchObjects concatenates the below-floor (upstream) and at/above-floor
@@ -583,23 +720,58 @@ func exclusiveFetchEnd(incl message.Location) message.Location {
 //     absolute Object ID in the new group.
 //   - Datagram-flavoured objects set bit 0x40 (§4486-4490); subscriber
 //     ignores the subgroup bits.
+//   - [cache.CachedObject.EndOfUnknownRange] elements serialize as §11.4.4.2
+//     End of Unknown Range markers (0x10C) with absolute Group/Object IDs,
+//     and become the prior Location for the delta encoding of what follows.
+//
+// The returned count is the number of real objects written (markers are
+// serialized but not counted — they carry no payload).
 func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedObject) (int, error) {
 	var (
 		written      int
 		prevGroup    uint64
 		prevObject   uint64
 		prevPriority uint8
-		havePrev     bool
+		// havePrev: a prior Group/Object ID exists — a real object or a
+		// §11.4.4.2 End-of-Range marker. haveActual: a real object was
+		// written — only then do a prior Subgroup ID / Priority exist
+		// (mirror of ReadDecoded's decHavePrev / decHaveActual).
+		havePrev   bool
+		haveActual bool
 		// Inferred from the ordering of the first vs second object.
 		// Without a second object we don't need the direction.
 		descending bool
 	)
 
 	for _, o := range objs {
+		if o.EndOfUnknownRange {
+			// §11.4.4.2 End of Unknown Range: the Group/Object ID fields
+			// carry the absolute range boundary, and the marker becomes
+			// the prior Location for subsequent delta encoding — but not
+			// a prior *actual* object, so the next object still spells
+			// out its Priority (and never references the prior Subgroup).
+			if err := out.WriteObject(&message.FetchObject{
+				SerializationFlags: message.FetchEndOfRangeGroup,
+				GroupIDDelta:       o.GroupID,
+				ObjectIDDelta:      o.ObjectID,
+			}); err != nil {
+				return written, err
+			}
+			prevGroup, prevObject = o.GroupID, o.ObjectID
+			havePrev = true
+			continue
+		}
+
 		// §11.2.1.1: the Object Status field "is absent in Objects
 		// delivered via a FETCH". Cached status markers describe absence,
-		// so they are simply not serialized — the gap in Object IDs
-		// conveys it.
+		// so they are simply not serialized — their knowledge still reaches
+		// the fetcher: the marker bumped the LARGEST_OBJECT watermark on
+		// ingest, FETCH_OK's EndLocation extends through it
+		// (capFetchEndLocation), and §11.4.4's gap rule makes the trailing
+		// gap of a FIN-terminated response authoritative non-existence.
+		// Emitting End of Non-Existent Range (0x8C) instead would be
+		// redundant: §11.4.4.2 reserves it for splitting non-serialized
+		// ranges into known-non-existent and unknown parts.
 		if o.IsStatusMarker() {
 			continue
 		}
@@ -662,9 +834,10 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 			fo.SubgroupID = o.SubgroupID
 		}
 
-		// Publisher priority: emit when it differs from the prior
-		// object (or on the first object).
-		if !havePrev || o.PublisherPriority != prevPriority {
+		// Publisher priority: emit when it differs from the prior actual
+		// object's — or when there is none (the first object, and the
+		// first object after a leading marker, §11.4.4.2).
+		if !haveActual || o.PublisherPriority != prevPriority {
 			fo.SerializationFlags |= message.FetchFlagPriority
 			fo.PublisherPriority = o.PublisherPriority
 		}
@@ -685,6 +858,7 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 		prevObject = o.ObjectID
 		prevPriority = o.PublisherPriority
 		havePrev = true
+		haveActual = true
 	}
 
 	return written, nil

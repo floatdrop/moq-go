@@ -1,7 +1,9 @@
 package message
 
 import (
+	"errors"
 	"fmt"
+	"io"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
@@ -116,6 +118,19 @@ func (o *FetchObject) Append(w *wire.Writer) {
 	w.VarintBytes(o.ObjectPayload)
 }
 
+// truncated converts a bare io.EOF into io.ErrUnexpectedEOF. Parse reads
+// after the leading flags varint use it: at that point part of an object has
+// been consumed, so a FIN is a truncated object, not a clean end-of-stream.
+// Callers (e.g. the relay's upstream stitcher) rely on that distinction to
+// tell "the sender FIN'd between objects, vouching for the rest of the range
+// (§11.4.4)" from "the response broke off mid-object".
+func truncated(err error) error {
+	if errors.Is(err, io.EOF) {
+		return io.ErrUnexpectedEOF
+	}
+	return err
+}
+
 // Parse deserializes a FetchObject from r.
 // r may be a *wire.Reader (in-memory) or a *wire.StreamReader (streaming).
 func (o *FetchObject) Parse(r wire.Decoder) error {
@@ -129,13 +144,13 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 	if flags == FetchEndOfRangeObject || flags == FetchEndOfRangeGroup {
 		groupID, err := r.Varint()
 		if err != nil {
-			return fmt.Errorf("moqt/message: end-of-range group ID: %w", err)
+			return fmt.Errorf("moqt/message: end-of-range group ID: %w", truncated(err))
 		}
 		o.GroupIDDelta = groupID // stored in GroupIDDelta as absolute Group ID
 
 		objectID, err := r.Varint()
 		if err != nil {
-			return fmt.Errorf("moqt/message: end-of-range object ID: %w", err)
+			return fmt.Errorf("moqt/message: end-of-range object ID: %w", truncated(err))
 		}
 		o.ObjectIDDelta = objectID // stored in ObjectIDDelta as absolute Object ID
 		return nil
@@ -144,7 +159,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 	if flags&FetchFlagGroupIDDelta != 0 {
 		delta, err := r.Varint()
 		if err != nil {
-			return err
+			return truncated(err)
 		}
 		o.GroupIDDelta = delta
 	}
@@ -152,7 +167,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 	if o.hasSubgroupIDField() {
 		subgroupID, err := r.Varint()
 		if err != nil {
-			return err
+			return truncated(err)
 		}
 		o.SubgroupID = subgroupID
 	}
@@ -160,7 +175,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 	if flags&FetchFlagObjectIDDelta != 0 {
 		delta, err := r.Varint()
 		if err != nil {
-			return err
+			return truncated(err)
 		}
 		o.ObjectIDDelta = delta
 	}
@@ -168,7 +183,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 	if flags&FetchFlagPriority != 0 {
 		priority, err := r.UInt8()
 		if err != nil {
-			return err
+			return truncated(err)
 		}
 		o.PublisherPriority = priority
 	}
@@ -176,7 +191,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 	if flags&FetchFlagProperties != 0 {
 		props, err := r.VarintBytes()
 		if err != nil {
-			return err
+			return truncated(err)
 		}
 		o.Properties = props
 	}
@@ -184,7 +199,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 	// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 27.
 	payload, err := r.VarintBytes()
 	if err != nil {
-		return err
+		return truncated(err)
 	}
 	o.ObjectPayload = payload
 

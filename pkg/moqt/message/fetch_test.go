@@ -3,6 +3,7 @@ package message
 import (
 	"bytes"
 	"errors"
+	"io"
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
@@ -539,5 +540,62 @@ func TestLocationCompare(t *testing.T) {
 				t.Errorf("Less = %v, want %v", got, c.wantLess)
 			}
 		})
+	}
+}
+
+// TestFetchObjectParseTruncated pins the EOF classification Parse gives a
+// FETCH response stream that ends mid-object: only an EOF on the very first
+// byte (the flags varint) is a clean end-of-stream; an EOF anywhere after it
+// means a truncated object and must surface as io.ErrUnexpectedEOF. The
+// relay's upstream stitcher relies on this to tell "the sender FIN'd between
+// objects, vouching for the rest of the range (§11.4.4)" from "the response
+// broke off mid-object".
+func TestFetchObjectParseTruncated(t *testing.T) {
+	full := &FetchObject{
+		SerializationFlags: FetchFlagGroupIDDelta | FetchFlagObjectIDDelta |
+			FetchFlagPriority | uint64(FetchSubgroupIDExplicit),
+		GroupIDDelta:      3,
+		SubgroupID:        1,
+		ObjectIDDelta:     7,
+		PublisherPriority: 5,
+		ObjectPayload:     []byte("payload"),
+	}
+	w := wire.NewWriter(nil)
+	full.Append(w)
+	encoded := w.Bytes()
+
+	t.Run("empty stream is clean EOF", func(t *testing.T) {
+		err := new(FetchObject).Parse(wire.NewStreamReader(bytes.NewReader(nil)))
+		if !errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("Parse(empty) = %v, want io.EOF", err)
+		}
+	})
+
+	// Every proper prefix that includes at least the flags byte is a
+	// truncated object.
+	for cut := 1; cut < len(encoded); cut++ {
+		err := new(FetchObject).Parse(wire.NewStreamReader(bytes.NewReader(encoded[:cut])))
+		if err == nil {
+			t.Fatalf("Parse(%d/%d bytes) succeeded, want truncation error", cut, len(encoded))
+		}
+		if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("Parse(%d/%d bytes) = %v, want io.ErrUnexpectedEOF", cut, len(encoded), err)
+		}
+	}
+
+	// Same for an End of Unknown Range marker (§11.4.4.2).
+	marker := &FetchObject{
+		SerializationFlags: FetchEndOfRangeGroup,
+		GroupIDDelta:       2,
+		ObjectIDDelta:      9,
+	}
+	mw := wire.NewWriter(nil)
+	marker.Append(mw)
+	mEncoded := mw.Bytes()
+	for cut := 2; cut < len(mEncoded); cut++ { // 0x10C flags varint is 2 bytes
+		err := new(FetchObject).Parse(wire.NewStreamReader(bytes.NewReader(mEncoded[:cut])))
+		if !errors.Is(err, io.ErrUnexpectedEOF) {
+			t.Fatalf("marker Parse(%d/%d bytes) = %v, want io.ErrUnexpectedEOF", cut, len(mEncoded), err)
+		}
 	}
 }

@@ -63,6 +63,15 @@ type CachedObject struct {
 	Properties        []byte // retained by reference; opaque to the cache
 	Payload           []byte // retained by reference; opaque
 	ReceivedAt        time.Time
+
+	// EndOfUnknownRange marks this element as a §11.4.4.2 End of Unknown
+	// Range (0x10C) FETCH marker rather than a stored object: every Location
+	// from the previous element in the response stream (exclusive) through
+	// {GroupID, ObjectID} (inclusive) has unknown status. Markers exist only
+	// on the FETCH serve path — upstream stitching manufactures them for
+	// sub-ranges no source could vouch for — and are never stored in the
+	// cache ring.
+	EndOfUnknownRange bool
 }
 
 // IsStatusMarker reports whether the object is a §11.2.1.1 status marker
