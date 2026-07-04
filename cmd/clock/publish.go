@@ -2,14 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/lmittmann/tint"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
@@ -31,13 +34,37 @@ func publish(ctx context.Context, addr string) error {
 	}
 	slog.InfoContext(ctx, "PUBLISH_OK", "alias", pub.TrackAlias())
 
-	// Watch the publish request stream for incoming control messages.
+	// Serve the publish request stream: reading follow-ups directly (instead
+	// of via AcceptRequest) obliges us to route AUTHORIZATION_TOKEN
+	// parameters through the session token cache (§10.2.2) and to answer
+	// every REQUEST_UPDATE with exactly one REQUEST_OK / REQUEST_ERROR
+	// (§10.9) — accepted here without applying any parameters. pubMu
+	// serializes those replies against the shutdown PUBLISH_DONE below:
+	// the Stream contract leaves concurrent writes undefined.
+	var pubMu sync.Mutex
 	go func() {
 		for {
 			msg, err := message.Parse(pub)
 			if err != nil {
 				slog.DebugContext(ctx, "publish request stream closed", tint.Err(err))
 				return
+			}
+			if _, err := sess.ProcessFollowupTokens(msg); err != nil {
+				slog.WarnContext(ctx, "publish token processing failed", tint.Err(err))
+				if tce, ok := errors.AsType[*session.TokenCacheError](err); ok {
+					_ = sess.Close(tce.Code, tce.Error())
+				}
+				return
+			}
+			if _, ok := msg.(*message.RequestUpdate); ok {
+				pubMu.Lock()
+				err := message.Marshal(pub, &message.RequestOK{})
+				pubMu.Unlock()
+				if err != nil {
+					slog.DebugContext(ctx, "publish REQUEST_UPDATE_OK write failed", tint.Err(err))
+					return
+				}
+				continue
 			}
 			slog.DebugContext(ctx, "publish request stream message", "type", fmt.Sprintf("%T", msg))
 		}
@@ -51,7 +78,9 @@ func publish(ctx context.Context, addr string) error {
 		select {
 		case <-ctx.Done():
 			slog.InfoContext(ctx, "shutting down, sending PUBLISH_DONE")
+			pubMu.Lock()
 			_ = pub.Done(moqt.PublishDoneTrackEnded, "")
+			pubMu.Unlock()
 			return nil
 
 		case t := <-ticker.C:

@@ -49,3 +49,4 @@ CLAUDE.local.md
 devenv.local.nix
 .direnv/
 /relay
+/msfdemo
