@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -402,6 +403,16 @@ func (h *sessionHandler) stitchedFetchObjects(
 		return cacheObjs // the request starts at/above the floor — no gap
 	}
 
+	// GetRange and OldestRetained are two separate cache reads: an eviction
+	// or TTL expiry between them can raise the floor above snapshot entries,
+	// making the upstream sub-range [requestStart, upEndIncl] overlap the
+	// snapshot. mergeFetchObjects relies on the two sources being disjoint
+	// by Location (a duplicate would serialize a non-ascending Object ID),
+	// so clip the snapshot to strictly above the sub-range.
+	cacheObjs = slices.DeleteFunc(cacheObjs, func(o *cache.CachedObject) bool {
+		return !upEndIncl.Less(message.Location{Group: o.GroupID, Object: o.ObjectID})
+	})
+
 	up := h.pickFetchUpstream(entry)
 	if up == nil {
 		// No reachable upstream: the below-floor sub-range has unknown
@@ -660,10 +671,22 @@ func unknownWholeRange(start, endIncl message.Location, order message.GroupOrder
 	return []*cache.CachedObject{unknownRangeMarker(endIncl)}
 }
 
-// mergeFetchObjects concatenates the below-floor (upstream) and at/above-floor
+// mergeFetchObjects merges the below-floor (upstream) and at/above-floor
 // (cache) slices in group order. The two are disjoint by Location and each is
 // already sorted in order, so for ascending the lower range leads and for
 // descending the higher (cache) range leads.
+//
+// Descending needs one more step: within a group, Object IDs always ascend
+// (§11.4.3), and §11.4.4's delta encoding cannot express a same-group
+// transition to a lower Object ID — so when the eviction floor splits a
+// group across the two sources, the seam group's runs must be spliced into
+// one contiguous ascending run, upstream part (lower Object IDs) first.
+// Plain concatenation would put the cache's high-object run before the
+// upstream's low-object run of the same group and serialize a wrapped
+// delta. Unknown-range markers interleaved with the seam run's objects move
+// with them (their coverage and delta re-anchoring stay as the upstream
+// meant them); a marker-only prefix — the whole-sub-range unknown marker,
+// whose coverage spans everything below the cache — stays after it.
 func mergeFetchObjects(order message.GroupOrder, lower, upper []*cache.CachedObject) []*cache.CachedObject {
 	switch {
 	case len(lower) == 0:
@@ -672,13 +695,40 @@ func mergeFetchObjects(order message.GroupOrder, lower, upper []*cache.CachedObj
 		return lower
 	}
 	out := make([]*cache.CachedObject, 0, len(lower)+len(upper))
-	if order == message.GroupOrderDescending {
-		out = append(out, upper...)
-		out = append(out, lower...)
-	} else {
+	if order != message.GroupOrderDescending {
 		out = append(out, lower...)
 		out = append(out, upper...)
+		return out
 	}
+
+	// The only group the two sources can share is the cache's lowest
+	// (upper's last element) — the floor group. splice is the length of
+	// lower's leading seam-group run, markers included: an interleaved
+	// upstream 0x10C marker belongs with its neighbouring objects (its
+	// coverage and the delta re-anchoring stay exactly as the upstream
+	// meant them, and every spliced Location is below the cache's seam
+	// objects). A prefix with no objects at all is NOT spliced — that is
+	// the whole-sub-range unknown marker, whose coverage spans everything
+	// below the cache and must stay after it.
+	seamG := upper[len(upper)-1].GroupID
+	splice, seamHasObject := 0, false
+	for splice < len(lower) && lower[splice].GroupID == seamG {
+		seamHasObject = seamHasObject || !lower[splice].EndOfUnknownRange
+		splice++
+	}
+	if !seamHasObject {
+		splice = 0
+	}
+	// cut is where upper's trailing seam-group run starts (the cache never
+	// holds unknown-range markers, so a plain group comparison suffices).
+	cut := len(upper)
+	for cut > 0 && upper[cut-1].GroupID == seamG {
+		cut--
+	}
+	out = append(out, upper[:cut]...)
+	out = append(out, lower[:splice]...)
+	out = append(out, upper[cut:]...)
+	out = append(out, lower[splice:]...)
 	return out
 }
 
@@ -810,8 +860,18 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 			fo.ObjectIDDelta = o.ObjectID
 
 		default:
-			// Same group. Omit ObjectIDDelta when consecutive;
-			// otherwise include it with the gap value.
+			// Same group. §11.4.4 cannot express a non-ascending Object ID
+			// here — the delta only ever adds. The inputs are sorted and
+			// seam-spliced (mergeFetchObjects), so hitting this is an
+			// internal invariant violation; fail rather than emit a wrapped
+			// delta the subscriber must treat as a session-fatal overflow.
+			if o.ObjectID <= prevObject {
+				return written, fmt.Errorf(
+					"relay: fetch serialization order violation: {%d,%d} after {%d,%d}",
+					o.GroupID, o.ObjectID, prevGroup, prevObject)
+			}
+			// Omit ObjectIDDelta when consecutive; otherwise include it
+			// with the gap value.
 			if o.ObjectID != prevObject+1 {
 				fo.SerializationFlags |= message.FetchFlagObjectIDDelta
 				fo.ObjectIDDelta = o.ObjectID - prevObject - 1
