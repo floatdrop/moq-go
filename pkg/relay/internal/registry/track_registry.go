@@ -430,10 +430,14 @@ func (r *TrackRegistry) RemoveUpstream(
 		delete(r.tracks, key)
 		entryDeleted = true
 	}
+	if upstreamEmpty {
+		// Still under r.mu: see [TrackRegistry.unpublishTrackFromDiscovery]
+		// for why the unpublish must serialize with AddUpstream's publish.
+		r.unpublishTrackFromDiscovery(entry)
+	}
 	r.mu.Unlock()
 
 	if upstreamEmpty {
-		r.unpublishTrackFromDiscovery(entry)
 		for _, sub := range notifyDownstreams {
 			sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded,
 				"relay: upstream gone", 0)
@@ -491,14 +495,16 @@ func (r *TrackRegistry) RemoveDownstream(
 		delete(r.tracks, key)
 		entryDeleted = true
 	}
+	if hadUpstream && upstreamEmpty {
+		// Still under r.mu: see [TrackRegistry.unpublishTrackFromDiscovery]
+		// for why the unpublish must serialize with AddUpstream's publish.
+		r.unpublishTrackFromDiscovery(entry)
+	}
 	r.mu.Unlock()
 
-	// Stream I/O and discovery calls happen outside the registry locks.
+	// Stream I/O happens outside the registry locks.
 	for _, u := range stranded {
 		u.CloseOnDemand()
-	}
-	if hadUpstream && upstreamEmpty {
-		r.unpublishTrackFromDiscovery(entry)
 	}
 	return true, downstreamEmpty, entryDeleted
 }
@@ -538,10 +544,10 @@ func (r *TrackRegistry) RemoveSession(sess *session.Session) (upstreamRemoved, d
 	r.mu.Lock()
 
 	// Collect entries whose upstream slice transitions to empty so we
-	// can unpublish them from Discovery and notify their dependent
-	// downstream subscribers after releasing the locks. Both kinds of
-	// I/O — discovery backend calls and PUBLISH_DONE stream writes —
-	// must not hold the registry lock across them.
+	// can notify their dependent downstream subscribers after releasing
+	// the locks — PUBLISH_DONE stream writes must not run under r.mu.
+	// Their Discovery unpublish, by contrast, happens before r.mu is
+	// released: see [TrackRegistry.unpublishTrackFromDiscovery].
 	type orphaned struct {
 		entry       *TrackEntry
 		downstreams []*DownstreamSub
@@ -605,13 +611,17 @@ func (r *TrackRegistry) RemoveSession(sess *session.Session) (upstreamRemoved, d
 			delete(r.tracks, key)
 		}
 	}
+	for _, o := range orphans {
+		// Still under r.mu: see [TrackRegistry.unpublishTrackFromDiscovery]
+		// for why the unpublish must serialize with AddUpstream's publish.
+		r.unpublishTrackFromDiscovery(o.entry)
+	}
 	r.mu.Unlock()
 
 	for _, u := range stranded {
 		u.CloseOnDemand()
 	}
 	for _, o := range orphans {
-		r.unpublishTrackFromDiscovery(o.entry)
 		for _, sub := range o.downstreams {
 			sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded,
 				"relay: publisher session gone", 0)
@@ -645,6 +655,19 @@ func (r *TrackRegistry) publishTrackToDiscovery(entry *TrackEntry) {
 
 // unpublishTrackFromDiscovery is the counterpart called when the last
 // UpstreamSub leaves a track.
+//
+// The caller MUST hold r.mu. Both this and [publishTrackToDiscovery] run
+// under the registry lock so the store receives publish/unpublish calls in
+// exactly the order the registry's upstream count crossed 0 — a late
+// unpublish issued after releasing r.mu could race a concurrent
+// AddUpstream's publish and erase the re-published track's record, leaving
+// a live track invisible cross-relay until its upstream cycles (nothing
+// re-publishes without another 0→1 transition). The Discovery call is
+// bounded by [discoveryCallTimeout] — and the interface requires backends
+// to honor ctx deadlines — so the lock hold is bounded too. RemoveSession
+// pays this once per orphaned track, serially; with a degraded backend
+// that is N × the timeout, an accepted worst case for a best-effort
+// advertisement fabric.
 func (r *TrackRegistry) unpublishTrackFromDiscovery(entry *TrackEntry) {
 	if r.discovery == nil {
 		return

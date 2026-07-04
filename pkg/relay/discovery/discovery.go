@@ -117,6 +117,13 @@ type NamespaceEvent struct {
 // subsequent reads observing the same set. Watch is the right
 // primitive for "tell me when this changes".
 //
+// Implementations MUST honor ctx cancellation and deadlines on every
+// call: the relay's registries invoke Publish/Unpublish while holding
+// their internal locks (that is what keeps the store's record order
+// consistent with registry state), bounding each call with a short
+// deadline. A backend that ignores ctx and blocks on a dead network
+// connection would stall the whole registry, not just the call.
+//
 // Close releases backend resources (network connections, goroutines).
 // Watch channels MUST be drained or their owning context cancelled
 // before Close to avoid backend-side blocking. After Close all methods

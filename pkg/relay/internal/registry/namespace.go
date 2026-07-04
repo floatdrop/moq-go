@@ -181,12 +181,13 @@ func (r *NamespaceRegistry) RegisterPublisher(
 	r.mu.Lock()
 	r.publishers = append(r.publishers, entry)
 	r.pubCount[key]++
-	firstAdvertise := r.pubCount[key] == 1
-	r.mu.Unlock()
-
-	if firstAdvertise {
+	if r.pubCount[key] == 1 {
+		// Under r.mu, so publish/unpublish reach the Discovery store in
+		// exactly the order pubCount crossed the 0 boundary — see
+		// [NamespaceRegistry.unpublishNamespaceFromDiscovery].
 		r.publishNamespaceToDiscovery(ns)
 	}
+	r.mu.Unlock()
 	return entry
 }
 
@@ -203,20 +204,17 @@ func (r *NamespaceRegistry) UnregisterPublisher(entry *PublisherEntry) bool {
 		return e == entry
 	})
 	removed := len(r.publishers) < before
-	var lastUnadvertise bool
 	if removed {
 		key := namespaceWireKey(entry.Namespace)
 		r.pubCount[key]--
 		if r.pubCount[key] <= 0 {
 			delete(r.pubCount, key)
-			lastUnadvertise = true
+			// Under r.mu — see
+			// [NamespaceRegistry.unpublishNamespaceFromDiscovery].
+			r.unpublishNamespaceFromDiscovery(entry.Namespace)
 		}
 	}
 	r.mu.Unlock()
-
-	if lastUnadvertise {
-		r.unpublishNamespaceFromDiscovery(entry.Namespace)
-	}
 	return removed
 }
 
@@ -288,11 +286,12 @@ func (r *NamespaceRegistry) RemoveSession(sess *session.Session) (publishers, su
 	// Unlock races with concurrent RemoveSession calls.
 	pubsRemoved := beforeP - len(r.publishers)
 	subsRemoved := beforeS - len(r.subscribers)
-	r.mu.Unlock()
-
 	for _, ns := range toUnadvertise {
+		// Under r.mu — see
+		// [NamespaceRegistry.unpublishNamespaceFromDiscovery].
 		r.unpublishNamespaceFromDiscovery(ns)
 	}
+	r.mu.Unlock()
 	return pubsRemoved, subsRemoved
 }
 
@@ -313,6 +312,16 @@ func (r *NamespaceRegistry) publishNamespaceToDiscovery(ns wire.TrackNamespace) 
 	}
 }
 
+// unpublishNamespaceFromDiscovery is the counterpart called when the last
+// publisher of a namespace leaves.
+//
+// The caller MUST hold r.mu. Both this and [publishNamespaceToDiscovery]
+// run under the registry lock so the store receives publish/unpublish in
+// exactly the order pubCount crossed 0 — a late unpublish issued after
+// releasing r.mu could race a concurrent RegisterPublisher's publish and
+// erase the re-advertised namespace's record. The Discovery call is bounded
+// by [discoveryCallTimeout] — and the interface requires backends to honor
+// ctx deadlines — so the lock hold is bounded too.
 func (r *NamespaceRegistry) unpublishNamespaceFromDiscovery(ns wire.TrackNamespace) {
 	if r.discovery == nil {
 		return
