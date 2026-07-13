@@ -3,10 +3,10 @@ module github.com/floatdrop/moq-go
 go 1.26
 
 require (
-	github.com/lmittmann/tint v1.1.3
+	github.com/lmittmann/tint v1.2.0
 	github.com/quic-go/quic-go v0.60.0
-	github.com/quic-go/webtransport-go v0.11.0
-	golang.org/x/sync v0.21.0
+	github.com/quic-go/webtransport-go v0.11.1
+	golang.org/x/sync v0.22.0
 )
 
 require (
