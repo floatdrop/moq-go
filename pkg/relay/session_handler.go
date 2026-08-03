@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
+	"github.com/floatdrop/moq-go/pkg/relay/cache"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
@@ -582,6 +584,7 @@ func (h *sessionHandler) serveFetchObjects(
 	start, end message.Location,
 	order message.GroupOrder,
 	fillTimeout time.Duration,
+	rangeFilters *message.RangeFilterSet,
 ) {
 	out, err := h.sess.OpenFetchStream(message.FetchHeader{RequestID: requestID})
 	if err != nil {
@@ -593,6 +596,15 @@ func (h *sessionHandler) serveFetchObjects(
 	// Gather cached objects, stitching the below-floor portion from upstream
 	// when the cache doesn't cover the whole range (§9.4).
 	objs := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
+
+	// §5.1.3: drop objects that fail the FETCH's Range Filters. §11.4.4.2
+	// unknown-range markers are not objects and are always kept.
+	if rangeFilters != nil {
+		objs = slices.DeleteFunc(objs, func(o *cache.CachedObject) bool {
+			return !o.EndOfUnknownRange &&
+				!rangeFilters.MatchesObject(o.SubgroupID, o.ObjectID, o.PublisherPriority, o.Properties)
+		})
+	}
 
 	written, err := streamFetchObjects(out, objs)
 	h.metrics.FetchServed(written)

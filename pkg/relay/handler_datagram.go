@@ -90,7 +90,9 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		// subscription (Forward State 0) receives no datagrams. There is
 		// no per-datagram stream to reset, so the groupExhausted signal
 		// is irrelevant here.
-		forward, _ := sub.ForwardDecision(d.GroupID, d.ObjectID)
+		// Datagrams have no subgroup; §5.1.3 SUBGROUP_FILTER treats them as
+		// subgroup 0. Object ID / Priority / Properties feed the other filters.
+		forward, _ := sub.ForwardDecision(d.GroupID, d.ObjectID, 0, d.PublisherPriority, d.Properties)
 		if !forward {
 			continue
 		}

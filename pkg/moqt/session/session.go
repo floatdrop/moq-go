@@ -121,6 +121,11 @@ type Session struct {
 	// WithMaxRequestUpdates; read by NewRequestUpdateLimiter, so no lock.
 	maxRequestUpdates uint64
 
+	// maxFilterRanges is the total Range Filter range budget we advertised via
+	// MAX_FILTER_RANGES (§10.3.1.6). 0 prohibits Range Filters. Set once at
+	// construction via WithMaxFilterRanges; read via MaxFilterRanges(), no lock.
+	maxFilterRanges uint64
+
 	closeOnce sync.Once
 	// closeErr holds the *ClosedError cause; atomic because Err may
 	// be called at any time, not only after Done fires.
@@ -165,6 +170,7 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 		tokenCache:                    NewTokenCache(cfg.maxAuthTokenCacheSize),
 		tokenVerifier:                 cfg.tokenVerifier,
 		maxRequestUpdates:             cfg.maxRequestUpdates,
+		maxFilterRanges:               cfg.maxFilterRanges,
 	}
 	var first uint64
 	if r == roleServer {
@@ -186,6 +192,12 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 // PeerOptions returns the SETUP options the peer advertised. The returned
 // slice aliases internal state and must not be mutated.
 func (s *Session) PeerOptions() []wire.KVPair { return s.peerOptions }
+
+// MaxFilterRanges returns the MAX_FILTER_RANGES value this session advertised
+// (§10.3.1.6) — the total Range Filter range budget it will accept on any one
+// subscription or fetch. 0 prohibits Range Filters. The relay enforces this
+// when validating a request's Range Filters against [message.RangeFilterSet.Validate].
+func (s *Session) MaxFilterRanges() uint64 { return s.maxFilterRanges }
 
 // AllocRequestID returns the next outbound Request ID per §10.1.
 func (s *Session) AllocRequestID() uint64 {

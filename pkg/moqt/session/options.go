@@ -31,6 +31,13 @@ type config struct {
 	// The default (0) means REQUEST_UPDATE concurrency is not limited.
 	maxRequestUpdates uint64
 
+	// maxFilterRanges is the per-subscription/fetch limit on the total number
+	// of Range Filter ranges (§10.3.1.6). It mirrors the value advertised via
+	// MAX_FILTER_RANGES and is captured by WithMaxFilterRanges so the receive
+	// side can reject over-limit filters with INVALID_FILTER. The default (0)
+	// prohibits Range Filters entirely.
+	maxFilterRanges uint64
+
 	// tokenVerifier is the optional application policy that turns a resolved
 	// (Type, Value) authorization token into an allow/deny decision. nil
 	// disables verification (all tokens are accepted by the transport; the
@@ -91,6 +98,19 @@ func WithMaxRequestUpdates(maxUpdates uint64) Option {
 	return func(c *config) {
 		c.maxRequestUpdates = maxUpdates
 		c.setupOptions = append(c.setupOptions, message.MaxRequestUpdatesOption(maxUpdates))
+	}
+}
+
+// WithMaxFilterRanges sets MAX_FILTER_RANGES (§10.3.1.6) — the maximum total
+// number of Range Filter ranges this endpoint will accept across all Range
+// Filter parameters on a single subscription or fetch (§5.1.3). The value is
+// advertised to the peer in SETUP and used to reject over-limit or (when 0)
+// any Range Filters with INVALID_FILTER. The default (option absent, or 0)
+// prohibits Range Filters entirely.
+func WithMaxFilterRanges(maxRanges uint64) Option {
+	return func(c *config) {
+		c.maxFilterRanges = maxRanges
+		c.setupOptions = append(c.setupOptions, message.MaxFilterRangesOption(maxRanges))
 	}
 }
 

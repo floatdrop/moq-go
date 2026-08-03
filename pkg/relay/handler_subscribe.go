@@ -64,6 +64,13 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 			_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
 			return
 		}
+		// §5.1.3 / §10.6: a malformed or over-limit Range Filter is INVALID_FILTER.
+		if errors.Is(err, message.ErrInvalidFilter) {
+			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE range filter rejected",
+				slog.String("err", err.Error()))
+			_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
+			return
+		}
 		// §5.1.2 says a malformed LOCATION_FILTER is also a session-level
 		// PROTOCOL_VIOLATION. We scope that one to this request for now —
 		// unrelated subscriptions on the same session shouldn't die because
@@ -166,7 +173,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		h.tracks.RemoveDownstream(fullName, sub.ID)
 	}()
 
-	// §10.2.11: "If Objects have been published on this Track the
+	// §10.2.16: "If Objects have been published on this Track the
 	// Publisher MUST include this parameter." LARGEST_OBJECT in
 	// SUBSCRIBE_OK tells the subscriber its Joining Location, which it
 	// uses to issue a Joining FETCH (§5.1.3) for cached backfill.
@@ -291,12 +298,17 @@ func (h *sessionHandler) handleSubscribeUpdate(
 		}
 		h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE parameter parse failed",
 			slog.String("err", err.Error()))
-		// §10.9: a failed subscription update is answered with
-		// REQUEST_ERROR and the publisher MUST also terminate the
-		// subscription with PUBLISH_DONE / UPDATE_FAILED. Writes go
-		// through the sub's lock — see [registry.DownstreamSub.WriteMessage].
+		// §10.9: a failed subscription update is answered with REQUEST_ERROR
+		// and the publisher MUST also terminate the subscription with
+		// PUBLISH_DONE / UPDATE_FAILED. A bad Range Filter uses INVALID_FILTER
+		// (§10.6); other malformed params use MALFORMED_TRACK. Writes go through
+		// the sub's lock — see [registry.DownstreamSub.WriteMessage].
+		code := moqt.RequestMalformedTrack
+		if errors.Is(err, message.ErrInvalidFilter) {
+			code = moqt.RequestInvalidFilter
+		}
 		_ = sub.WriteMessage(&message.RequestError{
-			ErrorCode:   moqt.RequestMalformedTrack,
+			ErrorCode:   code,
 			ErrorReason: err.Error(),
 		})
 		sub.TerminateWithPublishDone(moqt.PublishDoneUpdateFailed, err.Error(), 0)
@@ -656,6 +668,29 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	}
 	if p, ok := ps.Find(message.ParamGroupOrder); ok {
 		sub.SetGroupOrder(p.Byte)
+	}
+
+	// §5.1.3 Range Filters. They are installed only when present, so an update
+	// carrying none leaves the existing set unchanged. A malformed/over-limit
+	// set is a §10.6 INVALID_FILTER (request-scoped) — the caller maps
+	// message.ErrInvalidFilter to REQUEST_ERROR INVALID_FILTER.
+	//
+	// LIMITATION (draft-19 §5.1.3 REQUEST_UPDATE semantics not fully done): an
+	// update carrying any range-filter param replaces the WHOLE set, rather than
+	// the spec's per-parameter-type replace (non-zero Length) / remove (Length 0)
+	// with untouched types preserved. So a partial update wipes other filter
+	// types, and a Length-0 "remove" param is rejected as INVALID_FILTER instead
+	// of removing that type. Initial SUBSCRIBE and add-on-update work correctly;
+	// see the tracked follow-up for the per-type merge.
+	rf, err := message.RangeFiltersFromParams(ps)
+	if err != nil {
+		return err
+	}
+	if rf != nil {
+		if err := rf.Validate(sub.Session.MaxFilterRanges()); err != nil {
+			return err
+		}
+		sub.SetRangeFilters(rf)
 	}
 	return nil
 }

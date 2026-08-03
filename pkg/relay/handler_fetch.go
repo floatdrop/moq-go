@@ -91,6 +91,10 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 
 	order := fetchGroupOrder(msg.Parameters)
 	fillTimeout := message.FillTimeoutFromParam(msg.Parameters)
+	rangeFilters, ok := h.fetchRangeFilters(ctx, req, msg.Parameters)
+	if !ok {
+		return
+	}
 
 	// The response EndLocation is fixed by the watermark (§3604-3605) and is
 	// independent of which objects we end up streaming, so reply FETCH_OK
@@ -109,7 +113,27 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 	// past the capped EndLocation is outside the response by definition, so
 	// neither objects nor §11.4.4.2 unknown markers may reference it.
 	h.serveFetchObjects(ctx, req, "standalone", msg.RequestID, entry, fullName,
-		sf.StartLocation, endLocation, order, fillTimeout)
+		sf.StartLocation, endLocation, order, fillTimeout, rangeFilters)
+}
+
+// fetchRangeFilters parses and validates the §5.1.3 Range Filters on a FETCH's
+// parameters against the negotiated MAX_FILTER_RANGES. On an invalid or
+// over-limit filter it answers REQUEST_ERROR INVALID_FILTER (§10.6) and returns
+// ok=false, so the caller aborts before replying FETCH_OK.
+func (h *sessionHandler) fetchRangeFilters(
+	ctx context.Context, req *session.Request, ps message.Parameters,
+) (*message.RangeFilterSet, bool) {
+	rf, err := message.RangeFiltersFromParams(ps)
+	if err == nil && rf != nil {
+		err = rf.Validate(h.sess.MaxFilterRanges())
+	}
+	if err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH range filter rejected",
+			slog.String("err", err.Error()))
+		_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
+		return nil, false
+	}
+	return rf, true
 }
 
 // readFetchUpdates is the follow-up dispatch loop for an established FETCH:
@@ -308,6 +332,10 @@ func (h *sessionHandler) handleJoiningFetch(ctx context.Context, req *session.Re
 	}
 
 	order := fetchGroupOrder(msg.Parameters)
+	rangeFilters, ok := h.fetchRangeFilters(ctx, req, msg.Parameters)
+	if !ok {
+		return
+	}
 
 	if err := req.Reply(&message.FetchOK{
 		EndLocation:     endLoc,
@@ -319,7 +347,7 @@ func (h *sessionHandler) handleJoiningFetch(ctx context.Context, req *session.Re
 	}
 
 	h.serveFetchObjects(ctx, req, "joining", msg.RequestID, entry, jloc.fullName,
-		startLoc, endLoc, order, 0)
+		startLoc, endLoc, order, 0, rangeFilters)
 }
 
 // fetchGroupOrder pulls the GROUP_ORDER parameter (§10.2.8) out of a

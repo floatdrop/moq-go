@@ -374,7 +374,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			// One lock acquisition folds the §9.2 Forward-State gate and the
 			// §5.1.2 filter test. A paused subscription (Forward State 0) takes
 			// no queue slot; control messages on its request stream still flow.
-			forward, groupExhausted := w.sub.ForwardDecision(hdr.GroupID, objectID)
+			forward, groupExhausted := w.sub.ForwardDecision(
+				hdr.GroupID, objectID, hdr.SubgroupID, hdr.PublisherPriority, obj.Properties)
 			if !forward {
 				// §11.4.3: if the subscription has narrowed so this whole
 				// group is now out of range, the stream will never carry
