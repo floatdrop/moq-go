@@ -85,7 +85,7 @@ func (h *harness) dialQUIC(ctx context.Context, u *url.URL) (*session.Session, e
 }
 
 func (h *harness) dialWebTransport(ctx context.Context, u *url.URL) (*session.Session, error) {
-	d := webtransport.Dialer{
+	d := webtransport.Transport{
 		//nolint:gosec // G402: TLS verification is a CLI flag for self-signed interop relays.
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: h.insecure, NextProtos: []string{http3.NextProtoH3}},
 		QUICConfig:      quicConfig(),
