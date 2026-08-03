@@ -50,3 +50,6 @@ devenv.local.nix
 .direnv/
 /relay
 /msfdemo
+# relay-etcd binary when built in-place from the etcd submodule
+# (anchored so it never matches the cmd/relay-etcd source directory)
+/pkg/relay/discovery/etcd/relay-etcd
