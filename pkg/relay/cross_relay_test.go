@@ -626,6 +626,52 @@ func TestCrossRelay_WatchNamespacesForward(t *testing.T) {
 	relayA.stop(t)
 }
 
+// TestCrossRelay_SubscribeNamespaceSeedsRemote pins the seed side of
+// cross-relay namespace discovery: a SUBSCRIBE_NAMESPACE holder is told about a
+// namespace a *remote* relay advertised BEFORE the subscriber (and before this
+// relay) existed. Unlike the WatchNamespaces path, the seed reads
+// FindNamespacesUnder at subscribe time, so one pre-advertise suffices — no
+// re-advertise ticker needed.
+func TestCrossRelay_SubscribeNamespaceSeedsRemote(t *testing.T) {
+	t.Parallel()
+
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+
+	ctx := t.Context()
+
+	// Remote advertisement exists before the subscriber (and before relay A).
+	if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
+		Prefix:    wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+		RelayAddr: "relay-C",
+	}); err != nil {
+		t.Fatalf("seed PublishNamespace: %v", err)
+	}
+
+	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
+
+	subSess := dialClient(t, relayA)
+	nsReq, err := subSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
+		TrackNamespacePrefix: videoNS(),
+	})
+	if err != nil {
+		t.Fatalf("SubscribeNamespace: %v", err)
+	}
+
+	got := relaytest.ReadNextMessage(t, nsReq, time.After(2*time.Second))
+	nsMsg, ok := got.(*message.Namespace)
+	if !ok {
+		t.Fatalf("got %T, want *message.Namespace", got)
+	}
+	if len(nsMsg.TrackNamespaceSuffix) != 1 || string(nsMsg.TrackNamespaceSuffix[0]) != "cam1" {
+		t.Fatalf("seeded NAMESPACE suffix = %v, want [cam1]", nsMsg.TrackNamespaceSuffix)
+	}
+
+	_ = nsReq.Close()
+	_ = subSess.Close(0, "done")
+	relayA.stop(t)
+}
+
 // TestCrossRelay_ConcurrentSubscriberWrites drives two independent writers at
 // one SUBSCRIBE_NAMESPACE holder's stream: a local publisher's PUBLISH_NAMESPACE
 // forwards (on a session-handler goroutine) and the relay-level WatchNamespaces

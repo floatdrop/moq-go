@@ -1,6 +1,7 @@
 package track_test
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
@@ -36,5 +37,23 @@ func TestFullTrackNameKeyEqualsNewKey(t *testing.T) {
 	viaCtor := track.NewKey(ns, name)
 	if viaName != viaCtor {
 		t.Fatal("FullTrackName.Key() and NewKey differ for the same inputs")
+	}
+}
+
+// TestKeyBytesDeterministicAndDistinct pins the contract distributed discovery
+// backends rely on: Bytes is stable for equal Keys and, thanks to the length
+// prefix, never collides across the (namespace, name) split that a naive concat
+// would tie — the byte-slice analogue of TestKeyDisambiguatesNamespaceAndName.
+func TestKeyBytesDeterministicAndDistinct(t *testing.T) {
+	ns := wire.TrackNamespace{[]byte("example.com"), []byte("live")}
+	name := []byte("video")
+	if !bytes.Equal(track.NewKey(ns, name).Bytes(), track.NewKey(ns, name).Bytes()) {
+		t.Fatal("Bytes not deterministic for equal Keys")
+	}
+
+	b1 := track.NewKey(wire.TrackNamespace{[]byte("a"), []byte("b")}, []byte("c")).Bytes()
+	b2 := track.NewKey(wire.TrackNamespace{[]byte("a")}, []byte("bc")).Bytes()
+	if bytes.Equal(b1, b2) {
+		t.Fatal("Bytes collision: (a,b)/c and (a)/bc encode identically")
 	}
 }

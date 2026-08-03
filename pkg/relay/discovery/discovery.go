@@ -154,19 +154,39 @@ type DiscoveryStore interface {
 	// Prefix is a prefix of namespace (in the §9.5 / wire.TrackNamespace
 	// HasPrefix sense). A query for ["a","b","c"] matches advertised
 	// prefixes ["a"], ["a","b"], and ["a","b","c"]; advertised
-	// prefix ["a","b","c","d"] does NOT match.
+	// prefix ["a","b","c","d"] does NOT match. This is the ancestor
+	// direction: "which relays serve a covering prefix for this track?"
 	FindNamespace(ctx context.Context, namespace wire.TrackNamespace) ([]NamespaceInfo, error)
 
-	// WatchTracks streams every track Publish / Unpublish event the
-	// backend observes (local + remote) until ctx is cancelled or the
-	// store is closed. The channel is closed when the watch ends. A
-	// slow consumer must not block other watchers — backends SHOULD
-	// use a per-watcher buffered channel and drop on overflow with
+	// FindNamespacesUnder is the descendant complement of FindNamespace:
+	// it returns every advertisement whose Prefix extends (is at or below)
+	// prefix. A query for ["a"] matches advertised prefixes ["a"], ["a","b"],
+	// and ["a","b","c"]; ["x"] does NOT match. A zero-length prefix matches
+	// every advertisement. It answers "which namespaces advertised across the
+	// deployment fall under this SUBSCRIBE_NAMESPACE prefix?", used to seed a
+	// new namespace subscriber with state advertised before it registered.
+	FindNamespacesUnder(ctx context.Context, prefix wire.TrackNamespace) ([]NamespaceInfo, error)
+
+	// WatchTracks returns a channel that first delivers the current set of
+	// track advertisements as OpPublish events (the snapshot), then streams
+	// every subsequent Publish / Unpublish the backend observes (local +
+	// remote), until ctx is cancelled or the store is closed. The channel is
+	// closed when the watch ends.
+	//
+	// The snapshot→follow handoff is gapless: across it no event is missed or
+	// duplicated. A consumer that wants "current state plus every change from
+	// here on" therefore needs only this call, never a separate Find followed
+	// by a Watch (which would race any event landing between the two).
+	//
+	// The initial snapshot is delivered in full — a consumer interested only in
+	// deltas can ignore the leading OpPublish burst. For events after the
+	// snapshot a slow consumer must not block other watchers: backends SHOULD
+	// use a per-watcher buffered channel and drop live events on overflow with
 	// a logged warning.
 	WatchTracks(ctx context.Context) (<-chan TrackEvent, error)
 
-	// WatchNamespaces streams namespace events. Same contract as
-	// WatchTracks.
+	// WatchNamespaces streams namespace events. Same snapshot-then-follow
+	// contract as WatchTracks.
 	WatchNamespaces(ctx context.Context) (<-chan NamespaceEvent, error)
 
 	// Close releases backend resources.

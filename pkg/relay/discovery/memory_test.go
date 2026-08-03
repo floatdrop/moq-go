@@ -174,6 +174,62 @@ func TestMemoryStore_FindNamespacePrefixMatch(t *testing.T) {
 	}
 }
 
+// TestMemoryStore_FindNamespacesUnder pins the descendant direction: a query
+// returns advertisements whose Prefix extends (is at or below) the query, the
+// inverse of FindNamespace.
+func TestMemoryStore_FindNamespacesUnder(t *testing.T) {
+	t.Parallel()
+	s := discovery.NewMemoryStore()
+	defer s.Close()
+
+	prefixes := [][]string{
+		{"a"},
+		{"a", "b"},
+		{"a", "b", "c"},
+		{"x"}, // unrelated — must NOT match a query under ["a"]
+	}
+	for _, p := range prefixes {
+		if err := s.PublishNamespace(
+			t.Context(),
+			discovery.NamespaceInfo{Prefix: ns(p...), RelayAddr: "relay-A"},
+		); err != nil {
+			t.Fatalf("PublishNamespace %v: %v", p, err)
+		}
+	}
+
+	// Query ["a"] matches ["a"], ["a","b"], ["a","b","c"] but not ["x"].
+	got, err := s.FindNamespacesUnder(t.Context(), ns("a"))
+	if err != nil {
+		t.Fatalf("FindNamespacesUnder: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("FindNamespacesUnder(a) returned %d entries, want 3", len(got))
+	}
+	for _, g := range got {
+		if len(g.Prefix) == 0 || string(g.Prefix[0]) != "a" {
+			t.Errorf("unexpected non-descendant %v in results", g.Prefix)
+		}
+	}
+
+	// A deeper query narrows to itself and below.
+	got, err = s.FindNamespacesUnder(t.Context(), ns("a", "b"))
+	if err != nil {
+		t.Fatalf("FindNamespacesUnder(a,b): %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("FindNamespacesUnder(a,b) returned %d entries, want 2 (a/b, a/b/c)", len(got))
+	}
+
+	// The empty prefix matches everything.
+	got, err = s.FindNamespacesUnder(t.Context(), ns())
+	if err != nil {
+		t.Fatalf("FindNamespacesUnder(): %v", err)
+	}
+	if len(got) != len(prefixes) {
+		t.Fatalf("FindNamespacesUnder() returned %d entries, want %d (all)", len(got), len(prefixes))
+	}
+}
+
 // TestMemoryStore_WatchTracksReceivesEvents pins the Watch contract:
 // every Publish + Unpublish triggers a TrackEvent on the channel.
 func TestMemoryStore_WatchTracksReceivesEvents(t *testing.T) {
@@ -346,6 +402,72 @@ func TestMemoryStore_SlowWatcherDoesNotBlockPublisher(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("PublishTrack blocked on slow watcher")
+	}
+}
+
+// TestMemoryStore_WatchSeedsSnapshot pins the snapshot-then-follow contract: a
+// watch registered against a non-empty store first receives the current
+// advertisements as OpPublish events, then subsequent live changes.
+func TestMemoryStore_WatchSeedsSnapshot(t *testing.T) {
+	s := discovery.NewMemoryStore()
+	defer s.Close()
+	ctx := t.Context()
+
+	// Seed state BEFORE the watch exists.
+	key := newKey([]string{"video"}, "cam1")
+	for _, addr := range []string{"relay-A", "relay-B"} {
+		if err := s.PublishTrack(ctx, discovery.TrackInfo{Key: key, RelayAddr: addr}); err != nil {
+			t.Fatalf("PublishTrack %s: %v", addr, err)
+		}
+	}
+	if err := s.PublishNamespace(ctx, discovery.NamespaceInfo{Prefix: ns("video"), RelayAddr: "relay-A"}); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+
+	trackCh, err := s.WatchTracks(ctx)
+	if err != nil {
+		t.Fatalf("WatchTracks: %v", err)
+	}
+	nsCh, err := s.WatchNamespaces(ctx)
+	if err != nil {
+		t.Fatalf("WatchNamespaces: %v", err)
+	}
+
+	// Snapshot: both track advertisements, as OpPublish, in some order.
+	seen := map[string]bool{}
+	for range 2 {
+		ev, ok := receiveTrack(trackCh, 2*time.Second)
+		if !ok {
+			t.Fatal("timed out waiting for track snapshot event")
+		}
+		if ev.Op != discovery.OpPublish {
+			t.Errorf("snapshot event Op = %v, want publish", ev.Op)
+		}
+		seen[ev.Info.RelayAddr] = true
+	}
+	if !seen["relay-A"] || !seen["relay-B"] {
+		t.Errorf("track snapshot addrs = %v, want relay-A and relay-B", seen)
+	}
+
+	nsEv, ok := receiveNamespace(nsCh, 2*time.Second)
+	if !ok {
+		t.Fatal("timed out waiting for namespace snapshot event")
+	}
+	if nsEv.Op != discovery.OpPublish || nsEv.Info.RelayAddr != "relay-A" {
+		t.Errorf("namespace snapshot = %+v, want publish/relay-A", nsEv)
+	}
+
+	// Follow: a live publish after the snapshot is delivered too.
+	key2 := newKey([]string{"video"}, "cam2")
+	if err := s.PublishTrack(ctx, discovery.TrackInfo{Key: key2, RelayAddr: "relay-A"}); err != nil {
+		t.Fatalf("live PublishTrack: %v", err)
+	}
+	live, ok := receiveTrack(trackCh, 2*time.Second)
+	if !ok {
+		t.Fatal("timed out waiting for live track event")
+	}
+	if live.Op != discovery.OpPublish || live.Info.Key != key2 {
+		t.Errorf("live event = %+v, want publish of cam2", live)
 	}
 }
 

@@ -459,6 +459,7 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session) {
 	handler := newSessionHandler(
 		sess, r.log, r.tracks, r.names,
 		r.cfg.Authorizer, r.cfg.Metrics, r.fetch, r.upstreams,
+		r.cfg.Discovery, r.cfg.RelayAddr,
 		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,
 		r.handlers.Go,

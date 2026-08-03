@@ -136,18 +136,50 @@ func (h *sessionHandler) handleSubscribeNamespace(
 	entry := h.names.RegisterSubscriber(msg.TrackNamespacePrefix, h.sess, req.Stream, false /* wantsTracks */, true, 0)
 	defer h.names.UnregisterSubscriber(entry)
 
-	// Emit NAMESPACE for every currently-known publisher whose namespace
-	// matches this prefix. We snapshot the publishers list so we don't
-	// hold the registry lock across stream writes. Writes go through
-	// entry.WriteMessage so they serialise with concurrent forwards.
+	// Seed the subscriber with every namespace already known under this prefix,
+	// each announced once. Local PUBLISH_NAMESPACE publishers first (snapshotted
+	// so we don't hold the registry lock across stream writes); then, if
+	// Discovery is configured, namespaces advertised by OTHER relays — so a
+	// subscriber learns cross-relay namespaces advertised before it registered,
+	// not only those that change afterwards. Own-relay Discovery entries are
+	// skipped: the local pass already covered them. Writes go through
+	// entry.WriteMessage so they serialise with concurrent forwards. New
+	// arrivals during the subscription are handled live by handlePublishNamespace
+	// and the Discovery watcher.
+	seeded := make(map[string]struct{})
+	emit := func(ns wire.TrackNamespace) error {
+		k := namespaceKey(ns)
+		if _, dup := seeded[k]; dup {
+			return nil
+		}
+		seeded[k] = struct{}{}
+		return entry.WriteMessage(namespaceMessageFor(ns, msg.TrackNamespacePrefix))
+	}
 	for _, pub := range h.names.CopyPublishers() {
 		if !pub.Namespace.HasPrefix(msg.TrackNamespacePrefix) {
 			continue
 		}
-		if err := entry.WriteMessage(namespaceMessageFor(pub.Namespace, msg.TrackNamespacePrefix)); err != nil {
+		if err := emit(pub.Namespace); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "initial NAMESPACE write failed",
 				slog.String("err", err.Error()))
 			return
+		}
+	}
+	if h.discovery != nil {
+		infos, err := h.discovery.FindNamespacesUnder(ctx, msg.TrackNamespacePrefix)
+		if err != nil {
+			h.log.LogAttrs(ctx, slog.LevelDebug, "discovery namespace seed failed",
+				slog.String("err", err.Error()))
+		}
+		for _, info := range infos {
+			if info.RelayAddr == h.relayAddr {
+				continue // our own advertisement — already seeded from local publishers
+			}
+			if err := emit(info.Prefix); err != nil {
+				h.log.LogAttrs(ctx, slog.LevelDebug, "initial remote NAMESPACE write failed",
+					slog.String("err", err.Error()))
+				return
+			}
 		}
 	}
 
@@ -284,6 +316,15 @@ func (h *sessionHandler) serveNamespaceFollowups(
 		updates.Responded()
 		return true
 	})
+}
+
+// namespaceKey returns a canonical map key for a namespace tuple (its wire
+// encoding), so the SUBSCRIBE_NAMESPACE seed can announce each namespace once
+// across its local-publisher and Discovery passes.
+func namespaceKey(ns wire.TrackNamespace) string {
+	w := wire.NewWriter(nil)
+	w.TrackNamespace(ns)
+	return string(w.Bytes())
 }
 
 // namespaceMessageFor constructs a NAMESPACE wire message announcing the

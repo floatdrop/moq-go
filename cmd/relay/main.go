@@ -3,20 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/pem"
 	"flag"
-	"fmt"
 	"log"
 	"log/slog"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -27,15 +19,14 @@ import (
 	"time"
 
 	"github.com/lmittmann/tint"
-	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/session/quicconn"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/wtconn"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/relay"
+	"github.com/floatdrop/moq-go/pkg/relay/relaynet"
 )
 
 func main() {
@@ -91,9 +82,9 @@ func main() {
 	if *useWebTransport {
 		alpns = []string{http3.NextProtoH3}
 	} else {
-		alpns = []string{"moqt-18", "moqt-17", "moqt-16", "moq-00"}
+		alpns = relaynet.MOQTQUICALPNs
 	}
-	tlsCfg, err := tlsConfig(*certFile, *keyFile, alpns)
+	tlsCfg, err := relaynet.TLSConfig(*certFile, *keyFile, alpns)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -129,17 +120,12 @@ func main() {
 		log.Printf("relay listening on %s (WebTransport, path %s)", l.Addr(), *wtPath)
 		listener = l
 	} else {
-		ql, err := quic.ListenAddr(*addr, tlsCfg, &quic.Config{
-			MaxIdleTimeout:                   30 * time.Second,
-			KeepAlivePeriod:                  5 * time.Second,
-			EnableDatagrams:                  true,
-			EnableStreamResetPartialDelivery: true, // §11.4.3 RESET_STREAM_AT
-		})
+		l, err := relaynet.ListenQUIC(*addr, tlsCfg)
 		if err != nil {
 			log.Fatalf("listen %s: %v", *addr, err)
 		}
-		log.Printf("relay listening on %s (QUIC)", ql.Addr())
-		listener = quicconn.NewListener(ql)
+		log.Printf("relay listening on %s (QUIC)", l.Addr())
+		listener = l
 	}
 
 	r := relay.New(listener, relay.Config{
@@ -198,29 +184,6 @@ func catalogPolicy(catalogName string, ttl time.Duration) relay.CacheTTLPolicy {
 		}
 		return 0 // 0 → registry falls through to its default TTL
 	}
-}
-
-// tlsConfig returns a TLS config suitable for the chosen MOQT transport.
-// If certFile and keyFile are non-empty the certs are loaded from disk;
-// otherwise a self-signed ECDSA-P256 certificate is generated in memory
-// (valid for 10 days — within Chrome's ≤14-day tolerance for self-signed certs — appropriate for local development only). alpns lists
-// the acceptable ALPNs in server-preference order.
-func tlsConfig(certFile, keyFile string, alpns []string) (*tls.Config, error) {
-	var cert tls.Certificate
-	var err error
-	if certFile != "" && keyFile != "" {
-		cert, err = tls.LoadX509KeyPair(certFile, keyFile)
-	} else {
-		log.Print("no -cert/-key supplied — generating ephemeral self-signed certificate")
-		cert, err = selfSignedCert()
-	}
-	if err != nil {
-		return nil, fmt.Errorf("tls: %w", err)
-	}
-	return &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		NextProtos:   alpns,
-	}, nil
 }
 
 // webTransportListener stands up an HTTP/3 + WebTransport server on addr
@@ -286,46 +249,4 @@ func webTransportListener(addr, path string, tlsCfg *tls.Config) (*wtconn.Listen
 		}
 	}()
 	return l, nil
-}
-
-func selfSignedCert() (tls.Certificate, error) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "mediamesh-relay"},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
-		// serverAuth + a key-usage that permits TLS server handshakes is
-		// mandatory for browsers/Go clients that validate the cert against a
-		// trust store (real CA, mkcert, or an imported root). Without it the
-		// QUIC/h3 handshake fails before any MOQT logic runs, which a browser
-		// reports as a bare "connection failed". (The serverCertificateHashes
-		// pinning path ignores these fields, but setting them costs nothing
-		// and makes the cert work for both trust models.)
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		NotBefore:             time.Now().Add(-time.Minute),
-		// Chrome's serverCertificateHashes requires the total validity span to
-		// be at most 14 days; we stay well under so the printed SHA-256 can be
-		// pinned directly. Ephemeral and dev-only regardless.
-		NotAfter: time.Now().Add(10 * 24 * time.Hour),
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	keyDER, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		return tls.Certificate{}, err
-	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	// SEC1 EC keys use the "EC PRIVATE KEY" PEM type (RFC 5915); the generic
-	// "PRIVATE KEY" label denotes PKCS#8 and only parsed because
-	// tls.X509KeyPair tries every format.
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	return tls.X509KeyPair(certPEM, keyPEM)
 }

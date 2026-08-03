@@ -218,17 +218,40 @@ func (s *MemoryStore) FindNamespace(_ context.Context, namespace wire.TrackNames
 	return out, nil
 }
 
-// WatchTracks returns a channel that receives every track event until
-// ctx is cancelled or the store is closed. The channel is closed once
-// the watch ends. Per-watcher buffering: see [defaultWatchBufferSize] /
-// [WithWatchBufferSize].
+// FindNamespacesUnder returns every advertisement whose Prefix extends prefix
+// (the descendant direction — see [DiscoveryStore.FindNamespacesUnder]).
+func (s *MemoryStore) FindNamespacesUnder(_ context.Context, prefix wire.TrackNamespace) ([]NamespaceInfo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrClosed
+	}
+	var out []NamespaceInfo
+	for _, v := range s.namespaces {
+		if v.Prefix.HasPrefix(prefix) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+// WatchTracks delivers the current tracks as an OpPublish snapshot, then every
+// subsequent track event, until ctx is cancelled or the store is closed (see
+// [DiscoveryStore.WatchTracks]). Snapshotting and registering happen under the
+// same lock, so the handoff is gapless: a publish concurrent with this call
+// either lands in the snapshot or fans out to the channel afterwards, never
+// both and never neither. The channel is sized to hold the whole snapshot plus
+// the usual live headroom (see [WithWatchBufferSize]), so seeding never drops.
 func (s *MemoryStore) WatchTracks(ctx context.Context) (<-chan TrackEvent, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
-	ch := make(chan TrackEvent, s.bufferSize)
+	ch := make(chan TrackEvent, len(s.tracks)+s.bufferSize)
+	for _, v := range s.tracks {
+		ch <- TrackEvent{Op: OpPublish, Info: v} // fits: capacity includes len(tracks)
+	}
 	s.trackWatch = append(s.trackWatch, ch)
 	s.mu.Unlock()
 
@@ -236,14 +259,17 @@ func (s *MemoryStore) WatchTracks(ctx context.Context) (<-chan TrackEvent, error
 	return ch, nil
 }
 
-// WatchNamespaces — see [WatchTracks].
+// WatchNamespaces — see [MemoryStore.WatchTracks].
 func (s *MemoryStore) WatchNamespaces(ctx context.Context) (<-chan NamespaceEvent, error) {
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
-	ch := make(chan NamespaceEvent, s.bufferSize)
+	ch := make(chan NamespaceEvent, len(s.namespaces)+s.bufferSize)
+	for _, v := range s.namespaces {
+		ch <- NamespaceEvent{Op: OpPublish, Info: v} // fits: capacity includes len(namespaces)
+	}
 	s.nsWatch = append(s.nsWatch, ch)
 	s.mu.Unlock()
 
