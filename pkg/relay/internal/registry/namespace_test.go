@@ -47,7 +47,7 @@ func TestNamespaceRegistry_RegisterUnregisterPublisher(t *testing.T) {
 func TestNamespaceRegistry_RegisterUnregisterSubscriber(t *testing.T) {
 	t.Parallel()
 	r := registry.NewNamespaceRegistry()
-	entry := r.RegisterSubscriber(ns("chat"), nil, nil, false, true, 0)
+	entry := r.RegisterSubscriber(ns("chat"), nil, nil, false, true, 0, nil)
 
 	subs := r.CopySubscribers()
 	if len(subs) != 1 || subs[0].WantsTracks {
@@ -107,9 +107,9 @@ func TestNamespaceRegistry_MatchSubscribers(t *testing.T) {
 	t.Parallel()
 	r := registry.NewNamespaceRegistry()
 
-	sAll := r.RegisterSubscriber(ns(), nil, nil, false, true, 0)          // "all namespaces"
-	sVideo := r.RegisterSubscriber(ns("video"), nil, nil, false, true, 0) // wants video/*
-	sChatTracks := r.RegisterSubscriber(ns("chat"), nil, nil, true, true, 0)
+	sAll := r.RegisterSubscriber(ns(), nil, nil, false, true, 0, nil)          // "all namespaces"
+	sVideo := r.RegisterSubscriber(ns("video"), nil, nil, false, true, 0, nil) // wants video/*
+	sChatTracks := r.RegisterSubscriber(ns("chat"), nil, nil, true, true, 0, nil)
 
 	cases := []struct {
 		name string
@@ -151,8 +151,8 @@ func TestNamespaceRegistry_RemoveSession(t *testing.T) {
 	r.RegisterPublisher(ns("video"), sessA, nil)
 	r.RegisterPublisher(ns("audio"), sessA, nil)
 	r.RegisterPublisher(ns("chat"), sessB, nil)
-	r.RegisterSubscriber(ns(), sessA, nil, false, true, 0)
-	r.RegisterSubscriber(ns("video"), sessB, nil, true, true, 0)
+	r.RegisterSubscriber(ns(), sessA, nil, false, true, 0, nil)
+	r.RegisterSubscriber(ns("video"), sessB, nil, true, true, 0, nil)
 
 	pubs, subs := r.RemoveSession(sessA)
 	if pubs != 2 || subs != 1 {

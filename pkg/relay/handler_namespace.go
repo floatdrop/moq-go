@@ -131,9 +131,17 @@ func (h *sessionHandler) handleSubscribeNamespace(
 		return
 	}
 
-	// forward/groupOrder are ignored for a SUBSCRIBE_NAMESPACE (WantsTracks
-	// false), which never triggers PUBLISH — pass the Forward default.
-	entry := h.names.RegisterSubscriber(msg.TrackNamespacePrefix, h.sess, req.Stream, false /* wantsTracks */, true, 0)
+	// forward/groupOrder/rangeFilters are ignored for a SUBSCRIBE_NAMESPACE
+	// (WantsTracks false), which never triggers PUBLISH — pass the defaults.
+	entry := h.names.RegisterSubscriber(
+		msg.TrackNamespacePrefix,
+		h.sess,
+		req.Stream,
+		false, /* wantsTracks */
+		true,
+		0,
+		nil,
+	)
 	defer h.names.UnregisterSubscriber(entry)
 
 	// Seed the subscriber with every namespace already known under this prefix,
@@ -222,6 +230,21 @@ func (h *sessionHandler) handleSubscribeTracks(
 		return
 	}
 
+	// §5.1.3: TRACK_PROPERTY_FILTER (and any other Range Filters) on the
+	// SUBSCRIBE_TRACKS gate which PUBLISH messages are forwarded. Parse and
+	// validate against MAX_FILTER_RANGES; a bad/over-limit set is a §10.6
+	// INVALID_FILTER (request-scoped).
+	rangeFilters, err := message.RangeFiltersFromParams(msg.Parameters)
+	if err == nil && rangeFilters != nil {
+		err = rangeFilters.Validate(h.sess.MaxFilterRanges())
+	}
+	if err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "SubscribeTracks range filter rejected",
+			slog.String("err", err.Error()))
+		_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
+		return
+	}
+
 	// Reply REQUEST_OK before registering, so the OK cannot race a
 	// PUBLISH_SKIPPED that a concurrent publisher's PUBLISH handler
 	// (emitPublishSkipped) may write to this stream once the entry is visible.
@@ -238,6 +261,7 @@ func (h *sessionHandler) handleSubscribeTracks(
 		true, /* wantsTracks */
 		forward,
 		groupOrder,
+		rangeFilters,
 	)
 	defer h.names.UnregisterSubscriber(entry)
 

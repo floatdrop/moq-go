@@ -99,6 +99,16 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 			// SUBSCRIBE_TRACKS holders.
 			continue
 		}
+		// §5.1.3: a TRACK_PROPERTY_FILTER on the SUBSCRIBE_TRACKS gates which
+		// PUBLISH messages are forwarded — "PUBLISH messages which pass the
+		// filter will be forwarded while those which do not pass it will not be
+		// forwarded nor will any Objects." MatchesTrack is vacuously true when
+		// the subscription carries no track-property filter.
+		if sub.RangeFilters != nil && !sub.RangeFilters.MatchesTrack(msg.TrackProperties) {
+			h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH forward suppressed: TRACK_PROPERTY_FILTER",
+				slog.String("name", string(msg.Name)))
+			continue
+		}
 		// §6.1 (draft-19): a PUBLISH_SKIPPED prohibition is scoped to the single
 		// PUBLISH that could not be forwarded, not sticky across re-PUBLISHes —
 		// so every inbound PUBLISH is a fresh forwarding attempt, and a track we

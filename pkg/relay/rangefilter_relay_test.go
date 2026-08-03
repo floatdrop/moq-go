@@ -151,6 +151,70 @@ func TestFanout_ObjectIDRangeFilter(t *testing.T) {
 	}
 }
 
+// TestSubscribeTracks_TrackPropertyFilter pins §5.1.3: a TRACK_PROPERTY_FILTER
+// on a SUBSCRIBE_TRACKS forwards only PUBLISH messages whose Track Properties
+// pass — a matching track is forwarded, a non-matching one is suppressed.
+func TestSubscribeTracks_TrackPropertyFilter(t *testing.T) {
+	t.Parallel()
+	subSess, teardown := connectRelay(t, filterRelayConfig())
+	defer teardown()
+
+	const propType = 0x40 // even → single-integer Track Property
+	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		Parameters: message.Parameters{
+			message.RangeFilterParam(&message.RangeFilter{
+				Type: message.ParamTrackPropertyFilter, PropertyType: propType,
+				Ranges: []message.Range{{Start: 10, End: 20}},
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubscribeTracks: %v", err)
+	}
+	defer subStream.Close()
+
+	pub := func(name string, propVal uint64) {
+		s, err := dialAnotherClient(t, subSess).Publish(t.Context(), &message.Publish{
+			Namespace:       wire.TrackNamespace{[]byte("video"), []byte(name)},
+			Name:            []byte(name),
+			TrackProperties: message.AppendTrackProperties([]wire.KVPair{{Type: propType, IntVal: propVal}}),
+		})
+		if err != nil {
+			t.Fatalf("Publish %s: %v", name, err)
+		}
+		t.Cleanup(func() { s.Close() })
+	}
+
+	// cam2's property (99) is outside [10,20] → suppressed; cam1's (15) passes.
+	pub("cam2", 99)
+	pub("cam1", 15)
+
+	req, err := subSess.AcceptRequest(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptRequest: %v", err)
+	}
+	got, ok := req.First.(*message.Publish)
+	if !ok {
+		t.Fatalf("got %T, want *message.Publish", req.First)
+	}
+	if string(got.Name) != "cam1" {
+		t.Fatalf("forwarded PUBLISH Name = %q, want cam1 (cam2 must be filtered out)", got.Name)
+	}
+
+	// No second PUBLISH: cam2 was filtered by the TRACK_PROPERTY_FILTER.
+	done := make(chan struct{})
+	go func() {
+		_, _ = subSess.AcceptRequest(t.Context())
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("a second PUBLISH arrived; cam2 should have been filtered")
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
 // TestFetch_ObjectIDRangeFilter pins §5.1.3 filtering on the FETCH serve path:
 // an OBJECTID_FILTER selecting [1,2] returns only the matching cached objects.
 func TestFetch_ObjectIDRangeFilter(t *testing.T) {

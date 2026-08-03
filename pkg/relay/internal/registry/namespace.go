@@ -77,6 +77,12 @@ type SubscriberEntry struct {
 	// applies) or the validated Ascending/Descending value.
 	Forward    bool
 	GroupOrder byte
+
+	// RangeFilters holds the §5.1.3 Range Filters on the SUBSCRIBE_TRACKS. The
+	// PUBLISH forwarding loop evaluates TRACK_PROPERTY_FILTER (§10.2.14) against
+	// each PUBLISH's Track Properties via MatchesTrack; a PUBLISH that fails is
+	// not forwarded (§5.1.3). Set once at registration. nil = no restriction.
+	RangeFilters *message.RangeFilterSet
 }
 
 // WriteMessage serialises one control message onto the subscriber's request
@@ -219,10 +225,11 @@ func (r *NamespaceRegistry) UnregisterPublisher(entry *PublisherEntry) bool {
 }
 
 // RegisterSubscriber records a subscriber's SUBSCRIBE_NAMESPACE (when
-// wantsTracks is false) or SUBSCRIBE_TRACKS (when true). forward and groupOrder
-// carry the SUBSCRIBE_TRACKS FORWARD/GROUP_ORDER passthrough values (§10.19.1)
-// and are ignored unless wantsTracks. Returns the canonical pointer for use
-// with [NamespaceRegistry.UnregisterSubscriber].
+// wantsTracks is false) or SUBSCRIBE_TRACKS (when true). forward, groupOrder,
+// and rangeFilters carry the SUBSCRIBE_TRACKS FORWARD/GROUP_ORDER passthrough
+// (§10.19.1) and §5.1.3 Range Filters, and are ignored unless wantsTracks.
+// Returns the canonical pointer for use with
+// [NamespaceRegistry.UnregisterSubscriber].
 func (r *NamespaceRegistry) RegisterSubscriber(
 	prefix wire.TrackNamespace,
 	sess *session.Session,
@@ -230,14 +237,16 @@ func (r *NamespaceRegistry) RegisterSubscriber(
 	wantsTracks bool,
 	forward bool,
 	groupOrder byte,
+	rangeFilters *message.RangeFilterSet,
 ) *SubscriberEntry {
 	entry := &SubscriberEntry{
-		Prefix:      prefix,
-		Session:     sess,
-		Stream:      stream,
-		WantsTracks: wantsTracks,
-		Forward:     forward,
-		GroupOrder:  groupOrder,
+		Prefix:       prefix,
+		Session:      sess,
+		Stream:       stream,
+		WantsTracks:  wantsTracks,
+		Forward:      forward,
+		GroupOrder:   groupOrder,
+		RangeFilters: rangeFilters,
 	}
 	r.mu.Lock()
 	r.subscribers = append(r.subscribers, entry)

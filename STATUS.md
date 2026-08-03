@@ -101,7 +101,7 @@ By package, bottom-up along the dependency stack:
 | 5.1     | Subscriptions                    | DONE   | Subscribe/Publish/OK/Error state machine in `pubsub.go`. |
 | 5.1.1   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. |
 | 5.1.2   | Location filters                 | DONE   | All 4 types (NextGroupStart, LargestObject, AbsoluteStart, AbsoluteRange) + `Matches`. |
-| 5.1.3   | Range filters                    | PARTIAL | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. TRACK_PROPERTY_FILTER (PUBLISH forwarding) pending. |
+| 5.1.3   | Range filters                    | DONE    | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; TRACK_PROPERTY_FILTER gates PUBLISH forwarding on SUBSCRIBE_TRACKS; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. Two documented carve-outs (see Known protocol gaps): REQUEST_UPDATE whole-set replace vs per-type merge, and §6.3 object filters on a SUBSCRIBE_TRACKS not yet applied to the resulting subscription's objects. |
 | 5.1.4   | Combining filters                | DONE    | `ForwardDecision` ANDs Forward + Location + Range filters per object (§5.1.4); Range filters combine SetIDs via AND/OR. |
 | 5.1.5   | Joining an ongoing track         | DONE   | Relative & absolute joining FETCH in `fetch.go`. |
 | 5.1.5.1 | Dynamically starting new groups  | DONE   | Relay forwards a downstream `NEW_GROUP_REQUEST` upstream per §10.2.18: included in the on-demand upstream SUBSCRIBE (no established upstream) or sent as an upstream REQUEST_UPDATE, gated on `DYNAMIC_GROUPS` support, Largest-Group, and outstanding-request bookkeeping. |
@@ -161,7 +161,7 @@ By package, bottom-up along the dependency stack:
 | 10.2.11 | OBJECTID_FILTER               | 0x26   | DONE   | Enforced per object in the fanout/FETCH. |
 | 10.2.12 | PRIORITY_FILTER               | 0x27   | DONE   | Enforced per object (subgroup priority); >255 rejected INVALID_FILTER. |
 | 10.2.13 | OBJECT_PROPERTY_FILTER        | 0x28   | DONE   | Enforced per object against Object Properties; even property type. |
-| 10.2.14 | TRACK_PROPERTY_FILTER         | 0x29   | PARTIAL| Codec + evaluation (`message`, even property type); relay enforcement pending. |
+| 10.2.14 | TRACK_PROPERTY_FILTER         | 0x29   | DONE   | Gates PUBLISH forwarding on SUBSCRIBE_TRACKS against Track Properties; even property type. |
 | 10.2.15 | EXPIRES                       | 0x08   | DONE   | |
 | 10.2.16 | LARGEST_OBJECT                | 0x09   | DONE   | Monotonic constraint applied. |
 | 10.2.17 | FORWARD                       | 0x10   | DONE   | |
@@ -261,22 +261,27 @@ dial-on-demand, production `DiscoveryStore` backends (only the in-process
 `MemoryStore` ships), GOAWAY **cascading**, and a `Dialer` for `cmd/relay`
 itself (the binary stays single-instance; cross-relay is library-level).
 
-**draft-19 gaps.** The mechanical renames/removals from `draft-ietf-moq-transport-18`
-to `-19` (GOAWAY Request ID removal, `PUBLISH_SKIPPED`, `LOCATION_FILTER`,
-removing `DUPLICATE_SUBSCRIPTION`) are done, as are the substantive behavior
-changes for `MAX_REQUEST_UPDATES` (§10.3.1.7), the §10.19.1 SUBSCRIBE_TRACKS
-FORWARD/GROUP_ORDER passthrough, the §9.2 upstream Forward rule, and the
-single-PUBLISH `PUBLISH_SKIPPED` lifetime (§6.1), and the §12.1/§12.2 first-object
-`OBJECT`/`SUBGROUP_DELIVERY_TIMEOUT` override. The remaining -19 behavior change
-is not yet implemented and is not reflected in the "~98% complete" figure above:
-
-- **Range Filters (new §5.1.3/§10.2.10-14)** — `SUBGROUP_FILTER`/`OBJECTID_FILTER`/
-  `PRIORITY_FILTER`/`OBJECT_PROPERTY_FILTER`/`TRACK_PROPERTY_FILTER`, the
-  `MAX_FILTER_RANGES` setup option (§10.3.1.6), and `INVALID_FILTER` are
-  entirely unimplemented — this is the largest new feature in draft-19.
+**draft-19 changes.** All substantive `draft-ietf-moq-transport-18` → `-19`
+behavior changes are implemented: the mechanical renames/removals (GOAWAY
+Request ID, `PUBLISH_SKIPPED`, `LOCATION_FILTER`, `DUPLICATE_SUBSCRIPTION`);
+`MAX_REQUEST_UPDATES` (§10.3.1.7); the §10.19.1 SUBSCRIBE_TRACKS
+FORWARD/GROUP_ORDER passthrough; the §9.2 upstream Forward rule; the
+single-PUBLISH `PUBLISH_SKIPPED` lifetime (§6.1); the §12.1/§12.2 first-object
+`OBJECT`/`SUBGROUP_DELIVERY_TIMEOUT` override; and the flagship **Range Filters**
+(§5.1.3 — all five filter parameters, `MAX_FILTER_RANGES`, `INVALID_FILTER`,
+enforced across SUBSCRIBE/datagram/FETCH object filtering and SUBSCRIBE_TRACKS
+PUBLISH-forwarding). One Range Filter nuance remains (REQUEST_UPDATE per-type
+merge) — see Known protocol gaps.
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
 
+- **Object Range Filters on SUBSCRIBE_TRACKS (§6.3)** — the object filters
+  (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) that ride a SUBSCRIBE_TRACKS are
+  parsed and validated but applied only via TRACK_PROPERTY_FILTER's PUBLISH gate;
+  §6.3 also wants them applied to the objects of the resulting PUBLISH-created
+  subscriptions. Object filtering on a direct SUBSCRIBE/FETCH is unaffected (fully
+  enforced); a SUBSCRIBE_TRACKS subscriber can also restate object filters in its
+  PUBLISH_OK, which the fanout honors.
 - **Range Filter REQUEST_UPDATE semantics (§5.1.3)** — updating a
   subscription's Range Filters mid-stream replaces the *whole* filter set rather
   than the spec's per-parameter-type replace (non-zero Length) / remove
