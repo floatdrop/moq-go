@@ -12,11 +12,11 @@ import (
 func TestGroupOutOfRange(t *testing.T) {
 	t.Parallel()
 
-	absStart := func(g uint64) *message.SubscriptionFilter {
-		return &message.SubscriptionFilter{Type: message.FilterAbsoluteStart, StartLocation: message.Location{Group: g}}
+	absStart := func(g uint64) *message.LocationFilter {
+		return &message.LocationFilter{Type: message.FilterAbsoluteStart, StartLocation: message.Location{Group: g}}
 	}
-	absRange := func(start, delta uint64) *message.SubscriptionFilter {
-		return &message.SubscriptionFilter{
+	absRange := func(start, delta uint64) *message.LocationFilter {
+		return &message.LocationFilter{
 			Type:          message.FilterAbsoluteRange,
 			StartLocation: message.Location{Group: start},
 			EndGroupDelta: delta,
@@ -26,14 +26,14 @@ func TestGroupOutOfRange(t *testing.T) {
 	tests := []struct {
 		name   string
 		group  uint64
-		filter *message.SubscriptionFilter
+		filter *message.LocationFilter
 		want   bool
 	}{
 		{"nil filter never out of range", 9, nil, false},
 		{
 			"largest-object filter never out of range",
 			9,
-			&message.SubscriptionFilter{Type: message.FilterLargestObject},
+			&message.LocationFilter{Type: message.FilterLargestObject},
 			false,
 		},
 		{"absolute start: below start out", 2, absStart(5), true},

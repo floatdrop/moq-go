@@ -105,7 +105,7 @@ func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 // SUBSCRIBE_TRACKS is open and a PUBLISH arrives for a matching namespace, the
 // relay forwards the PUBLISH to the subscriber on its OWN new bidirectional
 // stream (accepted via AcceptRequest), NOT multiplexed onto the
-// SUBSCRIBE_TRACKS request stream. This is the precondition for PUBLISH_BLOCKED
+// SUBSCRIBE_TRACKS request stream. This is the precondition for PUBLISH_SKIPPED
 // (§10.20): the forward consumes the subscriber's bidi-stream credit.
 func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	t.Parallel()

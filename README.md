@@ -135,7 +135,7 @@ grouped here by the file they live in:
 | Update a live request | `ExampleSession_UpdateRequest` |
 | Serve a long-lived request stream (updates + follow-ups) | `ExampleRequestBroker` |
 | End a publication | `Example_endingAPublication` |
-| Stream exhaustion (PUBLISH_BLOCKED) | `ExampleSession_OpenPublish`, `ExampleSession_ReadPublishBlocked` |
+| Stream exhaustion (PUBLISH_SKIPPED) | `ExampleSession_OpenPublish`, `ExampleTrackSubscription_ReadPublishSkipped` |
 | Announce / discover namespaces | `ExampleSession_PublishNamespace`, `ExampleSession_SubscribeNamespace` |
 | Accept requests + reply (`Accept*` helpers) | `ExampleSession_AcceptRequest` |
 | Graceful shutdown (GOAWAY) | `ExampleSession_SendGoaway`, `ExampleSession_OnGoaway` |
@@ -162,7 +162,7 @@ The two demo commands — [`cmd/clock`](cmd/clock) and
 [`cmd/msfdemo`](cmd/msfdemo) — are complete, runnable versions of these patterns
 end to end; each has its own README with sequence diagrams.
 
-A per-feature breakdown of draft-18 completeness, the full list of what's
+A per-feature breakdown of draft-19 completeness, the full list of what's
 implemented per package, and known limitations live in
 [`STATUS.md`](STATUS.md).
 

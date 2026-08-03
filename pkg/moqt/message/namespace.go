@@ -141,26 +141,26 @@ func (m *SubscribeTracks) Parse(r *wire.Reader) error {
 	return m.Parameters.parse(r)
 }
 
-// PublishBlocked is the PUBLISH_BLOCKED message (§10.20). It signals that
-// a specific track is blocked from being published.
-type PublishBlocked struct {
+// PublishSkipped is the PUBLISH_SKIPPED message (§10.20). It signals that a
+// specific track's Subscription was not created for this SUBSCRIBE_TRACKS.
+type PublishSkipped struct {
 	TrackNamespaceSuffix wire.TrackNamespace
 	TrackName            []byte
 }
 
-// Type returns the wire type ID for PUBLISH_BLOCKED.
-func (m *PublishBlocked) Type() Type {
-	return TypePublishBlocked
+// Type returns the wire type ID for PUBLISH_SKIPPED.
+func (m *PublishSkipped) Type() Type {
+	return TypePublishSkipped
 }
 
-// Append serializes the PUBLISH_BLOCKED message to w.
-func (m *PublishBlocked) Append(w *wire.Writer) {
+// Append serializes the PUBLISH_SKIPPED message to w.
+func (m *PublishSkipped) Append(w *wire.Writer) {
 	w.TrackNamespace(m.TrackNamespaceSuffix)
 	w.VarintBytes(m.TrackName)
 }
 
-// Parse deserializes the PUBLISH_BLOCKED message from r.
-func (m *PublishBlocked) Parse(r *wire.Reader) error {
+// Parse deserializes the PUBLISH_SKIPPED message from r.
+func (m *PublishSkipped) Parse(r *wire.Reader) error {
 	s := r.Scanner()
 	s.TrackNamespace(&m.TrackNamespaceSuffix)
 	s.VarintBytes(&m.TrackName)

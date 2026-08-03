@@ -7,7 +7,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// FilterType identifies the type of a Subscription Filter per §5.1.2.
+// FilterType identifies the type of a Location Filter per §5.1.2.
 type FilterType uint64
 
 const (
@@ -44,11 +44,11 @@ func (f FilterType) String() string {
 	return fmt.Sprintf("FilterType(0x%X)", uint64(f))
 }
 
-// SubscriptionFilter is the Subscription Filter structure from §5.1.2.
+// LocationFilter is the Location Filter structure from §5.1.2.
 //
 // Wire format:
 //
-//	Subscription Filter {
+//	Location Filter {
 //	  Filter Type (vi64),
 //	  [Start Location (Location),]   -- present for AbsoluteStart, AbsoluteRange
 //	  [End Group Delta (vi64),]      -- present for AbsoluteRange only
@@ -56,7 +56,7 @@ func (f FilterType) String() string {
 //
 // For LargestObject and NextGroupStart the Start Location is implicit
 // (derived from the Largest Object at the publisher) and is NOT on the wire.
-type SubscriptionFilter struct {
+type LocationFilter struct {
 	Type          FilterType
 	StartLocation Location // used by AbsoluteStart and AbsoluteRange
 	EndGroupDelta uint64   // used by AbsoluteRange; 0 means rest of start group
@@ -68,7 +68,7 @@ type SubscriptionFilter struct {
 //   - AbsoluteRange: StartLocation.Group + EndGroupDelta would overflow uint64
 //     (per §5.1.2: "If the resulting Group ID would be greater than 2^64 - 1,
 //     the endpoint MUST close the session with a PROTOCOL_VIOLATION").
-func (f *SubscriptionFilter) Validate() error {
+func (f *LocationFilter) Validate() error {
 	switch f.Type {
 	case FilterNextGroupStart, FilterLargestObject, FilterAbsoluteStart:
 		return nil
@@ -88,12 +88,12 @@ func (f *SubscriptionFilter) Validate() error {
 // For other filter types it returns 0 (not meaningful).
 // Panics if called on an AbsoluteRange filter that would overflow (call
 // Validate first).
-func (f *SubscriptionFilter) EndGroup() uint64 {
+func (f *LocationFilter) EndGroup() uint64 {
 	return f.StartLocation.Group + f.EndGroupDelta
 }
 
-// Append serialises the SubscriptionFilter to w.
-func (f *SubscriptionFilter) Append(w *wire.Writer) {
+// Append serialises the LocationFilter to w.
+func (f *LocationFilter) Append(w *wire.Writer) {
 	w.Varint(uint64(f.Type))
 	switch f.Type {
 	case FilterAbsoluteStart:
@@ -108,9 +108,9 @@ func (f *SubscriptionFilter) Append(w *wire.Writer) {
 	}
 }
 
-// Parse deserialises a SubscriptionFilter from r.
+// Parse deserialises a LocationFilter from r.
 // Returns an error (PROTOCOL_VIOLATION) for unknown filter types.
-func (f *SubscriptionFilter) Parse(r *wire.Reader) error {
+func (f *LocationFilter) Parse(r *wire.Reader) error {
 	t, err := r.Varint()
 	if err != nil {
 		return fmt.Errorf("moqt/message: filter type: %w", err)
@@ -161,55 +161,55 @@ func (f *SubscriptionFilter) Parse(r *wire.Reader) error {
 }
 
 // Bytes serialises the filter to a fresh byte slice. Useful for building the
-// SUBSCRIPTION_FILTER parameter value.
-func (f *SubscriptionFilter) Bytes() []byte {
+// LOCATION_FILTER parameter value.
+func (f *LocationFilter) Bytes() []byte {
 	var w wire.Writer
 	f.Append(&w)
 	return w.Bytes()
 }
 
-// LargestObjectFilter returns a SUBSCRIPTION_FILTER parameter (§5.1.2,
+// LargestObjectFilter returns a LOCATION_FILTER parameter (§5.1.2,
 // FilterLargestObject): deliver objects strictly after the publisher's current
 // largest object — the live edge. This is the common "subscribe to live"
 // filter; pair it with a Joining FETCH to also backfill the current group.
 func LargestObjectFilter() Parameter {
-	return SubscriptionFilterParam(&SubscriptionFilter{Type: FilterLargestObject})
+	return LocationFilterParam(&LocationFilter{Type: FilterLargestObject})
 }
 
-// NextGroupStartFilter returns a SUBSCRIPTION_FILTER parameter (§5.1.2,
+// NextGroupStartFilter returns a LOCATION_FILTER parameter (§5.1.2,
 // FilterNextGroupStart): deliver from the start of the group after the current
 // largest, skipping the remainder of the in-progress group.
 func NextGroupStartFilter() Parameter {
-	return SubscriptionFilterParam(&SubscriptionFilter{Type: FilterNextGroupStart})
+	return LocationFilterParam(&LocationFilter{Type: FilterNextGroupStart})
 }
 
-// AbsoluteStartFilter returns a SUBSCRIPTION_FILTER parameter (§5.1.2,
+// AbsoluteStartFilter returns a LOCATION_FILTER parameter (§5.1.2,
 // FilterAbsoluteStart): deliver every object at or after start, open-ended.
 // A start of {0, 0} is equivalent to an unfiltered subscription.
 func AbsoluteStartFilter(start Location) Parameter {
-	return SubscriptionFilterParam(&SubscriptionFilter{
+	return LocationFilterParam(&LocationFilter{
 		Type:          FilterAbsoluteStart,
 		StartLocation: start,
 	})
 }
 
-// AbsoluteRangeFilter returns a SUBSCRIPTION_FILTER parameter (§5.1.2,
+// AbsoluteRangeFilter returns a LOCATION_FILTER parameter (§5.1.2,
 // FilterAbsoluteRange): deliver objects from start through the end of group
 // (start.Group + endGroupDelta). endGroupDelta == 0 passes the remainder of the
 // start group only.
 func AbsoluteRangeFilter(start Location, endGroupDelta uint64) Parameter {
-	return SubscriptionFilterParam(&SubscriptionFilter{
+	return LocationFilterParam(&LocationFilter{
 		Type:          FilterAbsoluteRange,
 		StartLocation: start,
 		EndGroupDelta: endGroupDelta,
 	})
 }
 
-// ParseSubscriptionFilter deserialises a SubscriptionFilter from raw bytes
-// (e.g. the Bytes field of a SUBSCRIPTION_FILTER parameter).
-func ParseSubscriptionFilter(raw []byte) (*SubscriptionFilter, error) {
+// ParseLocationFilter deserialises a LocationFilter from raw bytes
+// (e.g. the Bytes field of a LOCATION_FILTER parameter).
+func ParseLocationFilter(raw []byte) (*LocationFilter, error) {
 	r := wire.NewReader(raw)
-	f := &SubscriptionFilter{}
+	f := &LocationFilter{}
 	if err := f.Parse(r); err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func ParseSubscriptionFilter(raw []byte) (*SubscriptionFilter, error) {
 // Per §5.1.2: "Only objects published or received via a subscription having
 // Locations greater than or equal to Start Location and strictly less than or
 // equal to the End Group (when present) pass the filter.".
-func (f *SubscriptionFilter) Matches(group, object uint64, largestGroup, largestObject uint64, hasLargest bool) bool {
+func (f *LocationFilter) Matches(group, object uint64, largestGroup, largestObject uint64, hasLargest bool) bool {
 	switch f.Type {
 	case FilterLargestObject:
 		var startGroup, startObject uint64

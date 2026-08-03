@@ -39,7 +39,7 @@ func (l *pipeListener) Dial() (session.Conn, error) {
 // clientBidi caps the dialled client's outbound bidi credit; serverBidi caps
 // the relay-side (server) conn's outbound bidi credit toward this client —
 // the latter is what bounds how many PUBLISH streams the relay can open to a
-// SUBSCRIBE_TRACKS subscriber, the PUBLISH_BLOCKED (§10.20) trigger. A
+// SUBSCRIBE_TRACKS subscriber, the PUBLISH_SKIPPED (§10.20) trigger. A
 // negative limit means unlimited.
 func (l *pipeListener) DialWithLimits(clientBidi, serverBidi int) (session.Conn, error) {
 	clientConn, serverConn := sessiontest.NewConnPairWithLimits(clientBidi, serverBidi)

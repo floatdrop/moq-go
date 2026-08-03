@@ -36,24 +36,23 @@ const (
 type RequestErrorCode uint64
 
 const (
-	RequestInternalError         RequestErrorCode = 0x0
-	RequestUnauthorized          RequestErrorCode = 0x1
-	RequestTimeout               RequestErrorCode = 0x2
-	RequestNotSupported          RequestErrorCode = 0x3
-	RequestMalformedAuthToken    RequestErrorCode = 0x4
-	RequestExpiredAuthToken      RequestErrorCode = 0x5
-	RequestGoingAway             RequestErrorCode = 0x6
-	RequestExcessiveLoad         RequestErrorCode = 0x9
-	RequestDoesNotExist          RequestErrorCode = 0x10
-	RequestInvalidRange          RequestErrorCode = 0x11
-	RequestMalformedTrack        RequestErrorCode = 0x12
-	RequestDuplicateSubscription RequestErrorCode = 0x19
-	RequestUninterested          RequestErrorCode = 0x20
-	RequestPrefixOverlap         RequestErrorCode = 0x30
-	RequestNamespaceTooLarge     RequestErrorCode = 0x31
-	RequestInvalidJoiningID      RequestErrorCode = 0x32
-	RequestUnsupportedExtension  RequestErrorCode = 0x33
-	RequestRedirect              RequestErrorCode = 0x34
+	RequestInternalError        RequestErrorCode = 0x0
+	RequestUnauthorized         RequestErrorCode = 0x1
+	RequestTimeout              RequestErrorCode = 0x2
+	RequestNotSupported         RequestErrorCode = 0x3
+	RequestMalformedAuthToken   RequestErrorCode = 0x4
+	RequestExpiredAuthToken     RequestErrorCode = 0x5
+	RequestGoingAway            RequestErrorCode = 0x6
+	RequestExcessiveLoad        RequestErrorCode = 0x9
+	RequestDoesNotExist         RequestErrorCode = 0x10
+	RequestInvalidRange         RequestErrorCode = 0x11
+	RequestMalformedTrack       RequestErrorCode = 0x12
+	RequestUninterested         RequestErrorCode = 0x20
+	RequestPrefixOverlap        RequestErrorCode = 0x30
+	RequestNamespaceTooLarge    RequestErrorCode = 0x31
+	RequestInvalidJoiningID     RequestErrorCode = 0x32
+	RequestUnsupportedExtension RequestErrorCode = 0x33
+	RequestRedirect             RequestErrorCode = 0x34
 )
 
 // PublishDoneCode is a PUBLISH_DONE status code (§10.11, IANA §15.10.3).

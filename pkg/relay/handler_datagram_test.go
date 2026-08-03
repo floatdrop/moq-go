@@ -111,7 +111,7 @@ func TestDatagram_FilterDropsBelowStart(t *testing.T) {
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
-			message.SubscriptionFilterParam(&message.SubscriptionFilter{
+			message.LocationFilterParam(&message.LocationFilter{
 				Type:          message.FilterAbsoluteStart,
 				StartLocation: message.Location{Group: 0, Object: 2},
 			}),

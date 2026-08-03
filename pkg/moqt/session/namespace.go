@@ -35,11 +35,11 @@ type NamespaceSubscription struct {
 
 // TrackSubscription is an established SUBSCRIBE_TRACKS request (§10.19). It
 // embeds the still-open request stream and carries the peer's REQUEST_OK.
-// Follow-up PUBLISH_BLOCKED notifications are read via
-// [TrackSubscription.ReadPublishBlocked].
+// Follow-up PUBLISH_SKIPPED notifications are read via
+// [TrackSubscription.ReadPublishSkipped].
 type TrackSubscription struct {
 	// Stream is the SUBSCRIBE_TRACKS request stream, still open to receive
-	// PUBLISH_BLOCKED follow-ups. Close it to end the subscription.
+	// PUBLISH_SKIPPED follow-ups. Close it to end the subscription.
 	Stream
 
 	// OK is the REQUEST_OK the peer replied with.
@@ -85,7 +85,7 @@ func (s *Session) SubscribeNamespace(
 // supplies TrackNamespacePrefix and optional Parameters.
 //
 // On success a [TrackSubscription] is returned whose embedded stream stays open
-// for PUBLISH_BLOCKED follow-ups (read via [TrackSubscription.ReadPublishBlocked]).
+// for PUBLISH_SKIPPED follow-ups (read via [TrackSubscription.ReadPublishSkipped]).
 // On REQUEST_ERROR the stream is closed and a *RequestRejectedError is returned.
 func (s *Session) SubscribeTracks(ctx context.Context, m *message.SubscribeTracks) (*TrackSubscription, error) {
 	return awaitRequestResponse(ctx, s, m,
@@ -122,20 +122,20 @@ type IncomingNamespaceSubscription struct {
 // returned by [Request.AcceptSubscribeTracks]. REQUEST_OK has been sent; the
 // publisher forwards matching tracks as PUBLISH requests on new streams (see
 // [Session.OpenPublish]) and signals stream exhaustion with
-// [IncomingTrackSubscription.WritePublishBlocked] (§6.1 / §10.20). Close it to
+// [IncomingTrackSubscription.WritePublishSkipped] (§6.1 / §10.20). Close it to
 // end the subscription.
 type IncomingTrackSubscription struct {
 	// Stream is the SUBSCRIBE_TRACKS request stream, still open for
-	// PUBLISH_BLOCKED follow-ups. Close it to end the subscription.
+	// PUBLISH_SKIPPED follow-ups. Close it to end the subscription.
 	Stream
 }
 
-// WritePublishBlocked sends a PUBLISH_BLOCKED (§6.1 / §10.20) on the
+// WritePublishSkipped sends a PUBLISH_SKIPPED (§6.1 / §10.20) on the
 // SUBSCRIBE_TRACKS stream, telling the subscriber the publisher could not open a
 // PUBLISH stream for the named track because it has no available bidirectional
 // streams. It is the publisher-side counterpart of
-// [TrackSubscription.ReadPublishBlocked].
-func (t *IncomingTrackSubscription) WritePublishBlocked(pb *message.PublishBlocked) error {
+// [TrackSubscription.ReadPublishSkipped].
+func (t *IncomingTrackSubscription) WritePublishSkipped(pb *message.PublishSkipped) error {
 	return message.Marshal(t.Stream, pb)
 }
 
@@ -176,35 +176,35 @@ func (r *Request) AcceptSubscribeNamespace() (*IncomingNamespaceSubscription, er
 
 // AcceptSubscribeTracks accepts an inbound SUBSCRIBE_TRACKS (§10.19), replies
 // REQUEST_OK, and returns an [IncomingTrackSubscription] for forwarding matching
-// PUBLISHes and sending PUBLISH_BLOCKED follow-ups — the accept-side counterpart
+// PUBLISHes and sending PUBLISH_SKIPPED follow-ups — the accept-side counterpart
 // of [Session.SubscribeTracks]. r.First MUST be a *message.SubscribeTracks.
 func (r *Request) AcceptSubscribeTracks() (*IncomingTrackSubscription, error) {
 	return acceptNamespaceRequest[*message.SubscribeTracks](r, "AcceptSubscribeTracks",
 		func(s Stream) *IncomingTrackSubscription { return &IncomingTrackSubscription{Stream: s} })
 }
 
-// ReadPublishBlocked reads the next follow-up message on this SUBSCRIBE_TRACKS
-// response stream and returns it as a PUBLISH_BLOCKED.
+// ReadPublishSkipped reads the next follow-up message on this SUBSCRIBE_TRACKS
+// response stream and returns it as a PUBLISH_SKIPPED.
 //
 // This is the subscriber side of §6.1 / §10.20. After the initial REQUEST_OK,
-// the publisher sends PUBLISH_BLOCKED on this stream when it cannot open a
+// the publisher sends PUBLISH_SKIPPED on this stream when it cannot open a
 // PUBLISH stream for a matching track because it has no available
 // bidirectional streams. (Forwarded PUBLISHes themselves arrive on their own
 // new bidi streams via [Session.AcceptRequest], not here.) The returned
 // message names the track the publisher couldn't push; the caller's sanctioned
 // recovery is to issue an explicit SUBSCRIBE for it.
 //
-// It blocks until a message arrives or the stream ends. A non-PUBLISH_BLOCKED
+// It blocks until a message arrives or the stream ends. A non-PUBLISH_SKIPPED
 // message is reported as an error, as is the underlying read error (e.g.
 // io.EOF when the publisher FINs the SUBSCRIBE_TRACKS stream).
-func (t *TrackSubscription) ReadPublishBlocked() (*message.PublishBlocked, error) {
+func (t *TrackSubscription) ReadPublishSkipped() (*message.PublishSkipped, error) {
 	m, err := message.Parse(t.Stream)
 	if err != nil {
 		return nil, fmt.Errorf("moqt/session: read SUBSCRIBE_TRACKS follow-up: %w", err)
 	}
-	pb, ok := m.(*message.PublishBlocked)
+	pb, ok := m.(*message.PublishSkipped)
 	if !ok {
-		return nil, fmt.Errorf("moqt/session: unexpected %s on SUBSCRIBE_TRACKS stream, want PUBLISH_BLOCKED", m.Type())
+		return nil, fmt.Errorf("moqt/session: unexpected %s on SUBSCRIBE_TRACKS stream, want PUBLISH_SKIPPED", m.Type())
 	}
 	return pb, nil
 }

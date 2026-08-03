@@ -9,7 +9,7 @@ import (
 // ErrNoStreamCredit is returned by [Conn.OpenStream] when a new outbound
 // bidirectional stream cannot be opened because the peer's stream limit
 // (QUIC MAX_STREAMS flow control) is currently exhausted. It is the signal
-// the PUBLISH_BLOCKED path keys on: rather than blocking until the peer
+// the PUBLISH_SKIPPED path keys on: rather than blocking until the peer
 // raises the limit (as a blocking open would), the caller detects the
 // exhausted condition and reacts. Adapters MUST map their transport's
 // stream-limit error onto this sentinel so callers can test for it with

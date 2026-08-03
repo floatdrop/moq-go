@@ -70,7 +70,7 @@ func NewSessionPair(tb testing.TB) (client, server *session.Session) {
 
 // NewConnPair returns two session.Conn endpoints wired together in-process.
 // Both endpoints have unlimited outbound bidirectional-stream credit; use
-// [NewConnPairWithLimits] to cap one or both sides for PUBLISH_BLOCKED-style
+// [NewConnPairWithLimits] to cap one or both sides for PUBLISH_SKIPPED-style
 // stream-exhaustion testing.
 func NewConnPair() (a, b session.Conn) {
 	return NewConnPairWithLimits(-1, -1)

@@ -177,8 +177,8 @@ func (h *sessionHandler) handleSubscribeTracks(
 	}
 
 	// Reply REQUEST_OK before registering, so the OK cannot race a
-	// PUBLISH_BLOCKED that a concurrent publisher's PUBLISH handler
-	// (emitPublishBlocked) may write to this stream once the entry is visible.
+	// PUBLISH_SKIPPED that a concurrent publisher's PUBLISH handler
+	// (emitPublishSkipped) may write to this stream once the entry is visible.
 	if err := req.Reply(&message.RequestOK{}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "SubscribeTracks REQUEST_OK write failed",
 			slog.String("err", err.Error()))
@@ -189,8 +189,8 @@ func (h *sessionHandler) handleSubscribeTracks(
 	defer h.names.UnregisterSubscriber(entry)
 
 	// REQUEST_OK acks go through entry.WriteMessage so they serialise with
-	// the PUBLISH_BLOCKED notifications concurrent PUBLISH handlers write
-	// to this stream (emitPublishBlocked).
+	// the PUBLISH_SKIPPED notifications concurrent PUBLISH handlers write
+	// to this stream (emitPublishSkipped).
 	h.serveNamespaceFollowups(ctx, req.Stream, entry.WriteMessage)
 }
 

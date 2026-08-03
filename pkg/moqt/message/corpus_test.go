@@ -36,7 +36,7 @@ func benchControlCorpus() []struct {
 	name string
 	msg  Message
 } {
-	filter := &SubscriptionFilter{Type: FilterLargestObject}
+	filter := &LocationFilter{Type: FilterLargestObject}
 	return []struct {
 		name string
 		msg  Message
@@ -46,7 +46,7 @@ func benchControlCorpus() []struct {
 			Namespace: benchNamespace,
 			Name:      benchTrackName,
 			Parameters: Parameters{
-				SubscriptionFilterParam(filter),
+				LocationFilterParam(filter),
 				SubscriberPriorityParam(128),
 			},
 		}},

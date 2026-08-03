@@ -95,7 +95,7 @@ func TestUpstreamSub_FilterRoundTrip(t *testing.T) {
 	if sub.GetFilter() != nil {
 		t.Fatal("initial filter not nil")
 	}
-	f := &message.SubscriptionFilter{Type: message.FilterLargestObject}
+	f := &message.LocationFilter{Type: message.FilterLargestObject}
 	sub.SetFilter(f)
 	if got := sub.GetFilter(); got != f {
 		t.Fatalf("GetFilter returned %v, want the installed pointer", got)
@@ -121,7 +121,7 @@ func TestDownstreamSub_AccessorsRoundTrip(t *testing.T) {
 			sub.Priority, sub.GroupOrder)
 	}
 
-	f := &message.SubscriptionFilter{
+	f := &message.LocationFilter{
 		Type:          message.FilterAbsoluteStart,
 		StartLocation: message.Location{Group: 5, Object: 3},
 	}

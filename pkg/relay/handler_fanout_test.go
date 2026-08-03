@@ -366,7 +366,7 @@ func TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup(t *testing.T) {
 
 // TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart is the
 // §5.1.2 filter
-// canonical filter test: a subscriber with SubscriptionFilter type
+// canonical filter test: a subscriber with LocationFilter type
 // AbsoluteStart {Group: 0, Object: 2} must only see objects whose absolute
 // Location is >= {0, 2}. Earlier objects are dropped pre-enqueue and the
 // outbound stream's ObjectIDDelta is re-encoded so the subscriber decodes
@@ -393,7 +393,7 @@ func TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart(t *testing.T) {
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
-			message.SubscriptionFilterParam(&message.SubscriptionFilter{
+			message.LocationFilterParam(&message.LocationFilter{
 				Type:          message.FilterAbsoluteStart,
 				StartLocation: message.Location{Group: 0, Object: 2},
 			}),
@@ -513,7 +513,7 @@ func TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange(t *testing.T) {
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
-			message.SubscriptionFilterParam(&message.SubscriptionFilter{
+			message.LocationFilterParam(&message.LocationFilter{
 				Type:          message.FilterAbsoluteRange,
 				StartLocation: message.Location{Group: 0, Object: 1},
 				EndGroupDelta: 0,
@@ -964,7 +964,7 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
-			message.SubscriptionFilterParam(&message.SubscriptionFilter{
+			message.LocationFilterParam(&message.LocationFilter{
 				Type: message.FilterLargestObject,
 			}),
 		},

@@ -148,15 +148,15 @@ func TestSubscribeTracksRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPublishBlockedRoundTrip(t *testing.T) {
-	publishBlocked := &PublishBlocked{
+func TestPublishSkippedRoundTrip(t *testing.T) {
+	publishBlocked := &PublishSkipped{
 		TrackNamespaceSuffix: wire.TrackNamespace{[]byte("example.com")},
 		TrackName:            []byte("blocked-track"),
 	}
 
 	w := wire.NewWriter(nil)
 	publishBlocked.Append(w)
-	got := &PublishBlocked{}
+	got := &PublishSkipped{}
 	if err := got.Parse(wire.NewReader(w.Bytes())); err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -260,9 +260,9 @@ func TestNamespaceDiscoveryMessageTypes(t *testing.T) {
 		t.Errorf("SubscribeTracks.Type(): got %d, want %d", subscribeTracks.Type(), TypeSubscribeTracks)
 	}
 
-	publishBlocked := &PublishBlocked{}
-	if publishBlocked.Type() != TypePublishBlocked {
-		t.Errorf("PublishBlocked.Type(): got %d, want %d", publishBlocked.Type(), TypePublishBlocked)
+	publishBlocked := &PublishSkipped{}
+	if publishBlocked.Type() != TypePublishSkipped {
+		t.Errorf("PublishSkipped.Type(): got %d, want %d", publishBlocked.Type(), TypePublishSkipped)
 	}
 }
 
@@ -320,16 +320,16 @@ func TestEmptyNamespaceRoundTrip(t *testing.T) {
 	}
 }
 
-func TestPublishBlockedEmptyTrackName(t *testing.T) {
+func TestPublishSkippedEmptyTrackName(t *testing.T) {
 	// Test with empty track name (edge case)
-	publishBlocked := &PublishBlocked{
+	publishBlocked := &PublishSkipped{
 		TrackNamespaceSuffix: wire.TrackNamespace{[]byte("test")},
 		TrackName:            []byte{},
 	}
 
 	w := wire.NewWriter(nil)
 	publishBlocked.Append(w)
-	got := &PublishBlocked{}
+	got := &PublishSkipped{}
 	if err := got.Parse(wire.NewReader(w.Bytes())); err != nil {
 		t.Fatalf("Parse: %v", err)
 	}

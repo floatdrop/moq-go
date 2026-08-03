@@ -11,14 +11,14 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
-// TestPublishBlocked_EmittedWhenSubscriberOutOfStreamCredit pins §6.1 / §10.20:
+// TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit pins §6.1 / §10.20:
 // when a SUBSCRIBE_TRACKS subscriber has no bidirectional-stream credit left,
 // the relay cannot open a PUBLISH stream for a newly-published matching track,
-// so it sends PUBLISH_BLOCKED on the SUBSCRIBE_TRACKS response stream instead.
+// so it sends PUBLISH_SKIPPED on the SUBSCRIBE_TRACKS response stream instead.
 // The message carries only the namespace suffix beyond the subscriber's prefix
 // (here prefix "video", published "video"/"cam7" → suffix "cam7") plus the
 // track name.
-func TestPublishBlocked_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
+func TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 	t.Parallel()
 	primary, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
@@ -47,42 +47,42 @@ func TestPublishBlocked_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 	}
 	defer pubStream.Close()
 
-	// The subscriber reads the PUBLISH_BLOCKED via the session helper that
+	// The subscriber reads the PUBLISH_SKIPPED via the session helper that
 	// implements the §6.1 subscriber role.
 	type result struct {
-		pb  *message.PublishBlocked
+		pb  *message.PublishSkipped
 		err error
 	}
 	res := make(chan result, 1)
 	go func() {
-		pb, err := subStream.ReadPublishBlocked()
+		pb, err := subStream.ReadPublishSkipped()
 		res <- result{pb, err}
 	}()
 
 	select {
 	case r := <-res:
 		if r.err != nil {
-			t.Fatalf("ReadPublishBlocked: %v", r.err)
+			t.Fatalf("ReadPublishSkipped: %v", r.err)
 		}
 		if len(r.pb.TrackNamespaceSuffix) != 1 || string(r.pb.TrackNamespaceSuffix[0]) != "cam7" {
-			t.Fatalf("PublishBlocked suffix = %v, want [cam7]", relaytest.FormatNamespace(r.pb.TrackNamespaceSuffix))
+			t.Fatalf("PublishSkipped suffix = %v, want [cam7]", relaytest.FormatNamespace(r.pb.TrackNamespaceSuffix))
 		}
 		if string(r.pb.TrackName) != "rtp" {
-			t.Fatalf("PublishBlocked TrackName = %q, want %q", r.pb.TrackName, "rtp")
+			t.Fatalf("PublishSkipped TrackName = %q, want %q", r.pb.TrackName, "rtp")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for PUBLISH_BLOCKED")
+		t.Fatal("timeout waiting for PUBLISH_SKIPPED")
 	}
 }
 
-// TestPublishBlocked_StickyAcrossRePublish pins the §6.1 MUST-NOT: once the
-// relay has sent PUBLISH_BLOCKED for a track, a later origin re-PUBLISH of the
+// TestPublishSkipped_StickyAcrossRePublish pins the §6.1 MUST-NOT: once the
+// relay has sent PUBLISH_SKIPPED for a track, a later origin re-PUBLISH of the
 // SAME track must NOT be auto-forwarded to that subscriber — not even when
 // stream credit might be available again — until the subscriber issues a
 // SUBSCRIBE. Here the first PUBLISH (credit 0) blocks; the publisher FINs; a
 // second PUBLISH of the same track must produce neither a PUBLISH nor a second
-// PUBLISH_BLOCKED on the subscriber's stream.
-func TestPublishBlocked_StickyAcrossRePublish(t *testing.T) {
+// PUBLISH_SKIPPED on the subscriber's stream.
+func TestPublishSkipped_StickyAcrossRePublish(t *testing.T) {
 	t.Parallel()
 	primary, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
@@ -108,11 +108,11 @@ func TestPublishBlocked_StickyAcrossRePublish(t *testing.T) {
 		return s
 	}
 
-	// First publication: blocked. Expect exactly one PUBLISH_BLOCKED.
+	// First publication: blocked. Expect exactly one PUBLISH_SKIPPED.
 	pubStream1 := pub()
 	got := relaytest.ReadNextMessage(t, subStream, time.After(2*time.Second))
-	if _, ok := got.(*message.PublishBlocked); !ok {
-		t.Fatalf("first publication: got %T, want *message.PublishBlocked", got)
+	if _, ok := got.(*message.PublishSkipped); !ok {
+		t.Fatalf("first publication: got %T, want *message.PublishSkipped", got)
 	}
 	// FIN the first publication so the relay's handlePublish returns and the
 	// upstream entry is torn down before we re-publish.
@@ -121,7 +121,7 @@ func TestPublishBlocked_StickyAcrossRePublish(t *testing.T) {
 
 	// Second publication of the SAME track. Per §6.1 nothing must reach the
 	// subscriber's SUBSCRIBE_TRACKS stream (no PUBLISH, no second
-	// PUBLISH_BLOCKED).
+	// PUBLISH_SKIPPED).
 	pubStream2 := pub()
 	defer pubStream2.Close()
 

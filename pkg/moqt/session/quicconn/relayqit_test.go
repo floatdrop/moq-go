@@ -168,8 +168,8 @@ func awaitPeerAndFetchCatalog(t *testing.T, sess *session.Session, selfID, wantI
 	ns := wire.Namespace("room", wantID)
 	subMsg := &message.Subscribe{
 		Namespace: ns, Name: []byte("catalog"),
-		Parameters: message.Parameters{message.SubscriptionFilterParam(
-			&message.SubscriptionFilter{Type: message.FilterLargestObject},
+		Parameters: message.Parameters{message.LocationFilterParam(
+			&message.LocationFilter{Type: message.FilterLargestObject},
 		)},
 	}
 	subStream, err := sess.Subscribe(t.Context(), subMsg)

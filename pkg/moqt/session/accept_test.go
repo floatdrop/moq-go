@@ -141,12 +141,12 @@ func TestAcceptNamespaceRequestsReplyOK(t *testing.T) {
 	})
 }
 
-// TestAcceptSubscribeTracksWritePublishBlocked checks the publisher-side
-// WritePublishBlocked round-trips to the subscriber's ReadPublishBlocked. The
-// server side runs in a goroutine so its REQUEST_OK and PUBLISH_BLOCKED writes
-// have the client's concurrent reads (SubscribeTracks, ReadPublishBlocked) to
+// TestAcceptSubscribeTracksWritePublishSkipped checks the publisher-side
+// WritePublishSkipped round-trips to the subscriber's ReadPublishSkipped. The
+// server side runs in a goroutine so its REQUEST_OK and PUBLISH_SKIPPED writes
+// have the client's concurrent reads (SubscribeTracks, ReadPublishSkipped) to
 // drain the synchronous sessiontest pipes.
-func TestAcceptSubscribeTracksWritePublishBlocked(t *testing.T) {
+func TestAcceptSubscribeTracksWritePublishSkipped(t *testing.T) {
 	t.Parallel()
 	client, server := openPair(t)
 	ctx := t.Context()
@@ -162,7 +162,7 @@ func TestAcceptSubscribeTracksWritePublishBlocked(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			return pub.WritePublishBlocked(&message.PublishBlocked{
+			return pub.WritePublishSkipped(&message.PublishSkipped{
 				TrackNamespaceSuffix: wire.Namespace("ns"),
 				TrackName:            []byte("blocked-track"),
 			})
@@ -177,12 +177,12 @@ func TestAcceptSubscribeTracksWritePublishBlocked(t *testing.T) {
 	}
 	defer ts.Close()
 
-	pb, err := ts.ReadPublishBlocked()
+	pb, err := ts.ReadPublishSkipped()
 	if err != nil {
-		t.Fatalf("ReadPublishBlocked: %v", err)
+		t.Fatalf("ReadPublishSkipped: %v", err)
 	}
 	if string(pb.TrackName) != "blocked-track" {
-		t.Errorf("PUBLISH_BLOCKED TrackName = %q, want %q", pb.TrackName, "blocked-track")
+		t.Errorf("PUBLISH_SKIPPED TrackName = %q, want %q", pb.TrackName, "blocked-track")
 	}
 	if err := <-srvErr; err != nil {
 		t.Fatalf("server: %v", err)

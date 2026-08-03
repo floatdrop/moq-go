@@ -304,7 +304,7 @@ func TestOpenPublish_SuccessDeliversPublish(t *testing.T) {
 }
 
 // TestOpenPublish_ExhaustedCreditReturnsErrNoStreamCredit pins the
-// PUBLISH_BLOCKED trigger: with the client's bidi credit used up, OpenPublish
+// PUBLISH_SKIPPED trigger: with the client's bidi credit used up, OpenPublish
 // returns session.ErrNoStreamCredit rather than blocking.
 func TestOpenPublish_ExhaustedCreditReturnsErrNoStreamCredit(t *testing.T) {
 	t.Parallel()

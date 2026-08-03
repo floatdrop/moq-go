@@ -86,7 +86,7 @@ func ExampleSession_Publish() {
 }
 
 // Subscribing to a track: send SUBSCRIBE, then read objects from the
-// uni-streams pulled by AcceptDataStream. The subscription filter (§5.1.2)
+// uni-streams pulled by AcceptDataStream. The location filter (§5.1.2)
 // decides where delivery starts; FilterLargestObject means "everything
 // strictly after the current live edge".
 func ExampleSession_Subscribe() {
@@ -365,7 +365,7 @@ func Example_endingAPublication() {
 // Reacting to stream exhaustion. A relay forwarding many tracks can't block,
 // so it uses the non-blocking OpenPublish. When the peer's stream limit is
 // exhausted it returns ErrNoStreamCredit WITHOUT consuming a Request ID, so
-// the caller can send PUBLISH_BLOCKED (§6.1, §10.20) and let the subscriber
+// the caller can send PUBLISH_SKIPPED (§6.1, §10.20) and let the subscriber
 // recover with an explicit SUBSCRIBE.
 func ExampleSession_OpenPublish() {
 	var sess *session.Session
@@ -379,7 +379,7 @@ func ExampleSession_OpenPublish() {
 		TrackAlias: sess.AllocOutboundTrackAlias(),
 	})
 	if errors.Is(err, session.ErrNoStreamCredit) {
-		_ = message.Marshal(subscribeTracksStream, &message.PublishBlocked{
+		_ = message.Marshal(subscribeTracksStream, &message.PublishSkipped{
 			TrackNamespaceSuffix: ns,
 			TrackName:            name,
 		})
@@ -391,16 +391,16 @@ func ExampleSession_OpenPublish() {
 	defer pubStream.Close()
 }
 
-// The subscriber reads PUBLISH_BLOCKED on the SUBSCRIBE_TRACKS response
+// The subscriber reads PUBLISH_SKIPPED on the SUBSCRIBE_TRACKS response
 // stream; the sanctioned recovery is an explicit SUBSCRIBE for the track.
-func ExampleTrackSubscription_ReadPublishBlocked() {
+func ExampleTrackSubscription_ReadPublishSkipped() {
 	var sub *session.TrackSubscription // returned by Session.SubscribeTracks
 
-	pb, err := sub.ReadPublishBlocked()
+	pb, err := sub.ReadPublishSkipped()
 	if err != nil {
 		return
 	}
-	fmt.Printf("PUBLISH_BLOCKED for track %q\n", pb.TrackName)
+	fmt.Printf("PUBLISH_SKIPPED for track %q\n", pb.TrackName)
 	// Recover: sess.Subscribe for (pb.TrackNamespaceSuffix, pb.TrackName).
 }
 
@@ -508,12 +508,12 @@ func ExampleSession_AcceptRequest() {
 			_ = sub
 		case *message.SubscribeTracks:
 			// AcceptSubscribeTracks replies REQUEST_OK; forward matching tracks as
-			// PUBLISHes and signal stream exhaustion with WritePublishBlocked.
+			// PUBLISHes and signal stream exhaustion with WritePublishSkipped.
 			tracks, err := req.AcceptSubscribeTracks()
 			if err != nil {
 				return
 			}
-			_ = tracks // tracks.WritePublishBlocked(...) on §6.1 stream exhaustion.
+			_ = tracks // tracks.WritePublishSkipped(...) on §6.1 stream exhaustion.
 		}
 	}
 }

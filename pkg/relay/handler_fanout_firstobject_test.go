@@ -151,12 +151,12 @@ func TestFanout_FirstObjectBitOnPlainForward(t *testing.T) {
 // as starting at the subgroup's origin.
 func TestFanout_FirstObjectBitClearedForFilteredHead(t *testing.T) {
 	t.Parallel()
-	filter := &message.SubscriptionFilter{
+	filter := &message.LocationFilter{
 		Type:          message.FilterAbsoluteStart,
 		StartLocation: message.Location{Group: 0, Object: 2},
 	}
 	pub, sub := firstObjectTopology(t,
-		message.Parameters{message.SubscriptionFilterParam(filter)})
+		message.Parameters{message.LocationFilterParam(filter)})
 
 	writeSubgroupObjects(t, pub, message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDImplicitZero, TrackAlias: 7, GroupID: 0,

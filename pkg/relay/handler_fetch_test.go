@@ -611,8 +611,8 @@ func TestFetch_JoiningFetchRelativeCurrentGroup(t *testing.T) {
 	subMsg := &message.Subscribe{
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
-		Parameters: message.Parameters{message.SubscriptionFilterParam(
-			&message.SubscriptionFilter{Type: message.FilterLargestObject},
+		Parameters: message.Parameters{message.LocationFilterParam(
+			&message.LocationFilter{Type: message.FilterLargestObject},
 		)},
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
@@ -687,8 +687,8 @@ func TestFetch_JoiningFetchAbsoluteFullHistory(t *testing.T) {
 	subMsg := &message.Subscribe{
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
-		Parameters: message.Parameters{message.SubscriptionFilterParam(
-			&message.SubscriptionFilter{Type: message.FilterLargestObject},
+		Parameters: message.Parameters{message.LocationFilterParam(
+			&message.LocationFilter{Type: message.FilterLargestObject},
 		)},
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)

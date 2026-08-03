@@ -27,7 +27,7 @@ const (
 	ParamFillTimeout             ParamID = 0x0A
 	ParamForward                 ParamID = 0x10
 	ParamSubscriberPriority      ParamID = 0x20
-	ParamSubscriptionFilter      ParamID = 0x21
+	ParamLocationFilter          ParamID = 0x21
 	ParamGroupOrder              ParamID = 0x22
 	ParamNewGroupRequest         ParamID = 0x32
 	ParamTrackNamespacePrefix    ParamID = 0x34
@@ -55,8 +55,8 @@ func (p ParamID) String() string {
 		return "FORWARD"
 	case ParamSubscriberPriority:
 		return "SUBSCRIBER_PRIORITY"
-	case ParamSubscriptionFilter:
-		return "SUBSCRIPTION_FILTER"
+	case ParamLocationFilter:
+		return "LOCATION_FILTER"
 	case ParamGroupOrder:
 		return "GROUP_ORDER"
 	case ParamNewGroupRequest:
@@ -92,7 +92,7 @@ var paramKinds = map[ParamID]ParamKind{
 	ParamFillTimeout:             KindVarint,
 	ParamForward:                 KindByte,
 	ParamSubscriberPriority:      KindByte,
-	ParamSubscriptionFilter:      KindBytes,
+	ParamLocationFilter:          KindBytes,
 	ParamGroupOrder:              KindByte,
 	ParamNewGroupRequest:         KindVarint,
 	ParamTrackNamespacePrefix:    KindBytes,
@@ -210,23 +210,23 @@ func SubscriberPriorityParam(priority uint8) Parameter {
 	return ByteParam(ParamSubscriberPriority, priority)
 }
 
-// SubscriptionFilterParam builds SUBSCRIPTION_FILTER (§10.2.9) from a typed
-// SubscriptionFilter. The filter is serialised to bytes and stored as a
+// LocationFilterParam builds LOCATION_FILTER (§10.2.9) from a typed
+// LocationFilter. The filter is serialised to bytes and stored as a
 // length-prefixed KindBytes parameter per §10.2.9.
-func SubscriptionFilterParam(f *SubscriptionFilter) Parameter {
-	return BytesParam(ParamSubscriptionFilter, f.Bytes())
+func LocationFilterParam(f *LocationFilter) Parameter {
+	return BytesParam(ParamLocationFilter, f.Bytes())
 }
 
-// SubscriptionFilterFromParam extracts and parses a SUBSCRIPTION_FILTER
+// LocationFilterFromParam extracts and parses a LOCATION_FILTER
 // parameter from a Parameters list. Returns nil, nil if the parameter is
 // absent (unfiltered subscription). Returns an error if the parameter is
 // present but malformed.
-func SubscriptionFilterFromParam(ps Parameters) (*SubscriptionFilter, error) {
-	p, ok := ps.Find(ParamSubscriptionFilter)
+func LocationFilterFromParam(ps Parameters) (*LocationFilter, error) {
+	p, ok := ps.Find(ParamLocationFilter)
 	if !ok {
 		return nil, nil //nolint:nilnil // absent optional parameter: (nil filter, nil error) is the documented contract.
 	}
-	return ParseSubscriptionFilter(p.Bytes)
+	return ParseLocationFilter(p.Bytes)
 }
 
 // GroupOrder is the value of the GROUP_ORDER parameter (§10.2.8). The spec

@@ -41,11 +41,11 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 
 	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 
-	// §6.1 recovery: if this session previously received a PUBLISH_BLOCKED for
+	// §6.1 recovery: if this session previously received a PUBLISH_SKIPPED for
 	// this track (on one of its SUBSCRIBE_TRACKS subscriptions), issuing a
 	// SUBSCRIBE is the sanctioned way to lift the block — clear it so future
 	// PUBLISH forwards for the track are permitted again.
-	h.names.ClearBlockedForSession(h.sess, fullName.Key())
+	h.names.ClearSkippedForSession(h.sess, fullName.Key())
 
 	// §10.2.13: a NEW_GROUP_REQUEST on the SUBSCRIBE either rides the upstream
 	// SUBSCRIBE we are about to open (rule 1, no Established upstream) or, when
@@ -60,7 +60,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 
 	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, req.Stream, alias)
 	if err := installSubscribeParams(sub, msg.Parameters); err != nil {
-		// §5.1.2 says a malformed SUBSCRIPTION_FILTER is a session-level
+		// §5.1.2 says a malformed LOCATION_FILTER is a session-level
 		// PROTOCOL_VIOLATION. We scope the failure to this request for
 		// now — unrelated subscriptions on the same session shouldn't
 		// die because one peer sent a bad filter.
@@ -458,13 +458,13 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 ) (*registry.TrackEntry, bool, error) {
 	// §9.4 Largest Object filter — keeps the upstream subscription stable
 	// as downstream subscribers come and go with varying filters.
-	filter := &message.SubscriptionFilter{Type: message.FilterLargestObject}
+	filter := &message.LocationFilter{Type: message.FilterLargestObject}
 
 	// Bind the SUBSCRIBE message so we can read back the Request ID the
 	// session assigned (Subscribe mutates m.RequestID via AllocRequestID).
 	// The relay reuses that ID when it later sends an upstream
 	// REQUEST_UPDATE for §9.2 Forward propagation.
-	params := message.Parameters{message.SubscriptionFilterParam(filter)}
+	params := message.Parameters{message.LocationFilterParam(filter)}
 	params = append(params, extra...)
 	subMsg := &message.Subscribe{
 		Namespace:  fullName.Namespace,
@@ -562,7 +562,7 @@ func hasEstablishedUpstream(entry *registry.TrackEntry) bool {
 }
 
 // installSubscribeParams extracts the per-subscription policy fields from the
-// SUBSCRIBE parameters (§10.2) and records them on sub: SUBSCRIPTION_FILTER
+// SUBSCRIBE parameters (§10.2) and records them on sub: LOCATION_FILTER
 // (§10.2.9), SUBSCRIBER_PRIORITY (§10.2.7, advisory), GROUP_ORDER (§10.2.8).
 //
 // The §5.1.2 / §9.4 LargestObject snapshot is intentionally NOT taken here — the
@@ -570,9 +570,9 @@ func hasEstablishedUpstream(entry *registry.TrackEntry) bool {
 // [registry.TrackRegistry.AddDownstreamSnapshotLargest] and applies it with
 // [registry.DownstreamSub.SetLargestAtSubscribe].
 func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) error {
-	filter, err := message.SubscriptionFilterFromParam(ps)
+	filter, err := message.LocationFilterFromParam(ps)
 	if err != nil {
-		return fmt.Errorf("subscription filter: %w", err)
+		return fmt.Errorf("location filter: %w", err)
 	}
 	if filter != nil {
 		if err := filter.Validate(); err != nil {

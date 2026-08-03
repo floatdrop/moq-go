@@ -27,7 +27,7 @@ import (
 // [Subscription.Terminate]).
 //
 // The state intentionally does NOT track per-object forwarding decisions.
-// Those are fanout concerns expressed via the [message.SubscriptionFilter]
+// Those are fanout concerns expressed via the [message.LocationFilter]
 // / Forward-state fields on the concrete [UpstreamSub] / [DownstreamSub]
 // structs.
 type SubState int
@@ -194,7 +194,7 @@ type UpstreamSub struct {
 	// SUBSCRIBE. nil means "filter unset" (i.e. the subscription has not
 	// been sent yet); once set, the value is owned by the subscription
 	// and must not be mutated externally.
-	Filter *message.SubscriptionFilter
+	Filter *message.LocationFilter
 
 	// FetchCapable marks an upstream the relay reached via an on-demand
 	// SUBSCRIBE (a relay/origin, set in subscribeUpstream) — one expected to
@@ -303,14 +303,14 @@ func NewUpstreamSub(
 
 // SetFilter installs the upstream filter. Callers must not mutate the filter
 // after handing it over.
-func (u *UpstreamSub) SetFilter(f *message.SubscriptionFilter) {
+func (u *UpstreamSub) SetFilter(f *message.LocationFilter) {
 	u.mu.Lock()
 	u.Filter = f
 	u.mu.Unlock()
 }
 
 // GetFilter returns the currently installed filter (or nil).
-func (u *UpstreamSub) GetFilter() *message.SubscriptionFilter {
+func (u *UpstreamSub) GetFilter() *message.LocationFilter {
 	u.mu.RLock()
 	defer u.mu.RUnlock()
 	return u.Filter
@@ -346,7 +346,7 @@ type DownstreamSub struct {
 	// consults it on every object to decide whether to forward. nil
 	// means "no filter installed" — the relay treats the subscription
 	// as unfiltered (delivers every object on the track).
-	Filter *message.SubscriptionFilter
+	Filter *message.LocationFilter
 
 	// LargestAtSubscribe is the largest object the relay had observed on
 	// this track at the moment the SUBSCRIBE was accepted, per §5.1.2 /
@@ -406,14 +406,14 @@ func NewDownstreamSub(id uint64, sess *session.Session, stream session.Stream, t
 
 // SetFilter installs the downstream filter. Callers must not mutate the
 // filter after handing it over.
-func (d *DownstreamSub) SetFilter(f *message.SubscriptionFilter) {
+func (d *DownstreamSub) SetFilter(f *message.LocationFilter) {
 	d.mu.Lock()
 	d.Filter = f
 	d.mu.Unlock()
 }
 
 // GetFilter returns the currently installed filter (or nil).
-func (d *DownstreamSub) GetFilter() *message.SubscriptionFilter {
+func (d *DownstreamSub) GetFilter() *message.LocationFilter {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.Filter
@@ -557,7 +557,7 @@ func (d *DownstreamSub) ForwardDecision(group, object uint64) (forward, groupExh
 // A group equal to the Start Location's group is NOT out of range even when
 // the Start Location's Object rose — objects at or above it still pass, so the
 // stream stays relevant and object-level filtering handles the boundary.
-func GroupOutOfRange(group uint64, f *message.SubscriptionFilter) bool {
+func GroupOutOfRange(group uint64, f *message.LocationFilter) bool {
 	if f == nil {
 		return false
 	}

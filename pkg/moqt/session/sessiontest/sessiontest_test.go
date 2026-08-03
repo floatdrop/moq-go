@@ -25,7 +25,7 @@ func TestOpenStream_UnlimitedByDefault(t *testing.T) {
 	}
 }
 
-// TestOpenStream_ExhaustsCreditThenErrNoStreamCredit pins the PUBLISH_BLOCKED
+// TestOpenStream_ExhaustsCreditThenErrNoStreamCredit pins the PUBLISH_SKIPPED
 // trigger: once the per-endpoint bidi cap is used up, OpenStream returns
 // session.ErrNoStreamCredit rather than succeeding or blocking.
 func TestOpenStream_ExhaustsCreditThenErrNoStreamCredit(t *testing.T) {

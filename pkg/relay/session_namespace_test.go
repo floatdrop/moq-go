@@ -225,7 +225,7 @@ func dialAnotherClient(tb testing.TB, existing *session.Session) *session.Sessio
 // dialAnotherClientWithLimits is [dialAnotherClient] with explicit bidi-stream
 // credit caps on the new connection. serverBidi bounds how many bidi streams
 // the relay can open toward this client — set it low to force the relay's
-// PUBLISH fan-out into the PUBLISH_BLOCKED (§10.20) path.
+// PUBLISH fan-out into the PUBLISH_SKIPPED (§10.20) path.
 func dialAnotherClientWithLimits(t *testing.T, existing *session.Session, clientBidi, serverBidi int) *session.Session {
 	t.Helper()
 	pipeListenerMu.Lock()

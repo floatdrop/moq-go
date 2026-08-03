@@ -35,7 +35,7 @@ const (
 	TypeNamespaceDone      Type = 0x0E
 	TypeSubscribeNamespace Type = 0x50
 	TypeSubscribeTracks    Type = 0x51
-	TypePublishBlocked     Type = 0x0F
+	TypePublishSkipped     Type = 0x0F
 )
 
 // Message is the interface implemented by all in-scope MoQT control- and
@@ -159,8 +159,8 @@ func newMessage(t Type) (Message, error) {
 		return &SubscribeNamespace{}, nil
 	case TypeSubscribeTracks:
 		return &SubscribeTracks{}, nil
-	case TypePublishBlocked:
-		return &PublishBlocked{}, nil
+	case TypePublishSkipped:
+		return &PublishSkipped{}, nil
 	}
 	return nil, ErrUnknownType(t)
 }
@@ -202,8 +202,8 @@ func (t Type) String() string {
 		return "SUBSCRIBE_NAMESPACE"
 	case TypeSubscribeTracks:
 		return "SUBSCRIBE_TRACKS"
-	case TypePublishBlocked:
-		return "PUBLISH_BLOCKED"
+	case TypePublishSkipped:
+		return "PUBLISH_SKIPPED"
 	}
 	return fmt.Sprintf("Type(%#x)", uint64(t))
 }

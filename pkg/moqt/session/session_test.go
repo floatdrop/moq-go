@@ -139,12 +139,6 @@ func TestGoawayRoundTrip(t *testing.T) {
 	if string(g.NewSessionURI) != "moqt://relay-2.example/" {
 		t.Errorf("NewSessionURI = %q", g.NewSessionURI)
 	}
-	if !g.HasRequestID {
-		t.Error("control-stream GOAWAY missing Request ID")
-	}
-	if g.RequestID != 0 {
-		t.Errorf("server-emitted watermark = %d, want 0", g.RequestID)
-	}
 }
 
 // TestOnGoawayFiresOnArrival verifies that a handler registered before the
@@ -240,74 +234,6 @@ func TestOnGoawayFiresOnce(t *testing.T) {
 	}
 }
 
-// TestGoawayWatermarkAdvancesAfterAcceptRequest verifies that after the server
-// accepts inbound requests, SendGoaway reports a watermark of
-// peerRequestIDMax + 2 (the next unprocessed peer Request ID) rather than the
-// per-role minimum. §10.4: "The Request ID field contains the smallest
-// Request ID that was not or might not have been processed.".
-func TestGoawayWatermarkAdvancesAfterAcceptRequest(t *testing.T) {
-	client, server := openPair(t)
-
-	// Client sends two SUBSCRIBE requests (Request IDs 0 and 2).
-	// We keep the client streams so the bidi pipes don't block.
-	var wg sync.WaitGroup
-	var streams [2]session.Stream
-	wg.Go(func() {
-		for i := range 2 {
-			req, err := server.AcceptRequest(t.Context())
-			if err != nil {
-				t.Errorf("server AcceptRequest %d: %v", i, err)
-				return
-			}
-			// Cancel the request stream (both directions) so neither side blocks.
-			req.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
-			req.Stream.CancelWrite(uint64(moqt.StreamResetCancelled))
-		}
-	})
-	wg.Go(func() {
-		for i := range 2 {
-			sub := &message.Subscribe{RequestID: client.AllocRequestID()}
-			s, err := session.OpenRequestForTest(client, sub)
-			if err != nil {
-				t.Errorf("client OpenRequest %d: %v", i, err)
-				return
-			}
-			streams[i] = s
-		}
-	})
-	wg.Wait()
-
-	// Clean up client streams.
-	for _, s := range streams {
-		if s != nil {
-			s.CancelRead(uint64(moqt.StreamResetCancelled))
-			s.CancelWrite(uint64(moqt.StreamResetCancelled))
-		}
-	}
-
-	// Server sends GOAWAY. The watermark should be 4 (max seen = 2, + 2).
-	if err := server.SendGoaway(1*time.Second, ""); err != nil {
-		t.Fatalf("server SendGoaway: %v", err)
-	}
-
-	select {
-	case <-client.GoawayReceived():
-	case <-time.After(time.Second):
-		t.Fatal("client never received GOAWAY")
-	}
-	g := client.PeerGoaway()
-	if g == nil {
-		t.Fatal("PeerGoaway returned nil")
-	}
-	if !g.HasRequestID {
-		t.Fatal("GOAWAY missing Request ID")
-	}
-	// Client sent IDs 0 and 2; server saw max=2, so watermark = 2+2 = 4.
-	if g.RequestID != 4 {
-		t.Errorf("GOAWAY watermark = %d, want 4", g.RequestID)
-	}
-}
-
 func TestSendGoawayTwiceRejected(t *testing.T) {
 	_, server := openPair(t)
 
@@ -325,7 +251,7 @@ func TestDuplicateGoawayClosesPeerSession(t *testing.T) {
 	// Bypass the SendGoaway guard via the test-only SendControl export to
 	// push two GOAWAYs through the outbound channel directly. The peer must
 	// terminate the session on the second one (§10.4).
-	g := &message.Goaway{Timeout: 100, HasRequestID: true, RequestID: 0}
+	g := &message.Goaway{Timeout: 100}
 	if err := session.SendControl(server, g); err != nil {
 		t.Fatalf("first sendControl: %v", err)
 	}

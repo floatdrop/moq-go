@@ -136,7 +136,7 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 // [ErrNoStreamCredit] and consumes NO Request ID — the ID is allocated only
 // after the stream is successfully opened (see [Session.openAllocRequest]), so
 // a blocked attempt leaves the session's Request ID sequence untouched. This
-// lets the caller react to an exhausted limit by sending PUBLISH_BLOCKED (§6.1,
+// lets the caller react to an exhausted limit by sending PUBLISH_SKIPPED (§6.1,
 // §10.20) instead. On success it assigns m.RequestID, writes the PUBLISH as the
 // stream's first message, and returns the still-open bidi stream so the caller
 // can read the peer's REQUEST_OK / REQUEST_ERROR and send follow-ups (subgroup

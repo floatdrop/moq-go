@@ -99,13 +99,13 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 			// SUBSCRIBE_TRACKS holders.
 			continue
 		}
-		// §6.1: once we've sent PUBLISH_BLOCKED for a track, we MUST NOT send
+		// §6.1: once we've sent PUBLISH_SKIPPED for a track, we MUST NOT send
 		// a PUBLISH for it to that subscriber again — even on a later origin
 		// re-PUBLISH — until the subscriber issues a SUBSCRIBE (which clears
 		// the entry, see handleSubscribe). Skip such subscribers without
 		// consuming stream credit.
-		if h.names.IsBlocked(sub, fullName.Key()) {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH forward suppressed: track blocked for subscriber",
+		if h.names.IsSkipped(sub, fullName.Key()) {
+			h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH forward suppressed: track skipped for subscriber",
 				slog.String("name", string(msg.Name)))
 			continue
 		}
@@ -117,16 +117,16 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 			TrackProperties: msg.TrackProperties,
 		}
 		// OpenPublish is non-blocking (§6.1): if the subscriber's stream
-		// limit is exhausted it returns ErrNoStreamCredit — the PUBLISH_BLOCKED
+		// limit is exhausted it returns ErrNoStreamCredit — the PUBLISH_SKIPPED
 		// trigger handled below.
 		pubStream, err := sub.Session.OpenPublish(fwd)
 		if err != nil {
 			if errors.Is(err, session.ErrNoStreamCredit) {
 				// §6.1 / §10.20: no bidi-stream credit to open the PUBLISH
-				// stream — tell the subscriber with PUBLISH_BLOCKED on its
-				// SUBSCRIBE_TRACKS stream and record the track as blocked so
+				// stream — tell the subscriber with PUBLISH_SKIPPED on its
+				// SUBSCRIBE_TRACKS stream and record the track as skipped so
 				// we honour the §6.1 MUST-NOT on any later re-PUBLISH.
-				h.emitPublishBlocked(ctx, sub, fullName)
+				h.emitPublishSkipped(ctx, sub, fullName)
 				continue
 			}
 			h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH forward failed",
@@ -148,36 +148,36 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	}
 }
 
-// emitPublishBlocked sends a PUBLISH_BLOCKED (§10.20) to sub for the track
-// fullName and records the track as blocked for that subscriber. It is the
+// emitPublishSkipped sends a PUBLISH_SKIPPED (§10.20) to sub for the track
+// fullName and records the track as skipped for that subscriber. It is the
 // §6.1 response to an exhausted bidi-stream limit: the relay cannot open the
 // PUBLISH stream, so it tells the subscriber on its SUBSCRIBE_TRACKS response
 // stream and MUST NOT forward a PUBLISH for that track again until the
 // subscriber issues a SUBSCRIBE (see [sessionHandler.handleSubscribe], which
-// calls [registry.NamespaceRegistry.ClearBlockedForSession]).
+// calls [registry.NamespaceRegistry.ClearSkippedForSession]).
 //
 // Per §10.20 the message carries only the namespace suffix beyond the
 // subscriber's SUBSCRIBE_TRACKS prefix; we strip the prefix the same way
 // [namespaceMessageFor] does.
-func (h *sessionHandler) emitPublishBlocked(
+func (h *sessionHandler) emitPublishSkipped(
 	ctx context.Context,
 	sub *registry.SubscriberEntry,
 	fullName track.FullTrackName,
 ) {
 	suffix := fullName.Namespace[len(sub.Prefix):]
-	blocked := &message.PublishBlocked{
+	skipped := &message.PublishSkipped{
 		TrackNamespaceSuffix: append(wire.TrackNamespace(nil), suffix...),
 		TrackName:            fullName.Name,
 	}
-	if err := sub.WriteMessage(blocked); err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH_BLOCKED write failed",
+	if err := sub.WriteMessage(skipped); err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH_SKIPPED write failed",
 			slog.String("err", err.Error()))
 		return
 	}
 	// Record the prohibition only after a successful write — if the write
-	// failed the subscriber never learned it was blocked, so we shouldn't
+	// failed the subscriber never learned it was skipped, so we shouldn't
 	// suppress future forwards on its behalf.
-	h.names.MarkBlocked(sub, fullName.Key())
-	h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH_BLOCKED sent",
+	h.names.MarkSkipped(sub, fullName.Key())
+	h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH_SKIPPED sent",
 		slog.String("name", string(fullName.Name)))
 }

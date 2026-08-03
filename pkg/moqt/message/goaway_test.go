@@ -5,20 +5,17 @@ import (
 	"testing"
 )
 
-func TestGoawayControlStreamRoundTrip(t *testing.T) {
+func TestGoawayRoundTrip(t *testing.T) {
 	roundtrip(t, &Goaway{
 		NewSessionURI: []byte("moqt://relay-2.example/path"),
 		Timeout:       5000,
-		HasRequestID:  true,
-		RequestID:     42,
 	})
 }
 
-func TestGoawayRequestStreamRoundTrip(t *testing.T) {
+func TestGoawayEmptyURIRoundTrip(t *testing.T) {
 	roundtrip(t, &Goaway{
 		NewSessionURI: nil,
 		Timeout:       1000,
-		HasRequestID:  false,
 	})
 }
 

@@ -30,39 +30,39 @@ func TestFilterTypeString(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SubscriptionFilter round-trip (Append / Parse)
+// LocationFilter round-trip (Append / Parse)
 // ---------------------------------------------------------------------------
 
-func TestSubscriptionFilterRoundTrip(t *testing.T) {
+func TestLocationFilterRoundTrip(t *testing.T) {
 	tests := []struct {
 		name   string
-		filter SubscriptionFilter
+		filter LocationFilter
 	}{
 		{
 			name:   "NextGroupStart",
-			filter: SubscriptionFilter{Type: FilterNextGroupStart},
+			filter: LocationFilter{Type: FilterNextGroupStart},
 		},
 		{
 			name:   "LargestObject",
-			filter: SubscriptionFilter{Type: FilterLargestObject},
+			filter: LocationFilter{Type: FilterLargestObject},
 		},
 		{
 			name: "AbsoluteStart zero",
-			filter: SubscriptionFilter{
+			filter: LocationFilter{
 				Type:          FilterAbsoluteStart,
 				StartLocation: Location{Group: 0, Object: 0},
 			},
 		},
 		{
 			name: "AbsoluteStart non-zero",
-			filter: SubscriptionFilter{
+			filter: LocationFilter{
 				Type:          FilterAbsoluteStart,
 				StartLocation: Location{Group: 42, Object: 7},
 			},
 		},
 		{
 			name: "AbsoluteRange delta zero",
-			filter: SubscriptionFilter{
+			filter: LocationFilter{
 				Type:          FilterAbsoluteRange,
 				StartLocation: Location{Group: 10, Object: 3},
 				EndGroupDelta: 0,
@@ -70,7 +70,7 @@ func TestSubscriptionFilterRoundTrip(t *testing.T) {
 		},
 		{
 			name: "AbsoluteRange delta non-zero",
-			filter: SubscriptionFilter{
+			filter: LocationFilter{
 				Type:          FilterAbsoluteRange,
 				StartLocation: Location{Group: 5, Object: 0},
 				EndGroupDelta: 10,
@@ -86,7 +86,7 @@ func TestSubscriptionFilterRoundTrip(t *testing.T) {
 
 			// Deserialize
 			r := wire.NewReader(w.Bytes())
-			var got SubscriptionFilter
+			var got LocationFilter
 			if err := got.Parse(r); err != nil {
 				t.Fatalf("Parse() error: %v", err)
 			}
@@ -105,16 +105,16 @@ func TestSubscriptionFilterRoundTrip(t *testing.T) {
 	}
 }
 
-func TestSubscriptionFilterBytesRoundTrip(t *testing.T) {
-	f := &SubscriptionFilter{
+func TestLocationFilterBytesRoundTrip(t *testing.T) {
+	f := &LocationFilter{
 		Type:          FilterAbsoluteRange,
 		StartLocation: Location{Group: 3, Object: 1},
 		EndGroupDelta: 5,
 	}
 	raw := f.Bytes()
-	got, err := ParseSubscriptionFilter(raw)
+	got, err := ParseLocationFilter(raw)
 	if err != nil {
-		t.Fatalf("ParseSubscriptionFilter() error: %v", err)
+		t.Fatalf("ParseLocationFilter() error: %v", err)
 	}
 	if got.Type != f.Type || got.StartLocation != f.StartLocation || got.EndGroupDelta != f.EndGroupDelta {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", got, f)
@@ -125,32 +125,32 @@ func TestSubscriptionFilterBytesRoundTrip(t *testing.T) {
 // Parse error cases
 // ---------------------------------------------------------------------------
 
-func TestSubscriptionFilterParseUnknownType(t *testing.T) {
+func TestLocationFilterParseUnknownType(t *testing.T) {
 	var w wire.Writer
 	w.Varint(0xFF) // unknown filter type
 	r := wire.NewReader(w.Bytes())
-	var f SubscriptionFilter
+	var f LocationFilter
 	if err := f.Parse(r); err == nil {
 		t.Fatal("Parse() expected error for unknown filter type, got nil")
 	}
 }
 
-func TestSubscriptionFilterParseShortBuffer(t *testing.T) {
+func TestLocationFilterParseShortBuffer(t *testing.T) {
 	// AbsoluteStart type but no location bytes
 	var w wire.Writer
 	w.Varint(uint64(FilterAbsoluteStart))
 	r := wire.NewReader(w.Bytes())
-	var f SubscriptionFilter
+	var f LocationFilter
 	if err := f.Parse(r); err == nil {
 		t.Fatal("Parse() expected error for short buffer, got nil")
 	}
 }
 
-func TestSubscriptionFilterParseAbsoluteRangeOverflow(t *testing.T) {
+func TestLocationFilterParseAbsoluteRangeOverflow(t *testing.T) {
 	// Overflow via Parse() is impossible: QUIC varints max at 2^62-1, so
 	// StartGroup + EndGroupDelta ≤ 2*(2^62-1) = 2^63-2, which never exceeds
 	// 2^64-1. Test Validate() directly with in-memory values that do overflow.
-	f := &SubscriptionFilter{
+	f := &LocationFilter{
 		Type:          FilterAbsoluteRange,
 		StartLocation: Location{Group: math.MaxUint64},
 		EndGroupDelta: 1,
@@ -164,30 +164,30 @@ func TestSubscriptionFilterParseAbsoluteRangeOverflow(t *testing.T) {
 // Validate
 // ---------------------------------------------------------------------------
 
-func TestSubscriptionFilterValidate(t *testing.T) {
+func TestLocationFilterValidate(t *testing.T) {
 	tests := []struct {
 		name        string
-		filter      SubscriptionFilter
+		filter      LocationFilter
 		expectError bool
 	}{
 		{
 			name:        "NextGroupStart valid",
-			filter:      SubscriptionFilter{Type: FilterNextGroupStart},
+			filter:      LocationFilter{Type: FilterNextGroupStart},
 			expectError: false,
 		},
 		{
 			name:        "LargestObject valid",
-			filter:      SubscriptionFilter{Type: FilterLargestObject},
+			filter:      LocationFilter{Type: FilterLargestObject},
 			expectError: false,
 		},
 		{
 			name:        "AbsoluteStart valid",
-			filter:      SubscriptionFilter{Type: FilterAbsoluteStart, StartLocation: Location{Group: 5, Object: 3}},
+			filter:      LocationFilter{Type: FilterAbsoluteStart, StartLocation: Location{Group: 5, Object: 3}},
 			expectError: false,
 		},
 		{
 			name: "AbsoluteRange valid delta zero",
-			filter: SubscriptionFilter{
+			filter: LocationFilter{
 				Type:          FilterAbsoluteRange,
 				StartLocation: Location{Group: 10},
 				EndGroupDelta: 0,
@@ -196,7 +196,7 @@ func TestSubscriptionFilterValidate(t *testing.T) {
 		},
 		{
 			name: "AbsoluteRange valid delta non-zero",
-			filter: SubscriptionFilter{
+			filter: LocationFilter{
 				Type:          FilterAbsoluteRange,
 				StartLocation: Location{Group: 10},
 				EndGroupDelta: 5,
@@ -206,7 +206,7 @@ func TestSubscriptionFilterValidate(t *testing.T) {
 		{
 			// StartGroup = MaxUint64, EndGroupDelta = 1 → addition overflows uint64.
 			name: "AbsoluteRange overflow",
-			filter: SubscriptionFilter{
+			filter: LocationFilter{
 				Type:          FilterAbsoluteRange,
 				StartLocation: Location{Group: math.MaxUint64},
 				EndGroupDelta: 1,
@@ -215,7 +215,7 @@ func TestSubscriptionFilterValidate(t *testing.T) {
 		},
 		{
 			name:        "unknown type",
-			filter:      SubscriptionFilter{Type: FilterType(0x99)},
+			filter:      LocationFilter{Type: FilterType(0x99)},
 			expectError: true,
 		},
 	}
@@ -237,8 +237,8 @@ func TestSubscriptionFilterValidate(t *testing.T) {
 // EndGroup
 // ---------------------------------------------------------------------------
 
-func TestSubscriptionFilterEndGroup(t *testing.T) {
-	f := SubscriptionFilter{
+func TestLocationFilterEndGroup(t *testing.T) {
+	f := LocationFilter{
 		Type:          FilterAbsoluteRange,
 		StartLocation: Location{Group: 10},
 		EndGroupDelta: 5,
@@ -247,7 +247,7 @@ func TestSubscriptionFilterEndGroup(t *testing.T) {
 		t.Errorf("EndGroup() = %d, want 15", got)
 	}
 
-	f2 := SubscriptionFilter{
+	f2 := LocationFilter{
 		Type:          FilterAbsoluteRange,
 		StartLocation: Location{Group: 7},
 		EndGroupDelta: 0,
@@ -261,8 +261,8 @@ func TestSubscriptionFilterEndGroup(t *testing.T) {
 // Matches
 // ---------------------------------------------------------------------------
 
-func TestSubscriptionFilterMatchesLargestObject(t *testing.T) {
-	f := &SubscriptionFilter{Type: FilterLargestObject}
+func TestLocationFilterMatchesLargestObject(t *testing.T) {
+	f := &LocationFilter{Type: FilterLargestObject}
 
 	// No content yet → start at {0, 0}
 	if !f.Matches(0, 0, 0, 0, false) {
@@ -292,8 +292,8 @@ func TestSubscriptionFilterMatchesLargestObject(t *testing.T) {
 	}
 }
 
-func TestSubscriptionFilterMatchesNextGroupStart(t *testing.T) {
-	f := &SubscriptionFilter{Type: FilterNextGroupStart}
+func TestLocationFilterMatchesNextGroupStart(t *testing.T) {
+	f := &LocationFilter{Type: FilterNextGroupStart}
 
 	// No content yet → start at {0, 0}
 	if !f.Matches(0, 0, 0, 0, false) {
@@ -317,8 +317,8 @@ func TestSubscriptionFilterMatchesNextGroupStart(t *testing.T) {
 	}
 }
 
-func TestSubscriptionFilterMatchesAbsoluteStart(t *testing.T) {
-	f := &SubscriptionFilter{
+func TestLocationFilterMatchesAbsoluteStart(t *testing.T) {
+	f := &LocationFilter{
 		Type:          FilterAbsoluteStart,
 		StartLocation: Location{Group: 5, Object: 3},
 	}
@@ -345,14 +345,14 @@ func TestSubscriptionFilterMatchesAbsoluteStart(t *testing.T) {
 	}
 
 	// {0,0} start is equivalent to unfiltered
-	fAll := &SubscriptionFilter{Type: FilterAbsoluteStart, StartLocation: Location{}}
+	fAll := &LocationFilter{Type: FilterAbsoluteStart, StartLocation: Location{}}
 	if !fAll.Matches(0, 0, 0, 0, false) {
 		t.Error("AbsoluteStart {0,0}: everything should match")
 	}
 }
 
-func TestSubscriptionFilterMatchesAbsoluteRange(t *testing.T) {
-	f := &SubscriptionFilter{
+func TestLocationFilterMatchesAbsoluteRange(t *testing.T) {
+	f := &LocationFilter{
 		Type:          FilterAbsoluteRange,
 		StartLocation: Location{Group: 5, Object: 3},
 		EndGroupDelta: 3, // end group = 8
@@ -383,7 +383,7 @@ func TestSubscriptionFilterMatchesAbsoluteRange(t *testing.T) {
 	}
 
 	// Delta = 0: only start group passes
-	fSameGroup := &SubscriptionFilter{
+	fSameGroup := &LocationFilter{
 		Type:          FilterAbsoluteRange,
 		StartLocation: Location{Group: 5, Object: 0},
 		EndGroupDelta: 0,
@@ -397,72 +397,72 @@ func TestSubscriptionFilterMatchesAbsoluteRange(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// SubscriptionFilterParam / SubscriptionFilterFromParam integration
+// LocationFilterParam / LocationFilterFromParam integration
 // ---------------------------------------------------------------------------
 
-func TestSubscriptionFilterParamRoundTrip(t *testing.T) {
-	f := &SubscriptionFilter{
+func TestLocationFilterParamRoundTrip(t *testing.T) {
+	f := &LocationFilter{
 		Type:          FilterAbsoluteStart,
 		StartLocation: Location{Group: 10, Object: 2},
 	}
 
-	param := SubscriptionFilterParam(f)
-	if param.Type != ParamSubscriptionFilter {
-		t.Errorf("param.Type = %v, want ParamSubscriptionFilter", param.Type)
+	param := LocationFilterParam(f)
+	if param.Type != ParamLocationFilter {
+		t.Errorf("param.Type = %v, want ParamLocationFilter", param.Type)
 	}
 
 	ps := Parameters{param}
-	got, err := SubscriptionFilterFromParam(ps)
+	got, err := LocationFilterFromParam(ps)
 	if err != nil {
-		t.Fatalf("SubscriptionFilterFromParam() error: %v", err)
+		t.Fatalf("LocationFilterFromParam() error: %v", err)
 	}
 	if got == nil {
-		t.Fatal("SubscriptionFilterFromParam() returned nil, want filter")
+		t.Fatal("LocationFilterFromParam() returned nil, want filter")
 	}
 	if got.Type != f.Type || got.StartLocation != f.StartLocation {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", got, f)
 	}
 }
 
-func TestSubscriptionFilterFromParamAbsent(t *testing.T) {
+func TestLocationFilterFromParamAbsent(t *testing.T) {
 	ps := Parameters{}
-	got, err := SubscriptionFilterFromParam(ps)
+	got, err := LocationFilterFromParam(ps)
 	if err != nil {
-		t.Fatalf("SubscriptionFilterFromParam() unexpected error: %v", err)
+		t.Fatalf("LocationFilterFromParam() unexpected error: %v", err)
 	}
 	if got != nil {
 		t.Errorf("expected nil for absent parameter, got %+v", got)
 	}
 }
 
-func TestSubscriptionFilterFromParamMalformed(t *testing.T) {
+func TestLocationFilterFromParamMalformed(t *testing.T) {
 	// Bytes that don't parse as a valid filter (unknown type 0xFF)
-	ps := Parameters{BytesParam(ParamSubscriptionFilter, []byte{0xFF})}
-	_, err := SubscriptionFilterFromParam(ps)
+	ps := Parameters{BytesParam(ParamLocationFilter, []byte{0xFF})}
+	_, err := LocationFilterFromParam(ps)
 	if err == nil {
-		t.Fatal("SubscriptionFilterFromParam() expected error for malformed bytes, got nil")
+		t.Fatal("LocationFilterFromParam() expected error for malformed bytes, got nil")
 	}
 }
 
 // TestFilterConstructors verifies each convenience constructor produces a
-// SUBSCRIPTION_FILTER parameter that round-trips back to the expected filter.
+// LOCATION_FILTER parameter that round-trips back to the expected filter.
 func TestFilterConstructors(t *testing.T) {
 	cases := []struct {
 		name string
 		got  Parameter
-		want SubscriptionFilter
+		want LocationFilter
 	}{
-		{"LargestObjectFilter", LargestObjectFilter(), SubscriptionFilter{Type: FilterLargestObject}},
-		{"NextGroupStartFilter", NextGroupStartFilter(), SubscriptionFilter{Type: FilterNextGroupStart}},
+		{"LargestObjectFilter", LargestObjectFilter(), LocationFilter{Type: FilterLargestObject}},
+		{"NextGroupStartFilter", NextGroupStartFilter(), LocationFilter{Type: FilterNextGroupStart}},
 		{
 			"AbsoluteStartFilter",
 			AbsoluteStartFilter(Location{Group: 4, Object: 2}),
-			SubscriptionFilter{Type: FilterAbsoluteStart, StartLocation: Location{Group: 4, Object: 2}},
+			LocationFilter{Type: FilterAbsoluteStart, StartLocation: Location{Group: 4, Object: 2}},
 		},
 		{
 			"AbsoluteRangeFilter",
 			AbsoluteRangeFilter(Location{Group: 4, Object: 2}, 3),
-			SubscriptionFilter{
+			LocationFilter{
 				Type:          FilterAbsoluteRange,
 				StartLocation: Location{Group: 4, Object: 2},
 				EndGroupDelta: 3,
@@ -471,12 +471,12 @@ func TestFilterConstructors(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f, err := SubscriptionFilterFromParam(Parameters{tc.got})
+			f, err := LocationFilterFromParam(Parameters{tc.got})
 			if err != nil {
-				t.Fatalf("SubscriptionFilterFromParam: %v", err)
+				t.Fatalf("LocationFilterFromParam: %v", err)
 			}
 			if f == nil {
-				t.Fatal("SubscriptionFilterFromParam returned nil")
+				t.Fatal("LocationFilterFromParam returned nil")
 			}
 			if *f != tc.want {
 				t.Errorf("filter = %+v, want %+v", *f, tc.want)

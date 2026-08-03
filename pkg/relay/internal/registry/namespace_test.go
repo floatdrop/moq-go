@@ -275,10 +275,10 @@ func formatSubscribers(s []*registry.SubscriberEntry) string {
 	return out.String() + "]"
 }
 
-// TestNamespaceRegistry_BlockedSet exercises the §6.1 / §10.20 PUBLISH_BLOCKED
-// bookkeeping: MarkBlocked records a (subscriber, track) prohibition, IsBlocked
-// reports it, and both ClearBlocked and ClearBlockedForSession lift it.
-func TestNamespaceRegistry_BlockedSet(t *testing.T) {
+// TestNamespaceRegistry_SkippedSet exercises the §6.1 / §10.20 PUBLISH_SKIPPED
+// bookkeeping: MarkSkipped records a (subscriber, track) prohibition, IsSkipped
+// reports it, and ClearSkippedForSession lifts it.
+func TestNamespaceRegistry_SkippedSet(t *testing.T) {
 	t.Parallel()
 	r := registry.NewNamespaceRegistry()
 	entry := r.RegisterSubscriber(ns("video"), nil, nil, true /*wantsTracks*/)
@@ -286,36 +286,36 @@ func TestNamespaceRegistry_BlockedSet(t *testing.T) {
 	key := track.NewKey(ns("video", "cam7"), []byte("rtp"))
 	other := track.NewKey(ns("video", "cam7"), []byte("audio"))
 
-	// Initially nothing is blocked.
-	if r.IsBlocked(entry, key) {
-		t.Fatal("IsBlocked true before any MarkBlocked")
+	// Initially nothing is skipped.
+	if r.IsSkipped(entry, key) {
+		t.Fatal("IsSkipped true before any MarkSkipped")
 	}
 
-	// MarkBlocked is observable and scoped to the exact track key.
-	r.MarkBlocked(entry, key)
-	if !r.IsBlocked(entry, key) {
-		t.Fatal("IsBlocked false after MarkBlocked")
+	// MarkSkipped is observable and scoped to the exact track key.
+	r.MarkSkipped(entry, key)
+	if !r.IsSkipped(entry, key) {
+		t.Fatal("IsSkipped false after MarkSkipped")
 	}
-	if r.IsBlocked(entry, other) {
-		t.Fatal("IsBlocked true for a different track key")
-	}
-
-	// MarkBlocked is idempotent.
-	r.MarkBlocked(entry, key)
-	if !r.IsBlocked(entry, key) {
-		t.Fatal("IsBlocked false after repeated MarkBlocked")
+	if r.IsSkipped(entry, other) {
+		t.Fatal("IsSkipped true for a different track key")
 	}
 
-	// ClearBlockedForSession lifts across the session and reports whether it
+	// MarkSkipped is idempotent.
+	r.MarkSkipped(entry, key)
+	if !r.IsSkipped(entry, key) {
+		t.Fatal("IsSkipped false after repeated MarkSkipped")
+	}
+
+	// ClearSkippedForSession lifts across the session and reports whether it
 	// changed anything.
-	r.MarkBlocked(entry, key)
-	if !r.ClearBlockedForSession(nil /*matches the nil-session entry*/, key) {
-		t.Fatal("ClearBlockedForSession returned false when an entry was blocked")
+	r.MarkSkipped(entry, key)
+	if !r.ClearSkippedForSession(nil /*matches the nil-session entry*/, key) {
+		t.Fatal("ClearSkippedForSession returned false when an entry was skipped")
 	}
-	if r.IsBlocked(entry, key) {
-		t.Fatal("IsBlocked true after ClearBlockedForSession")
+	if r.IsSkipped(entry, key) {
+		t.Fatal("IsSkipped true after ClearSkippedForSession")
 	}
-	if r.ClearBlockedForSession(nil, key) {
-		t.Fatal("ClearBlockedForSession returned true when nothing was blocked")
+	if r.ClearSkippedForSession(nil, key) {
+		t.Fatal("ClearSkippedForSession returned true when nothing was skipped")
 	}
 }
