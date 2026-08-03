@@ -539,8 +539,7 @@ func TestInboundPublishMandatoryTrackPropertyValidation(t *testing.T) {
 		}
 		// Use the exported ValidateTrackProperties helper.
 		_, err = session.ValidateTrackProperties(pub.TrackProperties, nil, "PUBLISH")
-		var unsupported *session.ErrUnsupportedMandatoryTrackProperty
-		if !errors.As(err, &unsupported) {
+		if _, ok := errors.AsType[*session.ErrUnsupportedMandatoryTrackProperty](err); !ok {
 			serverErr = errors.New("expected *ErrUnsupportedMandatoryTrackProperty from ValidateTrackProperties")
 			return
 		}

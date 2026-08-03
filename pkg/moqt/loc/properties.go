@@ -16,24 +16,30 @@ import (
 // recognised by the typed accessors land in Extras and round-trip
 // unchanged.
 //
-// Zero values for Timestamp / Timescale / VideoFrameMarking / AudioLevel
-// are valid wire values; absence is tracked by the matching Has-bit so
-// callers can distinguish "field not present" from "field present and
-// zero".
+// Zero values for Timestamp / Timescale / AudioLevel are valid wire
+// values; absence is tracked by the matching Has-bit so callers can
+// distinguish "field not present" from "field present and zero". The
+// byte-slice fields (VideoConfig / VideoFrameMarking / AudioConfig)
+// instead use nil to mean absent.
 type Properties struct {
 	Timestamp uint64
 	Timescale uint64
 
-	// VideoConfig is the codec extradata. Absent when nil.
+	// VideoConfig is the codec extradata (§2.3.2.1). Absent when nil.
 	VideoConfig []byte
 
-	VideoFrameMarking uint64
-	AudioLevel        uint8
+	// AudioConfig is the codec configuration (§2.3.3.1). Absent when nil.
+	AudioConfig []byte
 
-	HasTimestamp         bool
-	HasTimescale         bool
-	HasVideoFrameMarking bool
-	HasAudioLevel        bool
+	// VideoFrameMarking carries the RFC 9626 frame-marking flags and
+	// layer identifiers (§2.3.2.2) as a 1-4 byte string. Absent when nil.
+	VideoFrameMarking []byte
+
+	AudioLevel uint8
+
+	HasTimestamp  bool
+	HasTimescale  bool
+	HasAudioLevel bool
 
 	// Extras carries KV pairs whose Type is not one of the well-known
 	// LOC properties. They round-trip verbatim. Extras MUST NOT contain
@@ -74,8 +80,7 @@ func (p *Properties) Parse(r *wire.Reader) error {
 			p.Timescale = kv.IntVal
 			p.HasTimescale = true
 		case PropVideoFrameMarking:
-			p.VideoFrameMarking = kv.IntVal
-			p.HasVideoFrameMarking = true
+			p.VideoFrameMarking = kv.ByteVal
 		case PropAudioLevel:
 			if kv.IntVal > 0xFF {
 				return fmt.Errorf("moqt/loc: audio level %d exceeds 0xFF", kv.IntVal)
@@ -84,6 +89,8 @@ func (p *Properties) Parse(r *wire.Reader) error {
 			p.HasAudioLevel = true
 		case PropVideoConfig:
 			p.VideoConfig = kv.ByteVal
+		case PropAudioConfig:
+			p.AudioConfig = kv.ByteVal
 		default:
 			p.Extras = append(p.Extras, kv)
 		}
@@ -125,13 +132,16 @@ func (p *Properties) toPairs() []wire.KVPair {
 	if p.HasTimescale {
 		n++
 	}
-	if p.HasVideoFrameMarking {
+	if p.VideoFrameMarking != nil {
 		n++
 	}
 	if p.HasAudioLevel {
 		n++
 	}
 	if p.VideoConfig != nil {
+		n++
+	}
+	if p.AudioConfig != nil {
 		n++
 	}
 	if n == 0 {
@@ -144,14 +154,17 @@ func (p *Properties) toPairs() []wire.KVPair {
 	if p.HasTimescale {
 		pairs = append(pairs, wire.KVPair{Type: PropTimescale, IntVal: p.Timescale})
 	}
-	if p.HasVideoFrameMarking {
-		pairs = append(pairs, wire.KVPair{Type: PropVideoFrameMarking, IntVal: p.VideoFrameMarking})
+	if p.VideoFrameMarking != nil {
+		pairs = append(pairs, wire.KVPair{Type: PropVideoFrameMarking, ByteVal: p.VideoFrameMarking})
 	}
 	if p.HasAudioLevel {
 		pairs = append(pairs, wire.KVPair{Type: PropAudioLevel, IntVal: uint64(p.AudioLevel)})
 	}
 	if p.VideoConfig != nil {
 		pairs = append(pairs, wire.KVPair{Type: PropVideoConfig, ByteVal: p.VideoConfig})
+	}
+	if p.AudioConfig != nil {
+		pairs = append(pairs, wire.KVPair{Type: PropAudioConfig, ByteVal: p.AudioConfig})
 	}
 	pairs = append(pairs, p.Extras...)
 	return pairs

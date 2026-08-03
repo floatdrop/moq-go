@@ -1,7 +1,7 @@
 package loc
 
 // EncodeAudioLevel packs an RFC 6464 audio level and voice-activity bit
-// into the byte stored in LOC's AudioLevel property (§2.3.3.1).
+// into the byte stored in LOC's AudioLevel property (§2.3.3.2).
 //
 // level is the magnitude in -dBov in the range [0, 127] (0 = loudest,
 // 127 = silence). voiceActivity is the V flag from RFC 6464 §3. Bits
