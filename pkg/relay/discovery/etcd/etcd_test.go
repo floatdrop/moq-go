@@ -151,7 +151,10 @@ func TestEtcdStore(t *testing.T) {
 			{"x"},                // unrelated
 		}
 		for _, p := range prefixes {
-			if err := s.PublishNamespace(t.Context(), discovery.NamespaceInfo{Prefix: ns(p...), RelayAddr: "relay-A"}); err != nil {
+			if err := s.PublishNamespace(
+				t.Context(),
+				discovery.NamespaceInfo{Prefix: ns(p...), RelayAddr: "relay-A"},
+			); err != nil {
 				t.Fatalf("PublishNamespace %v: %v", p, err)
 			}
 		}
@@ -173,7 +176,10 @@ func TestEtcdStore(t *testing.T) {
 		s := store("/nsroot/")
 		// A zero-length advertised prefix (SUBSCRIBE_NAMESPACE with no filter)
 		// must match any query, and be found by an empty query too.
-		if err := s.PublishNamespace(t.Context(), discovery.NamespaceInfo{Prefix: ns(), RelayAddr: "relay-A"}); err != nil {
+		if err := s.PublishNamespace(
+			t.Context(),
+			discovery.NamespaceInfo{Prefix: ns(), RelayAddr: "relay-A"},
+		); err != nil {
 			t.Fatalf("PublishNamespace root: %v", err)
 		}
 		got, err := s.FindNamespace(t.Context(), ns("anything", "deep"))

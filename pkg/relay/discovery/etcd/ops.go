@@ -37,11 +37,13 @@ func (s *Store) notClosed() error {
 	return nil
 }
 
-// PublishTrack writes the advertisement at (Key, RelayAddr). A repeat write of
-// the same tuple overwrites, satisfying the idempotent-publish contract. A zero
-// PublishedAt is stamped with the current time before storage.
+// PublishTrack writes the advertisement at (Key, RelayAddr), attaching it to the
+// store's shared lease so it expires if the relay's keep-alive stops. A repeat
+// write of the same tuple overwrites, satisfying the idempotent-publish
+// contract. A zero PublishedAt is stamped with the current time before storage.
 func (s *Store) PublishTrack(ctx context.Context, info discovery.TrackInfo) error {
-	if err := s.notClosed(); err != nil {
+	leaseID, err := s.ensureLease(ctx)
+	if err != nil {
 		return err
 	}
 	if info.PublishedAt.IsZero() {
@@ -51,7 +53,7 @@ func (s *Store) PublishTrack(ctx context.Context, info discovery.TrackInfo) erro
 	if err != nil {
 		return err
 	}
-	_, err = s.cli.Put(ctx, s.trackKey(info.Key, info.RelayAddr), string(val))
+	_, err = s.cli.Put(ctx, s.trackKey(info.Key, info.RelayAddr), string(val), clientv3.WithLease(leaseID))
 	return err
 }
 
@@ -77,7 +79,7 @@ func (s *Store) FindTrack(ctx context.Context, key track.Key) ([]discovery.Track
 	}
 	var out []discovery.TrackInfo
 	for _, kv := range resp.Kvs {
-		info, err := decodeTrack(kv.Value)
+		info, err := decodeTrack(kv.GetValue())
 		if err != nil {
 			return nil, err
 		}
@@ -86,9 +88,11 @@ func (s *Store) FindTrack(ctx context.Context, key track.Key) ([]discovery.Track
 	return out, nil
 }
 
-// PublishNamespace writes the advertisement at (Prefix, RelayAddr).
+// PublishNamespace writes the advertisement at (Prefix, RelayAddr), attaching it
+// to the store's shared lease (see [Store.PublishTrack]).
 func (s *Store) PublishNamespace(ctx context.Context, info discovery.NamespaceInfo) error {
-	if err := s.notClosed(); err != nil {
+	leaseID, err := s.ensureLease(ctx)
+	if err != nil {
 		return err
 	}
 	if info.PublishedAt.IsZero() {
@@ -98,7 +102,7 @@ func (s *Store) PublishNamespace(ctx context.Context, info discovery.NamespaceIn
 	if err != nil {
 		return err
 	}
-	_, err = s.cli.Put(ctx, s.nsKey(info.Prefix, info.RelayAddr), string(val))
+	_, err = s.cli.Put(ctx, s.nsKey(info.Prefix, info.RelayAddr), string(val), clientv3.WithLease(leaseID))
 	return err
 }
 
@@ -129,7 +133,7 @@ func (s *Store) FindNamespace(ctx context.Context, namespace wire.TrackNamespace
 			return nil, err
 		}
 		for _, kv := range resp.Kvs {
-			info, err := decodeNamespace(kv.Value)
+			info, err := decodeNamespace(kv.GetValue())
 			if err != nil {
 				return nil, err
 			}
@@ -139,8 +143,10 @@ func (s *Store) FindNamespace(ctx context.Context, namespace wire.TrackNamespace
 	return out, nil
 }
 
-// Close tears down every in-flight Watch and, if this store owns the client
-// (created via Open), closes it. Idempotent: a second Close is a no-op.
+// Close tears down every in-flight Watch, revokes the store's lease so its
+// advertisements disappear immediately (rather than lingering for the rest of
+// the TTL), and, if this store owns the client (created via Open), closes it.
+// Idempotent: a second Close is a no-op.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -151,7 +157,19 @@ func (s *Store) Close() error {
 	close(s.done) // signals all Watch goroutines to exit and close their channels
 	ownsClient := s.ownsClient
 	cli := s.cli
+	leaseID := s.leaseID
 	s.mu.Unlock()
+
+	s.bgCancel() // stops the lease keep-alive
+
+	// Best-effort revoke: a graceful shutdown clears the store's keys at once.
+	// A failure (etcd unreachable) is harmless — the lease expires on its own
+	// once the keep-alive is gone, which is the whole point of the TTL.
+	if leaseID != 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, _ = cli.Revoke(ctx, leaseID)
+		cancel()
+	}
 
 	if ownsClient {
 		return cli.Close()

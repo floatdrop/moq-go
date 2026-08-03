@@ -36,7 +36,12 @@ func (s *Store) WatchNamespaces(ctx context.Context) (<-chan discovery.Namespace
 	return out, nil
 }
 
-func (s *Store) pumpTracks(ctx context.Context, cancel context.CancelFunc, wch clientv3.WatchChan, out chan discovery.TrackEvent) {
+func (s *Store) pumpTracks(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	wch clientv3.WatchChan,
+	out chan discovery.TrackEvent,
+) {
 	defer close(out)
 	defer cancel()
 	for {
@@ -57,14 +62,19 @@ func (s *Store) pumpTracks(ctx context.Context, cancel context.CancelFunc, wch c
 				select {
 				case out <- te:
 				default:
-					s.log.Warn("etcd discovery: dropped track event on slow watcher", "op", te.Op.String())
+					s.log.WarnContext(ctx, "etcd discovery: dropped track event on slow watcher", "op", te.Op.String())
 				}
 			}
 		}
 	}
 }
 
-func (s *Store) pumpNamespaces(ctx context.Context, cancel context.CancelFunc, wch clientv3.WatchChan, out chan discovery.NamespaceEvent) {
+func (s *Store) pumpNamespaces(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	wch clientv3.WatchChan,
+	out chan discovery.NamespaceEvent,
+) {
 	defer close(out)
 	defer cancel()
 	for {
@@ -85,7 +95,12 @@ func (s *Store) pumpNamespaces(ctx context.Context, cancel context.CancelFunc, w
 				select {
 				case out <- ne:
 				default:
-					s.log.Warn("etcd discovery: dropped namespace event on slow watcher", "op", ne.Op.String())
+					s.log.WarnContext(
+						ctx,
+						"etcd discovery: dropped namespace event on slow watcher",
+						"op",
+						ne.Op.String(),
+					)
 				}
 			}
 		}
@@ -99,7 +114,7 @@ func (s *Store) pumpNamespaces(ctx context.Context, cancel context.CancelFunc, w
 func (s *Store) trackEvent(ev *clientv3.Event) (discovery.TrackEvent, bool) {
 	switch ev.Type {
 	case clientv3.EventTypePut:
-		info, err := decodeTrack(ev.Kv.Value)
+		info, err := decodeTrack(ev.Kv.GetValue())
 		if err != nil {
 			s.log.Warn("etcd discovery: undecodable track put", "err", err)
 			return discovery.TrackEvent{}, false
@@ -109,7 +124,7 @@ func (s *Store) trackEvent(ev *clientv3.Event) (discovery.TrackEvent, bool) {
 		if ev.PrevKv == nil {
 			return discovery.TrackEvent{}, false
 		}
-		info, err := decodeTrack(ev.PrevKv.Value)
+		info, err := decodeTrack(ev.PrevKv.GetValue())
 		if err != nil {
 			s.log.Warn("etcd discovery: undecodable track delete", "err", err)
 			return discovery.TrackEvent{}, false
@@ -122,7 +137,7 @@ func (s *Store) trackEvent(ev *clientv3.Event) (discovery.TrackEvent, bool) {
 func (s *Store) namespaceEvent(ev *clientv3.Event) (discovery.NamespaceEvent, bool) {
 	switch ev.Type {
 	case clientv3.EventTypePut:
-		info, err := decodeNamespace(ev.Kv.Value)
+		info, err := decodeNamespace(ev.Kv.GetValue())
 		if err != nil {
 			s.log.Warn("etcd discovery: undecodable namespace put", "err", err)
 			return discovery.NamespaceEvent{}, false
@@ -132,7 +147,7 @@ func (s *Store) namespaceEvent(ev *clientv3.Event) (discovery.NamespaceEvent, bo
 		if ev.PrevKv == nil {
 			return discovery.NamespaceEvent{}, false
 		}
-		info, err := decodeNamespace(ev.PrevKv.Value)
+		info, err := decodeNamespace(ev.PrevKv.GetValue())
 		if err != nil {
 			s.log.Warn("etcd discovery: undecodable namespace delete", "err", err)
 			return discovery.NamespaceEvent{}, false

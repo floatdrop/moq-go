@@ -20,6 +20,18 @@
 // FindTrack range-scans the per-track subtree; FindNamespace issues one
 // point-scan per ancestor prefix of the query (see [Store.FindNamespace]).
 //
+// # Liveness
+//
+// Every advertisement is attached to a single per-store etcd lease, granted
+// lazily on the first publish and renewed by a background keep-alive. The lease
+// therefore stands in for one relay process's liveness: while the process runs
+// it keeps the lease alive; when it dies (or is partitioned longer than the
+// lease TTL) etcd expires the lease and atomically drops every key the store
+// published, so peers stop routing to a relay that can no longer serve. A
+// graceful [Store.Close] revokes the lease so the advertisements disappear at
+// once rather than lingering for the remainder of the TTL. Configure the TTL
+// with [WithLeaseTTL].
+//
 // # Prototype limitations
 //
 // Watch starts at the store's current revision, so an event that lands between
@@ -29,12 +41,14 @@
 package etcd
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -53,18 +67,37 @@ const defaultRoot = "/moqt/discovery/"
 // honoring the [discovery.DiscoveryStore] slow-consumer contract.
 const defaultWatchBufferSize = 32
 
+// defaultLeaseTTL bounds how long a crashed relay's advertisements survive after
+// its keep-alive stops. Long enough that a brief keep-alive hiccup (GC pause,
+// transient network blip) does not expire a live relay, short enough that a dead
+// one is reaped promptly. Overridable via [WithLeaseTTL].
+const defaultLeaseTTL = 15 * time.Second
+
 // Store is an etcd-backed [discovery.DiscoveryStore]. Safe for concurrent use:
-// etcd operations carry their own synchronization; the local mutex guards only
-// the closed flag and the shared done channel used to tear watches down.
+// etcd operations carry their own synchronization; the local mutex guards the
+// closed flag, the shared done channel used to tear watches down, and the shared
+// leaseID. The first publish grants the lease under the mutex (see ensureLease),
+// so a slow Grant briefly serializes concurrent Find/Close calls; every later
+// publish takes the fast path and touches no network under the lock.
 type Store struct {
 	cli        *clientv3.Client
 	ownsClient bool
 	root       string
 	bufferSize int
+	leaseTTL   int64 // seconds; etcd lease granularity
 	log        *slog.Logger
+
+	// bgCtx bounds the lease keep-alive to the store's lifetime; bgCancel fires
+	// on Close. Held on the struct because clientv3.KeepAlive needs a context
+	// that outlives the request that first grants the lease.
+	bgCtx    context.Context
+	bgCancel context.CancelFunc
 
 	mu     sync.Mutex
 	closed bool
+	// leaseID is the shared lease every advertisement attaches to; 0 until the
+	// first publish grants it under mu (see ensureLease).
+	leaseID clientv3.LeaseID
 	// done fans a Close out to every in-flight Watch goroutine without needing
 	// each caller to cancel its own ctx.
 	done chan struct{}
@@ -99,6 +132,18 @@ func WithWatchBufferSize(n int) Option {
 	}
 }
 
+// WithLeaseTTL overrides the lease TTL that bounds this store's liveness (see
+// the package "Liveness" section). Sub-second values round up to 1s — etcd
+// lease granularity is whole seconds — and values <= 0 keep the default.
+func WithLeaseTTL(d time.Duration) Option {
+	return func(s *Store) {
+		if d <= 0 {
+			return
+		}
+		s.leaseTTL = max(int64((d+time.Second-1)/time.Second), 1)
+	}
+}
+
 // WithLogger sets the logger used for slow-watcher drop warnings. A nil logger
 // falls back to [slog.Default].
 func WithLogger(l *slog.Logger) Option {
@@ -109,10 +154,14 @@ func WithLogger(l *slog.Logger) Option {
 // [Store.Close] tears down watches but leaves the client open. Use [Open] when
 // you want the store to dial and own the connection.
 func New(cli *clientv3.Client, opts ...Option) *Store {
+	bgCtx, bgCancel := context.WithCancel(context.Background())
 	s := &Store{
 		cli:        cli,
 		root:       defaultRoot,
 		bufferSize: defaultWatchBufferSize,
+		leaseTTL:   int64(defaultLeaseTTL / time.Second),
+		bgCtx:      bgCtx,
+		bgCancel:   bgCancel,
 		done:       make(chan struct{}),
 	}
 	for _, opt := range opts {

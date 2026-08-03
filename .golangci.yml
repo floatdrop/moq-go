@@ -337,6 +337,13 @@ linters:
         # https://github.com/godoc-lint/godoc-lint?tab=readme-ov-file#require-stdlib-doclink
         - require-stdlib-doclink
 
+    gomoddirectives:
+      # Allow local `replace` directives: the split-out modules (e.g.
+      # pkg/relay/discovery/etcd) depend on the parent module via a relative
+      # replace during development, since the parent is not separately published.
+      # Default: false
+      replace-local: true
+
     govet:
       # Enable all analyzers.
       # Default: false
@@ -473,6 +480,7 @@ linters:
           - dupl
           - errcheck
           - goconst
+          - gocyclo
           - gosec
           - noctx
           - unparam
