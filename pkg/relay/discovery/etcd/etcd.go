@@ -20,6 +20,15 @@
 // FindTrack range-scans the per-track subtree; FindNamespace issues one
 // point-scan per ancestor prefix of the query (see [Store.FindNamespace]).
 //
+// # Watch semantics
+//
+// WatchTracks / WatchNamespaces are gapless snapshot-then-follow streams: each
+// reads the current advertisements at one etcd revision, emits them as
+// OpPublish events, then follows from exactly the next revision (clientv3
+// WithRev). Nothing lands between the snapshot and the follow, so a consumer
+// gets current state plus every later change from one call, with no separate
+// Find to race against.
+//
 // # Liveness
 //
 // Every advertisement is attached to a single per-store etcd lease, granted
@@ -31,13 +40,6 @@
 // graceful [Store.Close] revokes the lease so the advertisements disappear at
 // once rather than lingering for the remainder of the TTL. Configure the TTL
 // with [WithLeaseTTL].
-//
-// # Prototype limitations
-//
-// Watch starts at the store's current revision, so an event that lands between
-// a Find snapshot and a subsequent Watch subscription can be missed. Production
-// hardening threads the Find revision into the Watch (clientv3 WithRev) to make
-// the snapshot-then-follow handoff gapless; this prototype does not.
 package etcd
 
 import (

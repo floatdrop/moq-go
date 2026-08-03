@@ -20,12 +20,15 @@ import (
 // Discovery is configured) and returns when ctx is cancelled or the store
 // closes its watch channel.
 //
-// Limitation: this consumes the event stream only — it does NOT seed from a
-// FindNamespace snapshot, so namespaces advertised by other relays *before*
-// this watcher registered are not reflected until they are re-advertised. A
-// SUBSCRIBE_NAMESPACE holder still discovers them on demand (the SUBSCRIBE
-// itself resolves via FindNamespace); initial-state reflection across a
-// distributed backend is left to a future snapshot-then-watch pass.
+// The watch yields an initial snapshot before following live changes (see
+// [discovery.DiscoveryStore.WatchNamespaces]), so this goroutine observes
+// namespaces advertised before it started, not just later ones. The remaining
+// limitation is downstream of here: it starts once in [Relay.Start] and
+// reflects each event only to the SUBSCRIBE_NAMESPACE holders registered at the
+// moment it arrives, so a subscriber that registers later is not back-filled
+// with already-advertised namespaces. That subscriber still discovers them on
+// demand — its SUBSCRIBE resolves via FindNamespace — so this is a
+// reflection-latency gap, not a correctness one.
 func (r *Relay) runNamespaceWatch(ctx context.Context) {
 	ch, err := r.cfg.Discovery.WatchNamespaces(ctx)
 	if err != nil {

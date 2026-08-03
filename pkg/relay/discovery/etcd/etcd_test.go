@@ -251,6 +251,56 @@ func TestEtcdStore(t *testing.T) {
 		}
 	})
 
+	t.Run("WatchSeedsSnapshotThenFollows", func(t *testing.T) {
+		s := store("/watchsnap/")
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+
+		// Seed two advertisements of the same track BEFORE the watch exists.
+		key := newKey([]string{"video"}, "cam1")
+		for _, addr := range []string{"relay-A", "relay-B"} {
+			if err := s.PublishTrack(ctx, discovery.TrackInfo{
+				Key:       key,
+				FullName:  track.FullTrackName{Namespace: ns("video"), Name: []byte("cam1")},
+				RelayAddr: addr,
+			}); err != nil {
+				t.Fatalf("seed PublishTrack %s: %v", addr, err)
+			}
+		}
+
+		ch, err := s.WatchTracks(ctx)
+		if err != nil {
+			t.Fatalf("WatchTracks: %v", err)
+		}
+
+		// Snapshot: both seeded advertisements arrive as OpPublish, any order.
+		seen := map[string]bool{}
+		for range 2 {
+			ev := receiveTrack(t, ch)
+			if ev.Op != discovery.OpPublish {
+				t.Errorf("snapshot event Op = %v, want publish", ev.Op)
+			}
+			seen[ev.Info.RelayAddr] = true
+		}
+		if !seen["relay-A"] || !seen["relay-B"] {
+			t.Errorf("snapshot addrs = %v, want relay-A and relay-B", seen)
+		}
+
+		// Follow: a publish after the snapshot streams through gaplessly.
+		key2 := newKey([]string{"video"}, "cam2")
+		if err := s.PublishTrack(ctx, discovery.TrackInfo{
+			Key:       key2,
+			FullName:  track.FullTrackName{Namespace: ns("video"), Name: []byte("cam2")},
+			RelayAddr: "relay-A",
+		}); err != nil {
+			t.Fatalf("live PublishTrack: %v", err)
+		}
+		live := receiveTrack(t, ch)
+		if live.Op != discovery.OpPublish || live.Info.Key != key2 {
+			t.Errorf("live event = %+v, want publish of cam2", live)
+		}
+	})
+
 	t.Run("WatchClosedOnCtxCancel", func(t *testing.T) {
 		s := store("/watchcancel/")
 		ctx, cancel := context.WithCancel(t.Context())
