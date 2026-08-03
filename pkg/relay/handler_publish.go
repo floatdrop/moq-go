@@ -113,7 +113,7 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 			Namespace:       msg.Namespace,
 			Name:            msg.Name,
 			TrackAlias:      msg.TrackAlias, // not yet remapped per-session
-			Parameters:      msg.Parameters,
+			Parameters:      publishParamsForSubscriber(msg.Parameters, sub),
 			TrackProperties: msg.TrackProperties,
 		}
 		// OpenPublish is non-blocking (§6.1): if the subscriber's stream
@@ -146,6 +146,31 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	for _, s := range forwarded {
 		_ = s.Close()
 	}
+}
+
+// publishParamsForSubscriber builds the Parameters for a PUBLISH the relay
+// sends to sub as a result of its SUBSCRIBE_TRACKS. Per §10.19.1, FORWARD
+// (§10.2.17) and GROUP_ORDER (§10.2.8) on that PUBLISH derive from the
+// SUBSCRIBE_TRACKS, not the upstream PUBLISH: any inherited from upstream are
+// dropped, FORWARD=0 is set only when the subscriber asked not to forward
+// (otherwise omitted → the default 1), and GROUP_ORDER is copied from the
+// subscriber's request when it specified one (otherwise omitted, so the
+// publisher's default applies).
+func publishParamsForSubscriber(upstream message.Parameters, sub *registry.SubscriberEntry) message.Parameters {
+	out := make(message.Parameters, 0, len(upstream)+2)
+	for _, p := range upstream {
+		if p.Type == message.ParamForward || p.Type == message.ParamGroupOrder {
+			continue
+		}
+		out = append(out, p)
+	}
+	if !sub.Forward {
+		out = append(out, message.ForwardParam(false))
+	}
+	if sub.GroupOrder != 0 {
+		out = append(out, message.GroupOrderParam(message.GroupOrder(sub.GroupOrder)))
+	}
+	return out
 }
 
 // emitPublishSkipped sends a PUBLISH_SKIPPED (§10.20) to sub for the track

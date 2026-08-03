@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -58,10 +59,11 @@ func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 }
 
 // TestRequestUpdate_MalformedRejectedWithUpdateFailed pins the §10.9 failure
-// path: a REQUEST_UPDATE whose parameters are malformed (an out-of-range
-// GROUP_ORDER, a §10.2.8 protocol violation) is answered with REQUEST_ERROR,
-// and the relay MUST additionally terminate the subscription with a
-// PUBLISH_DONE carrying the UPDATE_FAILED (0x8) status code.
+// path: a REQUEST_UPDATE whose parameters are malformed but request-scoped
+// (here a LOCATION_FILTER whose AbsoluteRange overflows, §5.1.2 — kept
+// request-scoped for now, unlike GROUP_ORDER/FORWARD which close the session)
+// is answered with REQUEST_ERROR, and the relay MUST additionally terminate the
+// subscription with a PUBLISH_DONE carrying the UPDATE_FAILED (0x8) status code.
 func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 	t.Parallel()
 
@@ -89,10 +91,12 @@ func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 	}
 	defer subStream.Close()
 
-	// 0x05 is neither Ascending (0x1) nor Descending (0x2): installSubscribeParams
-	// rejects it, so the relay answers REQUEST_ERROR.
+	// An AbsoluteRange filter whose end-group delta overflows the start group
+	// (§5.1.2) fails installSubscribeParams' filter validation. Unlike an
+	// out-of-range GROUP_ORDER/FORWARD, a bad filter stays request-scoped, so
+	// the relay answers REQUEST_ERROR rather than closing the session.
 	_, err = subSess.UpdateRequest(t.Context(), subStream,
-		message.Parameters{message.ByteParam(message.ParamGroupOrder, 0x05)})
+		message.Parameters{message.AbsoluteRangeFilter(message.Location{Group: math.MaxUint64}, 1)})
 	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
 
 	// §10.9: the failed update is followed by a PUBLISH_DONE with
@@ -106,6 +110,48 @@ func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 	if pd.StatusCode != moqt.PublishDoneUpdateFailed {
 		t.Fatalf("PublishDone.StatusCode = %#x, want UPDATE_FAILED (%#x)",
 			uint64(pd.StatusCode), uint64(moqt.PublishDoneUpdateFailed))
+	}
+}
+
+// TestRequestUpdate_InvalidGroupOrderClosesSession pins §10.2.8: an
+// out-of-range GROUP_ORDER in a REQUEST_UPDATE is a session-level
+// PROTOCOL_VIOLATION — the wire value is invalid, so it supersedes §10.9's
+// request-scoped update-failure path and the relay closes the whole session.
+func TestRequestUpdate_InvalidGroupOrderClosesSession(t *testing.T) {
+	t.Parallel()
+
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
+		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Name:       []byte("cam1"),
+		TrackAlias: 7,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer pubStream.Close()
+
+	subSess := dialAnotherClient(t, pubSess)
+	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer subStream.Close()
+
+	// 0x05 is neither Ascending (0x1) nor Descending (0x2): §10.2.8 mandates a
+	// session close, not a REQUEST_ERROR.
+	_, _ = subSess.UpdateRequest(t.Context(), subStream,
+		message.Parameters{message.ByteParam(message.ParamGroupOrder, 0x05)})
+
+	select {
+	case <-subSess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("session not closed after out-of-range GROUP_ORDER REQUEST_UPDATE (§10.2.8)")
 	}
 }
 

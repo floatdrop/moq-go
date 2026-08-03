@@ -190,7 +190,7 @@ By package, bottom-up along the dependency stack:
 | 10.16   | NAMESPACE                     | 0x08   | DONE   | |
 | 10.17   | NAMESPACE_DONE                | 0x0E   | DONE   | |
 | 10.18   | SUBSCRIBE_NAMESPACE           | 0x50   | DONE   | |
-| 10.19   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | |
+| 10.19   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | §10.19.1: FORWARD/GROUP_ORDER are copied onto the PUBLISH messages the subscription triggers; an out-of-range value closes the session (§10.2.8/§10.2.17). |
 | 10.20   | PUBLISH_SKIPPED               | 0x0F   | DONE   | |
 
 ## §11 Data streams and datagrams
@@ -280,9 +280,6 @@ behavior changes are not yet implemented and are not reflected in the
 - **PUBLISH_SKIPPED lifetime (§6.1/§10.20)** — currently a sticky per-
   (subscriber, track) block lifted only by a subsequent SUBSCRIBE; draft-19
   scopes it to a single PUBLISH's lifetime instead.
-- **GROUP_ORDER/FORWARD passthrough on SUBSCRIBE_TRACKS** — Parameters on a
-  SUBSCRIBE_TRACKS message are not yet copied onto the PUBLISH messages it
-  triggers.
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
 
@@ -297,6 +294,12 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   self-limit *outbound* REQUEST_UPDATEs against a peer's advertised value for the
   same reason: `UpdateRequest`/`RequestBroker.Update` are synchronous
   write-then-read, so they never exceed any limit ≥ 1.
+- **Out-of-range GROUP_ORDER on FETCH (§10.2.8)** — the SUBSCRIBE and
+  SUBSCRIBE_TRACKS paths now close the session with PROTOCOL_VIOLATION on an
+  out-of-range GROUP_ORDER/FORWARD (§10.2.8/§10.2.17), but the FETCH paths (a
+  FETCH REQUEST_UPDATE, and the initial standalone/joining FETCH) still scope a
+  bad GROUP_ORDER to a REQUEST_ERROR / silent coercion pending the same
+  promotion.
 - **Late publisher pickup (§9.5)** — multiple publishers per track are merged
   and deduplicated, but a publisher (or remote relay) that begins advertising
   *after* a track's upstream set is established is not retroactively pulled in

@@ -48,7 +48,7 @@ func TestNamespaceRegistry_RegisterUnregisterPublisher(t *testing.T) {
 func TestNamespaceRegistry_RegisterUnregisterSubscriber(t *testing.T) {
 	t.Parallel()
 	r := registry.NewNamespaceRegistry()
-	entry := r.RegisterSubscriber(ns("chat"), nil, nil, false)
+	entry := r.RegisterSubscriber(ns("chat"), nil, nil, false, true, 0)
 
 	subs := r.CopySubscribers()
 	if len(subs) != 1 || subs[0].WantsTracks {
@@ -108,9 +108,9 @@ func TestNamespaceRegistry_MatchSubscribers(t *testing.T) {
 	t.Parallel()
 	r := registry.NewNamespaceRegistry()
 
-	sAll := r.RegisterSubscriber(ns(), nil, nil, false)          // "all namespaces"
-	sVideo := r.RegisterSubscriber(ns("video"), nil, nil, false) // wants video/*
-	sChatTracks := r.RegisterSubscriber(ns("chat"), nil, nil, true)
+	sAll := r.RegisterSubscriber(ns(), nil, nil, false, true, 0)          // "all namespaces"
+	sVideo := r.RegisterSubscriber(ns("video"), nil, nil, false, true, 0) // wants video/*
+	sChatTracks := r.RegisterSubscriber(ns("chat"), nil, nil, true, true, 0)
 
 	cases := []struct {
 		name string
@@ -152,8 +152,8 @@ func TestNamespaceRegistry_RemoveSession(t *testing.T) {
 	r.RegisterPublisher(ns("video"), sessA, nil)
 	r.RegisterPublisher(ns("audio"), sessA, nil)
 	r.RegisterPublisher(ns("chat"), sessB, nil)
-	r.RegisterSubscriber(ns(), sessA, nil, false)
-	r.RegisterSubscriber(ns("video"), sessB, nil, true)
+	r.RegisterSubscriber(ns(), sessA, nil, false, true, 0)
+	r.RegisterSubscriber(ns("video"), sessB, nil, true, true, 0)
 
 	pubs, subs := r.RemoveSession(sessA)
 	if pubs != 2 || subs != 1 {
@@ -281,7 +281,7 @@ func formatSubscribers(s []*registry.SubscriberEntry) string {
 func TestNamespaceRegistry_SkippedSet(t *testing.T) {
 	t.Parallel()
 	r := registry.NewNamespaceRegistry()
-	entry := r.RegisterSubscriber(ns("video"), nil, nil, true /*wantsTracks*/)
+	entry := r.RegisterSubscriber(ns("video"), nil, nil, true /*wantsTracks*/, true, 0)
 
 	key := track.NewKey(ns("video", "cam7"), []byte("rtp"))
 	other := track.NewKey(ns("video", "cam7"), []byte("audio"))

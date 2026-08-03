@@ -172,8 +172,13 @@ func (h *sessionHandler) handleFetchUpdate(
 
 // validateFetchUpdateParams checks the parameters of a FETCH REQUEST_UPDATE.
 // FETCH does not carry a Forward State (its response is a finished snapshot),
-// so the only thing the relay validates here is the GROUP_ORDER enum (§10.2.8)
-// — the same protocol-violation check installSubscribeParams applies.
+// so the only thing the relay validates here is the GROUP_ORDER enum (§10.2.8).
+//
+// TODO(draft-19): §10.2.8 mandates a session-level PROTOCOL_VIOLATION for an
+// out-of-range GROUP_ORDER; the SUBSCRIBE / SUBSCRIBE_TRACKS paths were
+// promoted to close the session (see [checkGroupOrderParam]), but the FETCH
+// paths (this one and the initial standalone/joining FETCH) still scope it to
+// a REQUEST_ERROR pending the same promotion.
 func validateFetchUpdateParams(ps message.Parameters) error {
 	if p, ok := ps.Find(message.ParamGroupOrder); ok {
 		switch message.GroupOrder(p.Byte) {

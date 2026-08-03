@@ -2,6 +2,7 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -60,10 +61,18 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 
 	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, req.Stream, alias)
 	if err := installSubscribeParams(sub, msg.Parameters); err != nil {
-		// §5.1.2 says a malformed LOCATION_FILTER is a session-level
-		// PROTOCOL_VIOLATION. We scope the failure to this request for
-		// now — unrelated subscriptions on the same session shouldn't
-		// die because one peer sent a bad filter.
+		if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
+			// §10.2.8 / §10.2.17: an out-of-range GROUP_ORDER/FORWARD is a
+			// session-level PROTOCOL_VIOLATION.
+			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE parameter protocol violation",
+				slog.String("err", err.Error()))
+			_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+			return
+		}
+		// §5.1.2 says a malformed LOCATION_FILTER is also a session-level
+		// PROTOCOL_VIOLATION. We scope that one to this request for now —
+		// unrelated subscriptions on the same session shouldn't die because
+		// one peer sent a bad filter.
 		h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE parameter parse failed",
 			slog.String("err", err.Error()))
 		_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
@@ -261,6 +270,16 @@ func (h *sessionHandler) handleSubscribeUpdate(
 ) {
 	prevForward := sub.ForwardState()
 	if err := installSubscribeParams(sub, upd.Parameters); err != nil {
+		if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
+			// §10.2.8 / §10.2.17: an out-of-range GROUP_ORDER/FORWARD is a
+			// session-level PROTOCOL_VIOLATION even in a REQUEST_UPDATE — the
+			// wire-level value is invalid, so it supersedes §10.9's
+			// request-scoped update-failure path.
+			h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE parameter protocol violation",
+				slog.String("err", err.Error()))
+			_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+			return
+		}
 		h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE parameter parse failed",
 			slog.String("err", err.Error()))
 		// §10.9: a failed subscription update is answered with
@@ -587,6 +606,9 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 		sub.SetFilter(filter)
 	}
 
+	if err := checkForwardParam(ps); err != nil {
+		return err
+	}
 	if p, ok := ps.Find(message.ParamForward); ok {
 		sub.SetForwardState(int(p.Byte))
 	}
@@ -594,12 +616,42 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	if p, ok := ps.Find(message.ParamSubscriberPriority); ok {
 		sub.SetPriority(p.Byte)
 	}
+	if err := checkGroupOrderParam(ps); err != nil {
+		return err
+	}
+	if p, ok := ps.Find(message.ParamGroupOrder); ok {
+		sub.SetGroupOrder(p.Byte)
+	}
+	return nil
+}
+
+// paramProtocolViolation marks a parameter value that draft-19 requires the
+// receiver answer with a session-level PROTOCOL_VIOLATION — an out-of-range
+// GROUP_ORDER (§10.2.8) or FORWARD (§10.2.17) — as opposed to a request-scoped
+// REQUEST_ERROR. Callers detect it with errors.AsType and close the session
+// with [moqt.SessionProtocolViolation].
+type paramProtocolViolation struct{ reason string }
+
+func (e *paramProtocolViolation) Error() string { return e.reason }
+
+// checkForwardParam enforces the §10.2.17 FORWARD value range (0 or 1). An
+// out-of-range value is a *paramProtocolViolation; absent or valid → nil.
+func checkForwardParam(ps message.Parameters) error {
+	if p, ok := ps.Find(message.ParamForward); ok && p.Byte > 1 {
+		return &paramProtocolViolation{fmt.Sprintf("invalid FORWARD value 0x%X (§10.2.17)", p.Byte)}
+	}
+	return nil
+}
+
+// checkGroupOrderParam enforces the §10.2.8 GROUP_ORDER value range (Ascending
+// 0x1 or Descending 0x2). An out-of-range value is a *paramProtocolViolation;
+// absent or valid → nil.
+func checkGroupOrderParam(ps message.Parameters) error {
 	if p, ok := ps.Find(message.ParamGroupOrder); ok {
 		switch message.GroupOrder(p.Byte) {
 		case message.GroupOrderAscending, message.GroupOrderDescending:
-			sub.SetGroupOrder(p.Byte)
 		default:
-			return fmt.Errorf("invalid GROUP_ORDER value 0x%X (§10.2.8)", p.Byte)
+			return &paramProtocolViolation{fmt.Sprintf("invalid GROUP_ORDER value 0x%X (§10.2.8)", p.Byte)}
 		}
 	}
 	return nil

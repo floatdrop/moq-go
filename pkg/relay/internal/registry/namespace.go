@@ -69,6 +69,16 @@ type SubscriberEntry struct {
 	// dispatches on this flag.
 	WantsTracks bool
 
+	// Forward and GroupOrder carry the FORWARD (§10.2.17) and GROUP_ORDER
+	// (§10.2.8) parameters from the SUBSCRIBE_TRACKS, which §10.19.1 copies
+	// onto every PUBLISH the subscription triggers. Set once at registration
+	// (never mutated), so reads in the PUBLISH fanout need no lock. They are
+	// meaningful only when WantsTracks: Forward defaults to true (FORWARD
+	// omitted or 1); GroupOrder is 0 when omitted (the publisher's default
+	// applies) or the validated Ascending/Descending value.
+	Forward    bool
+	GroupOrder byte
+
 	// skipped records the tracks for which the relay has sent this
 	// subscriber a PUBLISH_SKIPPED (§6.1, §10.20) because its bidi-stream
 	// limit was exhausted. Per §6.1 the relay MUST NOT send a PUBLISH for a
@@ -219,15 +229,26 @@ func (r *NamespaceRegistry) UnregisterPublisher(entry *PublisherEntry) bool {
 }
 
 // RegisterSubscriber records a subscriber's SUBSCRIBE_NAMESPACE (when
-// wantsTracks is false) or SUBSCRIBE_TRACKS (when true). Returns the canonical
-// pointer for use with [NamespaceRegistry.UnregisterSubscriber].
+// wantsTracks is false) or SUBSCRIBE_TRACKS (when true). forward and groupOrder
+// carry the SUBSCRIBE_TRACKS FORWARD/GROUP_ORDER passthrough values (§10.19.1)
+// and are ignored unless wantsTracks. Returns the canonical pointer for use
+// with [NamespaceRegistry.UnregisterSubscriber].
 func (r *NamespaceRegistry) RegisterSubscriber(
 	prefix wire.TrackNamespace,
 	sess *session.Session,
 	stream session.Stream,
 	wantsTracks bool,
+	forward bool,
+	groupOrder byte,
 ) *SubscriberEntry {
-	entry := &SubscriberEntry{Prefix: prefix, Session: sess, Stream: stream, WantsTracks: wantsTracks}
+	entry := &SubscriberEntry{
+		Prefix:      prefix,
+		Session:     sess,
+		Stream:      stream,
+		WantsTracks: wantsTracks,
+		Forward:     forward,
+		GroupOrder:  groupOrder,
+	}
 	r.mu.Lock()
 	r.subscribers = append(r.subscribers, entry)
 	r.mu.Unlock()

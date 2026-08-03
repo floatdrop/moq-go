@@ -1096,10 +1096,8 @@ func drainAllStreams(ctx context.Context, s *session.Session) {
 }
 
 // TestSubscribe_InvalidGroupOrderRejected pins the §10.2.8 rule: GROUP_ORDER
-// values other than 0x1 (Ascending) and 0x2 (Descending) are protocol
-// violations. The relay maps this to a per-request REQUEST_ERROR for now
-// (session-level promotion can land later alongside session-error
-// plumbing).
+// values other than 0x1 (Ascending) and 0x2 (Descending) are a session-level
+// PROTOCOL_VIOLATION, so a SUBSCRIBE carrying one closes the whole session.
 func TestSubscribe_InvalidGroupOrderRejected(t *testing.T) {
 	t.Parallel()
 
@@ -1117,12 +1115,17 @@ func TestSubscribe_InvalidGroupOrderRejected(t *testing.T) {
 	defer pubReqStream.Close()
 
 	subSess := dialAnotherClient(t, pubSess)
-	_, err = subSess.Subscribe(t.Context(), &message.Subscribe{
+	_, _ = subSess.Subscribe(t.Context(), &message.Subscribe{
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.ByteParam(message.ParamGroupOrder, 0x05),
 		},
 	})
-	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
+
+	select {
+	case <-subSess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("session not closed after out-of-range GROUP_ORDER SUBSCRIBE (§10.2.8)")
+	}
 }

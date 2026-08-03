@@ -194,7 +194,7 @@ func LargestObjectParam(group, object uint64) Parameter {
 	return LocationParam(ParamLargestObject, group, object)
 }
 
-// ForwardParam builds FORWARD (§10.2.12). The wire value is restricted to
+// ForwardParam builds FORWARD (§10.2.17). The wire value is restricted to
 // 0/1 per the spec, so the helper takes a bool.
 func ForwardParam(forward bool) Parameter {
 	var v uint8

@@ -131,7 +131,9 @@ func (h *sessionHandler) handleSubscribeNamespace(
 		return
 	}
 
-	entry := h.names.RegisterSubscriber(msg.TrackNamespacePrefix, h.sess, req.Stream, false /* wantsTracks */)
+	// forward/groupOrder are ignored for a SUBSCRIBE_NAMESPACE (WantsTracks
+	// false), which never triggers PUBLISH — pass the Forward default.
+	entry := h.names.RegisterSubscriber(msg.TrackNamespacePrefix, h.sess, req.Stream, false /* wantsTracks */, true, 0)
 	defer h.names.UnregisterSubscriber(entry)
 
 	// Emit NAMESPACE for every currently-known publisher whose namespace
@@ -176,6 +178,18 @@ func (h *sessionHandler) handleSubscribeTracks(
 		return
 	}
 
+	// §10.19.1: FORWARD/GROUP_ORDER on the SUBSCRIBE_TRACKS become the
+	// defaults copied onto every PUBLISH this subscription triggers. Resolve
+	// (and validate) before acking. An out-of-range value is a §10.2.8 /
+	// §10.2.17 session-level PROTOCOL_VIOLATION.
+	forward, groupOrder, err := subscribeTracksForwarding(msg.Parameters)
+	if err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "SubscribeTracks parameter protocol violation",
+			slog.String("err", err.Error()))
+		_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+		return
+	}
+
 	// Reply REQUEST_OK before registering, so the OK cannot race a
 	// PUBLISH_SKIPPED that a concurrent publisher's PUBLISH handler
 	// (emitPublishSkipped) may write to this stream once the entry is visible.
@@ -185,13 +199,44 @@ func (h *sessionHandler) handleSubscribeTracks(
 		return
 	}
 
-	entry := h.names.RegisterSubscriber(msg.TrackNamespacePrefix, h.sess, req.Stream, true /* wantsTracks */)
+	entry := h.names.RegisterSubscriber(
+		msg.TrackNamespacePrefix,
+		h.sess,
+		req.Stream,
+		true, /* wantsTracks */
+		forward,
+		groupOrder,
+	)
 	defer h.names.UnregisterSubscriber(entry)
 
 	// REQUEST_OK acks go through entry.WriteMessage so they serialise with
 	// the PUBLISH_SKIPPED notifications concurrent PUBLISH handlers write
 	// to this stream (emitPublishSkipped).
 	h.serveNamespaceFollowups(ctx, req.Stream, entry.WriteMessage)
+}
+
+// subscribeTracksForwarding resolves the FORWARD (§10.2.17) and GROUP_ORDER
+// (§10.2.8) parameters a SUBSCRIBE_TRACKS carries. §10.19.1 copies both onto
+// the PUBLISH messages the subscription triggers: forward defaults to true
+// (FORWARD omitted or 1; only 0 means "don't forward"); groupOrder is 0 when
+// omitted (the publisher's default applies) or the Ascending/Descending value.
+// An out-of-range value is a *paramProtocolViolation (§10.2.8 / §10.2.17: the
+// caller MUST close the session), shared with installSubscribeParams.
+func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder byte, err error) {
+	if err := checkForwardParam(ps); err != nil {
+		return false, 0, err
+	}
+	if err := checkGroupOrderParam(ps); err != nil {
+		return false, 0, err
+	}
+	forward = true
+	if p, ok := ps.Find(message.ParamForward); ok {
+		forward = p.Byte != 0
+	}
+	if p, ok := ps.Find(message.ParamGroupOrder); ok {
+		groupOrder = p.Byte
+	}
+	return forward, groupOrder, nil
 }
 
 // serveNamespaceFollowups holds a namespace request stream open (the §6.1 /

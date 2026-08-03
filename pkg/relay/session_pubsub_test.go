@@ -150,6 +150,85 @@ func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 		// Pin the current behaviour so we notice when remapping arrives.
 		t.Fatalf("forwarded TrackAlias = %d, want 99 (preserves the publisher's alias)", pub.TrackAlias)
 	}
+	// §10.19.1: the SUBSCRIBE_TRACKS omitted FORWARD and GROUP_ORDER, so the
+	// forwarded PUBLISH carries neither (FORWARD defaults to 1, GROUP_ORDER to
+	// the publisher's preference).
+	if p, ok := pub.Parameters.Find(message.ParamForward); ok {
+		t.Errorf("forwarded FORWARD present (=%d), want omitted", p.Byte)
+	}
+	if p, ok := pub.Parameters.Find(message.ParamGroupOrder); ok {
+		t.Errorf("forwarded GROUP_ORDER present (=%d), want omitted", p.Byte)
+	}
+}
+
+// TestPublish_ForwardsSubscribeTracksParams pins §10.19.1: the FORWARD
+// (§10.2.17) and GROUP_ORDER (§10.2.8) parameters on a SUBSCRIBE_TRACKS are
+// copied onto the PUBLISH the relay generates for that subscriber.
+func TestPublish_ForwardsSubscribeTracksParams(t *testing.T) {
+	t.Parallel()
+	subSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		Parameters: message.Parameters{
+			message.ForwardParam(false),
+			message.GroupOrderParam(message.GroupOrderDescending),
+		},
+	})
+	if err != nil {
+		t.Fatalf("SubscribeTracks: %v", err)
+	}
+	defer subStream.Close()
+
+	pubSess := dialAnotherClient(t, subSess)
+	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
+		Namespace:  wire.TrackNamespace{[]byte("video"), []byte("cam7")},
+		Name:       []byte("rtp"),
+		TrackAlias: 99,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer pubStream.Close()
+
+	req, err := subSess.AcceptRequest(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptRequest: %v", err)
+	}
+	pub, ok := req.First.(*message.Publish)
+	if !ok {
+		t.Fatalf("got %T, want *message.Publish", req.First)
+	}
+	if p, ok := pub.Parameters.Find(message.ParamForward); !ok || p.Byte != 0 {
+		t.Errorf("forwarded FORWARD = %d (present=%v), want 0", p.Byte, ok)
+	}
+	if p, ok := pub.Parameters.Find(message.ParamGroupOrder); !ok ||
+		message.GroupOrder(p.Byte) != message.GroupOrderDescending {
+		t.Errorf("forwarded GROUP_ORDER = %d (present=%v), want Descending (0x2)", p.Byte, ok)
+	}
+}
+
+// TestSubscribeTracks_InvalidGroupOrderClosesSession pins §10.2.8: a
+// SUBSCRIBE_TRACKS carrying a GROUP_ORDER outside {Ascending, Descending} is a
+// session-level PROTOCOL_VIOLATION, so the relay closes the whole session.
+func TestSubscribeTracks_InvalidGroupOrderClosesSession(t *testing.T) {
+	t.Parallel()
+	subSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	_, _ = subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		Parameters: message.Parameters{
+			message.GroupOrderParam(message.GroupOrder(0x07)), // out of range
+		},
+	})
+
+	select {
+	case <-subSess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("session not closed after out-of-range GROUP_ORDER SUBSCRIBE_TRACKS (§10.2.8)")
+	}
 }
 
 // TestPublish_DuplicateAliasRejected pins the §11.1 duplicate-alias rule:
