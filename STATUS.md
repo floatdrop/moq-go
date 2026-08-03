@@ -2,7 +2,7 @@
 
 Tracks this codebase's implementation of
 [`draft-ietf-moq-transport-19`](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/19/)
-(plus [`-loc-02`](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) and
+(plus [`-loc-04`](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) and
 [`-msf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) at the edges).
 
 ## Overall: ~98% complete
@@ -45,8 +45,9 @@ By package, bottom-up along the dependency stack:
   §11.4.2/§11.4.4 deltas to absolute IDs, GOAWAY, the §10.20 token cache, and
   pluggable transport via the `Conn` interface (`quicconn` + `wtconn` adapters).
 - **`loc`** — `Object.Encode`/`Decode`: typed Timestamp/Timescale/VideoConfig/
-  VideoFrameMarking/AudioLevel properties with `Extras` passthrough for unknown
-  IDs, an RFC 6464 audio-level codec, and AVC/HEVC NAL framing detection.
+  VideoFrameMarking/AudioConfig/AudioLevel properties with `Extras` passthrough
+  for unknown IDs, an RFC 6464 audio-level codec, and AVC/HEVC NAL framing
+  detection.
 - **`msf`** — `Catalog`/`Track` JSON (independent and delta catalogs, with
   `Apply` replaying delta operations in document order), group-ID sequencing,
   the Media and Event Timeline record formats, the `BeginBroadcast`/

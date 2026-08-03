@@ -9,7 +9,7 @@ transport-agnostic session library, a single-instance reference relay, media
 packaging libraries, and demo publisher/subscriber CLIs.
 
 - [Media over QUIC Transport (MoQT)](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) — `draft-ietf-moq-transport-19`
-- [Low Overhead Media Container (LOC)](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) — `draft-ietf-moq-loc-02`
+- [Low Overhead Media Container (LOC)](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) — `draft-ietf-moq-loc-04`
 - [MoQ Streaming Format (MSF)](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) — `draft-ietf-moq-msf-01`
 
 This is library + reference-relay code, not a media player. Payloads are opaque

@@ -2,7 +2,7 @@
 
 A minimal end-to-end demo of the MOQT Streaming Format
 (draft-ietf-moq-msf-01) layered on top of LOC
-(draft-ietf-moq-loc-02) and MoQ Transport
+(draft-ietf-moq-loc-04) and MoQ Transport
 (draft-ietf-moq-transport-19).
 
 One binary, two modes:
