@@ -52,7 +52,7 @@ Flag hand-rolled logic where the stdlib already does it: manual dedup/sort/conta
 
 Pull directly from root `CLAUDE.md`'s "Doing tasks" conventions — treat it as this repo's rigor bar (its equivalent of a tigerstyle-type standard), not a generic checklist:
 
-- No abstractions, helpers, or config knobs beyond what the change needs.
+- No abstractions, helpers, or config knobs beyond what the change needs or the specification defines. A helper the pinned IETF draft calls for — an encoder/decoder, validator, or evaluation primitive named by the spec — is in-scope even if the current commit doesn't yet consume it end-to-end; do not flag such spec-defined surface as "unused."
 - No error handling/validation for scenarios that can't happen given internal invariants; only validate at real system boundaries.
 - Comments only where the WHY is genuinely non-obvious — no restating what the code does.
 - Error/reset codes use the named constants in `pkg/moqt/errors.go`, not magic numbers.
