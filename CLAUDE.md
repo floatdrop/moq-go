@@ -106,3 +106,12 @@ Only retrieve the sections relevant to the task at hand.
   publish-done, and per-stream `StreamReset*` codes) — use the named constant.
 - Targets a recent Go (1.26.3); prefer modern idioms (the `use-modern-go` skill
   encodes the specifics).
+
+## Before committing
+
+Run `/moqt-review` on the pending change before creating a commit. It checks
+IETF draft compliance (correct `§X.Y` citations and matching wire behavior),
+reinvented standard-library logic, and adherence to the conventions above —
+distinct from `/code-review` (general bugs/simplification) and `use-modern-go`
+(Go-version idioms), which cover their own concerns and shouldn't be
+duplicated by it.
