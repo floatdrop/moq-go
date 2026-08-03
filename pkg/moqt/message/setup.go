@@ -17,6 +17,7 @@ const (
 	SetupOptionMaxAuthTokenCache  SetupOption = 0x04
 	SetupOptionAuthority          SetupOption = 0x05
 	SetupOptionMOQTImplementation SetupOption = 0x07
+	SetupOptionMaxRequestUpdates  SetupOption = 0x08
 )
 
 // Setup carries the SETUP message payload (§10.3). Setup Options span the
@@ -54,6 +55,16 @@ func MOQTImplementationOption(nameAndVersion string) wire.KVPair {
 // of token Aliases.
 func MaxAuthTokenCacheSizeOption(maxBytes uint64) wire.KVPair {
 	return wire.KVPair{Type: uint64(SetupOptionMaxAuthTokenCache), IntVal: maxBytes}
+}
+
+// MaxRequestUpdatesOption builds a MAX_REQUEST_UPDATES option (§10.3.1.7).
+// maxUpdates is the maximum number of unacknowledged REQUEST_UPDATE messages
+// the peer may have outstanding on any single request stream; the receiver of
+// a REQUEST_UPDATE that exceeds it MUST close the session with
+// TOO_MANY_REQUEST_UPDATES. The default if omitted is 0, which means the
+// endpoint does not limit REQUEST_UPDATE concurrency.
+func MaxRequestUpdatesOption(maxUpdates uint64) wire.KVPair {
+	return wire.KVPair{Type: uint64(SetupOptionMaxRequestUpdates), IntVal: maxUpdates}
 }
 
 func (m *Setup) Type() Type { return TypeSetup }

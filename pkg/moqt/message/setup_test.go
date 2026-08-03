@@ -12,6 +12,7 @@ func TestSetupRoundTrip(t *testing.T) {
 			PathOption("/relay"),
 			MaxAuthTokenCacheSizeOption(16 * 1024),
 			MOQTImplementationOption("mediamesh/dev"),
+			MaxRequestUpdatesOption(4),
 		},
 	})
 }

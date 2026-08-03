@@ -252,6 +252,13 @@ func (h *sessionHandler) runRequestLoop(ctx context.Context) error {
 			slog.Uint64("code", uint64(tce.Code)))
 		_ = h.sess.Close(tce.Code, tce.Error())
 	}
+	// §10.9: a REQUEST_UPDATE that opens a request stream is a PROTOCOL_VIOLATION
+	// AcceptRequest surfaces as *ErrUnexpectedRequestUpdate; close the session.
+	if _, ok := errors.AsType[*session.ErrUnexpectedRequestUpdate](err); ok {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "relay closing session on stray REQUEST_UPDATE",
+			slog.String("err", err.Error()))
+		_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+	}
 	return err
 }
 
@@ -467,6 +474,23 @@ func (h *sessionHandler) handleFollowupRequestID(ctx context.Context, upd *messa
 	h.log.LogAttrs(ctx, slog.LevelDebug, "relay closing session on follow-up Request ID violation",
 		slog.String("err", err.Error()))
 	_ = h.sess.Close(moqt.SessionInvalidRequestID, err.Error())
+	return false
+}
+
+// handleRequestUpdateLimit charges one credit on lim for a received
+// REQUEST_UPDATE and enforces the per-stream MAX_REQUEST_UPDATES limit
+// (§10.3.1.7). Exceeding it is session-fatal (TOO_MANY_REQUEST_UPDATES);
+// returns false when the session was closed, in which case the caller's read
+// loop should stop. The caller invokes lim.Responded once it has written the
+// mandated REQUEST_OK/REQUEST_ERROR.
+func (h *sessionHandler) handleRequestUpdateLimit(ctx context.Context, lim *session.RequestUpdateLimiter) bool {
+	err := lim.Received()
+	if err == nil {
+		return true
+	}
+	h.log.LogAttrs(ctx, slog.LevelDebug, "relay closing session on REQUEST_UPDATE limit",
+		slog.String("err", err.Error()))
+	_ = h.sess.Close(moqt.SessionTooManyRequestUpdates, err.Error())
 	return false
 }
 

@@ -115,6 +115,12 @@ type Session struct {
 	// via WithTokenVerifier; never mutated, so no lock is required.
 	tokenVerifier TokenVerifier
 
+	// maxRequestUpdates is the per-request-stream limit on unacknowledged
+	// inbound REQUEST_UPDATEs we advertised via MAX_REQUEST_UPDATES
+	// (§10.3.1.7). 0 means unlimited. Set once at construction via
+	// WithMaxRequestUpdates; read by NewRequestUpdateLimiter, so no lock.
+	maxRequestUpdates uint64
+
 	closeOnce sync.Once
 	// closeErr holds the *ClosedError cause; atomic because Err may
 	// be called at any time, not only after Done fires.
@@ -158,6 +164,7 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 		knownMandatoryTrackProperties: cfg.knownMandatoryTrackProperties,
 		tokenCache:                    NewTokenCache(cfg.maxAuthTokenCacheSize),
 		tokenVerifier:                 cfg.tokenVerifier,
+		maxRequestUpdates:             cfg.maxRequestUpdates,
 	}
 	var first uint64
 	if r == roleServer {

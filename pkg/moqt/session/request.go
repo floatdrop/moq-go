@@ -51,6 +51,83 @@ func (e *ErrDuplicateRequestID) Error() string {
 	)
 }
 
+// ErrUnexpectedRequestUpdate is returned by AcceptRequest when a peer opens a
+// request stream whose first message is a REQUEST_UPDATE. §10.9 permits
+// REQUEST_UPDATE only as a follow-up on an existing request stream (or against
+// a PUBLISH-established subscription); a REQUEST_UPDATE in any other position
+// is a PROTOCOL_VIOLATION. The caller MUST close the session with
+// SessionProtocolViolation.
+type ErrUnexpectedRequestUpdate struct {
+	RequestID uint64
+}
+
+func (e *ErrUnexpectedRequestUpdate) Error() string {
+	return fmt.Sprintf(
+		"moqt/session: REQUEST_UPDATE (Request ID %d) as the first message of a request stream — PROTOCOL_VIOLATION",
+		e.RequestID,
+	)
+}
+
+// ErrTooManyRequestUpdates is returned by [RequestUpdateLimiter.Received] when
+// a peer exceeds the per-request-stream MAX_REQUEST_UPDATES limit it was
+// advertised (§10.3.1.7). The caller MUST close the session with
+// SessionTooManyRequestUpdates.
+type ErrTooManyRequestUpdates struct {
+	Limit uint64
+}
+
+func (e *ErrTooManyRequestUpdates) Error() string {
+	return fmt.Sprintf(
+		"moqt/session: peer exceeded MAX_REQUEST_UPDATES (%d) outstanding on a request stream — TOO_MANY_REQUEST_UPDATES",
+		e.Limit,
+	)
+}
+
+// RequestUpdateLimiter enforces the receive-side MAX_REQUEST_UPDATES limit
+// (§10.3.1.7) for a single request stream. A REQUEST_UPDATE is "outstanding"
+// from when it is received until this endpoint writes the mandated
+// REQUEST_OK/REQUEST_ERROR; the sender may not have more than the advertised
+// limit outstanding at once. Construct one per stream via
+// [Session.NewRequestUpdateLimiter].
+//
+// A limiter is not safe for concurrent use, which matches the single-reader
+// invariant of the follow-up loops ([RequestBroker.Serve] and the relay's
+// per-stream readers). A limit of 0 (the default, meaning the option was not
+// advertised) disables the check.
+type RequestUpdateLimiter struct {
+	limit       uint64
+	outstanding uint64
+}
+
+// NewRequestUpdateLimiter returns a limiter seeded with the MAX_REQUEST_UPDATES
+// value this session advertised to the peer.
+func (s *Session) NewRequestUpdateLimiter() *RequestUpdateLimiter {
+	return &RequestUpdateLimiter{limit: s.maxRequestUpdates}
+}
+
+// Received records an inbound REQUEST_UPDATE. It returns
+// [*ErrTooManyRequestUpdates] when the stream already holds the advertised
+// limit of outstanding updates (§10.3.1.7: the endpoint MUST then close the
+// session with TOO_MANY_REQUEST_UPDATES); the caller owns that close, mirroring
+// [Session.CheckPeerRequestID]. On success the update counts as outstanding
+// until a matching [RequestUpdateLimiter.Responded].
+func (l *RequestUpdateLimiter) Received() error {
+	if l.limit != 0 && l.outstanding >= l.limit {
+		return &ErrTooManyRequestUpdates{Limit: l.limit}
+	}
+	l.outstanding++
+	return nil
+}
+
+// Responded releases the credit a successful [RequestUpdateLimiter.Received]
+// took, once this endpoint has written the mandated REQUEST_OK/REQUEST_ERROR.
+// Callers pair it with exactly one Received that returned nil (a Received that
+// errored closes the session and never reaches here), so outstanding is always
+// at least 1 on entry.
+func (l *RequestUpdateLimiter) Responded() {
+	l.outstanding--
+}
+
 // RequestRejectedError is returned by Publish / Subscribe when the peer
 // answers a request with REQUEST_ERROR (§10.5). Callers can detect it via
 // errors.As and inspect Code / Reason.
@@ -128,6 +205,16 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 				return nil, ctx.Err()
 			}
 			return nil, fmt.Errorf("moqt/session: parse request first message: %w", err)
+		}
+
+		// §10.9: REQUEST_UPDATE is valid only as a follow-up on an existing
+		// request stream (or against a PUBLISH-established subscription), never
+		// as the message that opens a stream. Receiving one here is a
+		// PROTOCOL_VIOLATION; the caller MUST close the session
+		// (SessionProtocolViolation), as with the Request-ID violations below.
+		if upd, ok := msg.(*message.RequestUpdate); ok {
+			resetStream(stream)
+			return nil, &ErrUnexpectedRequestUpdate{RequestID: upd.RequestID}
 		}
 
 		// §10.1 parity + duplicate enforcement, shared with the follow-up

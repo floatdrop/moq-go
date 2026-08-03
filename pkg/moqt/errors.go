@@ -30,6 +30,7 @@ const (
 	SessionExpiredAuthToken         SessionErrorCode = 0x18
 	SessionInvalidAuthority         SessionErrorCode = 0x19
 	SessionMalformedAuthority       SessionErrorCode = 0x1A
+	SessionTooManyRequestUpdates    SessionErrorCode = 0x1B
 )
 
 // RequestErrorCode is a REQUEST_ERROR code (§10.6, IANA §15.10.2).

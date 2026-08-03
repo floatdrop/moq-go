@@ -174,13 +174,13 @@ By package, bottom-up along the dependency stack:
 | 10.3.1.4| AUTHORIZATION_TOKEN (setup)   | 0x03   | DONE   | |
 | 10.3.1.5| MOQT_IMPLEMENTATION           | 0x07   | DONE   | Advisory. |
 | 10.3.1.6| MAX_FILTER_RANGES             | 0x06   | MISSING| Not yet implemented; see §5.1.3 gap. |
-| 10.3.1.7| MAX_REQUEST_UPDATES           | 0x08   | MISSING| Not yet implemented; see Known protocol gaps. |
+| 10.3.1.7| MAX_REQUEST_UPDATES           | 0x08   | DONE   | `WithMaxRequestUpdates` advertises the per-stream limit; enforced on inbound follow-ups via `RequestUpdateLimiter`, closing with `TOO_MANY_REQUEST_UPDATES` on overflow. |
 | 10.4    | GOAWAY                        | 0x10   | DONE   | Same encoding on control and request streams (draft-19 dropped the Request ID field); callback. |
 | 10.5    | REQUEST_OK                    | 0x07   | DONE   | Shared OK for PUBLISH/UPDATE/TRACK_STATUS/namespace reqs. |
 | 10.6    | REQUEST_ERROR (+ Redirect)    | 0x05   | DONE   | Redirect required only when code==REDIRECT. |
 | 10.7    | SUBSCRIBE                     | 0x03   | DONE   | |
 | 10.8    | SUBSCRIBE_OK                  | 0x04   | DONE   | Registers inbound track alias. |
-| 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | |
+| 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | A REQUEST_UPDATE opening a request stream is rejected as a PROTOCOL_VIOLATION (`ErrUnexpectedRequestUpdate`). |
 | 10.10   | PUBLISH                       | 0x1D   | DONE   | |
 | 10.11   | PUBLISH_DONE                  | 0x0B   | DONE   | |
 | 10.12   | FETCH (standalone + joining)  | 0x16   | DONE   | All three fetch types. |
@@ -271,9 +271,6 @@ behavior changes are not yet implemented and are not reflected in the
   `PRIORITY_FILTER`/`OBJECT_PROPERTY_FILTER`/`TRACK_PROPERTY_FILTER`, the
   `MAX_FILTER_RANGES` setup option (§10.3.1.6), and `INVALID_FILTER` are
   entirely unimplemented — this is the largest new feature in draft-19.
-- **`MAX_REQUEST_UPDATES` (§10.3.1.7) / `TOO_MANY_REQUEST_UPDATES`** — no
-  outstanding-REQUEST_UPDATE limit or PROTOCOL_VIOLATION check for a
-  REQUEST_UPDATE arriving outside a SUBSCRIBE-family/PUBLISH stream.
 - **`OBJECT_DELIVERY_TIMEOUT`/`SUBGROUP_DELIVERY_TIMEOUT` as Object Properties**
   — still Track-only; draft-19 allows a subgroup's first object to override
   the Track-level value.
@@ -289,6 +286,17 @@ behavior changes are not yet implemented and are not reflected in the
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
 
+- **`MAX_REQUEST_UPDATES` enforcement is receive-side only, and cannot trip
+  under our own processing (§10.3.1.7)** — we advertise the limit and enforce
+  it on inbound follow-ups (`RequestUpdateLimiter`), but every follow-up reader
+  (`RequestBroker.Serve`, the relay's per-stream loops) answers each
+  REQUEST_UPDATE synchronously before reading the next, so a stream never holds
+  more than one outstanding update and the check only ever fires against a peer
+  that pipelines faster than a hypothetical async responder would drain. §10.3.1.7
+  explicitly permits an immediate responder not to detect such a peer. We do not
+  self-limit *outbound* REQUEST_UPDATEs against a peer's advertised value for the
+  same reason: `UpdateRequest`/`RequestBroker.Update` are synchronous
+  write-then-read, so they never exceed any limit ≥ 1.
 - **Late publisher pickup (§9.5)** — multiple publishers per track are merged
   and deduplicated, but a publisher (or remote relay) that begins advertising
   *after* a track's upstream set is established is not retroactively pulled in

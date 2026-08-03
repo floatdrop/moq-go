@@ -116,11 +116,16 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 // REQUEST_UPDATE (§10.9) routes to [sessionHandler.handleFetchUpdate]; any
 // other follow-up is ignored. Scaffolding lives in [readRequestStream].
 func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Request, out *session.OutgoingFetchStream) {
+	updates := h.sess.NewRequestUpdateLimiter()
 	readRequestStream(ctx, req.Stream, func(m message.Message) bool {
 		if upd, ok := m.(*message.RequestUpdate); ok {
 			// §10.1: the update consumes a Request ID; a parity or
 			// duplicate violation is session-fatal.
 			if !h.handleFollowupRequestID(ctx, upd) {
+				return false
+			}
+			// §10.3.1.7: enforce the per-stream MAX_REQUEST_UPDATES limit.
+			if !h.handleRequestUpdateLimit(ctx, updates) {
 				return false
 			}
 			// §10.2.2: an update may REGISTER/DELETE token aliases;
@@ -129,6 +134,7 @@ func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Requ
 				return false
 			}
 			h.handleFetchUpdate(ctx, req, out, upd)
+			updates.Responded()
 		}
 		return true
 	})

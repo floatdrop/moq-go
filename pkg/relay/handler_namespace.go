@@ -209,12 +209,17 @@ func (h *sessionHandler) serveNamespaceFollowups(
 	stream session.Stream,
 	write func(message.Message) error,
 ) {
+	updates := h.sess.NewRequestUpdateLimiter()
 	readRequestStream(ctx, stream, func(m message.Message) bool {
 		upd, ok := m.(*message.RequestUpdate)
 		if !ok {
 			return true
 		}
 		if !h.handleFollowupRequestID(ctx, upd) {
+			return false
+		}
+		// §10.3.1.7: enforce the per-stream MAX_REQUEST_UPDATES limit.
+		if !h.handleRequestUpdateLimit(ctx, updates) {
 			return false
 		}
 		if !h.handleFollowupTokens(ctx, upd) {
@@ -231,6 +236,7 @@ func (h *sessionHandler) serveNamespaceFollowups(
 			stream.CancelRead(uint64(moqt.StreamResetInternalError))
 			return false
 		}
+		updates.Responded()
 		return true
 	})
 }

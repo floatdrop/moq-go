@@ -24,6 +24,13 @@ type config struct {
 	// default (0) prohibits alias registration per §10.3.1.3.
 	maxAuthTokenCacheSize uint64
 
+	// maxRequestUpdates is the per-request-stream limit on unacknowledged
+	// inbound REQUEST_UPDATEs (§10.3.1.7). It mirrors the value advertised to
+	// the peer via MAX_REQUEST_UPDATES and is captured here by
+	// WithMaxRequestUpdates so the session can enforce it on the receive side.
+	// The default (0) means REQUEST_UPDATE concurrency is not limited.
+	maxRequestUpdates uint64
+
 	// tokenVerifier is the optional application policy that turns a resolved
 	// (Type, Value) authorization token into an allow/deny decision. nil
 	// disables verification (all tokens are accepted by the transport; the
@@ -67,6 +74,23 @@ func WithMaxAuthTokenCacheSize(maxBytes uint64) Option {
 	return func(c *config) {
 		c.maxAuthTokenCacheSize = maxBytes
 		c.setupOptions = append(c.setupOptions, message.MaxAuthTokenCacheSizeOption(maxBytes))
+	}
+}
+
+// WithMaxRequestUpdates sets MAX_REQUEST_UPDATES (§10.3.1.7) — the maximum
+// number of unacknowledged REQUEST_UPDATE messages this endpoint is willing to
+// receive on any single request stream. The value is both advertised to the
+// peer in SETUP and enforced on inbound follow-ups: a REQUEST_UPDATE that
+// arrives while the stream already holds max outstanding updates closes the
+// session with TOO_MANY_REQUEST_UPDATES.
+//
+// A REQUEST_UPDATE is outstanding from receipt until this endpoint writes the
+// mandated REQUEST_OK/REQUEST_ERROR. The default (option absent, or 0) does not
+// limit REQUEST_UPDATE concurrency.
+func WithMaxRequestUpdates(maxUpdates uint64) Option {
+	return func(c *config) {
+		c.maxRequestUpdates = maxUpdates
+		c.setupOptions = append(c.setupOptions, message.MaxRequestUpdatesOption(maxUpdates))
 	}
 }
 

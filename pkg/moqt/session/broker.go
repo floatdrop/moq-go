@@ -263,6 +263,10 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 	})
 	defer stop()
 
+	// §10.3.1.7: per-stream MAX_REQUEST_UPDATES enforcement. One limiter per
+	// stream, since the limit is scoped to a single request stream.
+	updates := b.sess.NewRequestUpdateLimiter()
+
 	for {
 		msg, err := message.Parse(b.stream)
 		if err != nil {
@@ -303,6 +307,12 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 				_ = b.sess.Close(moqt.SessionInvalidRequestID, err.Error())
 				return err
 			}
+			// §10.3.1.7: reject a REQUEST_UPDATE that exceeds the per-stream
+			// MAX_REQUEST_UPDATES limit before acting on it.
+			if err := updates.Received(); err != nil {
+				_ = b.sess.Close(moqt.SessionTooManyRequestUpdates, err.Error())
+				return err
+			}
 			// §10.9: the receiver of a REQUEST_UPDATE "MUST respond with
 			// exactly one REQUEST_OK or REQUEST_ERROR". The broker keeps
 			// no mutable per-request parameters, so the update is
@@ -310,6 +320,7 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 			if err := b.WriteMessage(&message.RequestOK{}); err != nil {
 				return fmt.Errorf("moqt/session: write REQUEST_UPDATE_OK: %w", err)
 			}
+			updates.Responded()
 		}
 
 		if onMsg != nil && !onMsg(msg) {

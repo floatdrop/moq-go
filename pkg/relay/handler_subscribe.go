@@ -221,11 +221,16 @@ func (h *sessionHandler) readSubscribeUpdates(
 	sub *registry.DownstreamSub,
 	fullName track.FullTrackName,
 ) {
+	updates := h.sess.NewRequestUpdateLimiter()
 	readRequestStream(ctx, req.Stream, func(m message.Message) bool {
 		if upd, ok := m.(*message.RequestUpdate); ok {
 			// §10.1: the update consumes a Request ID; a parity or
 			// duplicate violation is session-fatal.
 			if !h.handleFollowupRequestID(ctx, upd) {
+				return false
+			}
+			// §10.3.1.7: enforce the per-stream MAX_REQUEST_UPDATES limit.
+			if !h.handleRequestUpdateLimit(ctx, updates) {
 				return false
 			}
 			// §10.2.2: an update may REGISTER/DELETE token aliases;
@@ -234,6 +239,7 @@ func (h *sessionHandler) readSubscribeUpdates(
 				return false
 			}
 			h.handleSubscribeUpdate(ctx, sub, fullName, upd)
+			updates.Responded()
 		}
 		return true
 	})
