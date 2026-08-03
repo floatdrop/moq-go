@@ -74,7 +74,7 @@ func main() {
 	)
 	flag.Parse()
 
-	logger := slog.New(tint.NewHandler(os.Stderr, &tint.Options{
+	logger := slog.New(tint.NewTextHandler(os.Stderr, &tint.Options{
 		Level:      slog.LevelDebug,
 		TimeFormat: time.TimeOnly,
 	}))
