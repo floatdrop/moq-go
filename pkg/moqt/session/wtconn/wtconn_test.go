@@ -87,7 +87,7 @@ func newLoopbackConns(t *testing.T) (client, server session.Conn) {
 	addr := udpConn.LocalAddr().String()
 
 	// Dial from the client side.
-	dialer := webtransport.Dialer{
+	dialer := webtransport.Transport{
 		TLSClientConfig: &tls.Config{
 			RootCAs:    certPool,
 			NextProtos: []string{http3.NextProtoH3},
@@ -281,7 +281,7 @@ func TestListener_AcceptYieldsSessionConn(t *testing.T) {
 		srvConn, srvErr = listener.Accept(ctx)
 	})
 	wg.Go(func() {
-		dialer := webtransport.Dialer{
+		dialer := webtransport.Transport{
 			TLSClientConfig: &tls.Config{
 				RootCAs:    certPool,
 				NextProtos: []string{http3.NextProtoH3},
