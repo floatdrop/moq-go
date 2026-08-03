@@ -12,7 +12,67 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
+
+// TestObjectDeliveryTimeoutObjectPropertyOverride verifies the §12.2
+// first-object override: the Track-level OBJECT_DELIVERY_TIMEOUT is long, but
+// the first object of the subgroup carries an OBJECT_DELIVERY_TIMEOUT Object
+// Property that shortens it, so a later write past the short (overridden)
+// timeout resets the stream. If the override were ignored, the long Track-level
+// timeout would let the second write through.
+func TestObjectDeliveryTimeoutObjectPropertyOverride(t *testing.T) {
+	client, server := openPair(t)
+
+	const (
+		trackTimeout    = 10 * time.Second      // long: must NOT be what fires
+		overrideTimeout = 20 * time.Millisecond // short: the first-object override
+	)
+
+	var wg sync.WaitGroup
+	var sendErr error
+
+	wg.Go(func() {
+		ds, err := server.AcceptDataStream(t.Context())
+		if err != nil {
+			return
+		}
+		_, _ = io.Copy(io.Discard, ds)
+	})
+
+	wg.Go(func() {
+		out, err := client.OpenSubgroup(message.SubgroupHeader{TrackAlias: 7, Properties: true})
+		if err != nil {
+			sendErr = err
+			return
+		}
+		out = out.WithDeliveryTimeouts(message.DeliveryTimeouts{Object: trackTimeout})
+
+		// First object carries the OBJECT_DELIVERY_TIMEOUT override (§12.2).
+		first := &message.SubgroupObject{
+			ObjectIDDelta: 0,
+			Properties: message.AppendTrackProperties([]wire.KVPair{
+				{Type: message.PropertyObjectDeliveryTimeout, IntVal: uint64(overrideTimeout / time.Millisecond)},
+			}),
+			Payload: []byte("first"),
+		}
+		if err := out.WriteObject(first); err != nil {
+			sendErr = err
+			return
+		}
+
+		// Wait past the overridden (short) timeout, then write a second object.
+		time.Sleep(overrideTimeout * 3)
+		second := &message.SubgroupObject{ObjectIDDelta: 1, Properties: []byte{}, Payload: []byte("second")}
+		sendErr = out.WriteObject(second)
+	})
+
+	wg.Wait()
+
+	if !errors.Is(sendErr, session.ErrDeliveryTimeout) {
+		t.Errorf("WriteObject() error = %v, want ErrDeliveryTimeout (override should shorten the timeout)", sendErr)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // OBJECT_DELIVERY_TIMEOUT: Write() enforcement

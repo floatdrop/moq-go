@@ -215,8 +215,8 @@ By package, bottom-up along the dependency stack:
 
 | §     | Property                       | Type | Status | Notes |
 |-------|--------------------------------|------|--------|-------|
-| 12.1  | SUBGROUP_DELIVERY_TIMEOUT      | 0x06 | DONE   | |
-| 12.2  | OBJECT_DELIVERY_TIMEOUT        | 0x02 | DONE   | |
+| 12.1  | SUBGROUP_DELIVERY_TIMEOUT      | 0x06 | DONE   | Track + Object Property; the first object of a subgroup overrides the Track-level value (§8 resolution in `message.DeliveryTimeouts`, enforced in `OutgoingSubgroupStream`). |
+| 12.2  | OBJECT_DELIVERY_TIMEOUT        | 0x02 | DONE   | Track + Object Property; first-object override, as §12.1. |
 | 12.3  | MAX_CACHE_DURATION             | 0x04 | DONE   | Lazy age-eviction in cache. |
 | 12.4  | DEFAULT_PUBLISHER_PRIORITY     | 0x0E | DONE   | |
 | 12.5  | DEFAULT_PUBLISHER_GROUP_ORDER  | 0x22 | DONE   | Validated. |
@@ -266,19 +266,26 @@ to `-19` (GOAWAY Request ID removal, `PUBLISH_SKIPPED`, `LOCATION_FILTER`,
 removing `DUPLICATE_SUBSCRIPTION`) are done, as are the substantive behavior
 changes for `MAX_REQUEST_UPDATES` (§10.3.1.7), the §10.19.1 SUBSCRIBE_TRACKS
 FORWARD/GROUP_ORDER passthrough, the §9.2 upstream Forward rule, and the
-single-PUBLISH `PUBLISH_SKIPPED` lifetime (§6.1). The remaining -19 behavior
-changes are not yet implemented and are not reflected in the "~98% complete"
-figure above:
+single-PUBLISH `PUBLISH_SKIPPED` lifetime (§6.1), and the §12.1/§12.2 first-object
+`OBJECT`/`SUBGROUP_DELIVERY_TIMEOUT` override. The remaining -19 behavior change
+is not yet implemented and is not reflected in the "~98% complete" figure above:
 
 - **Range Filters (new §5.1.3/§10.2.10-14)** — `SUBGROUP_FILTER`/`OBJECTID_FILTER`/
   `PRIORITY_FILTER`/`OBJECT_PROPERTY_FILTER`/`TRACK_PROPERTY_FILTER`, the
   `MAX_FILTER_RANGES` setup option (§10.3.1.6), and `INVALID_FILTER` are
   entirely unimplemented — this is the largest new feature in draft-19.
-- **`OBJECT_DELIVERY_TIMEOUT`/`SUBGROUP_DELIVERY_TIMEOUT` as Object Properties**
-  — still Track-only; draft-19 allows a subgroup's first object to override
-  the Track-level value.
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
+
+- **Delivery-timeout enforcement is stream-API-level, not auto-wired (§8)** —
+  `OutgoingSubgroupStream` enforces `OBJECT`/`SUBGROUP_DELIVERY_TIMEOUT`
+  (including the §12.1/§12.2 first-object override) once
+  `WithDeliveryTimeouts` is set, and `message.DeliveryTimeouts.Effective`
+  implements the §8 publisher/subscriber "smaller of two non-zero" resolution.
+  But the relay does not yet source the Track-level value from SUBSCRIBE_OK /
+  SUBSCRIBE params and apply it on the subgroups it opens, and the inbound
+  (subscriber-side) path enforces no timeout — so end-to-end timeout behaviour
+  is opt-in via the stream API rather than automatic.
 
 - **`MAX_REQUEST_UPDATES` enforcement is receive-side only, and cannot trip
   under our own processing (§10.3.1.7)** — we advertise the limit and enforce

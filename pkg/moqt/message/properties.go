@@ -14,12 +14,16 @@ type PropertyType = uint64
 // Property type constants from §12 and the IANA registry (Table 14).
 // All types listed here are from draft-ietf-moq-transport-19.
 const (
-	// PropertySubgroupDeliveryTimeout (0x06) is a Track Property (§12.1).
-	// Value: varint (milliseconds). Semantics defined in §8.
+	// PropertySubgroupDeliveryTimeout (0x06) is a Track or Object Property
+	// (§12.1). Value: varint (milliseconds). Semantics defined in §8. As an
+	// Object Property on the first object in a subgroup it overrides the
+	// Track-level value for that subgroup; it is ignored on any other object.
 	PropertySubgroupDeliveryTimeout PropertyType = 0x06
 
-	// PropertyObjectDeliveryTimeout (0x02) is a Track Property (§12.2).
-	// Value: varint (milliseconds). Semantics defined in §8.
+	// PropertyObjectDeliveryTimeout (0x02) is a Track or Object Property
+	// (§12.2). Value: varint (milliseconds). Semantics defined in §8. As an
+	// Object Property on the first object in a subgroup it overrides the
+	// Track-level value for that subgroup; it is ignored on any other object.
 	PropertyObjectDeliveryTimeout PropertyType = 0x02
 
 	// PropertyMaxCacheDuration (0x04) is a Track Property (§12.3).

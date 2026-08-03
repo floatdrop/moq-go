@@ -25,3 +25,91 @@ func FillTimeoutFromParam(ps Parameters) time.Duration {
 	//nolint:gosec // G115: p.Varint is a peer timeout in ms; an out-of-range value yields a wrong duration, not a memory-safety issue.
 	return time.Duration(p.Varint) * time.Millisecond
 }
+
+// msTimeout converts a varint millisecond count to a time.Duration.
+//
+//nolint:gosec // G115: a timeout in ms; an out-of-range value yields a wrong duration, not a memory-safety issue.
+func msTimeout(ms uint64) time.Duration { return time.Duration(ms) * time.Millisecond }
+
+// ObjectDeliveryTimeoutFromParam extracts OBJECT_DELIVERY_TIMEOUT (§10.2.4)
+// from ps, converting from milliseconds. Returns 0 when absent (§8: 0 disables
+// the timeout).
+func ObjectDeliveryTimeoutFromParam(ps Parameters) time.Duration {
+	p, ok := ps.Find(ParamObjectDeliveryTimeout)
+	if !ok {
+		return 0
+	}
+	return msTimeout(p.Varint)
+}
+
+// SubgroupDeliveryTimeoutFromParam extracts SUBGROUP_DELIVERY_TIMEOUT (§10.2.3)
+// from ps, converting from milliseconds. Returns 0 when absent.
+func SubgroupDeliveryTimeoutFromParam(ps Parameters) time.Duration {
+	p, ok := ps.Find(ParamSubgroupDeliveryTimeout)
+	if !ok {
+		return 0
+	}
+	return msTimeout(p.Varint)
+}
+
+// DeliveryTimeoutsFromParams extracts both delivery timeouts (§10.2.3/§10.2.4)
+// from ps — the form a subscriber communicates them in (§8).
+func DeliveryTimeoutsFromParams(ps Parameters) DeliveryTimeouts {
+	return DeliveryTimeouts{
+		Object:   ObjectDeliveryTimeoutFromParam(ps),
+		Subgroup: SubgroupDeliveryTimeoutFromParam(ps),
+	}
+}
+
+// effectiveDim combines one timeout dimension per §8: "If both the publisher's
+// value and the subscriber's value are non-zero, the smaller of the two is
+// used." A zero value means "no timeout", so it never wins over a non-zero one.
+func effectiveDim(publisher, subscriber time.Duration) time.Duration {
+	switch {
+	case publisher == 0:
+		return subscriber
+	case subscriber == 0:
+		return publisher
+	default:
+		return min(publisher, subscriber)
+	}
+}
+
+// Effective resolves the timeouts a publisher enforces for a subscription per
+// §8: the receiver holds the publisher's values (Track Property, or the
+// first-object Object Property override — see [DeliveryTimeouts.ApplyObjectProperties]),
+// sub holds the subscriber's Message-Parameter values, and each dimension is
+// the smaller of the two non-zero values.
+func (d DeliveryTimeouts) Effective(sub DeliveryTimeouts) DeliveryTimeouts {
+	return DeliveryTimeouts{
+		Object:   effectiveDim(d.Object, sub.Object),
+		Subgroup: effectiveDim(d.Subgroup, sub.Subgroup),
+	}
+}
+
+// ApplyObjectProperties returns d with any OBJECT_DELIVERY_TIMEOUT (§12.2) or
+// SUBGROUP_DELIVERY_TIMEOUT (§12.1) present in rawProps overriding the
+// corresponding dimension. rawProps is the Object-Properties blob of the FIRST
+// object in a subgroup (§12.1/§12.2: on the first object these override the
+// Track-level value for that subgroup; on any other object they are ignored, so
+// callers must invoke this only for the first object). A property present with
+// value 0 overrides to "disabled"; an absent property leaves d's dimension
+// unchanged. Malformed props leave d unchanged.
+func (d DeliveryTimeouts) ApplyObjectProperties(rawProps []byte) DeliveryTimeouts {
+	if len(rawProps) == 0 {
+		return d
+	}
+	pairs, err := ParseTrackProperties(rawProps) // generic KV-pair decode; scope is the caller's
+	if err != nil {
+		return d
+	}
+	for _, kv := range pairs {
+		switch kv.Type {
+		case PropertyObjectDeliveryTimeout:
+			d.Object = msTimeout(kv.IntVal)
+		case PropertySubgroupDeliveryTimeout:
+			d.Subgroup = msTimeout(kv.IntVal)
+		}
+	}
+	return d
+}

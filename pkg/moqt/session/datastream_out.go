@@ -60,6 +60,10 @@ type OutgoingSubgroupStream struct {
 	subgroupTimeout time.Duration // 0 = disabled
 
 	firstObjectTime time.Time // zero = no objects written yet
+	// sawFirstObject gates the §12.1/§12.2 first-object delivery-timeout
+	// override: only the first object of the subgroup may override the
+	// Track-level timeouts, so the override is applied at most once.
+	sawFirstObject bool
 
 	// Encoder state for WriteObjectAt: the running absolute Object ID so each
 	// call only has to apply the §11.4.2 delta. encHavePrev is false until the
@@ -84,6 +88,19 @@ func (s *OutgoingSubgroupStream) WithDeliveryTimeouts(t message.DeliveryTimeouts
 // time since the first WriteObject exceeds the timeout, the stream is reset
 // and ErrDeliveryTimeout is returned.
 func (s *OutgoingSubgroupStream) WriteObject(obj *message.SubgroupObject) error {
+	// §12.1/§12.2: the first object of a subgroup may carry
+	// OBJECT/SUBGROUP_DELIVERY_TIMEOUT as Object Properties that override the
+	// Track-level values for this subgroup; the same properties on later objects
+	// are ignored. Apply before the timeout check so the overridden value takes
+	// effect immediately, and before Close reads subgroupTimeout.
+	if !s.sawFirstObject && s.header.Properties {
+		eff := message.DeliveryTimeouts{Object: s.objectTimeout, Subgroup: s.subgroupTimeout}.
+			ApplyObjectProperties(obj.Properties)
+		s.objectTimeout = eff.Object
+		s.subgroupTimeout = eff.Subgroup
+	}
+	s.sawFirstObject = true
+
 	if err := s.checkObjectTimeout(); err != nil {
 		return err
 	}
