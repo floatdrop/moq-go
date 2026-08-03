@@ -218,6 +218,23 @@ func (s *MemoryStore) FindNamespace(_ context.Context, namespace wire.TrackNames
 	return out, nil
 }
 
+// FindNamespacesUnder returns every advertisement whose Prefix extends prefix
+// (the descendant direction — see [DiscoveryStore.FindNamespacesUnder]).
+func (s *MemoryStore) FindNamespacesUnder(_ context.Context, prefix wire.TrackNamespace) ([]NamespaceInfo, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrClosed
+	}
+	var out []NamespaceInfo
+	for _, v := range s.namespaces {
+		if v.Prefix.HasPrefix(prefix) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
 // WatchTracks delivers the current tracks as an OpPublish snapshot, then every
 // subsequent track event, until ctx is cancelled or the store is closed (see
 // [DiscoveryStore.WatchTracks]). Snapshotting and registering happen under the

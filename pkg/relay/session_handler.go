@@ -14,6 +14,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
+	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
@@ -33,6 +34,8 @@ type sessionHandler struct {
 	metrics             Metrics
 	fetch               *registry.FetchRouter
 	upstreams           *upstreamPool
+	discovery           discovery.DiscoveryStore
+	relayAddr           string
 	sendQueueSize       int
 	maxDropsBeforeReset int
 	maxFanoutLag        time.Duration
@@ -87,6 +90,8 @@ func newSessionHandler(
 	metrics Metrics,
 	fetch *registry.FetchRouter,
 	upstreams *upstreamPool,
+	discovery discovery.DiscoveryStore,
+	relayAddr string,
 	sendQueueSize int,
 	maxDropsBeforeReset int,
 	maxFanoutLag time.Duration,
@@ -103,6 +108,8 @@ func newSessionHandler(
 		metrics:             metrics,
 		fetch:               fetch,
 		upstreams:           upstreams,
+		discovery:           discovery,
+		relayAddr:           relayAddr,
 		sendQueueSize:       sendQueueSize,
 		maxDropsBeforeReset: maxDropsBeforeReset,
 		maxFanoutLag:        maxFanoutLag,

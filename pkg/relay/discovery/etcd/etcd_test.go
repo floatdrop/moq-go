@@ -172,6 +172,36 @@ func TestEtcdStore(t *testing.T) {
 		}
 	})
 
+	t.Run("FindNamespacesUnderDescendantMatch", func(t *testing.T) {
+		s := store("/nsunder/")
+		prefixes := [][]string{
+			{"a"},
+			{"a", "b"},
+			{"a", "b", "c"},
+			{"x"}, // unrelated — must NOT match a query under ["a"]
+		}
+		for _, p := range prefixes {
+			if err := s.PublishNamespace(
+				t.Context(),
+				discovery.NamespaceInfo{Prefix: ns(p...), RelayAddr: "relay-A"},
+			); err != nil {
+				t.Fatalf("PublishNamespace %v: %v", p, err)
+			}
+		}
+		got, err := s.FindNamespacesUnder(t.Context(), ns("a"))
+		if err != nil {
+			t.Fatalf("FindNamespacesUnder: %v", err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("FindNamespacesUnder(a) returned %d entries, want 3 (a, a/b, a/b/c)", len(got))
+		}
+		for _, g := range got {
+			if len(g.Prefix) == 0 || string(g.Prefix[0]) != "a" {
+				t.Errorf("unexpected non-descendant %v in results", g.Prefix)
+			}
+		}
+	})
+
 	t.Run("FindNamespaceEmptyQueryMatchesRoot", func(t *testing.T) {
 		s := store("/nsroot/")
 		// A zero-length advertised prefix (SUBSCRIBE_NAMESPACE with no filter)

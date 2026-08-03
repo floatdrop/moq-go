@@ -174,6 +174,62 @@ func TestMemoryStore_FindNamespacePrefixMatch(t *testing.T) {
 	}
 }
 
+// TestMemoryStore_FindNamespacesUnder pins the descendant direction: a query
+// returns advertisements whose Prefix extends (is at or below) the query, the
+// inverse of FindNamespace.
+func TestMemoryStore_FindNamespacesUnder(t *testing.T) {
+	t.Parallel()
+	s := discovery.NewMemoryStore()
+	defer s.Close()
+
+	prefixes := [][]string{
+		{"a"},
+		{"a", "b"},
+		{"a", "b", "c"},
+		{"x"}, // unrelated — must NOT match a query under ["a"]
+	}
+	for _, p := range prefixes {
+		if err := s.PublishNamespace(
+			t.Context(),
+			discovery.NamespaceInfo{Prefix: ns(p...), RelayAddr: "relay-A"},
+		); err != nil {
+			t.Fatalf("PublishNamespace %v: %v", p, err)
+		}
+	}
+
+	// Query ["a"] matches ["a"], ["a","b"], ["a","b","c"] but not ["x"].
+	got, err := s.FindNamespacesUnder(t.Context(), ns("a"))
+	if err != nil {
+		t.Fatalf("FindNamespacesUnder: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("FindNamespacesUnder(a) returned %d entries, want 3", len(got))
+	}
+	for _, g := range got {
+		if len(g.Prefix) == 0 || string(g.Prefix[0]) != "a" {
+			t.Errorf("unexpected non-descendant %v in results", g.Prefix)
+		}
+	}
+
+	// A deeper query narrows to itself and below.
+	got, err = s.FindNamespacesUnder(t.Context(), ns("a", "b"))
+	if err != nil {
+		t.Fatalf("FindNamespacesUnder(a,b): %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("FindNamespacesUnder(a,b) returned %d entries, want 2 (a/b, a/b/c)", len(got))
+	}
+
+	// The empty prefix matches everything.
+	got, err = s.FindNamespacesUnder(t.Context(), ns())
+	if err != nil {
+		t.Fatalf("FindNamespacesUnder(): %v", err)
+	}
+	if len(got) != len(prefixes) {
+		t.Fatalf("FindNamespacesUnder() returned %d entries, want %d (all)", len(got), len(prefixes))
+	}
+}
+
 // TestMemoryStore_WatchTracksReceivesEvents pins the Watch contract:
 // every Publish + Unpublish triggers a TrackEvent on the channel.
 func TestMemoryStore_WatchTracksReceivesEvents(t *testing.T) {

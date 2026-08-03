@@ -143,6 +143,39 @@ func (s *Store) FindNamespace(ctx context.Context, namespace wire.TrackNamespace
 	return out, nil
 }
 
+// FindNamespacesUnder returns every advertisement whose Prefix extends prefix
+// (the descendant direction — see [discovery.DiscoveryStore.FindNamespacesUnder]).
+//
+// etcd's native prefix scan can't serve this: keys are hex(wire(namespace)), and
+// a shorter namespace tuple is not a byte-prefix of a longer one under that
+// encoding (the leading element-count varint differs). So it range-scans the
+// whole namespace subtree and filters by tuple prefix in memory. That is a full
+// scan of advertised namespaces, acceptable for the seeding path this serves
+// (one query per SUBSCRIBE_NAMESPACE, not a hot path).
+func (s *Store) FindNamespacesUnder(
+	ctx context.Context,
+	prefix wire.TrackNamespace,
+) ([]discovery.NamespaceInfo, error) {
+	if err := s.notClosed(); err != nil {
+		return nil, err
+	}
+	resp, err := s.cli.Get(ctx, s.root+"n/", clientv3.WithPrefix())
+	if err != nil {
+		return nil, err
+	}
+	var out []discovery.NamespaceInfo
+	for _, kv := range resp.Kvs {
+		info, err := decodeNamespace(kv.GetValue())
+		if err != nil {
+			return nil, err
+		}
+		if info.Prefix.HasPrefix(prefix) {
+			out = append(out, info)
+		}
+	}
+	return out, nil
+}
+
 // Close tears down every in-flight Watch, revokes the store's lease so its
 // advertisements disappear immediately (rather than lingering for the rest of
 // the TTL), and, if this store owns the client (created via Open), closes it.
