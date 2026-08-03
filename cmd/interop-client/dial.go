@@ -78,9 +78,10 @@ func (h *harness) dialQUIC(ctx context.Context, u *url.URL) (*session.Session, e
 	return dialpkg.QUIC(ctx, u.String(), dialpkg.Options{
 		Implementation:     "moq-interop-client/0.1",
 		InsecureSkipVerify: h.insecure, // CLI flag for self-signed interop relays
-		// Offer every MOQT-over-QUIC ALPN we speak; the relay picks. The
-		// MOQT version is then negotiated at the SETUP layer.
-		ALPN: []string{"moqt-18", "moqt-17", "moqt-16", "moq-00"},
+		// Offer the one MOQT-over-QUIC ALPN we speak. Per §3.1 the selected
+		// "moqt-NN" ALPN fixes the draft version — draft-19 SETUP carries no
+		// version field.
+		ALPN: []string{"moqt-19"},
 	})
 }
 

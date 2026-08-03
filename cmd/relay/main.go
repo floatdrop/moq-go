@@ -71,13 +71,12 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
-	// MOQT-over-QUIC uses one of the "moqt-NN" ALPNs (one per draft) or
-	// the legacy "moq-00"; MOQT-over-WebTransport rides HTTP/3, whose
-	// ALPN is "h3". Picking the wrong set here surfaces as a TLS
-	// handshake failure that browsers report as "Connection refused".
-	// We accept multiple MOQT drafts so test pages that pin a specific
-	// draft number get past the handshake — version negotiation then
-	// happens at the MOQT SETUP layer.
+	// MOQT-over-QUIC uses a "moqt-NN" ALPN (one per draft, §3.1);
+	// MOQT-over-WebTransport rides HTTP/3, whose ALPN is "h3". Picking the
+	// wrong set here surfaces as a TLS handshake failure that browsers report
+	// as "Connection refused". The negotiated ALPN fixes the draft version
+	// (draft-19 SETUP carries no version field), so we advertise only the
+	// draft we speak — see relaynet.MOQTQUICALPNs.
 	var alpns []string
 	if *useWebTransport {
 		alpns = []string{http3.NextProtoH3}
@@ -232,10 +231,11 @@ func webTransportListener(addr, path string, tlsCfg *tls.Config) (*wtconn.Listen
 		// an empty protocol when the client offers none or none match, so this
 		// list is never the cause of a failed handshake. Most browser MOQT
 		// pages don't set the (very new) WebTransport `protocols` option at
-		// all and negotiate the MOQT version at the SETUP layer instead, just
-		// like the raw-QUIC path. We advertise the drafts anyway so a client
-		// that does offer one gets a matching WT-Protocol response header.
-		ApplicationProtocols: []string{"moqt-18", "moqt-17", "moqt-16", "moq-00"},
+		// all. Per §3.1 the negotiated "moqt-NN" protocol fixes the draft
+		// version (draft-19 SETUP carries no version field), so we advertise
+		// the same identifiers as the raw-QUIC ALPN path — shared with
+		// MOQTQUICALPNs so the two version signals never drift.
+		ApplicationProtocols: relaynet.MOQTQUICALPNs,
 		CheckOrigin: func(r *http.Request) bool {
 			log.Printf("wtconn: CheckOrigin origin=%q host=%q wt-protocols=%q",
 				r.Header.Get("Origin"), r.Host, r.Header.Get("Wt-Available-Protocols"))

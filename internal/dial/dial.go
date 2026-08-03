@@ -23,7 +23,9 @@ import (
 type Options struct {
 	// Implementation is the SETUP IMPLEMENTATION value ("name/version").
 	Implementation string
-	// ALPN is the NextProtos list offered; defaults to ["moq-00"].
+	// ALPN is the NextProtos list offered; defaults to ["moqt-19"] (§3.1: the
+	// "moqt-NN" ALPN is the draft-version signal — draft-19 SETUP has no
+	// version field).
 	ALPN []string
 	// InsecureSkipVerify disables TLS certificate verification (dev/demo
 	// relays with self-signed certificates).
@@ -54,7 +56,7 @@ func QUIC(ctx context.Context, addr string, o Options) (*session.Session, error)
 
 	alpn := o.ALPN
 	if len(alpn) == 0 {
-		alpn = []string{"moq-00"}
+		alpn = []string{"moqt-19"}
 	}
 	tlsCfg := &tls.Config{
 		//nolint:gosec // G402: opt-in for dev/demo/interop relays with self-signed certs.

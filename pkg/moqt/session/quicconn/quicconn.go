@@ -140,7 +140,7 @@ func (s *bidiStream) Context() context.Context { return s.s.Context() }
 // import pkg/relay.
 //
 // The caller owns the underlying *quic.Listener — its TLS config, ALPN
-// selection ("moq-00"), QUIC parameters, and listening socket. Close
+// selection ("moqt-19"), QUIC parameters, and listening socket. Close
 // on the Listener forwards to the underlying *quic.Listener, which is
 // also what the caller would call themselves on shutdown; both paths
 // are equivalent.
