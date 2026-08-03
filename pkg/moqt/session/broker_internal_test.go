@@ -97,8 +97,7 @@ func TestBrokerUpdate_ErrorFailsAllPending(t *testing.T) {
 	for i, ch := range []<-chan error{first, second} {
 		select {
 		case err := <-ch:
-			var rejected *RequestRejectedError
-			if !errors.As(err, &rejected) {
+			if _, ok := errors.AsType[*RequestRejectedError](err); !ok {
 				t.Fatalf("Update #%d: got %v, want RequestRejectedError", i+1, err)
 			}
 		case <-time.After(2 * time.Second):

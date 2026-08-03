@@ -181,8 +181,7 @@ func TestBrokerServe_RejectsInvalidUpdateRequestID(t *testing.T) {
 
 	select {
 	case err := <-serveDone:
-		var parity *session.ErrRequestIDParityViolation
-		if !errors.As(err, &parity) {
+		if _, ok := errors.AsType[*session.ErrRequestIDParityViolation](err); !ok {
 			t.Fatalf("Serve returned %v, want parity violation", err)
 		}
 	case <-time.After(2 * time.Second):

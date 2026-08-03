@@ -764,8 +764,7 @@ func TestCrossRelay_NoDialerNoop(t *testing.T) {
 	}
 	// Sanity: the rejection is the protocol-level REQUEST_ERROR, not a
 	// transport error.
-	var reqErr *session.RequestRejectedError
-	if !errors.As(err, &reqErr) {
+	if _, ok := errors.AsType[*session.RequestRejectedError](err); !ok {
 		t.Logf("Subscribe error (non-RequestRejectedError is acceptable): %v", err)
 	}
 
