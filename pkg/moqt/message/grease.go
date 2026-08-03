@@ -7,7 +7,7 @@ import (
 )
 
 // GREASE (Generate Random Extensions And Sustain Extensibility) support per
-// §14 of draft-ietf-moq-transport-18 and RFC 9170 §3.3.
+// §14 of draft-ietf-moq-transport-19 and RFC 9170 §3.3.
 //
 // GREASE values follow the pattern 0x7F * N + 0x9D for non-negative integer
 // values of N (that is, 0x9D, 0x11C, 0x19B, ..., 0x3FFFFFFFFFFFFFDE).

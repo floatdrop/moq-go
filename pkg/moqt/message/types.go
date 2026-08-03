@@ -1,5 +1,5 @@
 // Package message implements MoQT control- and request-stream message types
-// per draft-ietf-moq-transport-18. Each Message exposes a wire Type and
+// per draft-ietf-moq-transport-19. Each Message exposes a wire Type and
 // Append/Parse methods over wire.Writer/Reader.
 //
 // Marshal writes a complete control-message frame (Type + Length + Payload).

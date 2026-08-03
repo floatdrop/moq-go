@@ -1,7 +1,7 @@
 # MoQT Implementation Status
 
 Tracks this codebase's implementation of
-[`draft-ietf-moq-transport-18`](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/18/)
+[`draft-ietf-moq-transport-19`](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/19/)
 (plus [`-loc-02`](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) and
 [`-msf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) at the edges).
 

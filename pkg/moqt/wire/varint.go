@@ -7,7 +7,7 @@ import (
 	"math/bits"
 )
 
-// MoQT variable-length integers (draft-ietf-moq-transport-18 §1.4.1).
+// MoQT variable-length integers (draft-ietf-moq-transport-19 §1.4.1).
 //
 // Unlike QUIC's RFC 9000 §16 varints — which use the high 2 bits of the first
 // byte to select a 1/2/4/8-byte length — MoQT uses a "leading-ones" scheme: the

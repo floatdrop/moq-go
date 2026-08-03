@@ -9,7 +9,7 @@ import (
 )
 
 // TrackEntry is the central per-track control block (§9 of
-// draft-ietf-moq-transport-18). One entry exists for every track the relay
+// draft-ietf-moq-transport-19). One entry exists for every track the relay
 // currently knows about — created on the first SUBSCRIBE or
 // PUBLISH/PUBLISH_NAMESPACE for that track, destroyed when the last upstream
 // and the last downstream subscription have both gone.

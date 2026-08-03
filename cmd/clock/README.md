@@ -1,6 +1,6 @@
 # clock
 
-A minimal MOQT (draft-ietf-moq-transport-18) publish/subscribe demo.
+A minimal MOQT (draft-ietf-moq-transport-19) publish/subscribe demo.
 
 One binary, two modes:
 

@@ -1,6 +1,6 @@
 # relay
 
-A single-instance MOQT relay (draft-ietf-moq-transport-18) over QUIC.
+A single-instance MOQT relay (draft-ietf-moq-transport-19) over QUIC.
 
 Accepts publisher and subscriber sessions, routes objects between them via the
 track registry, and caches recent objects per track for late-joining subscribers.

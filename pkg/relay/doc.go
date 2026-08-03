@@ -1,4 +1,4 @@
-// Package relay implements an MOQT relay (§9 of draft-ietf-moq-transport-18):
+// Package relay implements an MOQT relay (§9 of draft-ietf-moq-transport-19):
 // an entity that is both a Publisher and a Subscriber, terminates Transport
 // Sessions, caches Objects, aggregates subscriptions, and forwards data
 // between upstream publishers and downstream subscribers.
