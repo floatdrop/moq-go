@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
@@ -273,49 +272,4 @@ func formatSubscribers(s []*registry.SubscriberEntry) string {
 		out.WriteString(relaytest.FormatNamespace(e.Prefix))
 	}
 	return out.String() + "]"
-}
-
-// TestNamespaceRegistry_SkippedSet exercises the §6.1 / §10.20 PUBLISH_SKIPPED
-// bookkeeping: MarkSkipped records a (subscriber, track) prohibition, IsSkipped
-// reports it, and ClearSkippedForSession lifts it.
-func TestNamespaceRegistry_SkippedSet(t *testing.T) {
-	t.Parallel()
-	r := registry.NewNamespaceRegistry()
-	entry := r.RegisterSubscriber(ns("video"), nil, nil, true /*wantsTracks*/, true, 0)
-
-	key := track.NewKey(ns("video", "cam7"), []byte("rtp"))
-	other := track.NewKey(ns("video", "cam7"), []byte("audio"))
-
-	// Initially nothing is skipped.
-	if r.IsSkipped(entry, key) {
-		t.Fatal("IsSkipped true before any MarkSkipped")
-	}
-
-	// MarkSkipped is observable and scoped to the exact track key.
-	r.MarkSkipped(entry, key)
-	if !r.IsSkipped(entry, key) {
-		t.Fatal("IsSkipped false after MarkSkipped")
-	}
-	if r.IsSkipped(entry, other) {
-		t.Fatal("IsSkipped true for a different track key")
-	}
-
-	// MarkSkipped is idempotent.
-	r.MarkSkipped(entry, key)
-	if !r.IsSkipped(entry, key) {
-		t.Fatal("IsSkipped false after repeated MarkSkipped")
-	}
-
-	// ClearSkippedForSession lifts across the session and reports whether it
-	// changed anything.
-	r.MarkSkipped(entry, key)
-	if !r.ClearSkippedForSession(nil /*matches the nil-session entry*/, key) {
-		t.Fatal("ClearSkippedForSession returned false when an entry was skipped")
-	}
-	if r.IsSkipped(entry, key) {
-		t.Fatal("IsSkipped true after ClearSkippedForSession")
-	}
-	if r.ClearSkippedForSession(nil, key) {
-		t.Fatal("ClearSkippedForSession returned true when nothing was skipped")
-	}
 }

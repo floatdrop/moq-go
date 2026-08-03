@@ -191,7 +191,7 @@ By package, bottom-up along the dependency stack:
 | 10.17   | NAMESPACE_DONE                | 0x0E   | DONE   | |
 | 10.18   | SUBSCRIBE_NAMESPACE           | 0x50   | DONE   | |
 | 10.19   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | §10.19.1: FORWARD/GROUP_ORDER are copied onto the PUBLISH messages the subscription triggers; an out-of-range value closes the session (§10.2.8/§10.2.17). |
-| 10.20   | PUBLISH_SKIPPED               | 0x0F   | DONE   | |
+| 10.20   | PUBLISH_SKIPPED               | 0x0F   | DONE   | Prohibition scoped to a single PUBLISH (draft-19 §6.1) — not sticky across re-PUBLISHes. |
 
 ## §11 Data streams and datagrams
 
@@ -263,9 +263,12 @@ itself (the binary stays single-instance; cross-relay is library-level).
 
 **draft-19 gaps.** The mechanical renames/removals from `draft-ietf-moq-transport-18`
 to `-19` (GOAWAY Request ID removal, `PUBLISH_SKIPPED`, `LOCATION_FILTER`,
-removing `DUPLICATE_SUBSCRIPTION`) are done, but several substantive -19
-behavior changes are not yet implemented and are not reflected in the
-"~98% complete" figure above:
+removing `DUPLICATE_SUBSCRIPTION`) are done, as are the substantive behavior
+changes for `MAX_REQUEST_UPDATES` (§10.3.1.7), the §10.19.1 SUBSCRIBE_TRACKS
+FORWARD/GROUP_ORDER passthrough, the §9.2 upstream Forward rule, and the
+single-PUBLISH `PUBLISH_SKIPPED` lifetime (§6.1). The remaining -19 behavior
+changes are not yet implemented and are not reflected in the "~98% complete"
+figure above:
 
 - **Range Filters (new §5.1.3/§10.2.10-14)** — `SUBGROUP_FILTER`/`OBJECTID_FILTER`/
   `PRIORITY_FILTER`/`OBJECT_PROPERTY_FILTER`/`TRACK_PROPERTY_FILTER`, the
@@ -274,9 +277,6 @@ behavior changes are not yet implemented and are not reflected in the
 - **`OBJECT_DELIVERY_TIMEOUT`/`SUBGROUP_DELIVERY_TIMEOUT` as Object Properties**
   — still Track-only; draft-19 allows a subgroup's first object to override
   the Track-level value.
-- **PUBLISH_SKIPPED lifetime (§6.1/§10.20)** — currently a sticky per-
-  (subscriber, track) block lifted only by a subsequent SUBSCRIBE; draft-19
-  scopes it to a single PUBLISH's lifetime instead.
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
 

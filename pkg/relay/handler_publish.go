@@ -99,16 +99,10 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 			// SUBSCRIBE_TRACKS holders.
 			continue
 		}
-		// §6.1: once we've sent PUBLISH_SKIPPED for a track, we MUST NOT send
-		// a PUBLISH for it to that subscriber again — even on a later origin
-		// re-PUBLISH — until the subscriber issues a SUBSCRIBE (which clears
-		// the entry, see handleSubscribe). Skip such subscribers without
-		// consuming stream credit.
-		if h.names.IsSkipped(sub, fullName.Key()) {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH forward suppressed: track skipped for subscriber",
-				slog.String("name", string(msg.Name)))
-			continue
-		}
+		// §6.1 (draft-19): a PUBLISH_SKIPPED prohibition is scoped to the single
+		// PUBLISH that could not be forwarded, not sticky across re-PUBLISHes —
+		// so every inbound PUBLISH is a fresh forwarding attempt, and a track we
+		// skipped earlier is retried here.
 		fwd := &message.Publish{
 			Namespace:       msg.Namespace,
 			Name:            msg.Name,
@@ -124,8 +118,8 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 			if errors.Is(err, session.ErrNoStreamCredit) {
 				// §6.1 / §10.20: no bidi-stream credit to open the PUBLISH
 				// stream — tell the subscriber with PUBLISH_SKIPPED on its
-				// SUBSCRIBE_TRACKS stream and record the track as skipped so
-				// we honour the §6.1 MUST-NOT on any later re-PUBLISH.
+				// SUBSCRIBE_TRACKS stream. The prohibition is scoped to this
+				// PUBLISH (draft-19); a later re-PUBLISH is retried above.
 				h.emitPublishSkipped(ctx, sub, fullName)
 				continue
 			}
@@ -174,12 +168,11 @@ func publishParamsForSubscriber(upstream message.Parameters, sub *registry.Subsc
 }
 
 // emitPublishSkipped sends a PUBLISH_SKIPPED (§10.20) to sub for the track
-// fullName and records the track as skipped for that subscriber. It is the
-// §6.1 response to an exhausted bidi-stream limit: the relay cannot open the
-// PUBLISH stream, so it tells the subscriber on its SUBSCRIBE_TRACKS response
-// stream and MUST NOT forward a PUBLISH for that track again until the
-// subscriber issues a SUBSCRIBE (see [sessionHandler.handleSubscribe], which
-// calls [registry.NamespaceRegistry.ClearSkippedForSession]).
+// fullName. It is the §6.1 response to an exhausted bidi-stream limit: the
+// relay cannot open the PUBLISH stream for this PUBLISH, so it tells the
+// subscriber on its SUBSCRIBE_TRACKS response stream. Per draft-19 §6.1 the
+// prohibition is scoped to this single PUBLISH — a later re-PUBLISH for the
+// track is a fresh forwarding attempt — so nothing is recorded here.
 //
 // Per §10.20 the message carries only the namespace suffix beyond the
 // subscriber's SUBSCRIBE_TRACKS prefix; we strip the prefix the same way
@@ -199,10 +192,6 @@ func (h *sessionHandler) emitPublishSkipped(
 			slog.String("err", err.Error()))
 		return
 	}
-	// Record the prohibition only after a successful write — if the write
-	// failed the subscriber never learned it was skipped, so we shouldn't
-	// suppress future forwards on its behalf.
-	h.names.MarkSkipped(sub, fullName.Key())
 	h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH_SKIPPED sent",
 		slog.String("name", string(fullName.Name)))
 }

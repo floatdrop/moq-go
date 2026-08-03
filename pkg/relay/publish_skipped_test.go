@@ -75,14 +75,14 @@ func TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 	}
 }
 
-// TestPublishSkipped_StickyAcrossRePublish pins the §6.1 MUST-NOT: once the
-// relay has sent PUBLISH_SKIPPED for a track, a later origin re-PUBLISH of the
-// SAME track must NOT be auto-forwarded to that subscriber — not even when
-// stream credit might be available again — until the subscriber issues a
-// SUBSCRIBE. Here the first PUBLISH (credit 0) blocks; the publisher FINs; a
-// second PUBLISH of the same track must produce neither a PUBLISH nor a second
-// PUBLISH_SKIPPED on the subscriber's stream.
-func TestPublishSkipped_StickyAcrossRePublish(t *testing.T) {
+// TestPublishSkipped_NotStickyAcrossRePublish pins the draft-19 §6.1 change:
+// a PUBLISH_SKIPPED prohibition is scoped to the single PUBLISH that could not
+// be forwarded, NOT sticky across re-PUBLISHes. Here the subscriber's bidi
+// credit stays 0, so the first PUBLISH is skipped; after the publisher FINs and
+// re-PUBLISHes the same track, the relay MUST re-attempt the forward — and
+// because credit is still exhausted, that surfaces as a SECOND PUBLISH_SKIPPED
+// (draft-18 would have suppressed it silently).
+func TestPublishSkipped_NotStickyAcrossRePublish(t *testing.T) {
 	t.Parallel()
 	primary, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
@@ -108,7 +108,7 @@ func TestPublishSkipped_StickyAcrossRePublish(t *testing.T) {
 		return s
 	}
 
-	// First publication: blocked. Expect exactly one PUBLISH_SKIPPED.
+	// First publication: blocked (credit 0). Expect one PUBLISH_SKIPPED.
 	pubStream1 := pub()
 	got := relaytest.ReadNextMessage(t, subStream, time.After(2*time.Second))
 	if _, ok := got.(*message.PublishSkipped); !ok {
@@ -119,21 +119,14 @@ func TestPublishSkipped_StickyAcrossRePublish(t *testing.T) {
 	_ = pubStream1.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	// Second publication of the SAME track. Per §6.1 nothing must reach the
-	// subscriber's SUBSCRIBE_TRACKS stream (no PUBLISH, no second
-	// PUBLISH_SKIPPED).
+	// Second publication of the SAME track. Per draft-19 §6.1 the earlier skip
+	// does not persist, so the relay re-attempts the forward — still no credit,
+	// so a SECOND PUBLISH_SKIPPED reaches the subscriber's stream.
 	pubStream2 := pub()
 	defer pubStream2.Close()
 
-	done := make(chan message.Message, 1)
-	go func() {
-		m, _ := message.Parse(subStream)
-		done <- m
-	}()
-	select {
-	case m := <-done:
-		t.Fatalf("re-PUBLISH of blocked track delivered %T to subscriber; want nothing (§6.1 MUST-NOT)", m)
-	case <-time.After(400 * time.Millisecond):
-		// Expected: the blocked track is suppressed on re-PUBLISH.
+	got2 := relaytest.ReadNextMessage(t, subStream, time.After(2*time.Second))
+	if _, ok := got2.(*message.PublishSkipped); !ok {
+		t.Fatalf("re-PUBLISH: got %T, want a second *message.PublishSkipped (skip is not sticky)", got2)
 	}
 }

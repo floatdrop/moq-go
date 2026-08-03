@@ -43,12 +43,6 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 
 	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 
-	// §6.1 recovery: if this session previously received a PUBLISH_SKIPPED for
-	// this track (on one of its SUBSCRIBE_TRACKS subscriptions), issuing a
-	// SUBSCRIBE is the sanctioned way to lift the block — clear it so future
-	// PUBLISH forwards for the track are permitted again.
-	h.names.ClearSkippedForSession(h.sess, fullName.Key())
-
 	// §10.2.13: a NEW_GROUP_REQUEST on the SUBSCRIBE either rides the upstream
 	// SUBSCRIBE we are about to open (rule 1, no Established upstream) or, when
 	// an upstream already exists, is evaluated against it as an Established

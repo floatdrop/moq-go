@@ -8,7 +8,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
@@ -78,15 +77,6 @@ type SubscriberEntry struct {
 	// applies) or the validated Ascending/Descending value.
 	Forward    bool
 	GroupOrder byte
-
-	// skipped records the tracks for which the relay has sent this
-	// subscriber a PUBLISH_SKIPPED (§6.1, §10.20) because its bidi-stream
-	// limit was exhausted. Per §6.1 the relay MUST NOT send a PUBLISH for a
-	// track after PUBLISH_SKIPPED until the subscriber issues a SUBSCRIBE for
-	// it; this set enforces that sticky prohibition. It is guarded by the
-	// owning [NamespaceRegistry]'s mutex, accessed only via MarkSkipped /
-	// IsSkipped / ClearSkippedForSession. nil until the first MarkSkipped.
-	skipped map[track.Key]struct{}
 }
 
 // WriteMessage serialises one control message onto the subscriber's request
@@ -419,51 +409,6 @@ func (r *NamespaceRegistry) MatchSubscribers(ns wire.TrackNamespace) []*Subscrib
 		}
 	}
 	return out
-}
-
-// MarkSkipped records that the relay has sent entry's subscriber a
-// PUBLISH_SKIPPED for the track identified by key (§6.1, §10.20). Idempotent.
-// Subsequent IsSkipped(entry, key) returns true until ClearSkippedForSession
-// is called.
-func (r *NamespaceRegistry) MarkSkipped(entry *SubscriberEntry, key track.Key) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if entry.skipped == nil {
-		entry.skipped = make(map[track.Key]struct{})
-	}
-	entry.skipped[key] = struct{}{}
-}
-
-// IsSkipped reports whether the relay has an outstanding PUBLISH_SKIPPED for
-// (entry's subscriber, key) — i.e. §6.1 forbids forwarding a PUBLISH for that
-// track to this subscriber until it issues a SUBSCRIBE.
-func (r *NamespaceRegistry) IsSkipped(entry *SubscriberEntry, key track.Key) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	_, ok := entry.skipped[key]
-	return ok
-}
-
-// ClearSkippedForSession removes any PUBLISH_SKIPPED prohibition for the track
-// key across every SUBSCRIBE_TRACKS subscription owned by sess. This is the
-// §6.1 recovery entry point the SUBSCRIBE handler uses: a session that was
-// told PUBLISH_SKIPPED for a track lifts the block by SUBSCRIBing to it,
-// regardless of which of its SUBSCRIBE_TRACKS prefixes covered the track.
-// Returns true if any entry was actually unblocked.
-func (r *NamespaceRegistry) ClearSkippedForSession(sess *session.Session, key track.Key) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	var cleared bool
-	for _, e := range r.subscribers {
-		if e.Session != sess {
-			continue
-		}
-		if _, ok := e.skipped[key]; ok {
-			delete(e.skipped, key)
-			cleared = true
-		}
-	}
-	return cleared
 }
 
 // CopyPublishers returns a snapshot of all publisher entries. Intended for
