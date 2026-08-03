@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -105,7 +106,12 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 			if hasNewGroupReq {
 				extra = message.Parameters{message.NewGroupRequestParam(newGroupReqParam.Varint)}
 			}
-			_, established, err := h.subscribeUpstream(ctx, fullName, extra)
+			// §9.2: the upstream Forward value is MUST=1 only if a downstream
+			// subscriber wants forwarding. The triggering sub is not yet on the
+			// entry (AddDownstreamSnapshotLargest runs below), so consult it
+			// directly alongside any downstream already registered on e.
+			wantForward := sub.ForwardState() == 1 || anyDownstreamForwards(e)
+			_, established, err := h.subscribeUpstream(ctx, fullName, extra, wantForward)
 			if err != nil {
 				h.log.LogAttrs(ctx, slog.LevelDebug, "upstream subscribe failed",
 					slog.String("err", err.Error()))
@@ -205,6 +211,15 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	// Established subscription and forward it if the rules call for it.
 	if hasNewGroupReq && reusedUpstream {
 		h.propagateNewGroupUpstream(ctx, fullName, newGroupReqParam.Varint)
+	}
+
+	// §9.2: a Forward=1 subscriber reusing an existing upstream that was paused
+	// (Forward=0, established when earlier downstreams didn't forward) MUST
+	// resume it. A freshly established upstream already reflects this subscriber
+	// via wantForward, so only the reuse path needs it; propagateForwardUpstream
+	// skips upstreams already forwarding, making this a no-op otherwise.
+	if reusedUpstream && sub.ForwardState() == 1 {
+		h.propagateForwardUpstream(ctx, fullName)
 	}
 
 	// Read follow-ups (§10.9 REQUEST_UPDATE, peer FIN/reset) on the bidi stream
@@ -399,6 +414,7 @@ func (h *sessionHandler) subscribeUpstream(
 	ctx context.Context,
 	fullName track.FullTrackName,
 	extra message.Parameters,
+	wantForward bool,
 ) (*registry.TrackEntry, bool, error) {
 	// Source dedup: never open a second upstream to a session this track is
 	// already subscribed on (or to ourselves — a publisher session also owns its
@@ -422,7 +438,7 @@ func (h *sessionHandler) subscribeUpstream(
 		subscribed[sess] = true // even on failure: don't retry the same source here
 		h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: issuing upstream SUBSCRIBE",
 			slog.String("source", src))
-		entry, established, err := h.subscribeUpstreamOnSession(ctx, sess, fullName, extra)
+		entry, established, err := h.subscribeUpstreamOnSession(ctx, sess, fullName, extra, wantForward)
 		if err != nil {
 			// A candidate that fails (session dying, rejection) must not mask the
 			// other publishers or the Discovery fallback. Remember the error and
@@ -480,6 +496,7 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	sess *session.Session,
 	fullName track.FullTrackName,
 	extra message.Parameters,
+	wantForward bool,
 ) (*registry.TrackEntry, bool, error) {
 	// §9.4 Largest Object filter — keeps the upstream subscription stable
 	// as downstream subscribers come and go with varying filters.
@@ -490,6 +507,14 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// The relay reuses that ID when it later sends an upstream
 	// REQUEST_UPDATE for §9.2 Forward propagation.
 	params := message.Parameters{message.LocationFilterParam(filter)}
+	// §9.2: Forward=1 upstream is MUST only when a downstream subscriber wants
+	// Objects forwarded. When none does, the relay exercises its discretion by
+	// pausing the upstream with Forward=0 so it doesn't pull Objects nobody is
+	// consuming; propagateForwardUpstream resumes it when a downstream later
+	// sets Forward=1. Forward=1 stays implicit (omitted) per §10.2.17.
+	if !wantForward {
+		params = append(params, message.ForwardParam(false))
+	}
 	params = append(params, extra...)
 	subMsg := &message.Subscribe{
 		Namespace:  fullName.Namespace,
@@ -510,6 +535,13 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	upstreamSub := registry.NewUpstreamSub(
 		h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias, subMsg.RequestID)
 	upstreamSub.SetFilter(filter)
+	if !wantForward {
+		// Match the local ForwardState to the Forward=0 we sent upstream, so a
+		// later §9.2 resume (propagateForwardUpstream) transitions 0→1 rather
+		// than treating the upstream as already forwarding. NewUpstreamSub
+		// seeds 1 (the omitted-FORWARD default).
+		upstreamSub.SetForwardState(0)
+	}
 	// This upstream is a relay/origin we SUBSCRIBE'd on demand, so it is
 	// expected to answer FETCH — eligible for §9.4 stitch backfill.
 	upstreamSub.FetchCapable = true
@@ -584,6 +616,15 @@ func hasEstablishedUpstream(entry *registry.TrackEntry) bool {
 		}
 	}
 	return false
+}
+
+// anyDownstreamForwards reports whether any downstream subscriber already
+// registered on entry wants Objects forwarded (Forward=1). §9.2 uses it (with
+// the not-yet-registered triggering sub checked separately) to decide the
+// upstream Forward value. A nil entry (no track state yet) reports false.
+func anyDownstreamForwards(entry *registry.TrackEntry) bool {
+	return entry != nil && slices.ContainsFunc(entry.CopyDownstream(),
+		func(d *registry.DownstreamSub) bool { return d.ForwardState() == 1 })
 }
 
 // installSubscribeParams extracts the per-subscription policy fields from the

@@ -133,7 +133,7 @@ By package, bottom-up along the dependency stack:
 | §     | Feature                              | Status | Notes |
 |-------|--------------------------------------|--------|-------|
 | 9.1   | Caching relays                       | DONE   | LRU+TTL object cache (`cache/cache.go`); updates limited to non-existence/properties. |
-| 9.2   | Forward handling                     | DONE   | FORWARD flag honoured; Forward=0 pauses delivery. |
+| 9.2   | Forward handling                     | DONE   | FORWARD flag honoured; Forward=0 pauses delivery. Upstream Forward is set to 1 only when a downstream subscriber forwards, else the relay pauses it (Forward=0) and resumes on the first forwarding subscriber. |
 | 9.3   | Multiple publishers                  | DONE   | Per-track upstreams; dedup by `{GroupID, ObjectID}`. |
 | 9.4   | Subscriber interactions              | DONE   | Upstream subscription established before SUBSCRIBE_OK; aggregation. |
 | 9.4.1 | Graceful subscriber switchover       | DONE   | GOAWAY grace period (`GoawayTimeout`). |
@@ -274,9 +274,6 @@ behavior changes are not yet implemented and are not reflected in the
 - **`OBJECT_DELIVERY_TIMEOUT`/`SUBGROUP_DELIVERY_TIMEOUT` as Object Properties**
   — still Track-only; draft-19 allows a subgroup's first object to override
   the Track-level value.
-- **Forward-flag relay rule (§9.2)** — the relay always sets Forward=1
-  upstream on a new subscription; draft-19 changes this to "MUST=1 only if
-  some downstream subscriber is Forward=1, otherwise relay discretion."
 - **PUBLISH_SKIPPED lifetime (§6.1/§10.20)** — currently a sticky per-
   (subscriber, track) block lifted only by a subsequent SUBSCRIBE; draft-19
   scopes it to a single PUBLISH's lifetime instead.

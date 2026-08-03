@@ -326,6 +326,218 @@ func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 	}
 }
 
+// upstreamForwardValue runs the publisher side of one on-demand upstream
+// SUBSCRIBE and reports the FORWARD parameter the relay sent: (0/1, present)
+// when FORWARD is on the SUBSCRIBE, or (0, false) when it is omitted (§10.2.17
+// default 1). It replies SUBSCRIBE_OK and drains follow-ups. The result arrives
+// on the returned channel once the relay's upstream SUBSCRIBE is accepted.
+func upstreamForwardValue(t *testing.T, pubSess *session.Session) <-chan [2]int {
+	t.Helper()
+	out := make(chan [2]int, 1)
+	go func() {
+		req, err := pubSess.AcceptRequest(t.Context())
+		if err != nil {
+			t.Errorf("publisher AcceptRequest: %v", err)
+			return
+		}
+		sub, ok := req.First.(*message.Subscribe)
+		if !ok {
+			t.Errorf("publisher received %T, want *message.Subscribe", req.First)
+			return
+		}
+		present := 0
+		val := 0
+		if p, ok := sub.Parameters.Find(message.ParamForward); ok {
+			present = 1
+			val = int(p.Byte)
+		}
+		out <- [2]int{val, present}
+		if err := req.Reply(&message.SubscribeOK{TrackAlias: 77}); err != nil {
+			t.Errorf("publisher SubscribeOK reply: %v", err)
+			return
+		}
+		for {
+			if _, err := message.Parse(req.Stream); err != nil {
+				return
+			}
+		}
+	}()
+	return out
+}
+
+// TestSubscribe_UpstreamForwardPausedWhenDownstreamForwardZero pins §9.2: when
+// the only downstream subscriber sets Forward=0, the relay exercises its
+// discretion and pauses the upstream with an explicit FORWARD=0.
+func TestSubscribe_UpstreamForwardPausedWhenDownstreamForwardZero(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+	})
+	if err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	defer pubNSStream.Close()
+
+	fwd := upstreamForwardValue(t, pubSess)
+
+	subSess := dialAnotherClient(t, pubSess)
+	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Name:       []byte("cam1"),
+		Parameters: message.Parameters{message.ForwardParam(false)},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer subStream.Close()
+
+	got := <-fwd
+	if got != [2]int{0, 1} {
+		t.Fatalf("upstream FORWARD = {val:%d present:%d}, want {0, 1} (explicit Forward=0)", got[0], got[1])
+	}
+}
+
+// TestSubscribe_UpstreamForwardOmittedWhenDownstreamForwards pins §9.2: when a
+// downstream subscriber wants forwarding (FORWARD omitted → default 1), the
+// relay's upstream SUBSCRIBE omits FORWARD too (implicit 1).
+func TestSubscribe_UpstreamForwardOmittedWhenDownstreamForwards(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+	})
+	if err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	defer pubNSStream.Close()
+
+	fwd := upstreamForwardValue(t, pubSess)
+
+	subSess := dialAnotherClient(t, pubSess)
+	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer subStream.Close()
+
+	got := <-fwd
+	if got[1] != 0 {
+		t.Fatalf("upstream FORWARD present (=%d), want omitted (implicit 1)", got[0])
+	}
+}
+
+// TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins pins §9.2: a
+// Forward=0 subscriber establishes a paused (Forward=0) upstream; when a second
+// Forward=1 subscriber reuses that upstream, the relay MUST resume it by
+// sending an upstream REQUEST_UPDATE with Forward=1.
+func TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+	})
+	if err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	defer pubNSStream.Close()
+
+	// Publisher: accept the upstream SUBSCRIBE (expect explicit Forward=0),
+	// reply SUBSCRIBE_OK, then read the resume REQUEST_UPDATE (expect Forward=1)
+	// and answer it with REQUEST_OK.
+	type result struct {
+		initialForward  int
+		resumeForward   int
+		initialHasParam bool
+	}
+	res := make(chan result, 1)
+	go func() {
+		req, err := pubSess.AcceptRequest(t.Context())
+		if err != nil {
+			t.Errorf("publisher AcceptRequest: %v", err)
+			return
+		}
+		sub, ok := req.First.(*message.Subscribe)
+		if !ok {
+			t.Errorf("publisher received %T, want *message.Subscribe", req.First)
+			return
+		}
+		var r result
+		if p, ok := sub.Parameters.Find(message.ParamForward); ok {
+			r.initialHasParam = true
+			r.initialForward = int(p.Byte)
+		}
+		if err := req.Reply(&message.SubscribeOK{TrackAlias: 77}); err != nil {
+			t.Errorf("publisher SubscribeOK: %v", err)
+			return
+		}
+		m, err := message.Parse(req.Stream)
+		if err != nil {
+			t.Errorf("publisher read follow-up: %v", err)
+			return
+		}
+		upd, ok := m.(*message.RequestUpdate)
+		if !ok {
+			t.Errorf("publisher follow-up = %T, want *message.RequestUpdate", m)
+			return
+		}
+		if p, ok := upd.Parameters.Find(message.ParamForward); ok {
+			r.resumeForward = int(p.Byte)
+		}
+		// Answer the §10.9 REQUEST_UPDATE so the relay's resume Update() call
+		// completes rather than timing out.
+		if err := message.Marshal(req.Stream, &message.RequestOK{}); err != nil {
+			t.Errorf("publisher REQUEST_OK: %v", err)
+		}
+		res <- r
+	}()
+
+	// Subscriber A (Forward=0) establishes the paused upstream.
+	subA := dialAnotherClient(t, pubSess)
+	subAStream, err := subA.Subscribe(t.Context(), &message.Subscribe{
+		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Name:       []byte("cam1"),
+		Parameters: message.Parameters{message.ForwardParam(false)},
+	})
+	if err != nil {
+		t.Fatalf("subscriber A Subscribe: %v", err)
+	}
+	defer subAStream.Close()
+
+	// Subscriber B (Forward omitted → 1) reuses the upstream and must resume it.
+	subB := dialAnotherClient(t, pubSess)
+	subBStream, err := subB.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("subscriber B Subscribe: %v", err)
+	}
+	defer subBStream.Close()
+
+	select {
+	case got := <-res:
+		if !got.initialHasParam || got.initialForward != 0 {
+			t.Errorf("upstream initial FORWARD = {val:%d present:%v}, want explicit 0",
+				got.initialForward, got.initialHasParam)
+		}
+		if got.resumeForward != 1 {
+			t.Errorf("upstream resume REQUEST_UPDATE FORWARD = %d, want 1", got.resumeForward)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("publisher did not observe the §9.2 upstream resume REQUEST_UPDATE")
+	}
+}
+
 // acceptUpstreamSubscribe runs the publisher side of one on-demand upstream
 // SUBSCRIBE: accept the relay's request, reply SUBSCRIBE_OK with the given
 // alias, then drain follow-ups. The returned channel closes when the relay
