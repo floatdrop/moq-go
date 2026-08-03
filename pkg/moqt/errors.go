@@ -54,6 +54,7 @@ const (
 	RequestInvalidJoiningID     RequestErrorCode = 0x32
 	RequestUnsupportedExtension RequestErrorCode = 0x33
 	RequestRedirect             RequestErrorCode = 0x34
+	RequestInvalidFilter        RequestErrorCode = 0x36
 )
 
 // PublishDoneCode is a PUBLISH_DONE status code (§10.11, IANA §15.10.3).

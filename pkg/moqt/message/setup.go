@@ -16,6 +16,7 @@ const (
 	SetupOptionAuthorizationToken SetupOption = 0x03
 	SetupOptionMaxAuthTokenCache  SetupOption = 0x04
 	SetupOptionAuthority          SetupOption = 0x05
+	SetupOptionMaxFilterRanges    SetupOption = 0x06
 	SetupOptionMOQTImplementation SetupOption = 0x07
 	SetupOptionMaxRequestUpdates  SetupOption = 0x08
 )
@@ -65,6 +66,15 @@ func MaxAuthTokenCacheSizeOption(maxBytes uint64) wire.KVPair {
 // endpoint does not limit REQUEST_UPDATE concurrency.
 func MaxRequestUpdatesOption(maxUpdates uint64) wire.KVPair {
 	return wire.KVPair{Type: uint64(SetupOptionMaxRequestUpdates), IntVal: maxUpdates}
+}
+
+// MaxFilterRangesOption builds a MAX_FILTER_RANGES option (§10.3.1.6).
+// maxRanges is the maximum total number of Ranges (Start/End pairs) the peer
+// may send across all Range Filter parameters (§5.1.3) for a single
+// subscription or fetch. The default if omitted is 0, which prohibits the peer
+// from sending any Range Filter parameters.
+func MaxFilterRangesOption(maxRanges uint64) wire.KVPair {
+	return wire.KVPair{Type: uint64(SetupOptionMaxFilterRanges), IntVal: maxRanges}
 }
 
 func (m *Setup) Type() Type { return TypeSetup }

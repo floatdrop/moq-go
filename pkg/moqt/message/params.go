@@ -29,8 +29,20 @@ const (
 	ParamSubscriberPriority      ParamID = 0x20
 	ParamLocationFilter          ParamID = 0x21
 	ParamGroupOrder              ParamID = 0x22
-	ParamNewGroupRequest         ParamID = 0x32
-	ParamTrackNamespacePrefix    ParamID = 0x34
+	// Range Filter parameters (§5.1.3, §10.2.10-14). All five carry a
+	// length-prefixed blob (SetID, optional Property Type, delta-encoded
+	// Ranges) — see rangefilter.go. NOTE: 0x26/0x28 are even, so under the
+	// §1.4.3 KV-pair rule they would carry a bare varint with no Length; but
+	// §5.1.3's figure shows a Length on all five, and this codebase encodes
+	// parameters by a per-type Kind (paramKinds), not by §1.4.3 parity — so all
+	// five register as KindBytes (length-prefixed).
+	ParamSubgroupFilter       ParamID = 0x25
+	ParamObjectIDFilter       ParamID = 0x26
+	ParamPriorityFilter       ParamID = 0x27
+	ParamObjectPropertyFilter ParamID = 0x28
+	ParamTrackPropertyFilter  ParamID = 0x29
+	ParamNewGroupRequest      ParamID = 0x32
+	ParamTrackNamespacePrefix ParamID = 0x34
 )
 
 // String returns a short name for known parameter types; unknown values render
@@ -59,6 +71,16 @@ func (p ParamID) String() string {
 		return "LOCATION_FILTER"
 	case ParamGroupOrder:
 		return "GROUP_ORDER"
+	case ParamSubgroupFilter:
+		return "SUBGROUP_FILTER"
+	case ParamObjectIDFilter:
+		return "OBJECTID_FILTER"
+	case ParamPriorityFilter:
+		return "PRIORITY_FILTER"
+	case ParamObjectPropertyFilter:
+		return "OBJECT_PROPERTY_FILTER"
+	case ParamTrackPropertyFilter:
+		return "TRACK_PROPERTY_FILTER"
 	case ParamNewGroupRequest:
 		return "NEW_GROUP_REQUEST"
 	case ParamTrackNamespacePrefix:
@@ -94,6 +116,11 @@ var paramKinds = map[ParamID]ParamKind{
 	ParamSubscriberPriority:      KindByte,
 	ParamLocationFilter:          KindBytes,
 	ParamGroupOrder:              KindByte,
+	ParamSubgroupFilter:          KindBytes,
+	ParamObjectIDFilter:          KindBytes,
+	ParamPriorityFilter:          KindBytes,
+	ParamObjectPropertyFilter:    KindBytes,
+	ParamTrackPropertyFilter:     KindBytes,
 	ParamNewGroupRequest:         KindVarint,
 	ParamTrackNamespacePrefix:    KindBytes,
 }
@@ -180,7 +207,7 @@ func FillTimeoutParam(d time.Duration) Parameter {
 	return VarintParam(ParamFillTimeout, uint64(d/time.Millisecond))
 }
 
-// ExpiresParam builds EXPIRES (§10.2.10): the time after which the sender
+// ExpiresParam builds EXPIRES (§10.2.15): the time after which the sender
 // will terminate the subscription. Zero means the subscription does not
 // expire (or expires at an unknown time).
 func ExpiresParam(d time.Duration) Parameter {
@@ -188,7 +215,7 @@ func ExpiresParam(d time.Duration) Parameter {
 	return VarintParam(ParamExpires, uint64(d/time.Millisecond))
 }
 
-// LargestObjectParam builds LARGEST_OBJECT (§10.2.11): the largest Location
+// LargestObjectParam builds LARGEST_OBJECT (§10.2.16): the largest Location
 // {Group, Object} observed in the track by the sender.
 func LargestObjectParam(group, object uint64) Parameter {
 	return LocationParam(ParamLargestObject, group, object)
@@ -244,13 +271,13 @@ func GroupOrderParam(order GroupOrder) Parameter {
 	return ByteParam(ParamGroupOrder, uint8(order))
 }
 
-// NewGroupRequestParam builds NEW_GROUP_REQUEST (§10.2.13): the largest known
+// NewGroupRequestParam builds NEW_GROUP_REQUEST (§10.2.18): the largest known
 // Group ID plus 1, or 0 if the subscriber has no Group information.
 func NewGroupRequestParam(largestGroupPlusOne uint64) Parameter {
 	return VarintParam(ParamNewGroupRequest, largestGroupPlusOne)
 }
 
-// TrackNamespacePrefixParam builds TRACK_NAMESPACE_PREFIX (§10.2.14): a
+// TrackNamespacePrefixParam builds TRACK_NAMESPACE_PREFIX (§10.2.19): a
 // namespace prefix used for namespace subscription updates. The value is a
 // TrackNamespace structure serialized per §2.4.1.
 func TrackNamespacePrefixParam(prefix wire.TrackNamespace) Parameter {
@@ -275,6 +302,26 @@ func (ps Parameters) Find(t ParamID) (Parameter, bool) {
 		}
 	}
 	return Parameter{}, false
+}
+
+// FindAll returns every parameter with the given type, in list order. Range
+// Filter parameters (§5.1.3) legitimately repeat within one message (multiple
+// SetIDs / Property Types), so callers that handle them must iterate all
+// occurrences rather than rely on [Parameters.Find]'s first-only result.
+func (ps Parameters) FindAll(t ParamID) []Parameter {
+	var out []Parameter
+	for _, p := range ps {
+		if p.Type == t {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// IsRangeFilterParam reports whether t is one of the five Range Filter
+// parameter types (§5.1.3, 0x25-0x29).
+func IsRangeFilterParam(t ParamID) bool {
+	return t >= ParamSubgroupFilter && t <= ParamTrackPropertyFilter
 }
 
 // append writes count + sorted, delta-encoded entries to w. Duplicate types

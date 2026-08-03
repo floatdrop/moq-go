@@ -13,6 +13,7 @@ func TestSetupRoundTrip(t *testing.T) {
 			MaxAuthTokenCacheSizeOption(16 * 1024),
 			MOQTImplementationOption("mediamesh/dev"),
 			MaxRequestUpdatesOption(4),
+			MaxFilterRangesOption(8),
 		},
 	})
 }

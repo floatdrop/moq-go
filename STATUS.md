@@ -101,8 +101,8 @@ By package, bottom-up along the dependency stack:
 | 5.1     | Subscriptions                    | DONE   | Subscribe/Publish/OK/Error state machine in `pubsub.go`. |
 | 5.1.1   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. |
 | 5.1.2   | Location filters                 | DONE   | All 4 types (NextGroupStart, LargestObject, AbsoluteStart, AbsoluteRange) + `Matches`. |
-| 5.1.3   | Range filters                    | MISSING | Not yet implemented (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY/TRACK_PROPERTY_FILTER, `MAX_FILTER_RANGES`); see Known protocol gaps. |
-| 5.1.4   | Combining filters                | MISSING | Depends on §5.1.3; the AND across Forward/Location/Range filters isn't meaningful until Range Filters exist. |
+| 5.1.3   | Range filters                    | PARTIAL | Message-layer codec + evaluation done (`message.RangeFilter`/`RangeFilterSet`: delta-encoded ranges, SetID AND/OR, per-type value match); session/relay enforcement pending. |
+| 5.1.4   | Combining filters                | PARTIAL | Range-filter SetID AND/OR implemented; the AND with Forward/Location filters lands with relay enforcement. |
 | 5.1.5   | Joining an ongoing track         | DONE   | Relative & absolute joining FETCH in `fetch.go`. |
 | 5.1.5.1 | Dynamically starting new groups  | DONE   | Relay forwards a downstream `NEW_GROUP_REQUEST` upstream per §10.2.18: included in the on-demand upstream SUBSCRIBE (no established upstream) or sent as an upstream REQUEST_UPDATE, gated on `DYNAMIC_GROUPS` support, Largest-Group, and outstanding-request bookkeeping. |
 | 5.2     | Fetch state management           | DONE   | Standalone + joining fetch lifecycle. |
@@ -157,11 +157,11 @@ By package, bottom-up along the dependency stack:
 | 10.2.7  | SUBSCRIBER_PRIORITY           | 0x20   | DONE   | |
 | 10.2.8  | GROUP_ORDER                   | 0x22   | DONE   | Ascending/Descending validated. |
 | 10.2.9  | LOCATION_FILTER               | 0x21   | DONE   | Overflow-checked. |
-| 10.2.10 | SUBGROUP_FILTER               | 0x25   | MISSING| Not yet implemented; see §5.1.3 gap. |
-| 10.2.11 | OBJECTID_FILTER               | 0x26   | MISSING| Not yet implemented; see §5.1.3 gap. |
-| 10.2.12 | PRIORITY_FILTER               | 0x27   | MISSING| Not yet implemented; see §5.1.3 gap. |
-| 10.2.13 | OBJECT_PROPERTY_FILTER        | 0x28   | MISSING| Not yet implemented; see §5.1.3 gap. |
-| 10.2.14 | TRACK_PROPERTY_FILTER         | 0x29   | MISSING| Not yet implemented; see §5.1.3 gap. |
+| 10.2.10 | SUBGROUP_FILTER               | 0x25   | PARTIAL| Codec + evaluation (`message`); relay enforcement pending. |
+| 10.2.11 | OBJECTID_FILTER               | 0x26   | PARTIAL| Codec + evaluation (`message`); relay enforcement pending. |
+| 10.2.12 | PRIORITY_FILTER               | 0x27   | PARTIAL| Codec + evaluation (`message`, >255 rejected); relay enforcement pending. |
+| 10.2.13 | OBJECT_PROPERTY_FILTER        | 0x28   | PARTIAL| Codec + evaluation (`message`, even property type); relay enforcement pending. |
+| 10.2.14 | TRACK_PROPERTY_FILTER         | 0x29   | PARTIAL| Codec + evaluation (`message`, even property type); relay enforcement pending. |
 | 10.2.15 | EXPIRES                       | 0x08   | DONE   | |
 | 10.2.16 | LARGEST_OBJECT                | 0x09   | DONE   | Monotonic constraint applied. |
 | 10.2.17 | FORWARD                       | 0x10   | DONE   | |
@@ -173,7 +173,7 @@ By package, bottom-up along the dependency stack:
 | 10.3.1.3| MAX_AUTH_TOKEN_CACHE_SIZE      | 0x04   | DONE   | Sizes the token cache. |
 | 10.3.1.4| AUTHORIZATION_TOKEN (setup)   | 0x03   | DONE   | |
 | 10.3.1.5| MOQT_IMPLEMENTATION           | 0x07   | DONE   | Advisory. |
-| 10.3.1.6| MAX_FILTER_RANGES             | 0x06   | MISSING| Not yet implemented; see §5.1.3 gap. |
+| 10.3.1.6| MAX_FILTER_RANGES             | 0x06   | PARTIAL| Option + `RangeFilterSet.Validate` limit check defined; session advertise/enforce pending. |
 | 10.3.1.7| MAX_REQUEST_UPDATES           | 0x08   | DONE   | `WithMaxRequestUpdates` advertises the per-stream limit; enforced on inbound follow-ups via `RequestUpdateLimiter`, closing with `TOO_MANY_REQUEST_UPDATES` on overflow. |
 | 10.4    | GOAWAY                        | 0x10   | DONE   | Same encoding on control and request streams (draft-19 dropped the Request ID field); callback. |
 | 10.5    | REQUEST_OK                    | 0x07   | DONE   | Shared OK for PUBLISH/UPDATE/TRACK_STATUS/namespace reqs. |
