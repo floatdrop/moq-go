@@ -13,6 +13,11 @@
 // meshes — give each its own bucket. Every read, write, and watch the store
 // performs is scoped to that bucket.
 //
+// One UDP port serves both MOQT transports — raw QUIC for native clients and peer
+// relays, WebTransport (HTTP/3) at -webtransport-path for browsers — so the port
+// works behind an L4 UDP load balancer and no transport has to be selected. See
+// the relay-etcd package doc for the deployment notes, which apply here too.
+//
 // The TLS and cross-relay dial paths here are development-grade: an ephemeral
 // self-signed cert when -cert/-key are omitted, and peer dialing that skips
 // certificate verification. Production deployments should supply real certs and
@@ -37,7 +42,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "0.0.0.0:4433", "listen address (raw QUIC)")
+	addr := flag.String("addr", "0.0.0.0:4433", "listen address; serves raw QUIC and WebTransport on this one UDP port")
 	certFile := flag.String("cert", "", "TLS certificate file (PEM); a self-signed dev cert is generated if empty")
 	keyFile := flag.String("key", "", "TLS private key file (PEM); generated with -cert if empty")
 	natsURL := flag.String("nats-url", nats.DefaultURL, "NATS server URL")
@@ -50,6 +55,8 @@ func main() {
 		"liveness TTL bounding how long this relay's advertisements survive after it stops heartbeating")
 	relayAddr := flag.String("relay-addr", "",
 		"address peers use to dial this relay, advertised in NATS; empty = single-instance (not reachable by peers)")
+	wtPath := flag.String("webtransport-path", "/moq",
+		"HTTP/3 path browsers use for the WebTransport CONNECT (raw QUIC ignores it)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -57,12 +64,16 @@ func main() {
 
 	// Do the fatal-on-error setup (TLS, listener) before opening the store, so no
 	// os.Exit path runs after store.Close() is deferred (which it would skip).
-	tlsCfg, err := relaynet.TLSConfig(*certFile, *keyFile, relaynet.MOQTQUICALPNs)
+	// Advertise both mappings' ALPNs — "moqt-NN" for raw QUIC and "h3" for
+	// WebTransport (§3.1) — so relaynet.Listen can decide per connection. Clients
+	// pick their transport by URL scheme, peers keep dialing raw QUIC, and no
+	// transport choice has to be agreed deployment-wide.
+	tlsCfg, err := relaynet.TLSConfig(*certFile, *keyFile, relaynet.DualALPNs)
 	if err != nil {
 		logger.Error("build TLS config", "err", err)
 		os.Exit(1)
 	}
-	listener, err := relaynet.ListenQUIC(*addr, tlsCfg)
+	listener, err := relaynet.Listen(*addr, *wtPath, tlsCfg, logger)
 	if err != nil {
 		logger.Error("listen", "addr", *addr, "err", err)
 		os.Exit(1)
@@ -83,6 +94,7 @@ func main() {
 
 	logger.Info("relay-nats listening",
 		"addr", listener.Addr().String(),
+		"webtransport_path", *wtPath,
 		"relay_addr", *relayAddr,
 		"nats_url", *natsURL,
 		"nats_bucket", *bucket,
@@ -90,6 +102,8 @@ func main() {
 
 	// Cross-relay dialing: peers advertise a RelayAddr in NATS; the relay dials it
 	// over raw QUIC when it needs an upstream SUBSCRIBE it can't serve locally.
+	// Peers always use raw QUIC, whatever transport clients chose — every relay
+	// serves both on its port, so there is nothing to coordinate.
 	// Dev-grade — verification is skipped (see package doc).
 	clientTLS := relaynet.InsecureClientTLSConfig(relaynet.MOQTQUICALPNs)
 	dialer := func(ctx context.Context, peer string) (session.Conn, error) {
