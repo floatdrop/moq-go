@@ -205,7 +205,7 @@ func (s *OutgoingSubgroupStream) Close() error {
 	return err
 }
 
-// Cancel resets the stream with the given application code (§3.3.3).
+// Cancel resets the stream with the given application code (§3.3.4).
 func (s *OutgoingSubgroupStream) Cancel(code moqt.StreamResetCode) {
 	s.dst.CancelWrite(uint64(code))
 }
@@ -262,7 +262,7 @@ func (s *OutgoingFetchStream) Write(p []byte) (int, error) { return s.dst.Write(
 // Close FINs the send side cleanly.
 func (s *OutgoingFetchStream) Close() error { return s.dst.Close() }
 
-// Cancel resets the stream with the given application code (§3.3.3).
+// Cancel resets the stream with the given application code (§3.3.4).
 func (s *OutgoingFetchStream) Cancel(code moqt.StreamResetCode) {
 	s.dst.CancelWrite(uint64(code))
 }

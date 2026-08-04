@@ -354,8 +354,8 @@ func (s *Session) recordRequestIDGapsLocked(rid uint64, peerMustBeEven bool) {
 	}
 }
 
-// resetStream resets both directions of a bidi request stream with
-// StreamResetInternalError (§3.3.3) — the common teardown when a request stream
+// resetStream cancels both directions of a bidi request stream (§3.3.3) with
+// StreamResetInternalError (§3.3.4) — the common teardown when a request stream
 // is abandoned mid-parse or fails §10.1 validation.
 func resetStream(s Stream) {
 	s.CancelRead(uint64(moqt.StreamResetInternalError))
@@ -473,7 +473,7 @@ func writeFirst(stream Stream, first message.Message) (Stream, error) {
 
 // readResponse parses one message from stream, honoring ctx. message.Parse
 // reads from a context-free io.Reader, so cancellation is bridged by resetting
-// the stream's read side with StreamResetCancelled (§3.3.3), which unblocks the
+// the stream's read side with StreamResetCancelled (§3.3.4), which unblocks the
 // in-flight Parse.
 //
 // The bridge is a context.AfterFunc hook rather than a watcher goroutine: it

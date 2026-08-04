@@ -58,7 +58,7 @@ type subgroupWriterSet struct {
 	// sawClean records that at least one contributor ended its inbound stream
 	// cleanly (io.EOF). With redundant upstreams a clean completion of the
 	// Subgroup is authoritative: the merged outbound stream then FINs even if a
-	// peer upstream reset. resetCode is the §3.3.3 code used only when NO
+	// peer upstream reset. resetCode is the §3.3.4 code used only when NO
 	// contributor ended cleanly (every upstream reset). These are written by each
 	// contributor at release under the SharedSubgroup mutex.
 	sawClean  bool
@@ -193,7 +193,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	}
 
 	// inboundReset records THIS contributor's termination mode: false on clean
-	// io.EOF, true on any other read error. inboundResetCode is the §3.3.3 code.
+	// io.EOF, true on any other read error. inboundResetCode is the §3.3.4 code.
 	// They are applied to the outbound streams only when this is the LAST
 	// contributor to leave the Subgroup — a single publisher dropping out (clean
 	// or reset) while others still feed the Subgroup must not disturb the
@@ -464,7 +464,7 @@ func (h *sessionHandler) openWriterForSub(
 //     records its enqueue time; if the writer later dequeues one that waited
 //     longer than maxLag, the subscriber has fallen too far behind the live
 //     edge (§8 Delivery Timeouts) and the writer resets its outbound stream
-//     with TOO_FAR_BEHIND (§3.3.3), transitions the [registry.DownstreamSub] to
+//     with TOO_FAR_BEHIND (§3.3.4), transitions the [registry.DownstreamSub] to
 //     [registry.SubTerminated], and exits. The optional maxDropsBeforeReset cap is a
 //     coarse backstop on cumulative drops, reset with EXCESSIVE_LOAD instead.
 type subgroupWriter struct {
@@ -492,7 +492,7 @@ type subgroupWriter struct {
 	drops            int
 	closed           bool                 // set under dropsMu inside close
 	inboundReset     bool                 // set under dropsMu inside close
-	inboundResetCode moqt.StreamResetCode // §3.3.3 reset code when inboundReset; set inside close
+	inboundResetCode moqt.StreamResetCode // §3.3.4 reset code when inboundReset; set inside close
 }
 
 // publish does a non-blocking send onto the inbox, stamping the enqueue time
@@ -705,7 +705,7 @@ func (w *subgroupWriter) run() {
 		// subscriber must re-subscribe (likely with a more selective filter or
 		// lower priority) to resume forwarding.
 		//
-		// §3.3.3 reset code: a lag-window breach is precisely TOO_FAR_BEHIND
+		// §3.3.4 reset code: a lag-window breach is precisely TOO_FAR_BEHIND
 		// (the subscriber can't keep up with the live edge). The cumulative
 		// drop-cap backstop is server-side resource pressure, so it uses
 		// EXCESSIVE_LOAD. A lag breach wins if both fired.
@@ -758,7 +758,7 @@ func (w *subgroupWriter) run() {
 		// reset means that there might be other objects in the
 		// Subgroup beyond the last one received. A relay might
 		// immediately reset the corresponding downstream stream...").
-		// inboundResetCode carries the §3.3.3 reason (CANCELLED for an
+		// inboundResetCode carries the §3.3.4 reason (CANCELLED for an
 		// upstream reset / ctx-cancel, MALFORMED_TRACK for a §11.4.3
 		// post-terminal-object violation).
 		w.out.Cancel(inboundResetCode)
@@ -788,7 +788,7 @@ func (w *subgroupWriter) applyPriority() {
 
 // close is idempotent. The reset argument is recorded so the writer
 // goroutine's post-drain path can decide between FIN and Cancel on its
-// current outbound stream; code is the §3.3.3 reason used when reset is true.
+// current outbound stream; code is the §3.3.4 reason used when reset is true.
 // Multiple callers may race to close; the first to enter the sync.Once wins,
 // which matches the §11.4.3 intent: once an outbound stream's fate is decided,
 // later changes don't apply.

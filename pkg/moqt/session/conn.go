@@ -24,7 +24,7 @@ type SendStream interface {
 	io.Closer
 
 	// CancelWrite resets the stream with the given application error code
-	// (§3.3.3 of draft-ietf-moq-transport-19) and unblocks any in-flight
+	// (§3.3.4 of draft-ietf-moq-transport-19) and unblocks any in-flight
 	// Write with an error. The session layer relies on this to unwedge its
 	// control-send loop on shutdown.
 	CancelWrite(code uint64)

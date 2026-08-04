@@ -30,7 +30,7 @@ var ErrPaddingStream = errors.New("moqt/session: padding stream received (ignora
 type DataStream interface {
 	// Read returns body bytes that follow the parsed header.
 	Read(p []byte) (int, error)
-	// Cancel resets the stream with the given application code (§3.3.3).
+	// Cancel resets the stream with the given application code (§3.3.4).
 	Cancel(code moqt.StreamResetCode)
 	// isDataStream seals the interface to this package.
 	isDataStream()
@@ -90,7 +90,7 @@ func (s *IncomingSubgroupStream) isDataStream() {}
 // for correctly-framed object access.
 func (s *IncomingSubgroupStream) Read(p []byte) (int, error) { return s.br.Read(p) }
 
-// Cancel resets the stream with the given application code (§3.3.3).
+// Cancel resets the stream with the given application code (§3.3.4).
 func (s *IncomingSubgroupStream) Cancel(code moqt.StreamResetCode) {
 	s.src.CancelRead(uint64(code))
 }
@@ -236,7 +236,7 @@ func (s *IncomingFetchStream) isDataStream() {}
 // for correctly-framed object access.
 func (s *IncomingFetchStream) Read(p []byte) (int, error) { return s.br.Read(p) }
 
-// Cancel resets the stream with the given application code (§3.3.3).
+// Cancel resets the stream with the given application code (§3.3.4).
 func (s *IncomingFetchStream) Cancel(code moqt.StreamResetCode) {
 	s.src.CancelRead(uint64(code))
 }
