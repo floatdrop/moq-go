@@ -175,6 +175,27 @@ type Config struct {
 	// invoked at most once per address while a session to it is live, and
 	// again only after that session ends.
 	Dialer func(ctx context.Context, relayAddr string) (session.Conn, error)
+
+	// UpstreamFanIn optionally bounds how many remote relays a cross-relay
+	// upstream SUBSCRIBE fans into for one namespace. §9.5 requires a relay to
+	// subscribe to every publisher that advertised the namespace, so the zero
+	// value (the default) does exactly that — full fan-in, no data loss in any
+	// topology. Like the other limits on this struct, zero means "no limit," and
+	// bounding is a deployment policy the operator opts into.
+	//
+	// A positive N is that opt-in: the pool ranks the advertising relays by
+	// rendezvous (HRW) weight — a deterministic order every relay computes
+	// identically — and subscribes only to the top N that dial successfully.
+	// Because the ranking is identical fleet-wide, relays converge on the same
+	// few upstreams per namespace, collapsing the relay-to-relay stream count
+	// from a full O(n²) mesh toward a tree (N is the redundancy width: 1 is a
+	// pure tree, 2 keeps one backup upstream). This is a deliberate deviation
+	// from §9.5's "subscribe to all," sound only where the advertisers are
+	// redundant sources of the same objects — which the relay's fanout already
+	// dedups — never where different relays hold distinct objects for the track.
+	//
+	// Only meaningful when Dialer and Discovery are set; ignored otherwise.
+	UpstreamFanIn int
 }
 
 // resolved Config defaults; kept as constants so tests can reference them
@@ -320,6 +341,7 @@ func New(listener Listener, cfg Config) *Relay {
 			sessionOpts:  cfg.SessionOptions,
 			log:          r.log,
 			serveSession: r.serveUpstreamSession,
+			fanIn:        cfg.UpstreamFanIn,
 		})
 	}
 

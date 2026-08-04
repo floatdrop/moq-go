@@ -408,7 +408,9 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 // subscribes to EVERY matching source for fault tolerance — every local
 // publisher advertising a covering namespace and every remote relay Discovery
 // resolves (§9.4 cross-relay aggregation) — deduping already-subscribed
-// sessions and fanning the rest into one track. A failed candidate does not
+// sessions and fanning the rest into one track. The remote-relay branch honors
+// an opt-in Config.UpstreamFanIn cap (see [upstreamPool.resolveUpstreams]); the
+// local-publisher branch always takes every match. A failed candidate does not
 // abort the others. Returns (entry, true, nil) when at least one upstream was
 // established, (nil, false, nil) when none is available anywhere, and
 // (nil, false, err) when every candidate failed with the last a hard error.
@@ -471,10 +473,12 @@ func (h *sessionHandler) subscribeUpstream(
 		establish(pub.Session, "local-publisher")
 	}
 
-	// 2. Every remote relay Discovery resolves for this namespace. The pool
-	//    dials + reuses one session per RelayAddr; resolveAll returns nil when no
-	//    other relay (besides ourselves) serves the namespace.
-	for _, remote := range h.upstreams.resolveAll(ctx, fullName.Namespace) {
+	// 2. Remote relays Discovery resolves for this namespace. §9.5 fans into
+	//    every advertiser by default; a positive Config.UpstreamFanIn instead
+	//    caps this to the top rendezvous-ranked few. The pool dials + reuses one
+	//    session per RelayAddr; resolveUpstreams returns nil when no other relay
+	//    (besides ourselves) serves the namespace.
+	for _, remote := range h.upstreams.resolveUpstreams(ctx, fullName.Namespace) {
 		establish(remote, "discovery-remote")
 	}
 

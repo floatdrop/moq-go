@@ -1,8 +1,11 @@
 package relay
 
 import (
+	"cmp"
 	"context"
+	"hash/fnv"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -38,6 +41,12 @@ type upstreamPool struct {
 	cancelBase   context.CancelFunc
 	serveSession func(sess *session.Session, onClose func())
 
+	// fanIn optionally caps how many rendezvous-ranked upstreams
+	// resolveUpstreams subscribes to per namespace (Config.UpstreamFanIn).
+	// Zero (or negative) means unbounded — fan in to every advertiser, the
+	// §9.5 default.
+	fanIn int
+
 	mu      sync.Mutex
 	entries map[string]*poolEntry
 }
@@ -59,6 +68,9 @@ type upstreamPoolConfig struct {
 	sessionOpts  []session.Option
 	log          *slog.Logger
 	serveSession func(sess *session.Session, onClose func())
+	// fanIn is Config.UpstreamFanIn verbatim; zero (the default) means
+	// unbounded fan-in.
+	fanIn int
 }
 
 func newUpstreamPool(cfg upstreamPoolConfig) *upstreamPool {
@@ -74,26 +86,43 @@ func newUpstreamPool(cfg upstreamPoolConfig) *upstreamPool {
 		baseCtx:      base,
 		cancelBase:   cancel,
 		serveSession: cfg.serveSession,
+		fanIn:        cfg.fanIn,
 		entries:      make(map[string]*poolEntry),
 	}
 }
 
-// resolveAll finds every remote relay that serves ns and returns a live session
-// to each, for §9.5 fault-tolerant fan-in: a downstream SUBSCRIBE pulls the
-// track from all matching upstreams, not just the first, so the loss of one
-// origin doesn't interrupt delivery. Returns nil when Discovery knows no usable
-// remote (none advertised, only this relay itself, or every candidate failed to
-// dial). Discovery-lookup and per-peer dial failures are logged and treated as
-// "skip that candidate" — consistent with the best-effort advertise side: the
-// local registry / a clean SUBSCRIBE rejection is the fallback, never a
-// torn-down session.
+// resolveUpstreams finds the remote relays that serve ns and returns a live
+// session to each, ranked by rendezvous (HRW) weight. The ranking is a
+// deterministic function of (ns, candidate addresses) alone, so every relay
+// sharing the same Discovery view computes the same order. On its own that only
+// fixes the dial order; with a positive fanIn (see below) it also bounds how
+// many upstreams are taken, so relays converge on the same small set and the
+// relay-to-relay stream count stays bounded instead of trending toward a full
+// O(n²) mesh — a tree rooted at ns's highest-weighted relays.
+//
+// §9.5 requires subscribing to every matching publisher (the fanout then dedups
+// the redundant copies they push), so fanIn == 0 (the default) fans into all of
+// them. A positive fanIn (Config.UpstreamFanIn) is an opt-in deviation: it
+// bounds the subscription to the top fanIn ranked upstreams — 1 is a pure tree,
+// 2 keeps one backup — trading the §9.5 fan-in for a bounded relay mesh. That is
+// only sound where the advertisers are redundant sources of the same objects,
+// never where different relays hold distinct objects for the track. Candidates
+// are dialled in rank order and, when bounded, the first fanIn that connect are
+// returned; a dead top-ranked relay still lingering in Discovery during its
+// lease TTL falls through transparently to the next-ranked one.
+//
+// Returns nil when Discovery knows no usable remote (none advertised, only this
+// relay itself, or every candidate failed to dial). Discovery-lookup and
+// per-peer dial failures are logged and treated as "skip that candidate" —
+// consistent with the best-effort advertise side: the local registry / a clean
+// SUBSCRIBE rejection is the fallback, never a torn-down session.
 //
 // Loop prevention is minimal: candidates whose RelayAddr equals this relay's
 // own (or is empty / unaddressable) are skipped so the relay never subscribes
 // to itself. Duplicate RelayAddrs collapse to one session (the pool keys by
 // address). Multi-hop cycle detection (A→B→C→A) is out of scope — see the
 // package limitations.
-func (p *upstreamPool) resolveAll(ctx context.Context, ns wire.TrackNamespace) []*session.Session {
+func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamespace) []*session.Session {
 	if p == nil || p.discovery == nil {
 		return nil
 	}
@@ -103,6 +132,10 @@ func (p *upstreamPool) resolveAll(ctx context.Context, ns wire.TrackNamespace) [
 			slog.String("err", err.Error()))
 		return nil
 	}
+	// Rank so the dial order is identical fleet-wide; a positive fanIn then
+	// takes the same top-fanIn upstreams everywhere.
+	rankByAffinity(ns, infos)
+
 	var (
 		out  []*session.Session
 		seen = make(map[string]bool, len(infos))
@@ -117,11 +150,53 @@ func (p *upstreamPool) resolveAll(ctx context.Context, ns wire.TrackNamespace) [
 			p.log.LogAttrs(ctx, slog.LevelDebug, "upstream pool dial failed",
 				slog.String("relay_addr", info.RelayAddr),
 				slog.String("err", err.Error()))
-			continue // try the next advertised relay
+			continue // fall through to the next-ranked relay
 		}
 		out = append(out, sess)
+		if p.fanIn > 0 && len(out) >= p.fanIn {
+			break // opt-in bound reached; deeper candidates are the fallback pool
+		}
 	}
 	return out
+}
+
+// rankByAffinity sorts infos in place by descending rendezvous (HRW) weight for
+// ns. The weight hashes (ns, RelayAddr), so the order depends only on the
+// namespace and the candidate set — every relay in the fleet derives the same
+// order and, taking the top few, converges on the same upstreams. RelayAddr
+// breaks weight ties, keeping the order total (and identical everywhere) even
+// on the rare hash collision.
+func rankByAffinity(ns wire.TrackNamespace, infos []discovery.NamespaceInfo) {
+	nsKey := namespaceAffinityKey(ns)
+	slices.SortFunc(infos, func(a, b discovery.NamespaceInfo) int {
+		if c := cmp.Compare(hrwWeight(nsKey, b.RelayAddr), hrwWeight(nsKey, a.RelayAddr)); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.RelayAddr, b.RelayAddr)
+	})
+}
+
+// hrwWeight is the highest-random-weight score for placing ns on the relay at
+// addr: FNV-1a over the namespace's canonical bytes followed by the address.
+// nsKey is canonical and self-delimiting (a field count then length-prefixed
+// fields), so the concatenation is injective in (ns, addr) and needs no
+// separator.
+func hrwWeight(nsKey []byte, addr string) uint64 {
+	// hash.Hash.Write never returns an error (documented on the interface); the
+	// blank assignments are just to satisfy the errcheck/gosec linters.
+	h := fnv.New64a()
+	_, _ = h.Write(nsKey)
+	_, _ = h.Write([]byte(addr))
+	return h.Sum64()
+}
+
+// namespaceAffinityKey is the canonical §2.4.1 wire encoding of ns, used as the
+// stable per-namespace seed for hrwWeight. Reusing the wire encoding (the same
+// bytes the etcd backend keys namespaces by) keeps nested tuples unambiguous.
+func namespaceAffinityKey(ns wire.TrackNamespace) []byte {
+	w := wire.NewWriter(nil)
+	w.TrackNamespace(ns)
+	return w.Bytes()
 }
 
 // get returns a pooled session for relayAddr, dialing one if none is live.
