@@ -146,8 +146,8 @@ func main() {
 	// matter: exiting main mid-drain, or letting the signal cancel the session
 	// handlers, means peers never see the GOAWAY.
 	if err := r.Run(ctx, 10*time.Second); err != nil {
-		// Log rather than log.Fatal so the deferred stop() runs (§exit
-		// hygiene): log.Fatal calls os.Exit and would skip it.
+		// Log rather than log.Fatal so the deferred stop() runs: log.Fatal
+		// calls os.Exit, which would skip it.
 		log.Printf("relay run: %v", err)
 	}
 }

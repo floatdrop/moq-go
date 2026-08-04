@@ -618,7 +618,7 @@ func (r *Relay) Stop(ctx context.Context) error {
 		}
 
 		// 5. Force-close anything still standing. We use
-		//    SessionGoawayTimeout (§10.4 / IANA §15.10.3): the
+		//    SessionGoawayTimeout (§10.4 / IANA §15.11.1): the
 		//    relay sent GOAWAY and the peer didn't drain within
 		//    GoawayTimeout. Closing an already-closed session is a
 		//    no-op via Session's internal closeOnce.

@@ -55,7 +55,7 @@ type Authorizer interface {
 // REQUEST_ERROR it sends downstream; Reason is forwarded as the human-readable
 // reason string.
 //
-// Code MUST be one of the §10.6 / IANA §15.10.2 REQUEST_ERROR codes (see
+// Code MUST be one of the §10.6 / IANA §15.11.2 REQUEST_ERROR codes (see
 // [moqt.RequestErrorCode]). If Code is the zero value, the relay substitutes
 // [moqt.RequestUnauthorized] when forming the REQUEST_ERROR.
 type DeniedError struct {

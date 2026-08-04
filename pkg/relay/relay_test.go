@@ -339,7 +339,7 @@ func TestRelay_StopReturnsEarlyOnCleanDrain(t *testing.T) {
 // TestRelay_StopForceClosesOnTimeout pins the timeout path: a client
 // that observes GOAWAY but ignores it gets force-closed at the
 // GoawayTimeout boundary, with session error code GoawayTimeout
-// (§10.4 / IANA §15.10.3).
+// (§10.4 / IANA §15.11.1).
 func TestRelay_StopForceClosesOnTimeout(t *testing.T) {
 	t.Parallel()
 	const grace = 200 * time.Millisecond
