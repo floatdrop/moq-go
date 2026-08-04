@@ -6,8 +6,9 @@
 // It exists so more than one relay binary (the core cmd/relay and the
 // etcd-backed relay in pkg/relay/discovery/etcd/cmd) share one copy of this
 // setup rather than each carrying its own. The helpers here are aimed at local
-// development and single-operator deployments — [SelfSignedCert] and
-// [InsecureClientTLSConfig] are explicitly not for production trust.
+// development and single-operator deployments — [SelfSignedCert],
+// [InsecureClientTLSConfig] and [Listen] are explicitly not for production: the
+// first two skip real trust, and the third accepts every browser Origin.
 package relaynet
 
 import (

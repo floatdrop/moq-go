@@ -2,7 +2,9 @@ package relay_test
 
 import (
 	"context"
+	"os/signal"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -12,11 +14,17 @@ import (
 )
 
 // Running the relay. relay.New takes a Listener (from quicconn, wtconn, or the
-// in-process sessiontest adapter) and a relay.Config; Start blocks until ctx
-// is cancelled or Stop is called.
+// in-process sessiontest adapter) and a relay.Config; Run serves until ctx is
+// cancelled and then performs the full §10.4 shutdown — GOAWAY, grace period,
+// force-close — returning only once that drain has finished.
+//
+// Prefer Run over Start for a binary driven by a signal. ctx is the shutdown
+// *trigger*, and Run keeps it away from the sessions: Start propagates its ctx to
+// every per-session handler, so wiring a signal context straight into Start tears
+// the sessions down underneath the drain and their peers never see the GOAWAY.
+// Start and Stop remain available for callers that drive the phases themselves.
 func ExampleNew() {
 	var listener relay.Listener // e.g. quicconn.NewListener(ql)
-	ctx := context.Background()
 
 	r := relay.New(listener, relay.Config{
 		GoawayTimeout: 5 * time.Second,
@@ -25,7 +33,12 @@ func ExampleNew() {
 		},
 	})
 
-	if err := r.Start(ctx); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	// The second argument bounds the shutdown itself, so a wedged handler or an
+	// unreachable Discovery backend cannot hang process exit.
+	if err := r.Run(ctx, 10*time.Second); err != nil {
 		panic(err)
 	}
 }
