@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
 	"github.com/floatdrop/moq-go/pkg/relay"
+	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
 
 // pipeListener is an in-process [relay.Listener] backed by [sessiontest].
@@ -70,6 +72,17 @@ func (l *pipeListener) Accept(ctx context.Context) (session.Conn, error) {
 }
 
 func (l *pipeListener) Addr() net.Addr { return nil }
+
+// isClosed reports whether Close has run, so a test can assert what had already
+// happened at the moment some other shutdown step ran.
+func (l *pipeListener) isClosed() bool {
+	select {
+	case <-l.done:
+		return true
+	default:
+		return false
+	}
+}
 
 func (l *pipeListener) Close() error {
 	if l.closeDelay > 0 {
@@ -210,6 +223,184 @@ func TestRelay_StopBroadcastsGoaway(t *testing.T) {
 
 	if err := <-stopDone; err != nil {
 		t.Fatalf("Stop returned: %v", err)
+	}
+}
+
+// withdrawSpyStore wraps a [discovery.MemoryStore] to observe — and stall —
+// Withdraw, which is how the ordering test below freezes Stop mid-sequence.
+type withdrawSpyStore struct {
+	*discovery.MemoryStore
+
+	onWithdraw func(relayAddr string) error
+}
+
+func (s *withdrawSpyStore) Withdraw(ctx context.Context, relayAddr string) error {
+	if err := s.onWithdraw(relayAddr); err != nil {
+		return err
+	}
+	return s.MemoryStore.Withdraw(ctx, relayAddr)
+}
+
+// TestRelay_StopWithdrawsFromDiscoveryBeforeGoaway pins the shutdown ordering
+// cross-relay deployments depend on: Stop must remove this relay's
+// advertisements from Discovery before it closes the listener and before any
+// GOAWAY goes out. A peer whose FindTrack / FindNamespace resolves to this relay
+// during the drain would otherwise dial an endpoint that is already dead.
+//
+// The store's Withdraw blocks until the test has finished asserting, which is
+// what makes this deterministic rather than a race against Stop's own progress:
+// while the withdrawal is in flight, Stop cannot have closed the listener or sent
+// a GOAWAY, so both "not yet" assertions are checked against a frozen shutdown.
+func TestRelay_StopWithdrawsFromDiscoveryBeforeGoaway(t *testing.T) {
+	t.Parallel()
+	const (
+		grace     = 250 * time.Millisecond
+		relayAddr = "relay-a:4433"
+	)
+
+	l := newPipeListener()
+
+	var (
+		mu          sync.Mutex
+		calls       int
+		gotAddr     string
+		sawListener bool // listener already closed when the withdrawal ran
+	)
+	withdrawn := make(chan struct{})
+	proceed := make(chan struct{})
+	store := &withdrawSpyStore{
+		MemoryStore: discovery.NewMemoryStore(),
+		onWithdraw: func(addr string) error {
+			mu.Lock()
+			calls++
+			first := calls == 1
+			gotAddr = addr
+			sawListener = l.isClosed()
+			mu.Unlock()
+			if first {
+				close(withdrawn)
+			}
+			// Hold the shutdown here so the assertions below run against a Stop
+			// that provably has not progressed past the withdrawal.
+			<-proceed
+			return nil
+		},
+	}
+	r := relay.New(l, relay.Config{
+		GoawayTimeout: grace,
+		Discovery:     store,
+		RelayAddr:     relayAddr,
+	})
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- r.Start(t.Context()) }()
+	t.Cleanup(func() { <-startErr })
+
+	clientConn, err := l.Dial()
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	clientSess, err := session.Client(t.Context(), clientConn)
+	if err != nil {
+		t.Fatalf("session.Client: %v", err)
+	}
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		stopDone <- r.Stop(stopCtx)
+	}()
+
+	select {
+	case <-withdrawn:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop did not withdraw from discovery")
+	}
+
+	// The GOAWAY must still be pending: withdrawal precedes it.
+	select {
+	case <-clientSess.GoawayReceived():
+		t.Error("GOAWAY was sent before the relay withdrew from discovery")
+	default:
+	}
+
+	mu.Lock()
+	closedFirst, addr := sawListener, gotAddr
+	mu.Unlock()
+	if closedFirst {
+		t.Error("listener was already closed when the withdrawal ran;" +
+			" withdrawal must precede it, or peers can resolve a dead endpoint")
+	}
+	if addr != relayAddr {
+		t.Errorf("Withdraw got relayAddr %q, want %q", addr, relayAddr)
+	}
+
+	close(proceed) // let the shutdown continue
+
+	// The GOAWAY still has to arrive — withdrawing must not skip the drain.
+	select {
+	case <-clientSess.GoawayReceived():
+	case <-time.After(2 * time.Second):
+		t.Fatal("client never received GOAWAY after the withdrawal")
+	}
+
+	if err := <-stopDone; err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	mu.Lock()
+	got := calls
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("Withdraw called %d times, want exactly 1", got)
+	}
+}
+
+// TestRelay_StopWithdrawFailureIsNotFatal pins that a backend that cannot be
+// reached at shutdown — the case the liveness TTL exists to cover — still gets
+// a full GOAWAY drain rather than a failed Stop.
+func TestRelay_StopWithdrawFailureIsNotFatal(t *testing.T) {
+	t.Parallel()
+	const grace = 250 * time.Millisecond
+
+	l := newPipeListener()
+	store := &withdrawSpyStore{
+		MemoryStore: discovery.NewMemoryStore(),
+		onWithdraw:  func(string) error { return errors.New("etcd unreachable") },
+	}
+	r := relay.New(l, relay.Config{
+		GoawayTimeout: grace,
+		Discovery:     store,
+	})
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- r.Start(t.Context()) }()
+	t.Cleanup(func() { <-startErr })
+
+	clientConn, err := l.Dial()
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	clientSess, err := session.Client(t.Context(), clientConn)
+	if err != nil {
+		t.Fatalf("session.Client: %v", err)
+	}
+
+	stopDone := make(chan error, 1)
+	go func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		stopDone <- r.Stop(stopCtx)
+	}()
+
+	select {
+	case <-clientSess.GoawayReceived():
+	case <-time.After(2 * time.Second):
+		t.Fatal("client did not receive GOAWAY after a failed withdrawal")
+	}
+	if err := <-stopDone; err != nil {
+		t.Fatalf("Stop returned %v; a failed withdrawal must not fail shutdown", err)
 	}
 }
 

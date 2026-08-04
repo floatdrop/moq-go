@@ -48,6 +48,16 @@ type Listener interface {
 	Close() error
 }
 
+// discoveryWithdrawTimeout bounds [Relay.Stop]'s Discovery withdrawal. It is the
+// first step of shutdown, so a backend that has gone away must not be able to
+// delay the GOAWAY broadcast behind it: the advertisements expire on their own
+// once the liveness TTL lapses. Deliberately far longer than the registries'
+// per-call discoveryCallTimeout — this is one RPC on the shutdown path, not a
+// call made under a registry lock. Worst case it adds this much to Stop on top
+// of GoawayTimeout, which still leaves room inside a typical 30s orchestrator
+// termination grace period.
+const discoveryWithdrawTimeout = 5 * time.Second
+
 // Config carries all relay knobs. It bundles transport-agnostic
 // scheduling parameters (queue sizes, reset thresholds, cache bounds),
 // pluggable hooks (Authorizer, Discovery), the GOAWAY grace period,
@@ -562,28 +572,53 @@ func (r *Relay) Stop(ctx context.Context) error {
 		r.log.LogAttrs(ctx, slog.LevelInfo, "relay stopping")
 		close(r.stopCh)
 
-		// 1. Close the listener; this unblocks the Accept loop. Close the
-		//    upstream pool too: no new cross-relay dials succeed during
-		//    shutdown, and its base context is cancelled so any in-flight
-		//    dial / dialled-session handler unwinds. The dialled sessions are
-		//    also in the snapshot below and get GOAWAY'd / force-closed like
+		// 1. Withdraw from Discovery first, before anything else: a peer that
+		//    resolves this relay via FindTrack / FindNamespace after step 2 has
+		//    closed the listener would dial a dead endpoint. Doing it ahead of
+		//    the listener close leaves only the harmless inverse window
+		//    (unadvertised but still accepting). Withdraw leaves the store
+		//    usable, so the rest of the drain can still resolve *other* relays.
+		//    Bounded by discoveryWithdrawTimeout as well as ctx: Stop may be
+		//    called with a deadline-free context, and an unreachable backend
+		//    must not hold the listener close and every GOAWAY behind it.
+		if r.cfg.Discovery != nil {
+			wctx, cancelWithdraw := context.WithTimeout(ctx, discoveryWithdrawTimeout)
+			err := r.cfg.Discovery.Withdraw(wctx, r.cfg.RelayAddr)
+			cancelWithdraw()
+			if err != nil {
+				// Not promoted to firstErr: the advertisements also expire on
+				// their own once the backend's liveness TTL lapses, so a failed
+				// withdrawal delays peer convergence but does not fail shutdown.
+				r.log.LogAttrs(ctx, slog.LevelWarn, "relay discovery withdrawal failed",
+					slog.String("err", err.Error()))
+			} else {
+				r.log.LogAttrs(ctx, slog.LevelInfo, "relay withdrawn from discovery")
+			}
+		}
+
+		// 2. Close the listener; this unblocks the Accept loop. Block new
+		//    upstream dials too — starting a cross-relay subscription while
+		//    draining is pointless — but leave the established upstream sessions
+		//    running: dropping them is "unsubscribing from upstream publishers",
+		//    which §3.6 puts after the downstream GOAWAY (step 6). They are in
+		//    the snapshot below, so they get GOAWAY'd / force-closed like
 		//    accepted ones.
 		if err := r.listener.Close(); err != nil && !isShutdownErr(err) {
 			firstErr = fmt.Errorf("relay: listener close: %w", err)
 		}
 		if r.upstreams != nil {
-			r.upstreams.close()
+			r.upstreams.stopDialing()
 		}
 
-		// 2. Mark shutdown in progress and snapshot the session set in one
+		// 3. Mark shutdown in progress and snapshot the session set in one
 		//    atomic step, so we can iterate without holding the lock while
 		//    doing potentially-blocking session work. The atomicity partitions
 		//    sessions cleanly: every session is either in this snapshot (its
-		//    drain is owned by steps 3–5 below) or registered later (it observes
+		//    drain is owned by steps 4–7 below) or registered later (it observes
 		//    shuttingDown in addSession and owns its own drain) — never both.
 		sessions := r.beginShutdown()
 
-		// 3. Send GOAWAY to each session if a grace period is set. A
+		// 4. Send GOAWAY to each session if a grace period is set. A
 		//    zero timeout means "don't bother with GOAWAY"; close
 		//    everything immediately. A relay-to-relay deployment may
 		//    want to include a New Session URI here — extend
@@ -599,7 +634,7 @@ func (r *Relay) Stop(ctx context.Context) error {
 			}
 		}
 
-		// 4. Wait up to GoawayTimeout for sessions to drain. Whichever
+		// 5. Wait up to GoawayTimeout for sessions to drain. Whichever
 		//    finishes first — drain or timeout — wins.
 		drained := make(chan struct{})
 		go func() {
@@ -617,7 +652,16 @@ func (r *Relay) Stop(ctx context.Context) error {
 			r.log.LogAttrs(ctx, slog.LevelWarn, "relay Stop ctx cancelled, force-closing sessions")
 		}
 
-		// 5. Force-close anything still standing. We use
+		// 6. Now that every downstream subscriber has had its GOAWAY and the
+		//    grace period is over, unsubscribe from upstream publishers by
+		//    cancelling the pool's base context. §3.6: "When the server is a
+		//    subscriber, it SHOULD send a GOAWAY message to downstream
+		//    subscribers prior to unsubscribing from upstream publishers."
+		if r.upstreams != nil {
+			r.upstreams.close()
+		}
+
+		// 7. Force-close anything still standing. We use
 		//    SessionGoawayTimeout (§10.4 / IANA §15.11.1): the
 		//    relay sent GOAWAY and the peer didn't drain within
 		//    GoawayTimeout. Closing an already-closed session is a
@@ -626,13 +670,13 @@ func (r *Relay) Stop(ctx context.Context) error {
 			_ = sess.Close(moqt.SessionGoawayTimeout, "relay shutdown")
 		}
 
-		// 6. Wait for all handler goroutines to exit. This is
+		// 8. Wait for all handler goroutines to exit. This is
 		//    important: returning while handlers are still running
 		//    would race with anything the caller does next (e.g.
 		//    closing a test's fake transport).
 		r.handlers.Wait()
 
-		// 7. Join the Discovery namespace watcher (if started). acceptCtx
+		// 9. Join the Discovery namespace watcher (if started). acceptCtx
 		//    was cancelled via stopCh above, so it is already unwinding.
 		r.watchWG.Wait()
 		r.log.LogAttrs(ctx, slog.LevelInfo, "relay stopped")
@@ -662,7 +706,7 @@ func (r *Relay) addSession(s *session.Session) {
 
 // drainStraggler runs the GOAWAY grace + force-close lifecycle for a single
 // session that registered after Stop snapshotted the live-session set, so
-// Stop's bulk drain (Stop steps 3–5) does not cover it. It mirrors that bulk
+// Stop's bulk drain (Stop steps 4–7) does not cover it. It mirrors that bulk
 // drain for one session: GOAWAY, wait for the peer to drain or the grace period
 // to elapse, then force-close. Spawned by addSession only during shutdown.
 func (r *Relay) drainStraggler(s *session.Session) {

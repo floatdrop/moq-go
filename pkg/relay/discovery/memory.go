@@ -17,8 +17,13 @@ import (
 // ever become useful.
 var nowFunc = time.Now
 
-// ErrClosed is returned by [MemoryStore] methods after Close has run.
+// ErrClosed is returned by [DiscoveryStore] methods after Close has run.
 var ErrClosed = errors.New("discovery: store closed")
+
+// ErrWithdrawn is returned by the Publish calls for a relay address that has
+// been withdrawn (see [DiscoveryStore.Withdraw]). It is not a failure: the
+// relay is shutting down, and re-advertising it would undo the withdrawal.
+var ErrWithdrawn = errors.New("discovery: relay withdrawn")
 
 // defaultWatchBufferSize bounds the per-watcher event channel. A slow
 // consumer can drop up to this many events before the backend stops
@@ -48,6 +53,9 @@ type MemoryStore struct {
 	trackWatch []chan TrackEvent
 	nsWatch    []chan NamespaceEvent
 	closed     bool
+	// withdrawn records relay addresses that called Withdraw, so a late
+	// Publish cannot re-advertise a relay that is draining.
+	withdrawn  map[string]struct{}
 	log        *slog.Logger
 	bufferSize int
 }
@@ -74,6 +82,7 @@ func NewMemoryStore(opts ...MemoryStoreOption) *MemoryStore {
 	s := &MemoryStore{
 		tracks:     make(map[trackEntryKey]TrackInfo),
 		namespaces: make(map[namespaceEntryKey]NamespaceInfo),
+		withdrawn:  make(map[string]struct{}),
 		bufferSize: defaultWatchBufferSize,
 	}
 	for _, opt := range opts {
@@ -108,6 +117,10 @@ func (s *MemoryStore) PublishTrack(_ context.Context, info TrackInfo) error {
 	if s.closed {
 		s.mu.Unlock()
 		return ErrClosed
+	}
+	if _, ok := s.withdrawn[info.RelayAddr]; ok {
+		s.mu.Unlock()
+		return ErrWithdrawn
 	}
 	if info.PublishedAt.IsZero() {
 		info.PublishedAt = nowFunc()
@@ -167,6 +180,10 @@ func (s *MemoryStore) PublishNamespace(_ context.Context, info NamespaceInfo) er
 	if s.closed {
 		s.mu.Unlock()
 		return ErrClosed
+	}
+	if _, ok := s.withdrawn[info.RelayAddr]; ok {
+		s.mu.Unlock()
+		return ErrWithdrawn
 	}
 	if info.PublishedAt.IsZero() {
 		info.PublishedAt = nowFunc()
@@ -275,6 +292,41 @@ func (s *MemoryStore) WatchNamespaces(ctx context.Context) (<-chan NamespaceEven
 
 	go s.watchNamespaceLifecycle(ctx, ch)
 	return ch, nil
+}
+
+// Withdraw drops every track and namespace advertisement whose RelayAddr is
+// relayAddr, emitting an OpUnpublish for each so watchers converge exactly as
+// they would on individual Unpublish calls, and records the address so a later
+// Publish returns [ErrWithdrawn] instead of re-advertising it. See
+// [DiscoveryStore.Withdraw].
+func (s *MemoryStore) Withdraw(_ context.Context, relayAddr string) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrClosed
+	}
+	s.withdrawn[relayAddr] = struct{}{}
+	// Deleting the current key while ranging is defined behaviour in Go, and
+	// the events go out under the lock for the same reason the Publish paths
+	// do — see [MemoryStore.PublishTrack].
+	dropped := 0
+	for idx, info := range s.tracks {
+		if idx.addr != relayAddr {
+			continue
+		}
+		delete(s.tracks, idx)
+		dropped += fanout(s.trackWatch, TrackEvent{Op: OpUnpublish, Info: info})
+	}
+	for idx, info := range s.namespaces {
+		if idx.addr != relayAddr {
+			continue
+		}
+		delete(s.namespaces, idx)
+		dropped += fanout(s.nsWatch, NamespaceEvent{Op: OpUnpublish, Info: info})
+	}
+	s.mu.Unlock()
+	s.warnDropped(dropped, OpUnpublish, "relay_addr", relayAddr)
+	return nil
 }
 
 // Close closes every active watch channel and rejects further

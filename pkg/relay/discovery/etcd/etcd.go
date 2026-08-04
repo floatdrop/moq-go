@@ -90,13 +90,17 @@ type Store struct {
 	log        *slog.Logger
 
 	// bgCtx bounds the lease keep-alive to the store's lifetime; bgCancel fires
-	// on Close. Held on the struct because clientv3.KeepAlive needs a context
-	// that outlives the request that first grants the lease.
+	// on Withdraw (which revokes the lease) or Close. Held on the struct because
+	// clientv3.KeepAlive needs a context that outlives the request that first
+	// grants the lease.
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
 
 	mu     sync.Mutex
 	closed bool
+	// withdrawn is set by Withdraw: the lease has been revoked, so no further
+	// publish may grant a new one and re-advertise a relay that is draining.
+	withdrawn bool
 	// leaseID is the shared lease every advertisement attaches to; 0 until the
 	// first publish grants it under mu (see ensureLease).
 	leaseID clientv3.LeaseID

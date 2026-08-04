@@ -3,6 +3,7 @@ package relay
 import (
 	"cmp"
 	"context"
+	"errors"
 	"hash/fnv"
 	"log/slog"
 	"slices"
@@ -49,6 +50,9 @@ type upstreamPool struct {
 
 	mu      sync.Mutex
 	entries map[string]*poolEntry
+	// noDial is set by stopDialing once shutdown begins: existing upstream
+	// sessions keep running, but no new one is established.
+	noDial bool
 }
 
 // poolEntry is the per-RelayAddr slot. ready is closed once sess/err are set,
@@ -224,6 +228,12 @@ func (p *upstreamPool) get(relayAddr string) (*session.Session, error) {
 			return e.sess, nil
 		}
 	}
+	if p.noDial {
+		p.mu.Unlock()
+		// Callers treat this like any other failed upstream resolution and skip
+		// the candidate.
+		return nil, errors.New("relay: upstream dialing stopped for shutdown")
+	}
 	// Publish an in-flight entry before dialing so concurrent callers wait on
 	// it rather than starting a second dial.
 	e := &poolEntry{ready: make(chan struct{})}
@@ -272,8 +282,21 @@ func (p *upstreamPool) dial(relayAddr string) (*session.Session, error) {
 	return sess, nil
 }
 
+// stopDialing blocks any further upstream dial, leaving sessions already
+// established running. [Relay.Stop] calls it as shutdown begins: starting a new
+// cross-relay subscription while draining is pointless, but tearing the live ones
+// down is "unsubscribing from upstream publishers", which §3.6 says SHOULD happen
+// only after the downstream GOAWAY has gone out — so that half is [upstreamPool.close].
+func (p *upstreamPool) stopDialing() {
+	p.mu.Lock()
+	p.noDial = true
+	p.mu.Unlock()
+}
+
 // close cancels the pool's base context, unwinding any in-flight dial and the
-// handler loops of dialled sessions. Called from [Relay.Stop].
+// handler loops of dialled sessions. This is the "unsubscribe from upstream"
+// step, so [Relay.Stop] calls it only after the GOAWAY broadcast and drain
+// (§3.6).
 func (p *upstreamPool) close() {
 	p.cancelBase()
 }

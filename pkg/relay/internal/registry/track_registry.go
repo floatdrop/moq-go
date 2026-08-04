@@ -14,6 +14,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"sync"
@@ -648,7 +649,10 @@ func (r *TrackRegistry) publishTrackToDiscovery(entry *TrackEntry) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), discoveryCallTimeout)
 	defer cancel()
-	if err := r.discovery.PublishTrack(ctx, info); err != nil {
+	// ErrWithdrawn is not a failure: the relay is shutting down and the store
+	// has deliberately stopped accepting advertisements, so every track still
+	// draining would log one of these.
+	if err := r.discovery.PublishTrack(ctx, info); err != nil && !errors.Is(err, discovery.ErrWithdrawn) {
 		r.log.Warn("discovery: PublishTrack failed", "err", err.Error(), "key", info.Key)
 	}
 }

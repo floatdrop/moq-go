@@ -2,6 +2,7 @@ package etcd
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -174,6 +175,48 @@ func (s *Store) FindNamespacesUnder(
 		}
 	}
 	return out, nil
+}
+
+// Withdraw revokes the store's lease, which atomically drops every key this
+// relay advertised — one RPC regardless of how many tracks and namespaces it
+// held — and marks the store withdrawn so no later publish grants a fresh lease
+// and re-advertises it. See [discovery.DiscoveryStore.Withdraw].
+//
+// relayAddr is accepted for the interface contract but not needed: every key
+// this store wrote hangs off the one lease, so revoking it withdraws exactly
+// this relay's advertisements and nothing else. Peers observe the drop as DELETE
+// events on their watches, which their stores surface as OpUnpublish.
+//
+// Unlike [Store.Close] this releases no resources: the client and every in-flight
+// Watch stay live, so a relay can keep resolving *other* relays' advertisements
+// while it drains. A store that never published anything has no lease and is a
+// no-op. The revoke is bounded by ctx, per the interface contract.
+func (s *Store) Withdraw(ctx context.Context, _ string) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return discovery.ErrClosed
+	}
+	if s.withdrawn {
+		s.mu.Unlock()
+		return nil // idempotent: the lease is already gone
+	}
+	s.withdrawn = true
+	leaseID := s.leaseID
+	s.leaseID = 0
+	s.mu.Unlock()
+
+	// Stop the keep-alive before revoking so the renewal stream cannot race the
+	// revoke; keepLeaseAlive sees s.withdrawn and exits without warning.
+	s.bgCancel()
+
+	if leaseID == 0 {
+		return nil // never advertised anything
+	}
+	if _, err := s.cli.Revoke(ctx, leaseID); err != nil {
+		return fmt.Errorf("etcd discovery: revoke lease: %w", err)
+	}
+	return nil
 }
 
 // Close tears down every in-flight Watch, revokes the store's lease so its
