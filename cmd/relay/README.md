@@ -1,6 +1,13 @@
 # relay
 
-A single-instance MOQT relay (draft-ietf-moq-transport-19) over QUIC.
+A single-instance MOQT relay (draft-ietf-moq-transport-19).
+
+One UDP port serves both transport mappings: raw QUIC for clients dialing
+`moqt://host:port`, and WebTransport (HTTP/3) at `-webtransport-path` for
+browsers and anything dialing the `https://host:port/path` form of the same URI
+(§3.1.4). Both are QUIC over UDP — the `https` scheme names an HTTP origin, not
+a TCP transport — and the listener picks per connection from the negotiated
+ALPN, so there is no transport to select.
 
 Accepts publisher and subscriber sessions, routes objects between them via the
 track registry, and caches recent objects per track for late-joining subscribers.
@@ -9,7 +16,7 @@ No authentication — suitable for local development and testing.
 ## Usage
 
 ```
-relay [-addr host:port] [-cert file] [-key file] [-webtransport [-webtransport-path /moq]]
+relay [-addr host:port] [-cert file] [-key file] [-webtransport-path /moq]
 ```
 
 | Flag | Default | Description |
@@ -17,8 +24,7 @@ relay [-addr host:port] [-cert file] [-key file] [-webtransport [-webtransport-p
 | `-addr` | `0.0.0.0:4433` | UDP address to listen on |
 | `-cert` | — | PEM certificate file. If omitted, an ephemeral self-signed cert is generated. |
 | `-key` | — | PEM private key file. Required when `-cert` is set. |
-| `-webtransport` | `false` | Serve MOQT over WebTransport (HTTP/3) instead of raw QUIC. |
-| `-webtransport-path` | `/moq` | HTTP/3 path for the WebTransport CONNECT (only used with `-webtransport`). |
+| `-webtransport-path` | `/moq` | HTTP/3 path browsers use for the WebTransport CONNECT. Raw QUIC ignores it. |
 | `-catalog-track-name` | `catalog` | Track name whose object cache uses `-catalog-ttl` instead of the default; empty disables the override. |
 | `-catalog-ttl` | `0` | Per-object TTL for tracks matching `-catalog-track-name`; `0` means infinite retention (FIFO size cap still applies). |
 | `-max-subscriptions` | `0` | Per-session cap on concurrent subscriptions (§13.1); `0` = unlimited. |
@@ -47,9 +53,10 @@ go run ./cmd/relay -cert server.crt -key server.key
 
 ## Shutdown
 
-The relay handles `SIGINT` and `SIGTERM`. On receipt it sends `GOAWAY` to all
-active sessions with a 5-second grace period, then force-closes any that have
-not drained.
+The relay handles `SIGINT` and `SIGTERM`. On receipt it sends `GOAWAY` (§10.4) to
+all active sessions with a 5-second grace period, then force-closes any that have
+not drained — and it does not exit until that drain finishes, so peers actually
+receive the GOAWAY rather than losing the connection under them.
 
 ## Interop testing
 
@@ -62,8 +69,8 @@ the relay's flags:
 |-----|---------|---------|
 | `MOQT_PORT` | `4443` | `-addr 0.0.0.0:$MOQT_PORT` |
 | `MOQT_CERT` / `MOQT_KEY` | `/certs/cert.pem`, `/certs/priv.key` | `-cert` / `-key` |
-| `MOQT_TRANSPORT` | `quic` | `quic` → raw QUIC; `webtransport` → `-webtransport` |
-| `MOQT_WEBTRANSPORT_PATH` | `/moq` | `-webtransport-path` (WebTransport only) |
+| `MOQT_TRANSPORT` | `webtransport` | Accepted and logged only — both mappings are always served, so it selects nothing. An unknown value is still rejected. |
+| `MOQT_WEBTRANSPORT_PATH` | `/` | `-webtransport-path` |
 
 ### Run the suite locally
 

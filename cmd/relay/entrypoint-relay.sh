@@ -7,12 +7,12 @@
 #   MOQT_PORT              UDP port to listen on (default: 4443)
 #   MOQT_CERT              TLS certificate PEM (default: /certs/cert.pem)
 #   MOQT_KEY               TLS private key PEM (default: /certs/priv.key)
-#   MOQT_TRANSPORT         "quic" (moqt://) or "webtransport" (https://) (default: webtransport)
-#                          The runner's docker harness always points the client
-#                          at https://relay:4443 (WebTransport / ALPN "h3") and
-#                          provides no way to set MOQT_TRANSPORT, so the relay
-#                          must speak WebTransport by default or every handshake
-#                          fails with "tls: no application protocol".
+#   MOQT_TRANSPORT         "quic" (moqt://) or "webtransport" (https://).
+#                          Accepted and logged, but it no longer selects
+#                          anything: the relay serves both mappings on one port,
+#                          so a client picks by URL scheme. Kept because the
+#                          runner sets it and rejecting an unknown value is a
+#                          clearer failure than ignoring a typo.
 #   MOQT_WEBTRANSPORT_PATH HTTP/3 CONNECT path for WebTransport (default: /)
 #                          The runner dials a path-less https://relay:4443, so
 #                          the CONNECT targets "/"; serving WebTransport at the
@@ -30,7 +30,7 @@ ROLE="${MOQT_ROLE:-relay}"
 PORT="${MOQT_PORT:-4443}"
 CERT="${MOQT_CERT:-/certs/cert.pem}"
 KEY="${MOQT_KEY:-/certs/priv.key}"
-TRANSPORT="${MOQT_TRANSPORT:-webtransport}"
+TRANSPORT="${MOQT_TRANSPORT:-webtransport}"  # informational; both are served
 WT_PATH="${MOQT_WEBTRANSPORT_PATH:-/}"
 
 if [ "$ROLE" != "relay" ]; then
@@ -47,12 +47,11 @@ if [ ! -f "$KEY" ]; then
     exit 1
 fi
 
-set -- -addr "0.0.0.0:$PORT" -cert "$CERT" -key "$KEY"
+# One port serves raw QUIC and WebTransport both, so there is no transport flag
+# to set — only where the WebTransport CONNECT handler mounts.
+set -- -addr "0.0.0.0:$PORT" -cert "$CERT" -key "$KEY" -webtransport-path "$WT_PATH"
 case "$TRANSPORT" in
-    quic)
-        ;;
-    webtransport|wt)
-        set -- "$@" -webtransport -webtransport-path "$WT_PATH"
+    quic|webtransport|wt)
         ;;
     *)
         echo "ERROR: MOQT_TRANSPORT must be 'quic' or 'webtransport' (got '$TRANSPORT')" >&2
@@ -60,5 +59,6 @@ case "$TRANSPORT" in
         ;;
 esac
 
-echo "Starting moq relay: transport=$TRANSPORT port=$PORT cert=$CERT" >&2
+echo "Starting moq relay: port=$PORT cert=$CERT wt-path=$WT_PATH" \
+     "(serving raw QUIC and WebTransport; MOQT_TRANSPORT=$TRANSPORT is informational)" >&2
 exec /app/relay "$@"

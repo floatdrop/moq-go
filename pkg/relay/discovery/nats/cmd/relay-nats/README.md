@@ -27,13 +27,34 @@ enabled (`nats-server -js`).
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-addr` | `0.0.0.0:4433` | UDP address to listen on (raw QUIC). |
+| `-addr` | `0.0.0.0:4433` | UDP address to listen on; serves raw QUIC and WebTransport both. |
 | `-cert` | — | PEM certificate file. If omitted, an ephemeral self-signed dev cert is generated. |
 | `-key` | — | PEM private key file. Required when `-cert` is set. |
+| `-webtransport-path` | `/moq` | HTTP/3 path browsers use for the WebTransport CONNECT. Raw QUIC ignores it. |
 | `-nats-url` | `nats://127.0.0.1:4222` | NATS server URL. |
 | `-nats-bucket` | `moqt_discovery` | JetStream KV bucket scoping all of this relay's discovery data. |
 | `-nats-ttl` | `15s` | Liveness TTL bounding how long this relay's advertisements survive after it stops heartbeating. |
-| `-relay-addr` | — | Address peers use to dial this relay, advertised in NATS. Empty = single-instance (not reachable by peers). |
+| `-relay-addr` | — | Address peers use to dial this relay, advertised in NATS. Empty = single-instance (not reachable by peers). Must be directly dialable — never a load-balancer address, since it is also the self-exclusion key that stops a relay dialing its own advertisements. |
+
+## Transports
+
+One UDP port serves both MOQT transport mappings, so clients choose per
+connection and nothing is configured deployment-wide:
+
+| Client URL | Transport | ALPN |
+|---|---|---|
+| `moqt://host:port` | raw QUIC | `moqt-19` |
+| `https://host:port/moq` | WebTransport over HTTP/3 | `h3` |
+
+Both are QUIC over UDP — the `https` scheme names an HTTP origin, not a TCP
+transport (§3.1.3 dereferences the URI, §3.1.4 derives the https form). Peer
+relays always dial each other over raw QUIC, whatever clients use.
+
+Behind a load balancer this needs **L4 UDP** forwarding; a TCP-terminating HTTPS
+load balancer cannot carry MOQT under either scheme. Sessions are long-lived and
+stateful, so route on QUIC connection ID rather than the 5-tuple, or connection
+migration and NAT rebinding will land packets on an instance that holds no state
+for them.
 
 ## Quick start: a two-relay mesh
 
@@ -98,9 +119,14 @@ it. If the process dies (or is partitioned longer than `-nats-ttl`), the
 heartbeat stops and JetStream expires the keys; because the bucket sets a limit
 marker TTL, the expiry emits a delete marker the peers' watchers turn into an
 "unpublish", so they stop routing to an instance that can no longer serve — the
-same outcome as an expired etcd lease. A graceful shutdown (`SIGINT` / `SIGTERM`)
-deletes the advertisements outright so they disappear at once rather than
-lingering for the rest of the TTL.
+same outcome as an expired etcd lease. A graceful shutdown deletes the
+advertisements outright so they disappear at once rather than lingering for the
+rest of the TTL.
+
+On a graceful shutdown (`SIGINT` / `SIGTERM`) this happens **before** the relay
+stops accepting and before it sends `GOAWAY`, which is the point: peers stop
+resolving this instance while it is still draining, instead of discovering it and
+dialing a listener that has already closed. See `DiscoveryStore.Withdraw`.
 
 ## Security
 
