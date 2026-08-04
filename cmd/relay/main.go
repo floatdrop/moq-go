@@ -141,20 +141,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	go func() {
-		<-ctx.Done()
-		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := r.Stop(shutCtx); err != nil {
-			log.Printf("relay stop: %v", err)
-		}
-	}()
-
-	if err := r.Start(ctx); err != nil {
-		// Return rather than log.Fatal so the deferred stop() runs (§exit
+	// Run — not Start — because it returns only after the GOAWAY drain has
+	// finished and it keeps live sessions out of ctx's cancellation scope. Both
+	// matter: exiting main mid-drain, or letting the signal cancel the session
+	// handlers, means peers never see the GOAWAY.
+	if err := r.Run(ctx, 10*time.Second); err != nil {
+		// Log rather than log.Fatal so the deferred stop() runs (§exit
 		// hygiene): log.Fatal calls os.Exit and would skip it.
-		log.Printf("relay start: %v", err)
-		return
+		log.Printf("relay run: %v", err)
 	}
 }
 

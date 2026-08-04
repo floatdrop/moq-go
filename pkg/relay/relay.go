@@ -371,11 +371,71 @@ func (r *Relay) Addr() net.Addr { return r.listener.Addr() }
 // its policy through Config.
 func (r *Relay) Authorizer() Authorizer { return r.cfg.Authorizer }
 
+// Run serves the relay until ctx is cancelled or the Listener fails fatally,
+// then performs the full §10.4 graceful shutdown — GOAWAY, [Config.GoawayTimeout]
+// grace period, force-close — and returns only once that drain has finished. It
+// returns [Relay.Start]'s error. This is the entry point a binary driven by
+// [os/signal.NotifyContext] wants; Start and Stop remain available for callers
+// that need to drive the phases themselves.
+//
+// ctx is the shutdown *trigger*, not the lifetime of the sessions. Run
+// deliberately does not hand ctx to Start, because Start propagates its ctx down
+// to every per-session handler: a signal-cancelled ctx would tear the sessions
+// down underneath the drain and their peers would never see the GOAWAY. Sessions
+// run under an internal context that outlives ctx and is unwound by Stop.
+//
+// shutdownTimeout caps the GOAWAY grace period: once it elapses Stop stops
+// waiting for peers to migrate and force-closes whatever is left, even if
+// [Config.GoawayTimeout] has not elapsed. Zero lets the grace period run to
+// Config.GoawayTimeout. It does not bound the join of in-flight handlers that
+// follows, so a wedged handler can still delay the return.
+func (r *Relay) Run(ctx context.Context, shutdownTimeout time.Duration) error {
+	// Trigger the drain on ctx without letting ctx reach the sessions.
+	// AfterFunc's stop is deferred so a signal arriving after Run has already
+	// returned cannot kick off a second drain.
+	stopTrigger := context.AfterFunc(ctx, func() { r.shutdown(shutdownTimeout) })
+	defer stopTrigger()
+
+	// WithoutCancel keeps ctx's values (logging scope, tracing) while dropping
+	// its cancellation. Nothing cancels this context: Start returns when Stop
+	// closes the listener, and the sessions it parents are unwound by Stop's
+	// force-close.
+	err := r.Start(context.WithoutCancel(ctx))
+
+	// Start returns as soon as Stop closes the listener, so the drain the
+	// trigger started is normally still in flight. Join it: returning here would let the
+	// caller exit the process mid-GOAWAY. Stop is idempotent and a second call
+	// blocks until the first completes, which also covers the path where Start
+	// failed on its own and no shutdown has begun yet.
+	r.shutdown(shutdownTimeout)
+	return err
+}
+
+// shutdown runs [Relay.Stop] under an optional timeout, logging a failure. The
+// error is not propagated: it reports trouble closing the listener, which says
+// nothing useful about why the relay is shutting down.
+func (r *Relay) shutdown(timeout time.Duration) {
+	ctx := context.Background()
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	if err := r.Stop(ctx); err != nil {
+		r.log.LogAttrs(ctx, slog.LevelError, "relay stop failed", slog.String("err", err.Error()))
+	}
+}
+
 // Start runs the relay accept loop until ctx is cancelled, Stop is called, or
 // the Listener returns a fatal error. The returned error reports the cause:
 //
 //   - nil when shutdown was initiated cleanly via ctx cancellation or Stop.
 //   - the Listener's Accept error otherwise.
+//
+// ctx is also the parent context of every accepted session's handler loops, so
+// cancelling it terminates live sessions immediately — without GOAWAY. Do not
+// wire a signal context straight into Start; use [Relay.Run], which separates
+// the shutdown trigger from the sessions' lifetime.
 //
 // Start is intended to be called exactly once per Relay. Calling it twice
 // concurrently is undefined.
@@ -493,8 +553,9 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session) {
 }
 
 // Stop initiates graceful shutdown.
-// Stop is idempotent. Concurrent calls share the same shutdown sequence; only
-// the first call performs work, later calls return immediately.
+// Stop is idempotent. Concurrent calls share the same shutdown sequence: only
+// the first call performs work, and later calls block until it has finished, so
+// a caller can use a second Stop to join a drain another goroutine started.
 func (r *Relay) Stop(ctx context.Context) error {
 	var firstErr error
 	r.stopOnce.Do(func() {

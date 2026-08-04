@@ -19,6 +19,13 @@ import (
 type pipeListener struct {
 	conns chan session.Conn
 	done  chan struct{}
+
+	// closeDelay stalls Close, modelling a real listener whose socket teardown
+	// is not instantaneous. Stop calls Close first, so this delays the GOAWAY
+	// broadcast behind it — which makes a session that is racing to tear itself
+	// down (because it wrongly inherited a cancelled context) lose the race
+	// deterministically instead of ~half the time.
+	closeDelay time.Duration
 }
 
 func newPipeListener() *pipeListener {
@@ -65,6 +72,9 @@ func (l *pipeListener) Accept(ctx context.Context) (session.Conn, error) {
 func (l *pipeListener) Addr() net.Addr { return nil }
 
 func (l *pipeListener) Close() error {
+	if l.closeDelay > 0 {
+		time.Sleep(l.closeDelay)
+	}
 	select {
 	case <-l.done:
 	default:
@@ -200,6 +210,82 @@ func TestRelay_StopBroadcastsGoaway(t *testing.T) {
 
 	if err := <-stopDone; err != nil {
 		t.Fatalf("Stop returned: %v", err)
+	}
+}
+
+// TestRelay_RunGoawaysOnShutdownSignal pins the contract the relay binaries
+// depend on: when the context handed to Run is cancelled — what
+// [os/signal.NotifyContext] does on SIGINT/SIGTERM — every live session still
+// receives a GOAWAY (§10.4), and Run does not return until the drain it started
+// has finished.
+//
+// Both halves are load-bearing, and each was independently broken when the
+// binaries wired the signal context straight into Start and called Stop from a
+// background goroutine: Start propagates its context to the per-session
+// handlers, so the signal tore the sessions down before Stop could GOAWAY them,
+// and Start returns as soon as Stop closes the listener, so main exited
+// mid-drain.
+func TestRelay_RunGoawaysOnShutdownSignal(t *testing.T) {
+	t.Parallel()
+	const grace = 250 * time.Millisecond
+
+	l := newPipeListener()
+	// Hold Stop at the listener-close step long enough that any session
+	// unwinding on the shutdown signal would be gone before the GOAWAY
+	// broadcast; a session whose lifetime Run kept separate from the signal is
+	// still there.
+	l.closeDelay = 100 * time.Millisecond
+	r := relay.New(l, relay.Config{GoawayTimeout: grace})
+
+	// Stands in for signal.NotifyContext: sigFire is the SIGTERM.
+	sigCtx, sigFire := context.WithCancel(context.Background())
+	defer sigFire()
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- r.Run(sigCtx, 2*time.Second) }()
+
+	clientConn, err := l.Dial()
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	clientSess, err := session.Client(t.Context(), clientConn)
+	if err != nil {
+		t.Fatalf("session.Client: %v", err)
+	}
+
+	start := time.Now()
+	sigFire()
+
+	select {
+	case <-clientSess.GoawayReceived():
+	case err := <-runDone:
+		t.Fatalf("Run returned (%v) without the client ever receiving GOAWAY", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("client did not receive GOAWAY within 2s of the shutdown signal")
+	}
+
+	// The client deliberately does not migrate, so the drain cannot finish
+	// early: Stop must burn the full grace period before force-closing. A Run
+	// that returns sooner did not wait for its own drain.
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("Run returned: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed < grace {
+			t.Errorf("Run returned %v after the signal, before the %v GOAWAY grace period elapsed;"+
+				" it did not wait for the drain", elapsed, grace)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return within 3s of the shutdown signal")
+	}
+
+	// Stop force-closes every session before returning, so by the time Run
+	// returns the peer's session must be finished too.
+	select {
+	case <-clientSess.Done():
+	case <-time.After(time.Second):
+		t.Fatal("client session still live after Run returned")
 	}
 }
 
