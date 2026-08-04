@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"sync"
@@ -327,7 +328,9 @@ func (r *NamespaceRegistry) publishNamespaceToDiscovery(ns wire.TrackNamespace) 
 	if err := r.discovery.PublishNamespace(ctx, discovery.NamespaceInfo{
 		Prefix:    ns,
 		RelayAddr: r.relayAddr,
-	}); err != nil {
+	}); err != nil && !errors.Is(err, discovery.ErrWithdrawn) {
+		// See [TrackRegistry.publishTrackToDiscovery]: a withdrawn store is
+		// shutting down, not broken.
 		r.log.Warn("discovery: PublishNamespace failed", "err", err.Error(), "namespace", ns)
 	}
 }

@@ -1,6 +1,7 @@
 package etcd_test
 
 import (
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -167,4 +168,102 @@ func TestEtcdLease(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestEtcdWithdraw pins the [discovery.DiscoveryStore.Withdraw] contract on the
+// etcd backend, which is what makes a relay stop being discoverable before it
+// sends GOAWAY. An independent observer client reads etcd directly, so the
+// assertions see exactly what a *different* relay would.
+func TestEtcdWithdraw(t *testing.T) {
+	endpoints := startEmbeddedEtcd(t)
+
+	obs, err := clientv3.New(clientv3.Config{Endpoints: endpoints, DialTimeout: 10 * time.Second})
+	if err != nil {
+		t.Fatalf("dial observer: %v", err)
+	}
+	t.Cleanup(func() { obs.Close() })
+
+	const prefix = "/withdraw/"
+	s, err := etcdstore.Open(endpoints, etcdstore.WithPrefix(prefix))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	key := newKey([]string{"video"}, "cam1")
+	if err := s.PublishTrack(t.Context(),
+		discovery.TrackInfo{Key: key, RelayAddr: "relay-A"}); err != nil {
+		t.Fatalf("PublishTrack: %v", err)
+	}
+	if err := s.PublishNamespace(t.Context(),
+		discovery.NamespaceInfo{Prefix: ns("video"), RelayAddr: "relay-A"}); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+
+	resp, err := obs.Get(t.Context(), prefix, clientv3.WithPrefix())
+	if err != nil {
+		t.Fatalf("observer Get: %v", err)
+	}
+	if len(resp.Kvs) != 2 {
+		t.Fatalf("observer saw %d keys before Withdraw, want 2", len(resp.Kvs))
+	}
+	leaseID := resp.Kvs[0].GetLease()
+	if leaseID == 0 {
+		t.Fatal("advertisement carries no lease")
+	}
+
+	if err := s.Withdraw(t.Context(), "relay-A"); err != nil {
+		t.Fatalf("Withdraw: %v", err)
+	}
+
+	// Revoking the lease erases every key that hung off it — atomically, and
+	// without waiting out the TTL.
+	resp, err = obs.Get(t.Context(), prefix, clientv3.WithPrefix())
+	if err != nil {
+		t.Fatalf("observer Get after Withdraw: %v", err)
+	}
+	if len(resp.Kvs) != 0 {
+		t.Errorf("observer still sees %d keys after Withdraw, want 0", len(resp.Kvs))
+	}
+
+	// The lease itself is gone: etcd reports a negative TTL for a lease that no
+	// longer exists, so nothing can be attached to it again.
+	ttl, err := obs.TimeToLive(t.Context(), clientv3.LeaseID(leaseID))
+	if err != nil {
+		t.Fatalf("observer TimeToLive: %v", err)
+	}
+	if ttl.TTL != -1 {
+		t.Errorf("lease TTL = %d after Withdraw, want -1 (revoked)", ttl.TTL)
+	}
+
+	// Terminal: a publisher arriving while the relay drains must not restore the
+	// advertisement by granting a fresh lease.
+	if err := s.PublishTrack(t.Context(),
+		discovery.TrackInfo{Key: key, RelayAddr: "relay-A"}); !errors.Is(err, discovery.ErrWithdrawn) {
+		t.Errorf("PublishTrack after Withdraw = %v, want ErrWithdrawn", err)
+	}
+	if n := len(mustGet(t, obs, prefix).Kvs); n != 0 {
+		t.Errorf("a withdrawn store re-advertised itself: %d keys", n)
+	}
+
+	// Reads still work: the store is withdrawn, not closed, so the relay can keep
+	// resolving other relays for the rest of its drain.
+	if _, err := s.FindTrack(t.Context(), key); err != nil {
+		t.Errorf("FindTrack after Withdraw: %v", err)
+	}
+
+	// Idempotent.
+	if err := s.Withdraw(t.Context(), "relay-A"); err != nil {
+		t.Errorf("second Withdraw = %v, want nil", err)
+	}
+}
+
+// mustGet reads every key under prefix, failing the test on error.
+func mustGet(t *testing.T, cli *clientv3.Client, prefix string) *clientv3.GetResponse {
+	t.Helper()
+	resp, err := cli.Get(t.Context(), prefix, clientv3.WithPrefix())
+	if err != nil {
+		t.Fatalf("observer Get %q: %v", prefix, err)
+	}
+	return resp
 }

@@ -19,12 +19,17 @@ import (
 // lease rather than racing to grant several. It uses the caller's ctx: a grant
 // is a one-shot RPC and inherits the same short deadline the registry bounds the
 // publish with. The keep-alive, by contrast, must outlive that request, so it is
-// bound to bgCtx (cancelled by Close), not ctx.
+// bound to bgCtx (cancelled by Withdraw / Close), not ctx.
 func (s *Store) ensureLease(ctx context.Context) (clientv3.LeaseID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
 		return 0, discovery.ErrClosed
+	}
+	if s.withdrawn {
+		// Withdraw revoked the lease on purpose; granting a fresh one here would
+		// re-advertise a relay that is draining.
+		return 0, discovery.ErrWithdrawn
 	}
 	if s.leaseID != 0 {
 		return s.leaseID, nil
@@ -44,10 +49,11 @@ func (s *Store) ensureLease(ctx context.Context) (clientv3.LeaseID, error) {
 
 // keepLeaseAlive drains the keep-alive response stream. The clientv3 keep-alive
 // stops renewing if its channel is not consumed, so this must run for the lease's
-// whole life. The channel closes when Close cancels bgCtx (expected) or when etcd
-// drops the lease while the store is still open (unexpected — e.g. an etcd outage
-// longer than the TTL). The latter is logged: the store's advertisements have
-// silently vanished from etcd and a re-publish would be needed to restore them.
+// whole life. The channel closes when Withdraw or Close cancels bgCtx (expected)
+// or when etcd drops the lease while the store is still open and advertising
+// (unexpected — e.g. an etcd outage longer than the TTL). The latter is logged:
+// the store's advertisements have silently vanished from etcd and a re-publish
+// would be needed to restore them.
 func (s *Store) keepLeaseAlive(ka <-chan *clientv3.LeaseKeepAliveResponse) {
 	// Consume every renewal ack; the values are unused, but leaving the channel
 	// unread makes clientv3 stop renewing. The loop ends when the channel closes.
@@ -55,7 +61,9 @@ func (s *Store) keepLeaseAlive(ka <-chan *clientv3.LeaseKeepAliveResponse) {
 		continue
 	}
 	s.mu.Lock()
-	closed := s.closed
+	// A withdrawn lease was revoked deliberately, so its keep-alive ending is
+	// expected — only an unexpected loss is worth clearing state and warning for.
+	closed := s.closed || s.withdrawn
 	if !closed {
 		// Lease lost while the store is still open (etcd outage longer than the
 		// TTL). Clear the ID so the next publish grants a fresh lease rather than

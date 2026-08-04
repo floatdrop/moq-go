@@ -189,6 +189,25 @@ type DiscoveryStore interface {
 	// contract as WatchTracks.
 	WatchNamespaces(ctx context.Context) (<-chan NamespaceEvent, error)
 
+	// Withdraw removes every advertisement this store published for relayAddr.
+	// It is the graceful-shutdown counterpart of the Publish calls: a relay
+	// calls it before it stops accepting connections so peers stop resolving it
+	// as an upstream while it drains (§3.6) rather than dialing an endpoint that
+	// is about to close. Peers observe the removals as OpUnpublish events on
+	// their watches, exactly as they would individual Unpublish calls.
+	//
+	// Withdraw is terminal for that address's advertising side: afterwards
+	// PublishTrack / PublishNamespace for relayAddr MUST NOT restore an
+	// advertisement, and MUST return [ErrWithdrawn] — a publisher arriving while
+	// the relay drains must not put it back into the fabric. Everything else
+	// stays usable: the relay keeps resolving *other* relays' advertisements
+	// through Find / Watch for the rest of its drain, and the per-track
+	// Unpublish calls that session teardown issues degrade to no-ops.
+	//
+	// Withdrawing an address that advertised nothing, or withdrawing twice, is a
+	// silent no-op. Unlike Close, Withdraw releases no backend resources.
+	Withdraw(ctx context.Context, relayAddr string) error
+
 	// Close releases backend resources.
 	Close() error
 }

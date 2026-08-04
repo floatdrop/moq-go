@@ -15,6 +15,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
@@ -934,4 +935,113 @@ func TestCrossRelay_UpstreamFanInCapConverges(t *testing.T) {
 	relayB.stop(t)
 	relayC.stop(t)
 	relayD.stop(t)
+}
+
+// TestCrossRelay_GoawayPrecedesUpstreamTeardown pins the §3.6 shutdown ordering:
+// "When the server is a subscriber, it SHOULD send a GOAWAY message to
+// downstream subscribers prior to unsubscribing from upstream publishers."
+//
+// The relay is a subscriber on every session its upstream pool dialled, so
+// cancelling the pool is the "unsubscribe from upstream" step and must not run
+// before the GOAWAY broadcast. It used to run first, at the same point as the
+// listener close, which raced the upstream session out of Stop's snapshot — so
+// the upstream peer could be dropped having never been told the relay was going
+// away.
+//
+// The test owns the upstream peer's session directly (the Dialer hands the relay
+// one end of a pipe and the test serves the other), so it can observe what that
+// peer receives.
+//
+// Detection profile, measured against the old ordering: 5/5 failures at
+// GOMAXPROCS=1, 0/5 on a multi-core run. Cancelling the pool does not itself
+// close the session — it unwinds the handler, and only if that wins the race to
+// deregister does the session miss Stop's snapshot and lose its GOAWAY. So this
+// is a strict regression guard single-threaded and a correctness assertion
+// everywhere else.
+func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
+	t.Parallel()
+
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+
+	ctx := t.Context()
+
+	// Stand in for a peer relay: advertise a namespace at "peer" so the relay
+	// resolves it as an upstream, and serve the far end of the dialled pipe here.
+	const peerAddr = "peer:4433"
+	if err := store.PublishNamespace(ctx,
+		discovery.NamespaceInfo{Prefix: videoNS(), RelayAddr: peerAddr}); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+
+	peerSessions := make(chan *session.Session, 1)
+	r := startTestRelay(ctx, relay.Config{
+		GoawayTimeout: 2 * time.Second, // long enough that the drain is observable
+		Discovery:     store,
+		RelayAddr:     "relay-under-test:4433",
+		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
+			if addr != peerAddr {
+				return nil, fmt.Errorf("no relay at %q", addr)
+			}
+			relaySide, peerSide := sessiontest.NewConnPair()
+			go func() {
+				// The relay dials as a client, so this end completes SETUP as
+				// the server.
+				sess, err := session.Server(context.Background(), peerSide)
+				if err != nil {
+					close(peerSessions)
+					return
+				}
+				peerSessions <- sess
+			}()
+			return relaySide, nil
+		},
+	})
+
+	// A downstream SUBSCRIBE with no local publisher drives the upstream dial.
+	// Issued in the background: the relay does not answer it until the upstream
+	// does, and this peer deliberately never replies — the dial is all we need.
+	subSess := dialClient(t, r)
+	go func() {
+		_, _ = subSess.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	}()
+
+	var peer *session.Session
+	select {
+	case peer = <-peerSessions:
+		if peer == nil {
+			t.Fatal("upstream peer SETUP failed")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("relay never dialled the advertised upstream")
+	}
+
+	stopDone := make(chan struct{})
+	go func() {
+		defer close(stopDone)
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = r.r.Stop(stopCtx)
+	}()
+
+	// The upstream peer must be told the relay is going away before its session
+	// is torn down.
+	select {
+	case <-peer.GoawayReceived():
+	case <-peer.Done():
+		t.Fatal("upstream session was torn down without ever receiving a GOAWAY;" +
+			" §3.6 requires the GOAWAY first")
+	case <-time.After(5 * time.Second):
+		t.Fatal("upstream peer received no GOAWAY")
+	}
+
+	<-stopDone
+	select {
+	case err := <-r.startErr:
+		if err != nil {
+			t.Errorf("Start returned: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("Start did not return after Stop")
+	}
 }

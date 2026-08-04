@@ -488,3 +488,93 @@ func receiveNamespace(ch <-chan discovery.NamespaceEvent, d time.Duration) (disc
 		return discovery.NamespaceEvent{}, false
 	}
 }
+
+// TestMemoryStoreWithdraw pins the [discovery.DiscoveryStore.Withdraw] contract
+// on the reference implementation: it removes only the named relay's
+// advertisements, tells watchers about each removal, and is terminal for that
+// address so a late publisher cannot re-advertise a relay that is draining.
+func TestMemoryStoreWithdraw(t *testing.T) {
+	s := discovery.NewMemoryStore()
+	defer s.Close()
+
+	const (
+		leaving = "relay-a:4433"
+		staying = "relay-b:4433"
+	)
+	key := track.Key{}
+	prefix := ns("withdraw")
+
+	events, err := s.WatchTracks(t.Context())
+	if err != nil {
+		t.Fatalf("WatchTracks: %v", err)
+	}
+
+	for _, addr := range []string{leaving, staying} {
+		if err := s.PublishTrack(t.Context(), discovery.TrackInfo{Key: key, RelayAddr: addr}); err != nil {
+			t.Fatalf("PublishTrack(%s): %v", addr, err)
+		}
+		if err := s.PublishNamespace(t.Context(),
+			discovery.NamespaceInfo{Prefix: prefix, RelayAddr: addr}); err != nil {
+			t.Fatalf("PublishNamespace(%s): %v", addr, err)
+		}
+	}
+	// Drain the two publish events so the next receive is the withdrawal's.
+	for range 2 {
+		<-events
+	}
+
+	if err := s.Withdraw(t.Context(), leaving); err != nil {
+		t.Fatalf("Withdraw: %v", err)
+	}
+
+	// Watchers must see the removal, exactly as they would an Unpublish.
+	select {
+	case ev := <-events:
+		if ev.Op != discovery.OpUnpublish {
+			t.Errorf("event Op = %v, want OpUnpublish", ev.Op)
+		}
+		if ev.Info.RelayAddr != leaving {
+			t.Errorf("event RelayAddr = %q, want %q", ev.Info.RelayAddr, leaving)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Withdraw emitted no track event")
+	}
+
+	// Only the withdrawn relay's entries are gone.
+	tracks, err := s.FindTrack(t.Context(), key)
+	if err != nil {
+		t.Fatalf("FindTrack: %v", err)
+	}
+	if len(tracks) != 1 || tracks[0].RelayAddr != staying {
+		t.Errorf("FindTrack = %+v, want only %q", tracks, staying)
+	}
+	spaces, err := s.FindNamespace(t.Context(), prefix)
+	if err != nil {
+		t.Fatalf("FindNamespace: %v", err)
+	}
+	if len(spaces) != 1 || spaces[0].RelayAddr != staying {
+		t.Errorf("FindNamespace = %+v, want only %q", spaces, staying)
+	}
+
+	// Terminal for the withdrawn address: a late publisher must not restore it.
+	if err := s.PublishTrack(t.Context(),
+		discovery.TrackInfo{Key: key, RelayAddr: leaving}); !errors.Is(err, discovery.ErrWithdrawn) {
+		t.Errorf("PublishTrack after Withdraw = %v, want ErrWithdrawn", err)
+	}
+	if err := s.PublishNamespace(t.Context(),
+		discovery.NamespaceInfo{Prefix: prefix, RelayAddr: leaving}); !errors.Is(err, discovery.ErrWithdrawn) {
+		t.Errorf("PublishNamespace after Withdraw = %v, want ErrWithdrawn", err)
+	}
+	if tracks, _ := s.FindTrack(t.Context(), key); len(tracks) != 1 {
+		t.Errorf("a withdrawn relay re-advertised itself: %+v", tracks)
+	}
+
+	// The other relay is unaffected, and a second Withdraw is a no-op.
+	if err := s.PublishTrack(t.Context(),
+		discovery.TrackInfo{Key: key, RelayAddr: staying}); err != nil {
+		t.Errorf("PublishTrack(%s) after another relay withdrew: %v", staying, err)
+	}
+	if err := s.Withdraw(t.Context(), leaving); err != nil {
+		t.Errorf("second Withdraw = %v, want nil (idempotent)", err)
+	}
+}

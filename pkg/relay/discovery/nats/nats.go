@@ -103,13 +103,16 @@ type Store struct {
 	log        *slog.Logger
 
 	// bgCtx bounds the heartbeat to the store's lifetime; bgCancel fires on
-	// Close. Held on the struct because the heartbeat outlives the publish that
-	// first starts it.
+	// Withdraw (which deletes the keys it would refresh) or on Close. Held on
+	// the struct because the heartbeat outlives the publish that first starts it.
 	bgCtx    context.Context
 	bgCancel context.CancelFunc
 
 	mu     sync.Mutex
 	closed bool
+	// withdrawn is set by Withdraw: this store's advertisements have been
+	// deleted on purpose, so no later publish may re-create them.
+	withdrawn bool
 	// own maps each advertisement this store published to the exact encoded
 	// bytes to re-Put on every heartbeat. Rewriting the identical bytes (a fixed
 	// PublishedAt included) is what lets watchers dedup the heartbeat away.

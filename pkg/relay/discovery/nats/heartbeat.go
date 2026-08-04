@@ -25,6 +25,11 @@ func (s *Store) ensureHeartbeat() error {
 	if s.closed {
 		return discovery.ErrClosed
 	}
+	if s.withdrawn {
+		// Withdraw deleted this store's keys on purpose; publishing again would
+		// re-advertise a relay that is draining.
+		return discovery.ErrWithdrawn
+	}
 	if !s.hbStarted {
 		s.hbStarted = true
 		go s.heartbeatLoop()
@@ -34,7 +39,7 @@ func (s *Store) ensureHeartbeat() error {
 
 // heartbeatLoop re-writes every advertisement this store owns once per interval,
 // resetting the bucket TTL so the keys do not expire while the relay is alive.
-// It runs until Close cancels bgCtx. The re-Put is byte-identical to the
+// It runs until Withdraw or Close cancels bgCtx. The re-Put is byte-identical to the
 // original (a fixed PublishedAt included), so watchers dedup it away rather than
 // re-emitting an OpPublish — the heartbeat is invisible to consumers.
 func (s *Store) heartbeatLoop() {
