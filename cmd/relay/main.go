@@ -9,8 +9,6 @@ import (
 	"flag"
 	"log"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -19,11 +17,8 @@ import (
 	"time"
 
 	"github.com/lmittmann/tint"
-	"github.com/quic-go/quic-go/http3"
-	"github.com/quic-go/webtransport-go"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/session/wtconn"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/relaynet"
@@ -36,11 +31,10 @@ func main() {
 	addr := flag.String("addr", "0.0.0.0:4433", "listen address")
 	certFile := flag.String("cert", "", "TLS certificate file (PEM); generated if empty")
 	keyFile := flag.String("key", "", "TLS private key file (PEM); generated if empty")
-	useWebTransport := flag.Bool("webtransport", false, "serve MOQT over WebTransport (HTTP/3) instead of raw QUIC")
 	wtPath := flag.String(
 		"webtransport-path",
 		"/moq",
-		"HTTP/3 path for the WebTransport CONNECT (only used with -webtransport)",
+		"HTTP/3 path browsers use for the WebTransport CONNECT (raw QUIC ignores it)",
 	)
 	// Long-lived "catalog" tracks are the classic example of data that
 	// must survive past the default 30s TTL: a late-joining subscriber
@@ -71,19 +65,12 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
-	// MOQT-over-QUIC uses a "moqt-NN" ALPN (one per draft, §3.1);
-	// MOQT-over-WebTransport rides HTTP/3, whose ALPN is "h3". Picking the
-	// wrong set here surfaces as a TLS handshake failure that browsers report
-	// as "Connection refused". The negotiated ALPN fixes the draft version
-	// (draft-19 SETUP carries no version field), so we advertise only the
-	// draft we speak — see relaynet.MOQTQUICALPNs.
-	var alpns []string
-	if *useWebTransport {
-		alpns = []string{http3.NextProtoH3}
-	} else {
-		alpns = relaynet.MOQTQUICALPNs
-	}
-	tlsCfg, err := relaynet.TLSConfig(*certFile, *keyFile, alpns)
+	// Advertise both mappings' ALPNs: "moqt-NN" for raw QUIC (one per draft,
+	// §3.1) and "h3" for MOQT-over-WebTransport. relaynet.Listen then decides per
+	// connection, so a client picks its transport by URL scheme rather than the
+	// relay picking for everyone. The negotiated ALPN also fixes the draft
+	// version, since draft-19 SETUP carries no version field.
+	tlsCfg, err := relaynet.TLSConfig(*certFile, *keyFile, relaynet.DualALPNs)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -93,39 +80,27 @@ func main() {
 		return nil, nil //nolint:nilnil // tls GetConfigForClient contract: (nil, nil) means "use the base config".
 	}
 
-	var listener relay.Listener
-	if *useWebTransport {
-		// Browsers reject self-signed certs unless the page pins them via
-		// WebTransport's serverCertificateHashes. Print the SHA-256 of the
-		// leaf cert's DER so the operator can paste it into the test page.
-		sum := sha256.Sum256(tlsCfg.Certificates[0].Certificate[0])
-		log.Printf("WebTransport server cert SHA-256: %s", hex.EncodeToString(sum[:]))
-		// A self-signed cert is untrusted by default, so a browser reports a
-		// bare "connection failed" at the QUIC/h3 handshake. The simplest dev
-		// path is to pin this hash; print a ready-to-paste JS snippet. (Only
-		// works while the relay process — and thus this ephemeral cert — lives;
-		// restarting regenerates the cert and changes the hash.)
-		jsBytes := make([]string, len(sum))
-		for i, b := range sum {
-			jsBytes[i] = strconv.Itoa(int(b))
-		}
-		log.Printf("  → new WebTransport(\"https://%s%s\", {serverCertificateHashes:"+
-			" [{algorithm: \"sha-256\", value: new Uint8Array([%s])}]})",
-			*addr, *wtPath, strings.Join(jsBytes, ","))
-		l, err := webTransportListener(*addr, *wtPath, tlsCfg)
-		if err != nil {
-			log.Fatalf("listen %s: %v", *addr, err)
-		}
-		log.Printf("relay listening on %s (WebTransport, path %s)", l.Addr(), *wtPath)
-		listener = l
-	} else {
-		l, err := relaynet.ListenQUIC(*addr, tlsCfg)
-		if err != nil {
-			log.Fatalf("listen %s: %v", *addr, err)
-		}
-		log.Printf("relay listening on %s (QUIC)", l.Addr())
-		listener = l
+	listener, err := relaynet.Listen(*addr, *wtPath, tlsCfg, logger)
+	if err != nil {
+		log.Fatalf("listen %s: %v", *addr, err)
 	}
+	log.Printf("relay listening on %s (raw QUIC as moqt://%s, WebTransport as https://%s%s)",
+		listener.Addr(), *addr, *addr, *wtPath)
+
+	// Browsers reject self-signed certs unless the page pins them via
+	// WebTransport's serverCertificateHashes. Print the SHA-256 of the leaf
+	// cert's DER plus a ready-to-paste snippet, so the browser path is usable
+	// without a real cert. (Only valid while this process — and thus this
+	// ephemeral cert — lives; restarting regenerates it and changes the hash.)
+	sum := sha256.Sum256(tlsCfg.Certificates[0].Certificate[0])
+	log.Printf("WebTransport server cert SHA-256: %s", hex.EncodeToString(sum[:]))
+	jsBytes := make([]string, len(sum))
+	for i, b := range sum {
+		jsBytes[i] = strconv.Itoa(int(b))
+	}
+	log.Printf("  → new WebTransport(\"https://%s%s\", {serverCertificateHashes:"+
+		" [{algorithm: \"sha-256\", value: new Uint8Array([%s])}]})",
+		*addr, *wtPath, strings.Join(jsBytes, ","))
 
 	r := relay.New(listener, relay.Config{
 		GoawayTimeout: 5 * time.Second,
@@ -177,70 +152,4 @@ func catalogPolicy(catalogName string, ttl time.Duration) relay.CacheTTLPolicy {
 		}
 		return 0 // 0 → registry falls through to its default TTL
 	}
-}
-
-// webTransportListener stands up an HTTP/3 + WebTransport server on addr
-// and registers a MOQT upgrade handler at path. The returned listener
-// feeds accepted *webtransport.Session values to the relay accept loop.
-//
-// The HTTP/3 server is started in the background; its lifecycle is tied
-// to the UDP socket (closing the socket unwinds wts.Serve). The relay
-// owns shutdown via [Listener.Close] on the returned listener plus
-// process exit, which is sufficient for this dev/test binary.
-func webTransportListener(addr, path string, tlsCfg *tls.Config) (*wtconn.Listener, error) {
-	udp, err := (&net.ListenConfig{}).ListenPacket(context.Background(), "udp", addr)
-	if err != nil {
-		return nil, err
-	}
-	mux := http.NewServeMux()
-	// Catch-all so requests that don't hit `path` (wrong URL, missing
-	// upgrade header, plain GET) get logged instead of silently 404'ing.
-	// Skip it when the upgrade handler itself owns "/" (path == "/"):
-	// registering two handlers for the same pattern panics the ServeMux,
-	// and a root-mounted upgrade already covers every request anyway. The
-	// interop runner dials a path-less URL (https://relay:4443), so the
-	// CONNECT targets "/" — see MOQT_WEBTRANSPORT_PATH in entrypoint-relay.sh.
-	if path != "/" {
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			alpn := ""
-			if r.TLS != nil {
-				alpn = r.TLS.NegotiatedProtocol
-			}
-			log.Printf("http3: unmatched request %s %s%s proto=%s alpn=%q upgrade=%q",
-				r.Method, r.Host, r.URL.Path, r.Proto, alpn, r.Header.Get(":protocol"))
-			http.NotFound(w, r)
-		})
-	}
-	h3 := &http3.Server{
-		TLSConfig: tlsCfg,
-		Handler:   mux,
-	}
-	webtransport.ConfigureHTTP3Server(h3)
-	wts := &webtransport.Server{
-		H3: h3,
-		// WebTransport sub-protocol negotiation (distinct from TLS ALPN):
-		// the client MAY offer protocols in the WT-Available-Protocols header
-		// and the server picks one. This is OPTIONAL — webtransport-go's
-		// server (server.go selectProtocol/Upgrade) completes the upgrade with
-		// an empty protocol when the client offers none or none match, so this
-		// list is never the cause of a failed handshake. Most browser MOQT
-		// pages don't set the (very new) WebTransport `protocols` option at
-		// all. Per §3.1 the negotiated "moqt-NN" protocol fixes the draft
-		// version (draft-19 SETUP carries no version field), so we advertise
-		// the same identifiers as the raw-QUIC ALPN path — shared with
-		// MOQTQUICALPNs so the two version signals never drift.
-		ApplicationProtocols: relaynet.MOQTQUICALPNs,
-		CheckOrigin: func(r *http.Request) bool {
-			log.Printf("wtconn: CheckOrigin origin=%q host=%q wt-protocols=%q",
-				r.Header.Get("Origin"), r.Host, r.Header.Get("Wt-Available-Protocols"))
-			return true
-		},
-	}
-	l := wtconn.NewListener(wts, mux, path, udp.LocalAddr(), 0)
-	go func() {
-		if err := wts.Serve(udp); err != nil {
-			log.Printf("webtransport serve: %v", err)
-		}
-	}()
-	return l, nil
 }

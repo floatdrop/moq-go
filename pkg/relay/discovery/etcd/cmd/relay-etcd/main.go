@@ -13,6 +13,22 @@
 // stays cleanly partitioned. Every read, write, and watch the store performs is
 // rooted at that prefix.
 //
+// One UDP port serves both MOQT transports: raw QUIC (ALPN "moqt-19") for native
+// clients and peer relays, and WebTransport (HTTP/3, ALPN "h3") at
+// -webtransport-path for browsers and anything dialing the https form of a moqt
+// URI (§3.1.4). Both are QUIC over UDP — the https scheme names an HTTP origin,
+// not a TCP transport — so the port sits behind an L4 UDP load balancer either
+// way, and WebTransport additionally traverses an HTTP/3-aware L7 proxy.
+//
+// There is deliberately no transport flag: the listener advertises both ALPNs and
+// decides per connection, so a client picks by URL scheme and peer relays keep
+// using raw QUIC. Nothing has to be agreed deployment-wide.
+//
+// Note that -relay-addr is the *peer-facing* address and must stay directly
+// dialable: pointing it at a load balancer would route cross-relay subscribes to
+// an arbitrary instance and break the self-exclusion that stops a relay dialing
+// its own advertisements.
+//
 // The TLS and cross-relay dial paths here are development-grade: an ephemeral
 // self-signed cert when -cert/-key are omitted, and peer dialing that skips
 // certificate verification. Production deployments should supply real certs and
@@ -36,7 +52,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "0.0.0.0:4433", "listen address (raw QUIC)")
+	addr := flag.String("addr", "0.0.0.0:4433", "listen address; serves raw QUIC and WebTransport on this one UDP port")
 	certFile := flag.String("cert", "", "TLS certificate file (PEM); a self-signed dev cert is generated if empty")
 	keyFile := flag.String("key", "", "TLS private key file (PEM); generated with -cert if empty")
 	endpoints := flag.String("etcd-endpoints", "127.0.0.1:2379",
@@ -47,6 +63,8 @@ func main() {
 		"etcd lease TTL bounding how long this relay's advertisements survive after it stops heartbeating")
 	relayAddr := flag.String("relay-addr", "",
 		"address peers use to dial this relay, advertised in etcd; empty = single-instance (not reachable by peers)")
+	wtPath := flag.String("webtransport-path", "/moq",
+		"HTTP/3 path browsers use for the WebTransport CONNECT (raw QUIC ignores it)")
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -54,12 +72,16 @@ func main() {
 
 	// Do the fatal-on-error setup (TLS, listener) before opening the store, so
 	// no os.Exit path runs after store.Close() is deferred (which it would skip).
-	tlsCfg, err := relaynet.TLSConfig(*certFile, *keyFile, relaynet.MOQTQUICALPNs)
+	// Advertise both mappings' ALPNs — "moqt-NN" for raw QUIC and "h3" for
+	// WebTransport (§3.1) — so relaynet.Listen can decide per connection. Clients
+	// pick their transport by URL scheme, peers keep dialing raw QUIC, and no
+	// transport choice has to be agreed deployment-wide.
+	tlsCfg, err := relaynet.TLSConfig(*certFile, *keyFile, relaynet.DualALPNs)
 	if err != nil {
 		logger.Error("build TLS config", "err", err)
 		os.Exit(1)
 	}
-	listener, err := relaynet.ListenQUIC(*addr, tlsCfg)
+	listener, err := relaynet.Listen(*addr, *wtPath, tlsCfg, logger)
 	if err != nil {
 		logger.Error("listen", "addr", *addr, "err", err)
 		os.Exit(1)
@@ -78,14 +100,17 @@ func main() {
 
 	logger.Info("relay-etcd listening",
 		"addr", listener.Addr().String(),
+		"webtransport_path", *wtPath,
 		"relay_addr", *relayAddr,
 		"etcd_endpoints", *endpoints,
 		"etcd_prefix", *prefix,
 	)
 
-	// Cross-relay dialing: peers advertise a RelayAddr in etcd; the relay dials
-	// it over raw QUIC when it needs an upstream SUBSCRIBE it can't serve
-	// locally. Dev-grade — verification is skipped (see package doc).
+	// Cross-relay dialing: peers advertise a RelayAddr in etcd; the relay dials it
+	// over raw QUIC when it needs an upstream SUBSCRIBE it can't serve locally.
+	// Peers always use raw QUIC, whatever transport clients chose — every relay
+	// serves both on its port, so there is nothing to coordinate.
+	// Dev-grade — verification is skipped (see package doc).
 	clientTLS := relaynet.InsecureClientTLSConfig(relaynet.MOQTQUICALPNs)
 	dialer := func(ctx context.Context, peer string) (session.Conn, error) {
 		return relaynet.DialQUIC(ctx, peer, clientTLS)
