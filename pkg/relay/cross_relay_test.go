@@ -817,3 +817,121 @@ func TestCrossRelay_NoDialerNoop(t *testing.T) {
 	_ = subSess.Close(0, "done")
 	relayA.stop(t)
 }
+
+// TestCrossRelay_UpstreamFanInCapConverges pins Phase-1 affinity routing: when
+// three remote relays advertise a namespace but UpstreamFanIn is 1, a leaf relay
+// subscribes to exactly one of them (the cap), and two independent leaf relays
+// pick the *same* one (rendezvous convergence). That is what turns a full
+// O(n²) relay-to-relay mesh into a tree rooted at one relay per namespace.
+func TestCrossRelay_UpstreamFanInCapConverges(t *testing.T) {
+	t.Parallel()
+
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+
+	ctx := t.Context()
+
+	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
+	relayC := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-C"})
+	relayD := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-D"})
+	remotes := map[string]*testRelay{"relay-B": relayB, "relay-C": relayC, "relay-D": relayD}
+
+	// A publisher on every remote so whichever the leaves converge on can serve
+	// cam1 (establishment, and thus the dial, only completes against a relay that
+	// actually hosts the track).
+	var pubSessions []*session.Session
+	for addr, tr := range remotes {
+		ps := dialClient(t, tr)
+		if _, err := ps.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()}); err != nil {
+			t.Fatalf("%s PublishNamespace: %v", addr, err)
+		}
+		if _, err := ps.Publish(
+			ctx,
+			&message.Publish{Namespace: videoNS(), Name: []byte("cam1"), TrackAlias: 7},
+		); err != nil {
+			t.Fatalf("%s Publish: %v", addr, err)
+		}
+		pubSessions = append(pubSessions, ps)
+	}
+
+	// A per-leaf dialer that records only successful dials into known remotes.
+	// A candidate a leaf cannot reach (e.g. the other leaf, should it re-advertise
+	// the namespace) misses the lookup and is not counted — resolveUpstreams
+	// treats it as skip-and-fall-through, so the log holds exactly the leaf's
+	// established upstreams.
+	makeDialer := func(mu *sync.Mutex, log map[string]int) func(context.Context, string) (session.Conn, error) {
+		return func(_ context.Context, addr string) (session.Conn, error) {
+			tr, ok := remotes[addr]
+			if !ok {
+				return nil, fmt.Errorf("no relay at %q", addr)
+			}
+			mu.Lock()
+			log[addr]++
+			mu.Unlock()
+			return tr.l.Dial()
+		}
+	}
+	dialed := func(mu *sync.Mutex, log map[string]int) (addrs []string, total int) {
+		mu.Lock()
+		defer mu.Unlock()
+		for a, n := range log {
+			if n > 0 {
+				addrs = append(addrs, a)
+				total += n
+			}
+		}
+		return addrs, total
+	}
+
+	var muA1 sync.Mutex
+	logA1 := map[string]int{}
+	relayA1 := startTestRelay(ctx, relay.Config{
+		Discovery: store, RelayAddr: "relay-A1", UpstreamFanIn: 1,
+		Dialer: makeDialer(&muA1, logA1),
+	})
+	var muA2 sync.Mutex
+	logA2 := map[string]int{}
+	relayA2 := startTestRelay(ctx, relay.Config{
+		Discovery: store, RelayAddr: "relay-A2", UpstreamFanIn: 1,
+		Dialer: makeDialer(&muA2, logA2),
+	})
+
+	// Subscribe blocks until the (single) upstream is established, so the dial
+	// logs are settled by the time each call returns.
+	sub1 := dialClient(t, relayA1)
+	req1, err := sub1.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	if err != nil {
+		t.Fatalf("A1 Subscribe: %v", err)
+	}
+	sub2 := dialClient(t, relayA2)
+	req2, err := sub2.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	if err != nil {
+		t.Fatalf("A2 Subscribe: %v", err)
+	}
+
+	a1Addrs, a1Total := dialed(&muA1, logA1)
+	a2Addrs, a2Total := dialed(&muA2, logA2)
+
+	if len(a1Addrs) != 1 || a1Total != 1 {
+		t.Errorf("A1 dialed %v (total %d); want exactly one upstream (UpstreamFanIn=1)", a1Addrs, a1Total)
+	}
+	if len(a2Addrs) != 1 || a2Total != 1 {
+		t.Errorf("A2 dialed %v (total %d); want exactly one upstream (UpstreamFanIn=1)", a2Addrs, a2Total)
+	}
+	if len(a1Addrs) == 1 && len(a2Addrs) == 1 && a1Addrs[0] != a2Addrs[0] {
+		t.Errorf("leaves diverged: A1 chose %q, A2 chose %q; rendezvous ranking must converge", a1Addrs[0], a2Addrs[0])
+	}
+
+	_ = req1.Close()
+	_ = req2.Close()
+	_ = sub1.Close(0, "done")
+	_ = sub2.Close(0, "done")
+	for _, ps := range pubSessions {
+		_ = ps.Close(0, "done")
+	}
+	relayA1.stop(t)
+	relayA2.stop(t)
+	relayB.stop(t)
+	relayC.stop(t)
+	relayD.stop(t)
+}
