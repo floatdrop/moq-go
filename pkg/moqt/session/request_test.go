@@ -553,7 +553,7 @@ func TestAcceptRequestParityHappyPath(t *testing.T) {
 // TestRejectErrorCancelsReadSide verifies that RejectError writes
 // REQUEST_ERROR, cancels the read side (CancelRead), and FINs the send
 // direction. After rejection, the client's writes to the stream must fail
-// because the server stopped reading (§3.3.2).
+// because the server stopped reading (§3.3.3).
 func TestRejectErrorCancelsReadSide(t *testing.T) {
 	client, server := openPair(t)
 	ctx := t.Context()

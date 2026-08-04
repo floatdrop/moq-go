@@ -592,8 +592,8 @@ func (r *Request) Reply(msg message.Message) error {
 
 // RejectError writes a REQUEST_ERROR with the given code and reason, then
 // cancels the read side and FINs the send direction of the bidi stream
-// (§3.3.2: "an endpoint that rejects a request without performing any
-// application processing SHOULD send a REQUEST_ERROR and FIN the stream").
+// (§3.3.3: "When an endpoint rejects a request without performing any
+// application processing, it SHOULD send a REQUEST_ERROR and FIN the stream.").
 // CancelRead ensures that any further data the peer sends after the rejection
 // does not queue in the transport buffer indefinitely.
 func (r *Request) RejectError(code moqt.RequestErrorCode, reason string) error {

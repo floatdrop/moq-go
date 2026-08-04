@@ -324,8 +324,9 @@ func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 // namespaceRequest folds in the §13.7.1 per-session cap for the three
 // namespace-state requests (the §13.1 subscription cap is inline on SUBSCRIBE).
 //
-// An unknown / unexpected first-message type is a protocol violation per §3.3.2:
-// OnUnknown resets the bidi stream and logs. The session is NOT closed — §9.5
+// An unexpected first-message type violates §10 ("Messages marked "First" MUST
+// be the first message on a new request stream"): OnUnknown resets the bidi
+// stream per §3.3.3 and logs. The session is NOT closed — §9.5
 // ("if a Session is closed due to an unknown or invalid control message [...] the
 // Relay MUST NOT propagate that message [...] to another Session") means the
 // relay isolates the failure to the one request.
