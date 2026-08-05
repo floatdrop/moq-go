@@ -5,11 +5,10 @@ Tracks this codebase's implementation of
 (plus [`-loc-04`](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) and
 [`-msf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) at the edges).
 
-## Overall: ~98% complete
+## Overall: ~97% complete
 
 The wire codec, all control messages and parameters, data streams/datagrams, the
-session lifecycle, and the single-instance relay are implemented and wired end to
-end. What remains is intentionally out of scope: behaviour the draft delegates to
+session lifecycle, and the relay are implemented and wired end to end. What remains is intentionally out of scope: behaviour the draft delegates to
 the transport (congestion control, 0-RTT, communication/media security) and
 *global* cross-session resource quotas, which sit above this library (per-session
 caps and the `Authorizer` hook are the in-library surface).
@@ -85,7 +84,7 @@ By package, bottom-up along the dependency stack:
 | 3.2     | Extension negotiation                | DONE   | SETUP options exchanged as KV pairs; peer options parsed. |
 | 3.2.1   | Reserved namespaces                  | DONE   | `AcceptRequest` rejects an exact `.` first field with DOES_NOT_EXIST; other `.`-prefixed namespaces pass through to the application per spec. |
 | 3.2.2   | Session-level tracks/namespaces      | DONE   | `.session` requests are rejected with DOES_NOT_EXIST before the application/relay sees them (no session-level extensions implemented), so relays never forward them; covers the empty-track-name rule. |
-| 3.3     | Session initialization               | DONE   | Control streams + SETUP exchange; early data-stream buffering. |
+| 3.3     | Session initialization               | PARTIAL| Control streams + SETUP exchange; early data-stream buffering. A bidi stream opening with an unexpected message type resets that stream instead of closing the session with PROTOCOL_VIOLATION as §3.3 requires — see Limitations. |
 | 3.3.2   | Request cancellation / rejection     | DONE   | STOP_SENDING, stream resets, REQUEST_ERROR in `request.go`. |
 | 3.3.3   | Stream reset error codes             | DONE   | All codes in `errors.go` (`StreamReset*`). |
 | 3.4     | Unidirectional stream types          | DONE   | SUBGROUP / FETCH / PADDING / SETUP type IDs dispatched. |
@@ -126,7 +125,7 @@ By package, bottom-up along the dependency stack:
 
 | §   | Feature                       | Status | Notes |
 |-----|-------------------------------|--------|-------|
-| 8   | Delivery timeouts / reliability| DONE  | OBJECT/SUBGROUP delivery timeouts enforced in `session/datastream.go`; reset w/ `StreamResetDeliveryTimeout`; publisher+subscriber values merged. |
+| 8   | Delivery timeouts / reliability| PARTIAL| OBJECT/SUBGROUP delivery timeouts enforced in `session/datastream.go`; reset w/ `StreamResetDeliveryTimeout`; publisher+subscriber values merged by `DeliveryTimeouts.Effective`. Stream-API-level only: the relay does not source the Track-level value from SUBSCRIBE/SUBSCRIBE_OK and apply it to the subgroups it opens, and the inbound path enforces no timeout — see Limitations. |
 
 ## §9 Relays
 
@@ -147,7 +146,7 @@ By package, bottom-up along the dependency stack:
 | §       | Message / option              | Type   | Status | Notes |
 |---------|-------------------------------|--------|--------|-------|
 | 10.1    | Request-ID parity/monotonicity| —      | DONE   | Enforced in `AcceptRequest` (per-role parity + monotonic). |
-| 10.2    | Message parameters (18 types) | —      | PARTIAL| 13 of 18 defined with correct kinds; the 5 new Range Filter parameters are MISSING; see §10.2.x below. |
+| 10.2    | Message parameters (18 types) | —      | DONE   | All 18 defined with correct kinds and per-message scope; see §10.2.x below. |
 | 10.2.1  | Parameter scope               | —      | DONE   | Per-message scope validation. |
 | 10.2.2  | AUTHORIZATION_TOKEN           | 0x03   | DONE   | 4 alias types; session token cache resolves inbound. |
 | 10.2.3  | SUBGROUP_DELIVERY_TIMEOUT     | 0x06   | DONE   | |
@@ -168,8 +167,8 @@ By package, bottom-up along the dependency stack:
 | 10.2.18 | NEW_GROUP_REQUEST             | 0x32   | DONE   | |
 | 10.2.19 | TRACK_NAMESPACE_PREFIX        | 0x34   | DONE   | |
 | 10.3    | SETUP                         | 0x2F00 | DONE   | Bidirectional handshake; options as KV pairs. |
-| 10.3.1.1| AUTHORITY option              | 0x05   | DONE   | |
-| 10.3.1.2| PATH option                   | 0x01   | DONE   | |
+| 10.3.1.1| AUTHORITY option              | 0x05   | PARTIAL| Sent (`WithAuthority`) and carried as a SETUP KV pair, but never validated on receipt: `SessionInvalidAuthority` is unused — see Limitations. |
+| 10.3.1.2| PATH option                   | 0x01   | PARTIAL| Sent (`WithPath`) and carried as a SETUP KV pair, but never validated on receipt: `SessionInvalidPath` is unused — see Limitations. |
 | 10.3.1.3| MAX_AUTH_TOKEN_CACHE_SIZE      | 0x04   | DONE   | Sizes the token cache. |
 | 10.3.1.4| AUTHORIZATION_TOKEN (setup)   | 0x03   | DONE   | |
 | 10.3.1.5| MOQT_IMPLEMENTATION           | 0x07   | DONE   | Advisory. |
