@@ -1,6 +1,6 @@
 # moq-go
 
-[![CI](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml/badge.svg?branch=draft-18)](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml?query=branch%3Adraft-18)
+[![CI](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml/badge.svg?branch=draft-19)](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml?query=branch%3Adraft-19)
 [![Go Reference](https://pkg.go.dev/badge/github.com/floatdrop/moq-go.svg)](https://pkg.go.dev/github.com/floatdrop/moq-go)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
 

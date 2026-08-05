@@ -3,7 +3,11 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [draft-18]
+    # The draft branches: draft-19 is the default and where work lands; draft-18
+    # is kept building while it is still around. Pinning this to a literal is why
+    # draft-19 went unbuilt for a while — it was set when draft-18 was the
+    # default (e53c5e0) and not moved when the default changed.
+    branches: [draft-19, draft-18]
   # Lets the third-party interop job below be run on demand while it is ungated.
   workflow_dispatch:
 
