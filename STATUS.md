@@ -251,27 +251,13 @@ policy. This library provides the hooks; enforcement is the operator's.
 
 ## Limitations
 
-This is a **single-instance** reference relay, though cross-relay routing works
-when wired up: set `Config.Discovery` + `Config.Dialer` and the relay follows a
-`FindNamespace` lookup to dial and subscribe upstream on another instance (and
-reflects remote namespaces to local subscribers via `WatchNamespaces`). Out of
-scope: multi-hop **loop detection** (the only guard is skipping the relay's own
-`RelayAddr`), an upstream **connection-health / redial policy** beyond
-dial-on-demand, production `DiscoveryStore` backends (only the in-process
-`MemoryStore` ships), GOAWAY **cascading**, and a `Dialer` for `cmd/relay`
-itself (the binary stays single-instance; cross-relay is library-level).
-
-**draft-19 changes.** All substantive `draft-ietf-moq-transport-18` → `-19`
-behavior changes are implemented: the mechanical renames/removals (GOAWAY
-Request ID, `PUBLISH_SKIPPED`, `LOCATION_FILTER`, `DUPLICATE_SUBSCRIPTION`);
-`MAX_REQUEST_UPDATES` (§10.3.1.7); the §10.19.1 SUBSCRIBE_TRACKS
-FORWARD/GROUP_ORDER passthrough; the §9.2 upstream Forward rule; the
-single-PUBLISH `PUBLISH_SKIPPED` lifetime (§6.1); the §12.1/§12.2 first-object
-`OBJECT`/`SUBGROUP_DELIVERY_TIMEOUT` override; and the flagship **Range Filters**
-(§5.1.3 — all five filter parameters, `MAX_FILTER_RANGES`, `INVALID_FILTER`,
-enforced across SUBSCRIBE/datagram/FETCH object filtering and SUBSCRIBE_TRACKS
-PUBLISH-forwarding). One Range Filter nuance remains (REQUEST_UPDATE per-type
-merge) — see Known protocol gaps.
+Out of scope in the relay's cross-instance routing: multi-hop **loop detection**
+(the only guard is skipping the relay's own `RelayAddr`), an upstream
+**connection-health / redial policy** beyond dial-on-demand, and GOAWAY
+**cascading**. `cmd/relay` stays single-instance by choice — the distributed
+`DiscoveryStore` backends ship as their own binaries (`relay-etcd`,
+`relay-nats`) in their own modules, so the core module never pulls in an etcd or
+NATS client.
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
 
@@ -290,6 +276,20 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   INVALID_FILTER instead of removing that type. Initial SUBSCRIBE/FETCH filtering
   and adding filters on update work; the per-type merge is a tracked follow-up.
 
+- **PATH / AUTHORITY are sent but never validated on receipt (§10.3.1.1,
+  §10.3.1.2)** — `WithPath` / `WithAuthority` emit the SETUP parameters, but
+  nothing checks them on the receiving side: `SessionInvalidPath` (0x8) and
+  `SessionInvalidAuthority` (0x19) are defined in `pkg/moqt/errors.go` and used
+  nowhere. Enforcement is also per transport mapping, and `relaynet.Listen` does
+  not record which mapping a session arrived on (it merges both into one accept
+  queue) — recoverable by conn type, since `quicconn` and `wtconn` are distinct
+  implementations, but not currently carried.
+- **An unexpected first message resets the stream instead of closing the session
+  (§3.3)** — "Bidirectional streams MUST NOT begin with any other message type
+  unless negotiated. If they do, the peer MUST close the Session with a
+  PROTOCOL_VIOLATION." The relay's `OnUnknown` resets that one bidi stream and
+  keeps the session up, deliberately isolating the failure to a single request.
+  That is friendlier, and it is not what the draft requires.
 - **Delivery-timeout enforcement is stream-API-level, not auto-wired (§8)** —
   `OutgoingSubgroupStream` enforces `OBJECT`/`SUBGROUP_DELIVERY_TIMEOUT`
   (including the §12.1/§12.2 first-object override) once
