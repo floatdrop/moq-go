@@ -13,7 +13,7 @@ import (
 )
 
 // ErrPaddingStream is returned by AcceptDataStream when a padding uni-stream
-// (§11.6, type 0x132B3E28) is received. Callers SHOULD loop and call
+// (§11.5, type 0x132B3E28) is received. Callers SHOULD loop and call
 // AcceptDataStream again.
 var ErrPaddingStream = errors.New("moqt/session: padding stream received (ignorable)")
 
@@ -193,7 +193,7 @@ func (s *IncomingSubgroupStream) ReadDecoded() (*DecodedSubgroupObject, error) {
 // calls), or Read (raw bytes). The peer's FIN surfaces as io.EOF from any of
 // these methods.
 type IncomingFetchStream struct {
-	// Header is the parsed FETCH_HEADER (§11.5).
+	// Header is the parsed FETCH_HEADER (§11.4.4).
 	Header message.FetchHeader
 	src    ReceiveStream
 	br     *bufio.Reader
@@ -447,7 +447,7 @@ func (s *IncomingFetchStream) decGroupOrder() message.GroupOrder {
 //     (§11.4.2) — callers MUST close the session with PROTOCOL_VIOLATION;
 //   - *message.UnknownDataStreamTypeError when the leading Type isn't
 //     recognized;
-//   - ErrPaddingStream when a padding stream (§11.6) is received — callers
+//   - ErrPaddingStream when a padding stream (§11.5.1) is received — callers
 //     SHOULD loop and call AcceptDataStream again;
 //   - a wrapped parser error otherwise.
 //
@@ -497,7 +497,7 @@ func (s *Session) AcceptDataStream(ctx context.Context) (DataStream, error) {
 		}
 		return &IncomingFetchStream{Header: hdr, src: src, br: br, rd: wire.NewStreamReader(br)}, nil
 	case typ == message.PaddingStreamType:
-		// §11.6: padding streams MUST be silently discarded. CancelRead
+		// §11.5.1: padding streams MUST be silently discarded. CancelRead
 		// (STOP_SENDING) abandons the stream and frees its flow control.
 		src.CancelRead(uint64(moqt.StreamResetInternalError))
 		return nil, ErrPaddingStream

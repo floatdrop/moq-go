@@ -104,7 +104,7 @@ func subscribe(ctx context.Context, addr string) error {
 		"name", videoTrack.Name, "codec", videoTrack.Codec,
 		"width", videoTrack.Width, "height", videoTrack.Height)
 
-	// Resolve the track's namespace. §5.1.10: a track without an
+	// Resolve the track's namespace. §5.2.2: a track without an
 	// explicit namespace inherits the catalog track's namespace.
 	videoNS := videoTrack.Namespace
 	if videoNS == "" {

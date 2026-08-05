@@ -92,7 +92,7 @@ func TestTrackStatus_OmitsLargestObjectBeforeAnyObjects(t *testing.T) {
 // the cache eviction story: under a publish flood that exceeds MaxCacheSize
 // the relay's per-track cache must evict older entries, and a FETCH
 // over the early range comes back with strictly fewer objects than
-// the range implies. Per §3553 the subscriber interprets gaps as
+// the range implies. Per §10.12.3 the subscriber interprets gaps as
 // "objects do not exist".
 //
 // The FIFO ring evicts strictly oldest-first, but the test asserts only

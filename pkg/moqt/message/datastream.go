@@ -47,8 +47,8 @@ func (e *ReservedSubgroupIDModeError) Error() string {
 }
 
 // ReadDataStreamType reads the leading Type varint that prefixes every MoQT
-// uni-stream data header (SUBGROUP_HEADER §11.4.2, FETCH_HEADER §11.5,
-// padding §11.6, ...). A dispatcher uses this together with type predicates
+// uni-stream data header (SUBGROUP_HEADER §11.4.2, FETCH_HEADER §11.4.4,
+// padding §11.5.1, ...). A dispatcher uses this together with type predicates
 // such as IsSubgroupHeaderType to decide how to consume the remainder of the
 // stream.
 func ReadDataStreamType(r io.Reader) (uint64, error) {
@@ -60,5 +60,5 @@ func ReadDataStreamType(r io.Reader) (uint64, error) {
 }
 
 // PaddingStreamType is the leading Type varint of a padding uni-stream
-// (§11.6). Receivers MUST silently discard padding streams.
+// (§11.5.1). Receivers MUST silently discard padding streams.
 const PaddingStreamType uint64 = 0x132B3E28

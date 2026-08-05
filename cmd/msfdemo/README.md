@@ -120,7 +120,7 @@ Flow:
    `msf.Catalog.Validate` and pick the first track whose `packaging`
    is `loc` and `role` is `video` (see `selectVideoTrack`). The
    track's `Namespace` field is honoured if present, otherwise the
-   subscriber inherits the catalog track's namespace per §5.1.10.
+   subscriber inherits the catalog track's namespace per §5.2.2.
 4. **SUBSCRIBE** on the discovered track with `FilterLargestObject` —
    delivers every video frame that arrives after the subscription is
    established. The demo skips a video-track Joining FETCH because

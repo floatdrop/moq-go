@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// §5.3.1 — Time-aligned Audio/Video Tracks with single quality.
+// §5.6.1 — Time-aligned Audio/Video Tracks with single quality.
 func TestCatalogExample531(t *testing.T) {
 	const doc = `{
 		"version": "draft-01",
@@ -91,7 +91,7 @@ func TestCatalogExample531(t *testing.T) {
 	}
 }
 
-// §5.3.6 — Custom field passthrough.
+// §5.6.6 — Custom field passthrough.
 func TestCatalogCustomFields(t *testing.T) {
 	const doc = `{
 		"version": "draft-01",
@@ -157,7 +157,7 @@ func TestCatalogCustomFields(t *testing.T) {
 	}
 }
 
-// §5.3.7 — VOD Tracks (isLive=false, trackDuration set).
+// §5.6.7 — VOD Tracks (isLive=false, trackDuration set).
 func TestCatalogVOD(t *testing.T) {
 	const doc = `{
 		"version": "draft-01",
@@ -189,7 +189,7 @@ func TestCatalogVOD(t *testing.T) {
 	}
 }
 
-// §5.3.9 — Terminating a live broadcast.
+// §5.6.13 — Terminating a live broadcast.
 func TestCatalogTerminate(t *testing.T) {
 	const doc = `{
 		"version": "draft-01",

@@ -22,7 +22,7 @@ import (
 // compare against the publisher's absolute IDs directly.
 //
 // orderHint is the GroupOrder the test expects the relay to use; the
-// delta-reversal must agree with it (§4466-4473).
+// delta-reversal must agree with it (§11.4.4.1).
 func fetchAndDrain(
 	t *testing.T,
 	sess *session.Session,
@@ -94,7 +94,7 @@ func decodeFetchStream(t *testing.T, fs *session.IncomingFetchStream, order mess
 		switch {
 		case !havePrev:
 			// First object: GroupIDDelta and ObjectIDDelta carry
-			// absolute values (§4460-4464).
+			// absolute values (§11.4.4.1).
 			g = fo.GroupIDDelta
 			o = fo.ObjectIDDelta
 		case fo.SerializationFlags&message.FetchFlagGroupIDDelta != 0:
@@ -529,7 +529,7 @@ func TestFetch_FromCacheDescending(t *testing.T) {
 	}
 }
 
-// TestFetch_RejectsStartBeyondLargest pins §3585-3587: FETCH whose
+// TestFetch_RejectsStartBeyondLargest pins §10.12.3: FETCH whose
 // StartLocation is strictly greater than the relay's LargestObject is
 // REQUEST_ERROR / InvalidRange.
 func TestFetch_RejectsStartBeyondLargest(t *testing.T) {
@@ -553,7 +553,7 @@ func TestFetch_RejectsStartBeyondLargest(t *testing.T) {
 }
 
 // TestFetch_RejectsEmptyTrack pins the "no objects published yet" case
-// (§3585-3587): the relay knows the track but the watermark is
+// (§10.12.3): the relay knows the track but the watermark is
 // {0, 0}, so any FETCH (other than a request that ends at {0, 0})
 // has nothing to serve. REQUEST_ERROR / InvalidRange.
 func TestFetch_RejectsEmptyTrack(t *testing.T) {
@@ -751,7 +751,7 @@ func TestFetch_PartialRangeCarriesPriority(t *testing.T) {
 	}
 }
 
-// TestFetch_OKEndLocationCappedToWatermark pins §3628-3632: a FETCH
+// TestFetch_OKEndLocationCappedToWatermark pins §10.13: a FETCH
 // whose requested EndLocation extends beyond the relay's Largest
 // Object should have FETCH_OK.EndLocation capped at {Largest.Group,
 // Largest.Object + 1}.

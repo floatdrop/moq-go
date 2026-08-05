@@ -65,7 +65,7 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 
 	largest, hasLargest := entry.GetLargest()
 	if !hasLargest {
-		// §3585-3587: "If no Objects have been published for the
+		// §10.12.3: "If no Objects have been published for the
 		// track or Start Location is greater than the Largest Object
 		// the publisher MUST return REQUEST_ERROR with error code
 		// INVALID_RANGE."
@@ -73,7 +73,7 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 		return
 	}
 
-	// §3576: "End Location MUST specify the same or a larger Location
+	// §10.12.3: "End Location MUST specify the same or a larger Location
 	// than Start Location for Standalone and Absolute Joining Fetches."
 	// For wire input message.Fetch.Validate already enforced this at parse
 	// time (a violation is a session PROTOCOL_VIOLATION there); this check
@@ -83,7 +83,7 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 		return
 	}
 
-	// §3585: Start > Largest is INVALID_RANGE.
+	// §10.12.3: Start > Largest is INVALID_RANGE.
 	if largest.Less(sf.StartLocation) {
 		_ = req.RejectError(moqt.RequestInvalidRange, "relay: start beyond largest object")
 		return
@@ -96,7 +96,7 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 		return
 	}
 
-	// The response EndLocation is fixed by the watermark (§3604-3605) and is
+	// The response EndLocation is fixed by the watermark (§10.13) and is
 	// independent of which objects we end up streaming, so reply FETCH_OK
 	// before doing any (possibly slow) upstream stitching.
 	endLocation := capFetchEndLocation(sf.EndLocation, largest)
@@ -367,7 +367,7 @@ func fetchGroupOrder(ps message.Parameters) message.GroupOrder {
 }
 
 // inclusiveFetchEnd converts the protocol's exclusive-style EndLocation
-// (§3622-3624: "the last Object, plus 1; or 0 to indicate the entire
+// (§10.12.1: "the last Object, plus 1; or 0 to indicate the entire
 // Group") into the cache's inclusive-end convention.
 //
 //   - EndLocation = {G, 0}        → inclusive end {G, MaxUint64}
@@ -380,7 +380,7 @@ func inclusiveFetchEnd(end message.Location) message.Location {
 	return message.Location{Group: end.Group, Object: end.Object - 1}
 }
 
-// capFetchEndLocation implements §3628-3632: if the requested end is
+// capFetchEndLocation implements §10.13: if the requested end is
 // beyond {Largest.Group, Largest.Object + 1} we cap the response's
 // EndLocation to that watermark+1. Otherwise echo the request's value.
 //
@@ -804,15 +804,15 @@ func exclusiveFetchEnd(incl message.Location) message.Location {
 // stream with §11.4.4 delta encoding:
 //
 //   - The first object includes both GroupIDDelta and ObjectIDDelta
-//     flags; the values are absolute (§4460-4464).
+//     flags; the values are absolute (§11.4.4.1).
 //   - Subsequent objects in the same group use ObjectIDDelta only when
 //     the gap is > 0 (a consecutive object omits the flag, the
 //     subscriber reconstructs ObjectID = prior + 1).
 //   - Subsequent objects in a different group set GroupIDDelta:
 //     ascending → newGroup - priorGroup - 1, descending →
-//     priorGroup - newGroup - 1 (§4466-4473). ObjectIDDelta is then the
+//     priorGroup - newGroup - 1 (§11.4.4.1). ObjectIDDelta is then the
 //     absolute Object ID in the new group.
-//   - Datagram-flavoured objects set bit 0x40 (§4486-4490); subscriber
+//   - Datagram-flavoured objects set bit 0x40 (§11.4.4.1); subscriber
 //     ignores the subgroup bits.
 //   - [cache.CachedObject.EndOfUnknownRange] elements serialize as §11.4.4.2
 //     End of Unknown Range markers (0x10C) with absolute Group/Object IDs,
@@ -874,7 +874,7 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 
 		switch {
 		case !havePrev:
-			// §4460-4464: first object MUST include both
+			// §11.4.4.1: first object MUST include both
 			// GroupIDDelta and ObjectIDDelta flags; values are
 			// absolute.
 			fo.SerializationFlags |= message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta
@@ -924,7 +924,7 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 
 		switch o.ForwardingPref {
 		case cache.ForwardingDatagram:
-			// §4486-4490: bit 0x40 marks the object as a
+			// §11.4.4.1: bit 0x40 marks the object as a
 			// Datagram-flavoured object; the subscriber ignores
 			// the two subgroup bits.
 			fo.SerializationFlags |= message.FetchFlagDatagram

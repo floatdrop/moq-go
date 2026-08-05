@@ -80,7 +80,7 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger) (*Dual
 	}
 	// webtransport.Server.ServeQUICConn refuses a connection unless DATAGRAM and
 	// stream-reset partial delivery were both negotiated, so this depends on
-	// defaultQUICConfig enabling them — it does, for MOQT's own reasons (§11.6,
+	// defaultQUICConfig enabling them — it does, for MOQT's own reasons (§11.3,
 	// §11.4.3), and the WebTransport half breaks if that ever changes.
 	h3 := &http3.Server{TLSConfig: tlsCfg, Handler: mux}
 	webtransport.ConfigureHTTP3Server(h3)

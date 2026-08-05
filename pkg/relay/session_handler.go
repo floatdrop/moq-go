@@ -206,7 +206,7 @@ func (h *sessionHandler) run(ctx context.Context) error {
 		dataErr = h.runDataLoop(runCtx)
 		cancel() // wake sibling loops if the data loop dies first
 	})
-	// Datagrams are OPTIONAL (§11.6): a transport or peer without DATAGRAM
+	// Datagrams are OPTIONAL (§11.3): a transport or peer without DATAGRAM
 	// support fails ReceiveDatagram on the first call, which must not take down
 	// SUBSCRIBE/PUBLISH handling. So the datagram loop neither cancels its
 	// siblings nor promotes its error as a session fault — it just stops.
@@ -282,7 +282,7 @@ func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 		ds, err := h.sess.AcceptDataStream(ctx)
 		if err != nil {
 			if errors.Is(err, session.ErrPaddingStream) {
-				// §11.6 padding stream — silently discarded
+				// §11.5.1 padding stream — silently discarded
 				// by AcceptDataStream itself; loop and try again.
 				continue
 			}

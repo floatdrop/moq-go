@@ -108,7 +108,7 @@ func ExampleSession_Subscribe() {
 		ds, err := sess.AcceptDataStream(ctx)
 		if err != nil {
 			if errors.Is(err, session.ErrPaddingStream) {
-				continue // §11.6 padding stream — ignore and keep looping
+				continue // §11.5.1 padding stream — ignore and keep looping
 			}
 			return
 		}
@@ -130,7 +130,7 @@ func ExampleSession_Subscribe() {
 
 // Routing inbound data streams with a Demux instead of the hand-rolled
 // AcceptDataStream loop + type-switch above. Subgroup streams dispatch by their
-// §11.1 Track Alias, FETCH streams by their §11.5 Request ID, so a subscriber
+// §11.1 Track Alias, FETCH streams by their §11.4.4 Request ID, so a subscriber
 // to several tracks gets each track's objects on its own handler without
 // matching aliases by hand.
 func ExampleDemux() {

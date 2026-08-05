@@ -12,7 +12,7 @@ import (
 // (embedded, so Close / reads / message.Marshal work directly on it) plus the
 // Request ID follow-up traffic needs, so the caller can send REQUEST_UPDATE via
 // [FetchRequest.Update] without holding it separately. The response objects
-// arrive on a separate FETCH_HEADER uni-stream (§11.5) via
+// arrive on a separate FETCH_HEADER uni-stream (§11.4.4) via
 // [Session.AcceptDataStream], not on the embedded stream. It is returned by
 // [Session.Fetch].
 type FetchRequest struct {
@@ -32,7 +32,7 @@ type FetchRequest struct {
 //
 // On success a [FetchRequest] is returned whose embedded stream stays open (the
 // caller may send REQUEST_UPDATE via [FetchRequest.Update]) and whose OK holds
-// the parsed FETCH_OK. The publisher will open a FETCH_HEADER uni-stream (§11.5)
+// the parsed FETCH_OK. The publisher will open a FETCH_HEADER uni-stream (§11.4.4)
 // carrying the response objects; the caller receives that via AcceptDataStream.
 //
 // On REQUEST_ERROR the stream is closed and a *RequestRejectedError is
@@ -56,7 +56,7 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 // accepted via [Request.AcceptFetch] — the accept-side counterpart of
 // [Session.Fetch]. FETCH_OK has already been written on the embedded request
 // stream; the response objects are streamed on a separate FETCH_HEADER
-// uni-stream (§11.5) opened via [FetchResponder.OpenFetchStream], which binds
+// uni-stream (§11.4.4) opened via [FetchResponder.OpenFetchStream], which binds
 // this fetch's Request ID automatically. The embedded request stream stays open
 // for REQUEST_UPDATE follow-ups.
 type FetchResponder struct {
@@ -68,7 +68,7 @@ type FetchResponder struct {
 	requestID uint64
 }
 
-// OpenFetchStream opens the outbound FETCH_HEADER uni-stream (§11.5) carrying
+// OpenFetchStream opens the outbound FETCH_HEADER uni-stream (§11.4.4) carrying
 // this fetch's response objects, with the Request ID bound automatically. The
 // caller MUST Close the returned stream to FIN it once all objects are written,
 // or Cancel to reset. It is [Session.OpenFetchStream] pre-bound to this fetch.
@@ -98,7 +98,7 @@ func (r *Request) AcceptFetch(ok *message.FetchOK) (*FetchResponder, error) {
 	return &FetchResponder{Stream: r.Stream, s: r.s, requestID: f.RequestID}, nil
 }
 
-// OpenFetchStream opens an outbound FETCH_HEADER uni-stream (§11.5),
+// OpenFetchStream opens an outbound FETCH_HEADER uni-stream (§11.4.4),
 // writes the header (Type + Request ID), and returns the body writer. The
 // caller MUST Close to FIN the stream once all fetch objects have been
 // written, or Cancel to reset.

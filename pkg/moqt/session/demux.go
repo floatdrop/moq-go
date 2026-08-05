@@ -23,7 +23,7 @@ type FetchHandler func(*IncomingFetchStream)
 // type-switch + Track-Alias match" a subscriber otherwise writes.
 //
 // Subgroup streams are dispatched by their §11.1 Track Alias — the value a
-// subscriber gets from [Subscription.TrackAlias]; FETCH streams by their §11.5
+// subscriber gets from [Subscription.TrackAlias]; FETCH streams by their §11.4.4
 // Request ID — the ID the subscriber's FETCH was assigned. A stream with no
 // registered handler is passed to the OnUnknown callback.
 //
@@ -86,7 +86,7 @@ func (d *Demux) OnUnknown(f func(DataStream)) {
 
 // Run accepts data streams from sess and dispatches each to its registered
 // handler until ctx is cancelled or [Session.AcceptDataStream] returns a
-// non-padding error, which Run returns. Padding streams (§11.6) are skipped.
+// non-padding error, which Run returns. Padding streams (§11.5.1) are skipped.
 //
 // Dispatch is synchronous: a handler runs to completion before Run accepts the
 // next stream, mirroring a hand-written accept loop. A handler that reads a

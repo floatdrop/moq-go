@@ -9,12 +9,12 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// paddingDatagramType is the MoQT PADDING datagram type (§11.6).
+// paddingDatagramType is the MoQT PADDING datagram type (§11.5.2).
 const paddingDatagramType uint64 = 0x132B3E29
 
 // ReceiveDatagram blocks until a QUIC DATAGRAM frame arrives from the peer,
 // parses it, and returns the contained ObjectDatagram. PADDING datagrams
-// (§11.6) are silently consumed and the call retries. Unknown datagram types
+// (§11.3) are silently consumed and the call retries. Unknown datagram types
 // close the session with PROTOCOL_VIOLATION per §11.
 //
 // Transport-level errors (session closed, ctx cancelled) are returned
@@ -45,7 +45,7 @@ func (s *Session) ReceiveDatagram(ctx context.Context) (*message.ObjectDatagram,
 			return obj, nil
 
 		case typ == paddingDatagramType:
-			// §11.6: receiver MUST discard all data in a padding datagram.
+			// §11.5.2: receiver MUST discard all data in a padding datagram.
 			continue
 
 		default:

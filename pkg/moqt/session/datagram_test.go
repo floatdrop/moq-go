@@ -11,7 +11,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// paddingDatagramType mirrors the unexported constant in datagram.go (§11.6).
+// paddingDatagramType mirrors the unexported constant in datagram.go (§11.5.2).
 const paddingDatagramType uint64 = 0x132B3E29
 
 // openPairWithConns is openPair's sibling that also returns the underlying

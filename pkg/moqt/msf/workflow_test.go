@@ -50,7 +50,7 @@ func TestEndBroadcastTerminate(t *testing.T) {
 		t.Errorf("Version: got %q", c.Version)
 	}
 
-	// §5.3.9 example shape — tracks key must serialise as [].
+	// §5.6.13 example shape — tracks key must serialise as [].
 	raw, err := json.Marshal(c)
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)

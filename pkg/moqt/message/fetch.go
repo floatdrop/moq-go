@@ -230,7 +230,7 @@ func (m *FetchOK) Type() Type {
 	return TypeFetchOK
 }
 
-// FetchHeader is the header of a FETCH_HEADER stream (§11.5). It identifies
+// FetchHeader is the header of a FETCH_HEADER stream (§11.4.4). It identifies
 // which FETCH request this stream responds to.
 type FetchHeader struct {
 	RequestID uint64
