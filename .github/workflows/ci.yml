@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [draft-18]
+  # Lets the third-party interop job below be run on demand while it is ungated.
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref (e.g. new push to a PR).
 concurrency:
@@ -87,8 +89,15 @@ jobs:
   # yet breaks interop. Both jobs use Docker (preinstalled on the runner). The
   # advisory `make interop-matrix` is intentionally not gated — it has known
   # cross-implementation divergences (see STATUS.md).
+  # Manual-only: every published third-party client still speaks draft-18, while
+  # this relay advertises only the "moqt-19" ALPN, so the TLS handshake cannot
+  # complete and every case fails with "failed to connect to server". Gating on
+  # it would mean a permanently red required check. Re-enable by deleting the
+  # `if:` once the interop images move to draft-19 — nothing else about the job
+  # needs to change. Run it meanwhile from the Actions tab (workflow_dispatch).
   interop:
     name: Interop (relay ← third-party client)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -102,5 +111,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
-      # Loopback regression guard: our client and relay agree on all six cases.
-      - run: make interop-client
+      # Loopback regression guard over BOTH transport mappings: our client and
+      # relay agree on all six cases via moqt:// and via https://. This is the
+      # only interop coverage left while the job above is manual, and the only
+      # thing exercising the relay container's WebTransport path — a stale
+      # -webtransport flag in entrypoint-relay.sh once broke exactly that.
+      - run: make interop-loopback

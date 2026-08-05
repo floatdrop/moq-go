@@ -78,7 +78,8 @@ From the repository root, against a third-party test client (defaults to
 `moq-dev-rs`, draft-18), over both transports:
 
 ```sh
-make interop                     # raw QUIC + WebTransport
+make interop-loopback            # our client -> our relay, both transports (CI gate)
+make interop                     # raw QUIC + WebTransport vs a third-party client
 make interop-quic                # raw QUIC only
 make interop-webtransport        # WebTransport only
 make interop CLIENT_IMAGE=ghcr.io/englishm/moq-interop-runner-moq-test-client-draft-18:latest
@@ -91,6 +92,15 @@ These build the relay image from source, generate a self-signed cert pair under
 Docker Desktop for macOS). `interop-matrix` is driven by
 [`interop/matrix.sh`](../../interop/matrix.sh); edit its `CLIENTS` list (or set
 the `CLIENTS` env var) to add or mark clients.
+
+`make interop` is **not** run by CI: every published third-party client still
+speaks draft-18, while this relay advertises only the `moqt-19` ALPN, so the
+handshake cannot complete and every case fails with "failed to connect to
+server". The CI job is kept but gated to manual `workflow_dispatch`; drop the
+`if:` in [`ci.yml`](../../.github/workflows/ci.yml) once those images move to
+draft-19. `make interop-loopback` is what gates PRs meanwhile — same six cases
+against our own relay image over both `moqt://` and `https://`, so the container's
+WebTransport path stays covered.
 
 ### Client direction
 

@@ -19,12 +19,10 @@ services:
     environment:
       - MOQT_ROLE=relay
       - MOQT_PORT=4443
-      # The default loopback (CLIENT_RELAY_IMAGE=moq-relay:latest, our own
-      # image) dials moqt://relay:4443, so the relay must speak raw QUIC — our
-      # image otherwise defaults to WebTransport (the external moq-interop-runner
-      # drives it that way). Defaults to quic to match the moqt:// URL; the
-      # Makefile derives it from CLIENT_RELAY_URL's scheme. Third-party relay
-      # images ignore this var and use their own transport conventions.
+      # Our own relay image serves raw QUIC and WebTransport on one port, so this
+      # selects nothing for it — the client's URL scheme decides. Still set (the
+      # Makefile derives it from CLIENT_RELAY_URL) because third-party relay
+      # images do use it to choose a transport.
       - MOQT_TRANSPORT=${MOQT_TRANSPORT:-quic}
     # No healthcheck override here: third-party relay images ship their own
     # (e.g. moq-rs uses `ss`, the moq-dev adapter greps /proc/net/udp6), and

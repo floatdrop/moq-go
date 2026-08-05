@@ -102,6 +102,14 @@ interop-client: interop-build interop-certs
 		$(CLIENT_COMPOSE) up --build --abort-on-container-exit --exit-code-from test-client; \
 	status=$$?; $(CLIENT_COMPOSE) down -v >/dev/null 2>&1; exit $$status
 
+# Our client against our own relay over BOTH mappings — one relay image, both URL
+# schemes. Keeps WebTransport covered now that the third-party job (`make
+# interop`) is manual-only: nothing else exercises the relay container's HTTP/3
+# path, and a stale flag in entrypoint-relay.sh once broke it unnoticed.
+interop-loopback:
+	$(MAKE) interop-client CLIENT_RELAY_URL=moqt://relay:4443
+	$(MAKE) interop-client CLIENT_RELAY_URL=https://relay:4443/
+
 interop-clean:
 	-$(COMPOSE) down -v >/dev/null 2>&1
 	-$(CLIENT_COMPOSE) down -v >/dev/null 2>&1
