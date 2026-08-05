@@ -1,5 +1,8 @@
 # moq-go
 
+<!-- Badges take a single branch and no globs, so this one names the current
+     draft explicitly; update it on a draft bump. The CI push filter itself
+     globs draft-*, so builds need no edit. -->
 [![CI](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml/badge.svg?branch=draft-19)](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml?query=branch%3Adraft-19)
 [![Go Reference](https://pkg.go.dev/badge/github.com/floatdrop/moq-go.svg)](https://pkg.go.dev/github.com/floatdrop/moq-go)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)

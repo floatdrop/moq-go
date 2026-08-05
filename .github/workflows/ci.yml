@@ -3,11 +3,14 @@ name: CI
 on:
   pull_request:
   push:
-    # The draft branches: draft-19 is the default and where work lands; draft-18
-    # is kept building while it is still around. Pinning this to a literal is why
-    # draft-19 went unbuilt for a while — it was set when draft-18 was the
-    # default (e53c5e0) and not moved when the default changed.
-    branches: [draft-19, draft-18]
+    # A glob, not a literal: this filter named draft-18 back when that was the
+    # default branch (e53c5e0), so when the default moved to draft-19 every push
+    # to it went unbuilt until someone noticed. draft-* covers the current draft
+    # branch and the next one without an edit.
+    #
+    # The README badge still needs a literal — GitHub badges take one branch and
+    # no globs — so that is the only place a draft bump has to touch.
+    branches: ['draft-*']
   # Lets the third-party interop job below be run on demand while it is ungated.
   workflow_dispatch:
 
