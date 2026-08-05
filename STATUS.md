@@ -78,9 +78,10 @@ By package, bottom-up along the dependency stack:
 | 3.1     | Session establishment                | DONE   | SETUP handshake in `handshake.go`. |
 | 3.1.1   | MOQT URI scheme                      | DONE   | `pkg/moqt/uri` parses/validates `moqt://` (scheme, non-empty host, default port 443, well-known, https conversion); `msfdemo -addr` accepts a URI and feeds AUTHORITY/PATH options. |
 | 3.1.2   | Fragment identifiers (`#type:value`) | DONE   | `uri.Parse` validates the `type:value` grammar (type ∈ [a-z0-9-]); fragment is kept local and dropped from the https URL. |
-| 3.1.3   | WebTransport                         | DONE   | `wtconn` adapter (webtransport-go). |
-| 3.1.4   | Native QUIC                          | DONE   | `quicconn` adapter (quic-go). |
-| 3.1.5   | Connection URL                       | PARTIAL| Present in GOAWAY/REDIRECT; general handling deferred to app. |
+| 3.1.3   | Dereferencing a MOQT URI             | DONE   | A client offers either mapping's ALPN and the server picks: `relaynet.Listen` advertises `moqt-NN` + `h3` on one socket and dispatches on the negotiated protocol; `uri.HTTPSURL` derives the https form; `cmd/interop-client` switches adapter on the URL scheme. |
+| 3.1.4   | WebTransport                         | DONE   | `wtconn` adapter (webtransport-go); MOQT identifiers offered as the WebTransport sub-protocol both ways. |
+| 3.1.5   | Native QUIC                          | DONE   | `quicconn` adapter (quic-go). |
+| 3.1.6   | Connection URL                       | DONE   | Descriptive: a track MAY have connection URLs, and the section defers their syntax and setup to the transport mapping — which §3.1.3-3.1.5 above implement. Nothing further is required of an endpoint. |
 | 3.2     | Extension negotiation                | DONE   | SETUP options exchanged as KV pairs; peer options parsed. |
 | 3.2.1   | Reserved namespaces                  | DONE   | `AcceptRequest` rejects an exact `.` first field with DOES_NOT_EXIST; other `.`-prefixed namespaces pass through to the application per spec. |
 | 3.2.2   | Session-level tracks/namespaces      | DONE   | `.session` requests are rejected with DOES_NOT_EXIST before the application/relay sees them (no session-level extensions implemented), so relays never forward them; covers the empty-track-name rule. |
