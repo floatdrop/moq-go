@@ -155,13 +155,25 @@ dialing a listener that has already closed. See `DiscoveryStore.Withdraw`.
 ## Health endpoint
 
 Off by default. Setting `-health-addr` opts into a plain HTTP-over-**TCP**
-endpoint on its own port, answering `200 OK` with an empty body at
-`-health-path`:
+endpoint on its own port, answering `200 OK` with the body `ok` plus a trailing
+newline at `-health-path`:
 
 ```sh
 go run ./cmd/relay-etcd -health-addr 127.0.0.1:9000 -health-path /ready
 curl -i http://localhost:9000/ready
 ```
+
+```
+HTTP/1.1 200 OK
+Date: Fri, 07 Aug 2026 09:10:39 GMT
+Content-Length: 3
+Content-Type: text/plain; charset=utf-8
+
+ok
+```
+
+The body is there so a human running `curl` sees a confirmation rather than
+nothing; probes should key on the status code, not on the body text.
 
 It is separate from `-addr` because that port is UDP-only — an orchestrator or
 TCP load-balancer probe has nothing to talk to there.
