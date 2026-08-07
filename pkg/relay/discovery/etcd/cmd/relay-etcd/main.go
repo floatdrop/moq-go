@@ -80,6 +80,18 @@ func main() {
 		"HTTP/3 path browsers use for the WebTransport CONNECT (raw QUIC ignores it)")
 	healthAddr := flag.String("health-addr", "",
 		"TCP address for the HTTP health endpoint; empty (the default) disables it")
+	// A relay serving MSF has to keep catalogs longer than media. A catalog is
+	// published once on join and republished only when a participant's tracks
+	// change, so on the default 30-second retention it is evicted within the
+	// first minute of a call — and from then on anyone who joins later gets
+	// nothing from the Relative Joining FETCH that backfills it, never learning
+	// that participant's nickname, version or tracks. cmd/relay has always set
+	// this; this binary did not, which is the difference between a room that
+	// works and one where late arrivals see half of it.
+	catalogTrackName := flag.String("catalog-track-name", "catalog",
+		"track name whose Object Cache uses --catalog-ttl instead of the default; empty disables the override")
+	catalogTTL := flag.Duration("catalog-ttl", 0,
+		"per-object TTL for tracks matching --catalog-track-name; 0 means infinite retention (the FIFO size cap still applies)")
 	healthPath := flag.String("health-path", "/healthz",
 		"path on -health-addr that answers 200 OK")
 	flag.Parse()
@@ -192,10 +204,11 @@ func main() {
 		SessionOptions: []session.Option{
 			session.WithImplementation("mediamesh-relay-etcd/0.1"),
 		},
-		Logger:    logger,
-		Discovery: store,
-		RelayAddr: *relayAddr,
-		Dialer:    dialer,
+		Logger:         logger,
+		Discovery:      store,
+		RelayAddr:      *relayAddr,
+		Dialer:         dialer,
+		CacheTTLPolicy: relay.TrackNameTTL(*catalogTrackName, *catalogTTL),
 	})
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

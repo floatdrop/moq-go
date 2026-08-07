@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bytes"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
@@ -33,3 +34,43 @@ type CacheTTLPolicy func(name track.FullTrackName) time.Duration
 // internal "non-positive means TTL disabled" convention, and so a return value
 // of 0 keeps its natural meaning ("use the default").
 const CacheTTLInfinite = time.Duration(-1)
+
+// TrackNameTTL returns a [CacheTTLPolicy] giving every track whose Name equals
+// name the retention ttl, and leaving every other track on
+// [Config.MaxCacheDuration]. A ttl of 0 is read as "retain indefinitely" and
+// becomes [CacheTTLInfinite]; any positive ttl is honoured verbatim. An empty
+// name returns nil, which disables the override entirely.
+//
+// Matching is namespace-agnostic: every publisher's track of that Name gets the
+// same retention. That fits the MSF per-broadcaster catalog model, where each
+// participant owns a namespace but they all share one catalog Name.
+//
+// This lives here, rather than in the binary that wants it, because it is the
+// rule two binaries need and only one of them had. A relay serving MSF must
+// retain catalogs longer than media: a catalog is published once on join and
+// republished only when tracks change, so under the default 30-second
+// retention it is evicted from the cache within the first minute of a call.
+// After that a participant who joins later gets nothing from the Relative
+// Joining FETCH that backfills it — and since the live SUBSCRIBE starts at the
+// largest object, they never learn that participant's nickname, version or
+// tracks at all. The bug is invisible from the publisher's side, because the
+// people already in the room are unaffected.
+//
+// The choice of which Name and how long still belongs to the binary; only the
+// shape of the predicate is shared.
+func TrackNameTTL(name string, ttl time.Duration) CacheTTLPolicy {
+	if name == "" {
+		return nil
+	}
+	want := []byte(name)
+	override := ttl
+	if override == 0 {
+		override = CacheTTLInfinite
+	}
+	return func(n track.FullTrackName) time.Duration {
+		if bytes.Equal(n.Name, want) {
+			return override
+		}
+		return 0 // fall through to Config.MaxCacheDuration
+	}
+}
