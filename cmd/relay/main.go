@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -19,7 +18,6 @@ import (
 	"github.com/lmittmann/tint"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/relaynet"
 )
@@ -108,7 +106,7 @@ func main() {
 			session.WithImplementation("mediamesh-relay/0.1"),
 		},
 		Logger:                         logger,
-		CacheTTLPolicy:                 catalogPolicy(*catalogTrackName, *catalogTTL),
+		CacheTTLPolicy:                 relay.TrackNameTTL(*catalogTrackName, *catalogTTL),
 		MaxSubscriptionsPerSession:     *maxSubs,
 		MaxNamespaceRequestsPerSession: *maxNamespaceReqs,
 	})
@@ -124,32 +122,5 @@ func main() {
 		// Log rather than log.Fatal so the deferred stop() runs: log.Fatal
 		// calls os.Exit, which would skip it.
 		log.Printf("relay run: %v", err)
-	}
-}
-
-// catalogPolicy builds a [relay.CacheTTLPolicy] that overrides the
-// Object Cache TTL for tracks whose Name equals catalogName. ttl == 0
-// is interpreted as "retain indefinitely" via [relay.CacheTTLInfinite];
-// any positive ttl is honoured verbatim. catalogName == "" disables the
-// override (returns nil) so every track uses the registry default.
-//
-// Matching is namespace-agnostic: every publisher's track whose Name
-// equals catalogName gets the same retention. That fits the MSF /
-// per-broadcaster catalog model where each room's publisher owns its
-// own namespace but they all share the catalog Name.
-func catalogPolicy(catalogName string, ttl time.Duration) relay.CacheTTLPolicy {
-	if catalogName == "" {
-		return nil
-	}
-	wantName := []byte(catalogName)
-	override := ttl
-	if override == 0 {
-		override = relay.CacheTTLInfinite
-	}
-	return func(n track.FullTrackName) time.Duration {
-		if bytes.Equal(n.Name, wantName) {
-			return override
-		}
-		return 0 // 0 → registry falls through to its default TTL
 	}
 }
