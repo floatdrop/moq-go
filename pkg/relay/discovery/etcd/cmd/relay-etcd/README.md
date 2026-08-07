@@ -28,6 +28,8 @@ go run ./cmd/relay-etcd [flags]
 | `-etcd-prefix` | `/moqt/discovery/` | Root key prefix scoping all of this relay's etcd data. |
 | `-etcd-lease-ttl` | `15s` | Lease TTL bounding how long this relay's advertisements survive after it stops heartbeating. |
 | `-relay-addr` | — | Address peers use to dial this relay, advertised in etcd. Empty = single-instance (not reachable by peers). Must be directly dialable — never a load-balancer address, since it is also the self-exclusion key that stops a relay dialing its own advertisements. |
+| `-health-addr` | — | TCP address for the HTTP health endpoint. Empty (the default) disables it. |
+| `-health-path` | `/healthz` | Path on `-health-addr` that answers `200 OK`; anything else there gets `404`. Ignored unless `-health-addr` is set. |
 
 ## Transports
 
@@ -122,6 +124,39 @@ On a graceful shutdown (`SIGINT` / `SIGTERM`) this happens **before** the relay
 stops accepting and before it sends `GOAWAY`, which is the point: peers stop
 resolving this instance while it is still draining, instead of discovering it and
 dialing a listener that has already closed. See `DiscoveryStore.Withdraw`.
+
+## Health endpoint
+
+Off by default. Setting `-health-addr` opts into a plain HTTP-over-**TCP**
+endpoint on its own port, answering `200 OK` with an empty body at
+`-health-path`:
+
+```sh
+go run ./cmd/relay-etcd -health-addr 127.0.0.1:9000 -health-path /ready
+curl -i http://localhost:9000/ready
+```
+
+It is separate from `-addr` because that port is UDP-only — an orchestrator or
+TCP load-balancer probe has nothing to talk to there.
+
+The check is **process liveness**, not readiness. It goes up once the MOQT
+listener is bound, and on a `SIGINT`/`SIGTERM` shutdown it comes down at the
+*start* of the shutdown, before the GOAWAY drain — so a load balancer stops
+steering new connections here while the relay is still draining. That ordering
+holds for signal-initiated shutdown only: if the relay stops because its listener
+failed, the drain has already run by the time the health port closes, and probes
+keep succeeding for up to `GoawayTimeout` after the relay stopped accepting.
+
+It says nothing about whether etcd is reachable — a relay partitioned from etcd
+still serves its local sessions and still reports healthy.
+
+`-health-path` must begin with `/`; the relay logs and exits otherwise, rather
+than starting up and 404ing every probe. The comparison is exact, so a probe must
+request the path as given (a trailing slash is significant).
+
+The port is unauthenticated, which is the other reason it is opt-in: when you do
+enable it, prefer an internal interface (`-health-addr 127.0.0.1:8080`) over
+`0.0.0.0`.
 
 ## Security
 
