@@ -52,6 +52,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -84,6 +85,16 @@ func main() {
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
+
+	// Log the build before any fatal setup, so a bug report about a relay that
+	// died on TLS or the listener still identifies which binary died.
+	version, commit, commitTime, dirty := buildInfo()
+	logger.Info("relay-etcd build",
+		"version", version,
+		"commit", commit,
+		"commit_time", commitTime,
+		"dirty", dirty,
+	)
 
 	// Do the fatal-on-error setup (TLS, listener) before opening the store, so
 	// no os.Exit path runs after store.Close() is deferred (which it would skip).
@@ -221,6 +232,50 @@ func main() {
 		stop()
 		<-healthClosed
 	}
+}
+
+// unstamped is what buildInfo reports for a field the toolchain left out, so an
+// operator reading the log can tell "not recorded" from a real value.
+const unstamped = "unknown"
+
+// buildInfo reports this binary's module version, commit, commit time, and
+// whether the tree it was built from had uncommitted changes. The Go toolchain
+// stamps all of it at link time, so identifying a build needs no -ldflags and
+// no generated file.
+//
+// commitTime is when the commit was made, not when the binary was built — the
+// toolchain records the former and there is no stamp for the latter.
+//
+// The commit fields need a VCS checkout on disk: `go build` and local-path
+// `go install ./cmd/relay-etcd` have one, while `go install <pkg>@<version>`
+// builds from the module cache and stamps only the version. `go run` (what this
+// command's README suggests) omits them by default, as does -buildvcs=false,
+// leaving version "(devel)".
+func buildInfo() (version, commit, commitTime string, dirty bool) {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		// bi is nil here. ReadBuildInfo only fails when the linker wrote no build
+		// info at all, which no `go` build command produces.
+		return unstamped, unstamped, unstamped, false
+	}
+
+	// A GOPATH-mode (GO111MODULE=off) binary has build settings but an empty
+	// module block.
+	version, commit, commitTime = bi.Main.Version, unstamped, unstamped
+	if version == "" {
+		version = unstamped
+	}
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			commit = s.Value
+		case "vcs.time":
+			commitTime = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	return version, commit, commitTime, dirty
 }
 
 // splitEndpoints turns a comma-separated endpoint list into a slice, trimming

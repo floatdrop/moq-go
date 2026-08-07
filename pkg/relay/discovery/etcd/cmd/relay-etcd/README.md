@@ -16,6 +16,33 @@ cd pkg/relay/discovery/etcd
 go run ./cmd/relay-etcd [flags]
 ```
 
+## Identifying a build
+
+The first line the relay logs identifies the binary (wrapped here; it is one
+line):
+
+```
+time=2026-08-07T08:20:30.114Z level=INFO msg="relay-etcd build"
+  version=v0.0.0-20260807082028-602bd1c1432c
+  commit=602bd1c1432cb789e312aa7c86b75a0657c8a053
+  commit_time=2026-08-07T08:20:28Z dirty=false
+```
+
+It comes from the metadata the Go toolchain stamps at link time, so there is
+nothing to pass at build time. Three things to know when reading it:
+
+- **The commit fields need a VCS checkout on disk.** `go build` and local-path
+  `go install ./cmd/relay-etcd` have one. `go install <pkg>@<version>` builds
+  from the module cache, which has no `.git`, so it reports the real `version`
+  with `commit` and `commit_time` `unknown`.
+- **`go run` omits the commit fields by default**, reporting `version=(devel)`.
+  Pass `-buildvcs=true` to stamp them anyway; `-buildvcs=false` always omits
+  them.
+- **`commit_time` is when the commit was made**, not when the binary was built;
+  the toolchain records the former and has no stamp for the latter. `dirty=true`
+  means the tree had uncommitted changes at build time, in which case `version`
+  carries a `+dirty` suffix as well.
+
 ## Flags
 
 | Flag | Default | Description |
