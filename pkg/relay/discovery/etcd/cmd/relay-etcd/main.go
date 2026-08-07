@@ -47,6 +47,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -82,9 +83,29 @@ func main() {
 		"TCP address for the HTTP health endpoint; empty (the default) disables it")
 	healthPath := flag.String("health-path", "/healthz",
 		"path on -health-addr that answers 200 OK")
+	// Nothing here is logged per group, per object or per frame — measured with
+	// two clients exchanging video and audio, the relay emitted nothing at all
+	// for a minute, at debug. It speaks while a session is set up and then goes
+	// quiet. So this exists to turn logging *up* for a diagnosis rather than to
+	// hold a flood back: -log-level debug reports every PUBLISH, SUBSCRIBE and
+	// FETCH dispatched, which is what you want when a participant is not seeing
+	// what they should.
+	//
+	// info by default, because at that level a whole run is five lines and each
+	// earns its place: the build and commit this binary was made from, the
+	// address and configuration it came up on, and quic-go reporting that the
+	// kernel refused it the UDP receive buffer it asked for — a packet-loss
+	// problem worth hearing about unprompted rather than discovering later.
+	logLevel := flag.String("log-level", "info",
+		"log verbosity: debug, info, warn or error")
 	flag.Parse()
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	level, err := parseLogLevel(*logLevel)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 
 	// Log the build before any fatal setup, so a bug report about a relay that
@@ -256,6 +277,25 @@ const unstamped = "unknown"
 // builds from the module cache and stamps only the version. `go run` (what this
 // command's README suggests) omits them by default, as does -buildvcs=false,
 // leaving version "(devel)".
+// parseLogLevel maps the -log-level flag onto a slog level. An unknown value is
+// rejected rather than quietly defaulted: a typo that produced a different
+// verbosity than the one asked for is the kind of thing found much later, while
+// wondering where the logs went.
+func parseLogLevel(name string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("unknown -log-level %q: want debug, info, warn or error", name)
+	}
+}
+
 func buildInfo() (version, commit, commitTime string, dirty bool) {
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
