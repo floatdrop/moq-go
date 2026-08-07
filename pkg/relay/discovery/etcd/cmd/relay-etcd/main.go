@@ -47,6 +47,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -128,6 +129,10 @@ func main() {
 					return
 				}
 				w.WriteHeader(http.StatusOK)
+				// Body so a human running curl sees something; probes key on the
+				// status code. A failed write means the prober hung up mid-response,
+				// which is its problem, not a relay fault worth logging.
+				_, _ = io.WriteString(w, "ok\n")
 			}),
 			// An unauthenticated port on a public interface: bound the time a
 			// stalled client can hold a connection mid-header.
