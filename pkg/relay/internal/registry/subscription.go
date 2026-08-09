@@ -354,6 +354,12 @@ type DownstreamSub struct {
 	// Guarded by mu; access via SetRangeFilters / GetRangeFilters.
 	rangeFilters *message.RangeFilterSet
 
+	// deliveryTimeouts holds the §10.2.3 / §10.2.4 values the subscriber asked
+	// for. The fanout resolves them against the publisher's Track-level pair
+	// (§8: the smaller of the two non-zero values) once per subgroup stream it
+	// opens. Guarded by mu; access via SetDeliveryTimeouts / GetDeliveryTimeouts.
+	deliveryTimeouts message.DeliveryTimeouts
+
 	// LargestAtSubscribe is the largest object the relay had observed on
 	// this track at the moment the SUBSCRIBE was accepted, per §5.1.2 /
 	// §9.4 ("a relay handling a SUBSCRIBE acts as the publisher").
@@ -423,6 +429,23 @@ func (d *DownstreamSub) GetFilter() *message.LocationFilter {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.Filter
+}
+
+// SetDeliveryTimeouts records the §10.2.3 / §10.2.4 delivery timeouts the
+// subscriber asked for. A zero dimension means "no timeout" per §8.
+func (d *DownstreamSub) SetDeliveryTimeouts(t message.DeliveryTimeouts) {
+	d.mu.Lock()
+	d.deliveryTimeouts = t
+	d.mu.Unlock()
+}
+
+// GetDeliveryTimeouts returns the delivery timeouts the subscriber asked for.
+// The zero value means the subscriber requested none, which leaves the
+// publisher's Track-level values to stand on their own (§8).
+func (d *DownstreamSub) GetDeliveryTimeouts() message.DeliveryTimeouts {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.deliveryTimeouts
 }
 
 // SetRangeFilters installs the subscription's Range Filters (§5.1.3), which the

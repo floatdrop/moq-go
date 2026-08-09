@@ -12,9 +12,13 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// ErrDeliveryTimeout is returned by OutgoingSubgroupStream.WriteObject or
-// Write when the OBJECT_DELIVERY_TIMEOUT has been exceeded. The stream is
-// reset with StreamResetDeliveryTimeout before this error is returned.
+// ErrDeliveryTimeout is returned by OutgoingSubgroupStream.WriteObject,
+// WriteObjectAt or WriteObjectReceivedAt when the OBJECT_DELIVERY_TIMEOUT has
+// been exceeded for the object being written. The stream is reset with
+// StreamResetDeliveryTimeout before this error is returned.
+//
+// Not returned by Write: the raw path cannot see object boundaries or receipt
+// times, so it enforces no object timeout at all — see its own doc.
 var ErrDeliveryTimeout = errors.New("moqt/session: object delivery timeout exceeded")
 
 // ErrObjectIDNotIncreasing is returned by
@@ -45,9 +49,10 @@ var writerPool = sync.Pool{
 // cleanly; Cancel resets it.
 //
 // If delivery timeouts are configured via WithDeliveryTimeouts:
-//   - OBJECT_DELIVERY_TIMEOUT: checked on every WriteObject/Write after the
-//     first. If time.Since(firstObjectTime) > ObjectTimeout, the stream is
-//     reset with StreamResetDeliveryTimeout and ErrDeliveryTimeout is returned.
+//   - OBJECT_DELIVERY_TIMEOUT: checked before every object is passed to the
+//     transport, against that object's own receipt time. If the elapsed time
+//     exceeds the timeout the stream is reset with StreamResetDeliveryTimeout
+//     and ErrDeliveryTimeout is returned.
 //   - SUBGROUP_DELIVERY_TIMEOUT: a timer is started when Close() is called.
 //     If the timer fires before the transport acknowledges all data
 //     (SendStream.Context() done), the stream is reset.
@@ -56,10 +61,19 @@ type OutgoingSubgroupStream struct {
 
 	dst SendStream
 
-	objectTimeout   time.Duration // 0 = disabled
-	subgroupTimeout time.Duration // 0 = disabled
+	// pubTimeouts and subTimeouts are the two halves §8 resolves separately:
+	// the publisher's Track Property values (possibly overridden by the first
+	// object's Object Properties) and the subscriber's Message Parameter
+	// values. They are kept apart until the first object arrives because the
+	// override applies to the publisher's half ALONE — merging early and
+	// overriding the merged value would silently discard a subscriber timeout
+	// shorter than the publisher's override.
+	pubTimeouts message.DeliveryTimeouts
+	subTimeouts message.DeliveryTimeouts
 
-	firstObjectTime time.Time // zero = no objects written yet
+	objectTimeout   time.Duration // resolved; 0 = disabled
+	subgroupTimeout time.Duration // resolved; 0 = disabled
+
 	// sawFirstObject gates the §12.1/§12.2 first-object delivery-timeout
 	// override: only the first object of the subgroup may override the
 	// Track-level timeouts, so the override is applied at most once.
@@ -72,36 +86,84 @@ type OutgoingSubgroupStream struct {
 	encHavePrev   bool
 }
 
-// WithDeliveryTimeouts returns a shallow copy of s with the given delivery
-// timeouts configured. Zero values disable the corresponding timeout.
-func (s *OutgoingSubgroupStream) WithDeliveryTimeouts(t message.DeliveryTimeouts) *OutgoingSubgroupStream {
+// WithDeliveryTimeouts returns a shallow copy of s configured with the §8
+// delivery timeouts. Zero values disable the corresponding timeout.
+//
+// The two halves are supplied separately because §8 does not treat them
+// symmetrically: "the publisher's value is the Object Property when present on
+// the first object of the subgroup, and the Track Property otherwise. If both
+// the publisher's value and the subscriber's value are non-zero, the smaller
+// of the two is used." The override therefore resolves within the publisher's
+// half, and only the result is compared against the subscriber's. A caller
+// that pre-merges the two loses that ordering: a first-object override would
+// replace a subscriber timeout it was never allowed to outrank.
+//
+// A publisher with no subscriber-supplied values passes the zero
+// DeliveryTimeouts as subscriber, which never wins over a non-zero publisher
+// value.
+func (s *OutgoingSubgroupStream) WithDeliveryTimeouts(
+	publisher, subscriber message.DeliveryTimeouts,
+) *OutgoingSubgroupStream {
 	cp := *s
-	cp.objectTimeout = t.Object
-	cp.subgroupTimeout = t.Subgroup
+	cp.pubTimeouts = publisher
+	cp.subTimeouts = subscriber
+	// Resolved now so a subgroup whose first object carries no override — the
+	// common case — enforces the right values from its very first write.
+	eff := publisher.Effective(subscriber)
+	cp.objectTimeout = eff.Object
+	cp.subgroupTimeout = eff.Subgroup
 	return &cp
 }
 
 // WriteObject serializes obj onto the stream with correct wire framing.
 // The hasProperties flag is taken from the stored SubgroupHeader automatically.
 //
-// OBJECT_DELIVERY_TIMEOUT is checked after the first object: if the elapsed
-// time since the first WriteObject exceeds the timeout, the stream is reset
-// and ErrDeliveryTimeout is returned.
+// OBJECT_DELIVERY_TIMEOUT is measured from the moment this call is made, which
+// is the correct §8 reading for an original publisher handing over an object as
+// it is produced. A relay — which received the object earlier, and may have
+// spent the interval blocked on some other subscriber — must use
+// [OutgoingSubgroupStream.WriteObjectReceivedAt] instead, or the object's age
+// is measured from the wrong end.
 func (s *OutgoingSubgroupStream) WriteObject(obj *message.SubgroupObject) error {
+	return s.WriteObjectReceivedAt(time.Now(), obj)
+}
+
+// WriteObjectReceivedAt is [OutgoingSubgroupStream.WriteObject] with the
+// object's §8 receipt time supplied by the caller: "the time at which the first
+// payload byte of every object has been either received from the upstream
+// subscription, or provided by the original publisher application".
+//
+// The clock is per object, not per stream. An object that reaches the transport
+// promptly passes however long the stream has already been open, and one that
+// queued behind a blocked write fails however new the stream is — which is the
+// whole point, since a stream-lifetime cap would reset healthy subscribers for
+// no reason other than having stayed subscribed.
+func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
+	receivedAt time.Time,
+	obj *message.SubgroupObject,
+) error {
 	// §12.1/§12.2: the first object of a subgroup may carry
 	// OBJECT/SUBGROUP_DELIVERY_TIMEOUT as Object Properties that override the
-	// Track-level values for this subgroup; the same properties on later objects
-	// are ignored. Apply before the timeout check so the overridden value takes
-	// effect immediately, and before Close reads subgroupTimeout.
-	if !s.sawFirstObject && s.header.Properties {
-		eff := message.DeliveryTimeouts{Object: s.objectTimeout, Subgroup: s.subgroupTimeout}.
-			ApplyObjectProperties(obj.Properties)
+	// Track-level values for this subgroup; the same properties on any later
+	// object "is ignored". The override applies to the publisher's half only,
+	// and the subscriber's values are compared against the result — see
+	// WithDeliveryTimeouts. Resolved before the timeout check so the overridden
+	// value takes effect immediately, and before Close reads subgroupTimeout.
+	//
+	// "First object of the subgroup", not "first object on this stream": the two
+	// diverge whenever a stream does not begin at the subgroup's start — a
+	// subscriber that joined mid-subgroup, or a §11.4.3 gap-reopen. §11.4.2's
+	// FIRST_OBJECT bit is exactly that distinction, and ReplayingSubgroup is its
+	// inverse, so a replay stream must not treat whatever object it happens to
+	// start with as carrying the subgroup's override.
+	if !s.sawFirstObject && s.header.Properties && !s.header.ReplayingSubgroup {
+		eff := s.pubTimeouts.ApplyObjectProperties(obj.Properties).Effective(s.subTimeouts)
 		s.objectTimeout = eff.Object
 		s.subgroupTimeout = eff.Subgroup
 	}
 	s.sawFirstObject = true
 
-	if err := s.checkObjectTimeout(); err != nil {
+	if err := s.checkObjectTimeout(receivedAt); err != nil {
 		return err
 	}
 	wr, _ := writerPool.Get().(*wire.Writer)
@@ -149,30 +211,32 @@ func (s *OutgoingSubgroupStream) WriteObjectAt(objectID uint64, obj *message.Sub
 // WriteObject for correctly-framed object access; Write is an escape hatch
 // for callers that manage framing themselves.
 //
-// OBJECT_DELIVERY_TIMEOUT is enforced here too: the first Write records the
-// start time; subsequent Writes check the elapsed time.
+// OBJECT_DELIVERY_TIMEOUT is NOT enforced here. §8 measures it per object,
+// from the moment that object was received, and a caller that manages its own
+// framing is the only party that knows where one object ends and the next
+// begins — bytes handed to Write carry no such boundary. A caller that wants
+// the timeout enforced should use
+// [OutgoingSubgroupStream.WriteObjectReceivedAt], which has both facts.
+// SUBGROUP_DELIVERY_TIMEOUT still applies, since Close observes it.
 func (s *OutgoingSubgroupStream) Write(p []byte) (int, error) {
-	if err := s.checkObjectTimeout(); err != nil {
-		return 0, err
-	}
 	return s.dst.Write(p)
 }
 
-// checkObjectTimeout enforces OBJECT_DELIVERY_TIMEOUT. On the first call it
-// records the start time; on subsequent calls it checks the elapsed time.
-func (s *OutgoingSubgroupStream) checkObjectTimeout() error {
+// checkObjectTimeout enforces OBJECT_DELIVERY_TIMEOUT against one object's
+// receipt time, per §8: "the implementation MUST check the time elapsed since
+// the first byte of the object before attempting to pass it to the underlying
+// transport for transmission; if the time elapsed exceeds
+// OBJECT_DELIVERY_TIMEOUT, it MUST reset the underlying transport stream with
+// the reset stream code DELIVERY_TIMEOUT".
+func (s *OutgoingSubgroupStream) checkObjectTimeout(receivedAt time.Time) error {
 	if s.objectTimeout <= 0 {
 		return nil
 	}
-	now := time.Now()
-	if s.firstObjectTime.IsZero() {
-		s.firstObjectTime = now
-		return nil
-	}
-	if now.Sub(s.firstObjectTime) > s.objectTimeout {
+	elapsed := time.Since(receivedAt)
+	if elapsed > s.objectTimeout {
 		s.dst.CancelWrite(uint64(moqt.StreamResetDeliveryTimeout))
 		return fmt.Errorf("%w (elapsed %s, limit %s)",
-			ErrDeliveryTimeout, now.Sub(s.firstObjectTime), s.objectTimeout)
+			ErrDeliveryTimeout, elapsed, s.objectTimeout)
 	}
 	return nil
 }

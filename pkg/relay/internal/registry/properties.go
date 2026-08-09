@@ -27,6 +27,13 @@ type decodedProperties struct {
 	// publisher.
 	dynamicGroups    bool
 	dynamicGroupsErr error
+
+	// deliveryTimeouts is the publisher's Track-level OBJECT_DELIVERY_TIMEOUT
+	// (§12.2) and SUBGROUP_DELIVERY_TIMEOUT (§12.1) pair. Per §8 a zero value
+	// in either dimension means "no timeout", which is also what an absent
+	// property decodes to — so the zero DeliveryTimeouts is the correct
+	// reading of a track that declares neither.
+	deliveryTimeouts message.DeliveryTimeouts
 }
 
 // decodeTrackProperties parses the raw Track Properties block once and pulls
@@ -41,9 +48,14 @@ func decodeTrackProperties(raw []byte) decodedProperties {
 	var d decodedProperties
 	for _, kv := range pairs {
 		// Dispatch each property the relay acts on to its decoder. Add a
-		// branch here (turning this into a switch) for each new property.
-		if kv.Type == message.PropertyDynamicGroups {
+		// branch here for each new property.
+		switch kv.Type {
+		case message.PropertyDynamicGroups:
 			d.dynamicGroups, d.dynamicGroupsErr = decodeDynamicGroups(kv.IntVal)
+		case message.PropertyObjectDeliveryTimeout:
+			d.deliveryTimeouts.Object = message.MillisecondTimeout(kv.IntVal)
+		case message.PropertySubgroupDeliveryTimeout:
+			d.deliveryTimeouts.Subgroup = message.MillisecondTimeout(kv.IntVal)
 		}
 	}
 	return d
@@ -76,4 +88,22 @@ func (e *TrackEntry) DynamicGroups() (bool, error) {
 		return false, e.decoded.parseErr
 	}
 	return e.decoded.dynamicGroups, e.decoded.dynamicGroupsErr
+}
+
+// DeliveryTimeouts returns the publisher's Track-level delivery timeouts (§8),
+// using the values decoded once when Properties was set. The fanout resolves
+// these against each subscriber's own §10.2.3 / §10.2.4 parameters before
+// applying them to the subgroup streams it opens.
+//
+// A malformed Properties block reports the zero pair — "no timeout" — rather
+// than an error: unlike §12.6, where acting on a bad value would mean honouring
+// a NEW_GROUP_REQUEST the publisher never authorised, the safe reading of an
+// undecodable timeout is not to enforce one.
+func (e *TrackEntry) DeliveryTimeouts() message.DeliveryTimeouts {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.decoded.parseErr != nil {
+		return message.DeliveryTimeouts{}
+	}
+	return e.decoded.deliveryTimeouts
 }
