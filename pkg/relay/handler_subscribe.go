@@ -639,7 +639,8 @@ func anyDownstreamForwards(entry *registry.TrackEntry) bool {
 
 // installSubscribeParams extracts the per-subscription policy fields from the
 // SUBSCRIBE parameters (§10.2) and records them on sub: LOCATION_FILTER
-// (§10.2.9), SUBSCRIBER_PRIORITY (§10.2.7, advisory), GROUP_ORDER (§10.2.8).
+// (§10.2.9), SUBSCRIBER_PRIORITY (§10.2.7, advisory), GROUP_ORDER (§10.2.8),
+// OBJECT_DELIVERY_TIMEOUT (§10.2.4) and SUBGROUP_DELIVERY_TIMEOUT (§10.2.3).
 //
 // The §5.1.2 / §9.4 LargestObject snapshot is intentionally NOT taken here — the
 // caller captures it atomically via
@@ -673,6 +674,22 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	if p, ok := ps.Find(message.ParamGroupOrder); ok {
 		sub.SetGroupOrder(p.Byte)
 	}
+
+	// §10.2.3 / §10.2.4 delivery timeouts, overridden per parameter — the same
+	// "override present" behaviour as the fields above, applied to each
+	// dimension separately rather than to the pair. They are independent values
+	// that merely travel together: an absent parameter decodes to zero and §8
+	// gives zero the meaning "no timeout", so installing the decoded pair
+	// whenever either is present would let a REQUEST_UPDATE that adjusts one
+	// timeout silently disable the other.
+	timeouts := sub.GetDeliveryTimeouts()
+	if p, ok := ps.Find(message.ParamObjectDeliveryTimeout); ok {
+		timeouts.Object = message.MillisecondTimeout(p.Varint)
+	}
+	if p, ok := ps.Find(message.ParamSubgroupDeliveryTimeout); ok {
+		timeouts.Subgroup = message.MillisecondTimeout(p.Varint)
+	}
+	sub.SetDeliveryTimeouts(timeouts)
 
 	// §5.1.3 Range Filters. They are installed only when present, so an update
 	// carrying none leaves the existing set unchanged. A malformed/over-limit

@@ -126,7 +126,7 @@ By package, bottom-up along the dependency stack:
 
 | §   | Feature                       | Status | Notes |
 |-----|-------------------------------|--------|-------|
-| 8   | Delivery timeouts / reliability| PARTIAL| OBJECT/SUBGROUP delivery timeouts enforced in `session/datastream.go`; reset w/ `StreamResetDeliveryTimeout`; publisher+subscriber values merged by `DeliveryTimeouts.Effective`. Stream-API-level only: the relay does not source the Track-level value from SUBSCRIBE/SUBSCRIBE_OK and apply it to the subgroups it opens, and the inbound path enforces no timeout — see Limitations. |
+| 8   | Delivery timeouts / reliability| PARTIAL| OBJECT/SUBGROUP delivery timeouts enforced in `session/datastream_out.go`; reset w/ `StreamResetDeliveryTimeout`. OBJECT_DELIVERY_TIMEOUT is measured per object from its receipt time (`WriteObjectReceivedAt`), not from stream open. `WithDeliveryTimeouts` takes the publisher's and subscriber's halves separately so the §12.1/§12.2 first-object override resolves within the publisher's half before `DeliveryTimeouts.Effective` takes the smaller of the two. The relay sources both sides — the publisher's Track Properties (decoded once onto the entry) and the subscriber's SUBSCRIBE parameters (§10.2.3/§10.2.4) — and passes them to every subgroup stream it opens downstream, resetting that stream alone with DELIVERY_TIMEOUT while the subscription continues. Not enforced on the raw `Write` path (no object boundaries) or inbound — see Limitations. |
 
 ## §9 Relays
 
@@ -290,15 +290,37 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   PROTOCOL_VIOLATION." The relay's `OnUnknown` resets that one bidi stream and
   keeps the session up, deliberately isolating the failure to a single request.
   That is friendlier, and it is not what the draft requires.
-- **Delivery-timeout enforcement is stream-API-level, not auto-wired (§8)** —
-  `OutgoingSubgroupStream` enforces `OBJECT`/`SUBGROUP_DELIVERY_TIMEOUT`
-  (including the §12.1/§12.2 first-object override) once
-  `WithDeliveryTimeouts` is set, and `message.DeliveryTimeouts.Effective`
-  implements the §8 publisher/subscriber "smaller of two non-zero" resolution.
-  But the relay does not yet source the Track-level value from SUBSCRIBE_OK /
-  SUBSCRIBE params and apply it on the subgroups it opens, and the inbound
-  (subscriber-side) path enforces no timeout — so end-to-end timeout behaviour
-  is opt-in via the stream API rather than automatic.
+- **Delivery-timeout enforcement is outbound-only, and not on the raw path
+  (§8)** — the publisher side is wired end to end: `OutgoingSubgroupStream`
+  enforces `OBJECT`/`SUBGROUP_DELIVERY_TIMEOUT` (including the §12.1/§12.2
+  first-object override) and the relay's fanout applies both halves to every
+  subgroup stream it opens, sourcing the publisher's from the entry's Track
+  Properties and the subscriber's from the SUBSCRIBE parameters. Two gaps
+  remain. The raw `Write` escape hatch does not enforce OBJECT_DELIVERY_TIMEOUT
+  at all: §8 measures it per object from that object's receipt, and a caller
+  managing its own framing is the only party that knows either fact, so the
+  check belongs to `WriteObjectReceivedAt`. And the inbound (subscriber-side)
+  path enforces no timeout — a subscriber does not police how long the relay
+  takes to deliver a subgroup it was promised.
+
+  The relay's receipt time is also approximate. §8 names the first payload byte
+  of the object; the fanout passes `fwdObject.enqueuedAt`, stamped once the
+  object has been read whole, deduped and cached, so the clock starts late by
+  the object's inbound transfer time. The error is always lenient and scales
+  with object size. Fixing it means recording the instant in the inbound read
+  and carrying it separately from `enqueuedAt`, which cannot be reused: it is
+  the `MaxFanoutLag` measurement, and that window means time spent queued rather
+  than object age.
+
+  Note that the §3.3.4 reset codes are not interchangeable here, and the fanout
+  keeps them apart deliberately. A delivery timeout resets the one stream with
+  `DELIVERY_TIMEOUT` ("a delivery timeout was exceeded for this stream") and
+  leaves the subscription live; only the `MaxFanoutLag` window uses
+  `TOO_FAR_BEHIND`, whose §3.3.4 definition says the subscription "is being
+  terminated". Collapsing the two would make a per-subgroup timeout cost the
+  subscriber the whole track — and it is precisely the survivable variant that
+  lets a publisher stripe sheddable data across subgroups the relay may drop
+  under load.
 
 - **`MAX_REQUEST_UPDATES` enforcement is receive-side only, and cannot trip
   under our own processing (§10.3.1.7)** — we advertise the limit and enforce

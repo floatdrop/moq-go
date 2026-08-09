@@ -184,10 +184,11 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// Per §9.7 we drain even with zero subscribers (publisher flow control);
 		// the per-object joiner scan picks up subs that join mid-stream.
 		initialSubs, gen := entry.CopyDownstreamWithGen()
+		pubTimeouts := entry.DeliveryTimeouts()
 		sg.Mu.Lock()
 		set.gen = gen
 		for _, sub := range initialSubs {
-			h.openWriterForSub(ctx, set.hdr, sub, set.writers)
+			h.openWriterForSub(ctx, set.hdr, sub, set.writers, pubTimeouts)
 		}
 		sg.Mu.Unlock()
 	}
@@ -361,7 +362,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		newSubs, set.gen = entry.UpdateLargestAndDetectNew(loc,
 			func(s *registry.DownstreamSub) bool { _, ok := set.writers[s]; return ok }, set.gen)
 		for _, sub := range newSubs {
-			h.openWriterForSub(ctx, set.hdr, sub, set.writers)
+			h.openWriterForSub(ctx, set.hdr, sub, set.writers, entry.DeliveryTimeouts())
 		}
 
 		// §5.1.2 filter evaluation per-subscriber, pre-enqueue. A filter miss
@@ -416,6 +417,7 @@ func (h *sessionHandler) openWriterForSub(
 	hdr message.SubgroupHeader,
 	sub *registry.DownstreamSub,
 	writers map[*registry.DownstreamSub]*subgroupWriter,
+	pubTimeouts message.DeliveryTimeouts,
 ) {
 	if _, already := writers[sub]; already {
 		return
@@ -442,6 +444,13 @@ func (h *sessionHandler) openWriterForSub(
 		metrics:             h.metrics,
 		maxDropsBeforeReset: h.maxDropsBeforeReset,
 		maxLag:              h.maxFanoutLag,
+		// §8: the two halves stay apart. The §12.1 / §12.2 first-object
+		// override belongs to the publisher's half alone, and
+		// OutgoingSubgroupStream applies it — being the only party that sees
+		// the object carrying it — so handing over a pre-merged pair would let
+		// an override outrank a shorter subscriber timeout.
+		pubTimeouts: pubTimeouts,
+		subTimeouts: sub.GetDeliveryTimeouts(),
 	}
 	writers[sub] = w
 	h.spawn(w.run)
@@ -467,6 +476,16 @@ func (h *sessionHandler) openWriterForSub(
 //     with TOO_FAR_BEHIND (§3.3.4), transitions the [registry.DownstreamSub] to
 //     [registry.SubTerminated], and exits. The optional maxDropsBeforeReset cap is a
 //     coarse backstop on cumulative drops, reset with EXCESSIVE_LOAD instead.
+//   - When the §8 delivery timeouts elapse, [session.OutgoingSubgroupStream]
+//     resets this one stream with DELIVERY_TIMEOUT and the writer stops
+//     forwarding — WITHOUT terminating the subscription. The two escalations
+//     are not interchangeable, and §3.3.4 is explicit about which is which:
+//     TOO_FAR_BEHIND says "the corresponding subscription ... is being
+//     terminated", whereas DELIVERY_TIMEOUT says only "a delivery timeout was
+//     exceeded for this stream". So a subgroup the publisher marked as
+//     short-lived expires on its own without costing the subscriber the track,
+//     which is what lets a publisher stripe disposable data (an enhancement
+//     layer, say) across subgroups the relay may shed under load.
 type subgroupWriter struct {
 	sub *registry.DownstreamSub
 	// ctx is writer-scoped: it bounds every blocking stream operation
@@ -486,6 +505,12 @@ type subgroupWriter struct {
 	metrics             Metrics
 	maxDropsBeforeReset int
 	maxLag              time.Duration
+	// pubTimeouts and subTimeouts are the §8 delivery-timeout halves for this
+	// (subgroup, subscriber), handed to every outbound stream the writer opens
+	// and resolved there once the first object's properties are known. Zero
+	// values disable the corresponding dimension.
+	pubTimeouts message.DeliveryTimeouts
+	subTimeouts message.DeliveryTimeouts
 
 	closeOnce        sync.Once
 	dropsMu          sync.Mutex
@@ -595,6 +620,13 @@ func (w *subgroupWriter) run() {
 			w.out = nil
 			return false
 		}
+		// §8: enforce the delivery timeouts on this stream.
+		// WithDeliveryTimeouts returns a copy, so the bridge below must cancel
+		// the copy — both wrap the same SendStream, but only the copy is the
+		// one this writer goes on to use. Two zero pairs disable both
+		// dimensions, which is the no-timeout behaviour every existing caller
+		// had.
+		fresh = fresh.WithDeliveryTimeouts(w.pubTimeouts, w.subTimeouts)
 		w.out = fresh
 		w.unbridge = context.AfterFunc(w.ctx, func() {
 			fresh.Cancel(moqt.StreamResetCancelled)
@@ -676,7 +708,36 @@ func (w *subgroupWriter) run() {
 		} else {
 			out.ObjectIDDelta = fwd.absID - prevID - 1
 		}
-		if err := w.out.WriteObject(&out); err != nil {
+		// §8 measures OBJECT_DELIVERY_TIMEOUT from when this object was
+		// received, not from when this stream opened. Passing enqueuedAt means
+		// a subscriber that keeps up is never reset however long it stays
+		// subscribed, while one whose queue is ageing is cut off on the first
+		// stale object — which is the distinction the timeout exists to draw.
+		//
+		// enqueuedAt approximates §8's instant from above: the clause names the
+		// FIRST payload byte, and this is stamped once the object has been read
+		// whole, deduped and cached. The gap is the object's inbound transfer
+		// time, so the error is always lenient and grows with object size —
+		// widest on exactly the congested upstream the timeout is there for.
+		// Closing it means recording the instant in the inbound read, which
+		// enqueuedAt cannot do alone: it is also the MaxFanoutLag measurement
+		// below, and that window means time spent queued, not object age.
+		if err := w.out.WriteObjectReceivedAt(fwd.enqueuedAt, &out); err != nil {
+			// §8 OBJECT_DELIVERY_TIMEOUT: WriteObject has already reset this
+			// stream with DELIVERY_TIMEOUT (§3.3.4) and that code is
+			// stream-scoped — the subgroup is abandoned, the subscription is
+			// not. Resetting again (with INTERNAL_ERROR) would overwrite a
+			// reason the subscriber acts on, so this returns before the
+			// generic branch. The subscription-scoped escalation stays where
+			// it was: the maxLag / TOO_FAR_BEHIND path after the loop.
+			if errors.Is(err, session.ErrDeliveryTimeout) {
+				w.log.Debug("fanout: delivery timeout, abandoning subgroup stream",
+					"sub_id", w.sub.ID, "group", w.hdr.GroupID,
+					"subgroup", w.hdr.SubgroupID)
+				w.out = nil
+				failWrites()
+				continue
+			}
 			w.log.Debug("fanout: WriteObject failed",
 				"sub_id", w.sub.ID, "err", err.Error())
 			w.out.Cancel(moqt.StreamResetInternalError)

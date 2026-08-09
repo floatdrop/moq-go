@@ -22,14 +22,17 @@ func FillTimeoutFromParam(ps Parameters) time.Duration {
 	if !ok {
 		return 0
 	}
-	//nolint:gosec // G115: p.Varint is a peer timeout in ms; an out-of-range value yields a wrong duration, not a memory-safety issue.
-	return time.Duration(p.Varint) * time.Millisecond
+	return MillisecondTimeout(p.Varint)
 }
 
-// msTimeout converts a varint millisecond count to a time.Duration.
+// MillisecondTimeout converts a varint millisecond count — the form every §8
+// timeout takes on the wire, whether it arrives as a Message Parameter
+// (§10.2.3 / §10.2.4 / §10.2.5) or a Track/Object Property (§12.1 / §12.2) — to
+// a time.Duration. Exported so every decoder of these values agrees by
+// construction rather than by copies of the same multiplication.
 //
 //nolint:gosec // G115: a timeout in ms; an out-of-range value yields a wrong duration, not a memory-safety issue.
-func msTimeout(ms uint64) time.Duration { return time.Duration(ms) * time.Millisecond }
+func MillisecondTimeout(ms uint64) time.Duration { return time.Duration(ms) * time.Millisecond }
 
 // ObjectDeliveryTimeoutFromParam extracts OBJECT_DELIVERY_TIMEOUT (§10.2.4)
 // from ps, converting from milliseconds. Returns 0 when absent (§8: 0 disables
@@ -39,7 +42,7 @@ func ObjectDeliveryTimeoutFromParam(ps Parameters) time.Duration {
 	if !ok {
 		return 0
 	}
-	return msTimeout(p.Varint)
+	return MillisecondTimeout(p.Varint)
 }
 
 // SubgroupDeliveryTimeoutFromParam extracts SUBGROUP_DELIVERY_TIMEOUT (§10.2.3)
@@ -49,7 +52,7 @@ func SubgroupDeliveryTimeoutFromParam(ps Parameters) time.Duration {
 	if !ok {
 		return 0
 	}
-	return msTimeout(p.Varint)
+	return MillisecondTimeout(p.Varint)
 }
 
 // DeliveryTimeoutsFromParams extracts both delivery timeouts (§10.2.3/§10.2.4)
@@ -106,9 +109,9 @@ func (d DeliveryTimeouts) ApplyObjectProperties(rawProps []byte) DeliveryTimeout
 	for _, kv := range pairs {
 		switch kv.Type {
 		case PropertyObjectDeliveryTimeout:
-			d.Object = msTimeout(kv.IntVal)
+			d.Object = MillisecondTimeout(kv.IntVal)
 		case PropertySubgroupDeliveryTimeout:
-			d.Subgroup = msTimeout(kv.IntVal)
+			d.Subgroup = MillisecondTimeout(kv.IntVal)
 		}
 	}
 	return d
