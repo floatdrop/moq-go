@@ -3,6 +3,7 @@ package etcd
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
@@ -43,6 +44,7 @@ func (s *Store) notClosed() error {
 // write of the same tuple overwrites, satisfying the idempotent-publish
 // contract. A zero PublishedAt is stamped with the current time before storage.
 func (s *Store) PublishTrack(ctx context.Context, info discovery.TrackInfo) error {
+	start := nowFunc()
 	leaseID, err := s.ensureLease(ctx)
 	if err != nil {
 		return err
@@ -55,7 +57,18 @@ func (s *Store) PublishTrack(ctx context.Context, info discovery.TrackInfo) erro
 		return err
 	}
 	_, err = s.cli.Put(ctx, s.trackKey(info.Key, info.RelayAddr), string(val), clientv3.WithLease(leaseID))
-	return err
+	if err != nil {
+		return err
+	}
+	// Log the advertise at Debug with its elapsed time so a "no publisher"
+	// subscribe on another relay can be correlated against when this track
+	// actually landed in etcd — confirming (or ruling out) an advertise/
+	// subscribe race.
+	s.log.LogAttrs(ctx, slog.LevelDebug, "etcd discovery: track advertised",
+		slog.String("name", string(info.FullName.Name)),
+		slog.String("relay_addr", info.RelayAddr),
+		slog.Duration("elapsed", nowFunc().Sub(start)))
+	return nil
 }
 
 // UnpublishTrack deletes the (key, relayAddr) advertisement. A missing key is a
@@ -92,6 +105,7 @@ func (s *Store) FindTrack(ctx context.Context, key track.Key) ([]discovery.Track
 // PublishNamespace writes the advertisement at (Prefix, RelayAddr), attaching it
 // to the store's shared lease (see [Store.PublishTrack]).
 func (s *Store) PublishNamespace(ctx context.Context, info discovery.NamespaceInfo) error {
+	start := nowFunc()
 	leaseID, err := s.ensureLease(ctx)
 	if err != nil {
 		return err
@@ -104,7 +118,18 @@ func (s *Store) PublishNamespace(ctx context.Context, info discovery.NamespaceIn
 		return err
 	}
 	_, err = s.cli.Put(ctx, s.nsKey(info.Prefix, info.RelayAddr), string(val), clientv3.WithLease(leaseID))
-	return err
+	if err != nil {
+		return err
+	}
+	// Namespace advertisement is what a remote SUBSCRIBE's FindNamespace looks
+	// up, so log it at Debug with elapsed time: the "no publisher for namespace"
+	// rejection on a peer is diagnosed by comparing when this landed against
+	// when the peer queried.
+	s.log.LogAttrs(ctx, slog.LevelDebug, "etcd discovery: namespace advertised",
+		slog.String("prefix", fmt.Sprintf("%v", info.Prefix)),
+		slog.String("relay_addr", info.RelayAddr),
+		slog.Duration("elapsed", nowFunc().Sub(start)))
+	return nil
 }
 
 // UnpublishNamespace deletes the (prefix, relayAddr) advertisement.

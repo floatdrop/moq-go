@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"hash/fnv"
 	"log/slog"
 	"slices"
@@ -132,10 +133,19 @@ func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamesp
 	}
 	infos, err := p.discovery.FindNamespace(ctx, ns)
 	if err != nil {
-		p.log.LogAttrs(ctx, slog.LevelDebug, "upstream pool: FindNamespace failed",
+		// A Discovery lookup failure is transient (etcd RPC timeout, leader
+		// election) and collapses to the same nil return as a genuinely empty
+		// result — a caller cannot tell "the fabric hiccupped" from "no relay
+		// serves this namespace". Log it at Warn so that distinction survives to
+		// production, where the default level hides Debug.
+		p.log.LogAttrs(ctx, slog.LevelWarn, "upstream pool: FindNamespace failed",
+			slog.String("namespace", fmt.Sprintf("%v", ns)),
 			slog.String("err", err.Error()))
 		return nil
 	}
+	p.log.LogAttrs(ctx, slog.LevelInfo, "upstream pool: FindNamespace resolved",
+		slog.String("namespace", fmt.Sprintf("%v", ns)),
+		slog.Int("advertisers_found", len(infos)))
 	// Rank so the dial order is identical fleet-wide; a positive fanIn then
 	// takes the same top-fanIn upstreams everywhere.
 	rankByAffinity(ns, infos)
