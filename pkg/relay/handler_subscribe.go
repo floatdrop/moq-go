@@ -114,13 +114,26 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 			wantForward := sub.ForwardState() == 1 || anyDownstreamForwards(e)
 			_, established, err := h.subscribeUpstream(ctx, fullName, extra, wantForward)
 			if err != nil {
-				h.log.LogAttrs(ctx, slog.LevelDebug, "upstream subscribe failed",
+				// A candidate existed but every establish attempt errored. Log
+				// at Info with the underlying error so this transient failure is
+				// distinguishable in production from a genuine "nobody serves it".
+				h.log.LogAttrs(ctx, slog.LevelInfo, "SUBSCRIBE rejected: upstream subscribe failed",
+					slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
+					slog.String("name", string(msg.Name)),
+					slog.Uint64("request_id", msg.RequestID),
 					slog.String("err", err.Error()))
-				_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no upstream for track")
+				_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no upstream for track: "+err.Error())
 				return
 			}
 			if !established {
-				h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE rejected: no publisher for namespace")
+				// No local publisher and no remote advertiser — a genuine miss
+				// or an advertise/subscribe race. Log at Info with the track
+				// identity + RequestID so it correlates with the client-side
+				// error (default level hides Debug).
+				h.log.LogAttrs(ctx, slog.LevelInfo, "SUBSCRIBE rejected: no publisher for namespace",
+					slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
+					slog.String("name", string(msg.Name)),
+					slog.Uint64("request_id", msg.RequestID))
 				_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no publisher for namespace")
 				return
 			}
@@ -478,7 +491,8 @@ func (h *sessionHandler) subscribeUpstream(
 	//    caps this to the top rendezvous-ranked few. The pool dials + reuses one
 	//    session per RelayAddr; resolveUpstreams returns nil when no other relay
 	//    (besides ourselves) serves the namespace.
-	for _, remote := range h.upstreams.resolveUpstreams(ctx, fullName.Namespace) {
+	remotes := h.upstreams.resolveUpstreams(ctx, fullName.Namespace)
+	for _, remote := range remotes {
 		establish(remote, "discovery-remote")
 	}
 
@@ -488,6 +502,21 @@ func (h *sessionHandler) subscribeUpstream(
 	// No upstream anywhere. Surface a candidate's failure if one occurred
 	// (a better diagnostic than a bare "no publisher"); otherwise (nil,false,nil)
 	// drives the §9.4 "does not exist" rejection.
+	//
+	// Log a summary at Info so the empty-result case is visible in production
+	// (default level hides Debug): it separates "no local publisher AND no
+	// remote advertiser" (a genuine miss or an advertise/subscribe race) from
+	// "candidates existed but every establish failed" (lastErr set).
+	logAttrs := []slog.Attr{
+		slog.String("namespace", fmt.Sprintf("%v", fullName.Namespace)),
+		slog.String("name", string(fullName.Name)),
+		slog.Int("local_publishers", len(publishers)),
+		slog.Int("remote_candidates", len(remotes)),
+	}
+	if lastErr != nil {
+		logAttrs = append(logAttrs, slog.String("last_err", lastErr.Error()))
+	}
+	h.log.LogAttrs(ctx, slog.LevelInfo, "subscribeUpstream: no upstream established", logAttrs...)
 	return nil, false, lastErr
 }
 
