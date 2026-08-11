@@ -40,6 +40,11 @@ type Catalog struct {
 	// via Track.InitRef (§5.1.7). Per §5.1.7 it SHOULD appear after the
 	// tracks array in the document.
 	InitDataList []InitData `json:"initDataList,omitempty"`
+	// ContentProtections declares DRM/CENC key-acquisition metadata
+	// referenced by tracks via Track.ContentProtectionRefIDs
+	// (draft-ietf-moq-cmsf-01 §4.1.1). Per §4.1.1, content protection
+	// information MUST NOT be duplicated at the track level.
+	ContentProtections []ContentProtection `json:"contentProtections,omitempty"`
 
 	// Extras holds producer-defined catalog-root fields. Keys MUST NOT
 	// collide with the known field names; this is the producer's
@@ -144,6 +149,17 @@ type Track struct {
 	AuthInfo         map[string]any         `json:"authInfo,omitempty"`
 	Accessibility    []Accessibility        `json:"accessibility,omitempty"`
 
+	// MaxGrpSapStartingType and MaxObjSapStartingType bound the stream
+	// access point type a Group / Object may start with
+	// (draft-ietf-moq-cmsf-01 §3.5.2.1, §3.5.2.2). Valid range 0-3.
+	MaxGrpSapStartingType *int `json:"maxGrpSapStartingType,omitempty"`
+	MaxObjSapStartingType *int `json:"maxObjSapStartingType,omitempty"`
+	// ContentProtectionRefIDs references Catalog.ContentProtections
+	// entries by RefID (CMSF §4.1.2). Presence means the track is
+	// CENC-encrypted and a subscriber MUST acquire licenses before
+	// decryption.
+	ContentProtectionRefIDs []string `json:"contentProtectionRefIDs,omitempty"`
+
 	// Extras holds producer-defined per-track fields (§5.6.6 example).
 	// Keys MUST NOT collide with known field names.
 	Extras map[string]any `json:"-"`
@@ -153,60 +169,64 @@ type Track struct {
 // fields. Used during UnmarshalJSON to separate known fields from
 // Extras.
 var knownCatalogFields = map[string]struct{}{
-	"version":       {},
-	"generatedAt":   {},
-	"isComplete":    {},
-	"tracks":        {},
-	"publishTracks": {},
-	"deltaUpdate":   {},
-	"initDataList":  {},
+	"version":            {},
+	"generatedAt":        {},
+	"isComplete":         {},
+	"tracks":             {},
+	"publishTracks":      {},
+	"deltaUpdate":        {},
+	"initDataList":       {},
+	"contentProtections": {},
 }
 
 // knownTrackFields lists every JSON key produced by Track's typed
 // fields.
 var knownTrackFields = map[string]struct{}{
-	"name":             {},
-	"namespace":        {},
-	"packaging":        {},
-	"eventType":        {},
-	"isLive":           {},
-	"targetLatency":    {},
-	"buffers":          {},
-	"role":             {},
-	"label":            {},
-	"renderGroup":      {},
-	"altGroup":         {},
-	"initRef":          {},
-	"depends":          {},
-	"template":         {},
-	"temporalId":       {},
-	"spatialId":        {},
-	"codec":            {},
-	"mimetype":         {},
-	"framerate":        {},
-	"timescale":        {},
-	"bitrate":          {},
-	"avgBitrate":       {},
-	"maxGopDuration":   {},
-	"maxGroupDuration": {},
-	"width":            {},
-	"height":           {},
-	"samplerate":       {},
-	"channelConfig":    {},
-	"displayWidth":     {},
-	"displayHeight":    {},
-	"lang":             {},
-	"parentName":       {},
-	"parentNamespace":  {},
-	"trackDuration":    {},
-	"connectionUri":    {},
-	"token":            {},
-	"encryptionScheme": {},
-	"cipherSuite":      {},
-	"keyId":            {},
-	"trackBaseKey":     {},
-	"authInfo":         {},
-	"accessibility":    {},
+	"name":                    {},
+	"namespace":               {},
+	"packaging":               {},
+	"eventType":               {},
+	"isLive":                  {},
+	"targetLatency":           {},
+	"buffers":                 {},
+	"role":                    {},
+	"label":                   {},
+	"renderGroup":             {},
+	"altGroup":                {},
+	"initRef":                 {},
+	"depends":                 {},
+	"template":                {},
+	"temporalId":              {},
+	"spatialId":               {},
+	"codec":                   {},
+	"mimetype":                {},
+	"framerate":               {},
+	"timescale":               {},
+	"bitrate":                 {},
+	"avgBitrate":              {},
+	"maxGopDuration":          {},
+	"maxGroupDuration":        {},
+	"width":                   {},
+	"height":                  {},
+	"samplerate":              {},
+	"channelConfig":           {},
+	"displayWidth":            {},
+	"displayHeight":           {},
+	"lang":                    {},
+	"parentName":              {},
+	"parentNamespace":         {},
+	"trackDuration":           {},
+	"connectionUri":           {},
+	"token":                   {},
+	"encryptionScheme":        {},
+	"cipherSuite":             {},
+	"keyId":                   {},
+	"trackBaseKey":            {},
+	"authInfo":                {},
+	"accessibility":           {},
+	"maxGrpSapStartingType":   {},
+	"maxObjSapStartingType":   {},
+	"contentProtectionRefIDs": {},
 }
 
 // trackAlias decouples the JSON tag-driven marshaller from the

@@ -274,6 +274,17 @@ func overlayTrackComposite(dst *Track, src Track) {
 		v := *src.SpatialID
 		dst.SpatialID = &v
 	}
+	if src.MaxGrpSapStartingType != nil {
+		v := *src.MaxGrpSapStartingType
+		dst.MaxGrpSapStartingType = &v
+	}
+	if src.MaxObjSapStartingType != nil {
+		v := *src.MaxObjSapStartingType
+		dst.MaxObjSapStartingType = &v
+	}
+	if src.ContentProtectionRefIDs != nil {
+		dst.ContentProtectionRefIDs = append([]string(nil), src.ContentProtectionRefIDs...)
+	}
 	if src.AuthInfo != nil {
 		dst.AuthInfo = cloneExtras(src.AuthInfo)
 	}
@@ -307,6 +318,7 @@ func cloneCatalog(c Catalog) Catalog {
 	out.Tracks = cloneTracks(c.Tracks)
 	out.PublishTracks = cloneTracks(c.PublishTracks)
 	out.InitDataList = append([]InitData(nil), c.InitDataList...)
+	out.ContentProtections = cloneContentProtections(c.ContentProtections)
 	out.Extras = cloneExtras(c.Extras)
 	out.DeltaUpdate = nil
 	return out
@@ -322,6 +334,28 @@ func cloneTracks(in []Track) []Track {
 		out[i].AuthInfo = cloneExtras(out[i].AuthInfo)
 		out[i].Depends = append([]string(nil), out[i].Depends...)
 		out[i].Accessibility = append([]Accessibility(nil), out[i].Accessibility...)
+		out[i].ContentProtectionRefIDs = append([]string(nil), out[i].ContentProtectionRefIDs...)
+	}
+	return out
+}
+
+// cloneContentProtections deep-copies a catalog's contentProtections
+// array (CMSF §4.1.1) for [cloneCatalog].
+func cloneContentProtections(in []ContentProtection) []ContentProtection {
+	if in == nil {
+		return nil
+	}
+	out := append([]ContentProtection(nil), in...)
+	for i := range out {
+		out[i].DefaultKID = append([]string(nil), out[i].DefaultKID...)
+		if out[i].DRMSystem.LAURL != nil {
+			v := *out[i].DRMSystem.LAURL
+			out[i].DRMSystem.LAURL = &v
+		}
+		if out[i].DRMSystem.CertURL != nil {
+			v := *out[i].DRMSystem.CertURL
+			out[i].DRMSystem.CertURL = &v
+		}
 	}
 	return out
 }

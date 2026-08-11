@@ -3,6 +3,7 @@ package msf
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -254,6 +255,68 @@ func TestDeltaUpdateOrder(t *testing.T) {
 		if c.DeltaUpdate[i].Op != op {
 			t.Errorf("DeltaUpdate[%d].Op: got %q, want %q", i, c.DeltaUpdate[i].Op, op)
 		}
+	}
+}
+
+// Clone overlay carries CMSF fields (maxGrpSapStartingType,
+// maxObjSapStartingType, contentProtectionRefIDs) from the clone entry,
+// and the child's ContentProtectionRefIDs slice is independent of the
+// parent's after cloning.
+func TestDeltaCloneOverlaysCMSFFields(t *testing.T) {
+	base := Catalog{
+		Version: "draft-01",
+		Tracks: []Track{
+			{
+				Name:                    "video",
+				Packaging:               PackagingCMAF,
+				IsLive:                  new(true),
+				ContentProtectionRefIDs: []string{"1"},
+			},
+		},
+	}
+
+	delta := Catalog{
+		DeltaUpdate: []DeltaOp{
+			{
+				Op: DeltaOpClone,
+				Tracks: []Track{
+					{
+						ParentName:              "video",
+						Name:                    "video-hi",
+						MaxGrpSapStartingType:   new(2),
+						MaxObjSapStartingType:   new(3),
+						ContentProtectionRefIDs: []string{"1", "2"},
+					},
+				},
+			},
+		},
+	}
+
+	out, err := Apply(base, delta)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	var clone Track
+	for _, tr := range out.Tracks {
+		if tr.Name == "video-hi" {
+			clone = tr
+			break
+		}
+	}
+	if clone.MaxGrpSapStartingType == nil || *clone.MaxGrpSapStartingType != 2 {
+		t.Errorf("clone MaxGrpSapStartingType: %v", clone.MaxGrpSapStartingType)
+	}
+	if clone.MaxObjSapStartingType == nil || *clone.MaxObjSapStartingType != 3 {
+		t.Errorf("clone MaxObjSapStartingType: %v", clone.MaxObjSapStartingType)
+	}
+	if !reflect.DeepEqual(clone.ContentProtectionRefIDs, []string{"1", "2"}) {
+		t.Errorf("clone ContentProtectionRefIDs: %v", clone.ContentProtectionRefIDs)
+	}
+
+	// Mutating the clone's slice must not affect the parent's.
+	clone.ContentProtectionRefIDs[0] = "mutated"
+	if out.Tracks[0].ContentProtectionRefIDs[0] != "1" {
+		t.Errorf("parent ContentProtectionRefIDs mutated: %v", out.Tracks[0].ContentProtectionRefIDs)
 	}
 }
 

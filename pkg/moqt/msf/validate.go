@@ -50,6 +50,45 @@ func (c *Catalog) validateIndependent() error {
 	if err := validateTargetLatencyGroups(c.Tracks, "altGroup", func(t Track) *int { return t.AltGroup }); err != nil {
 		return err
 	}
+	if err := validateContentProtections(c); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateContentProtections enforces draft-ietf-moq-cmsf-01 §4.1.1's
+// per-entry required fields and refID uniqueness, then §4.1.2's
+// referential integrity: every track's ContentProtectionRefIDs entry
+// MUST name a RefID present in c.ContentProtections.
+func validateContentProtections(c *Catalog) error {
+	refIDs := make(map[string]struct{}, len(c.ContentProtections))
+	for i, cp := range c.ContentProtections {
+		if cp.RefID == "" {
+			return fmt.Errorf("moqt/msf: contentProtections[%d]: refID is required (CMSF §4.1.1.1)", i)
+		}
+		if _, dup := refIDs[cp.RefID]; dup {
+			return fmt.Errorf("moqt/msf: contentProtections[%d]: duplicate refID %q (CMSF §4.1.1.1)", i, cp.RefID)
+		}
+		refIDs[cp.RefID] = struct{}{}
+		if len(cp.DefaultKID) == 0 {
+			return fmt.Errorf("moqt/msf: contentProtections[%d]: defaultKID is required (CMSF §4.1.1.2)", i)
+		}
+		if cp.Scheme == "" {
+			return fmt.Errorf("moqt/msf: contentProtections[%d]: scheme is required (CMSF §4.1.1.3)", i)
+		}
+		if cp.DRMSystem.SystemID == "" {
+			return fmt.Errorf("moqt/msf: contentProtections[%d]: drmSystem.systemID is required (CMSF §4.1.1.4.1)", i)
+		}
+	}
+	for i, tr := range c.Tracks {
+		for _, ref := range tr.ContentProtectionRefIDs {
+			if _, ok := refIDs[ref]; !ok {
+				return fmt.Errorf(
+					"moqt/msf: tracks[%d]: contentProtectionRefIDs references unknown refID %q (CMSF §4.1.1, §4.1.2)",
+					i, ref)
+			}
+		}
+	}
 	return nil
 }
 
@@ -112,7 +151,7 @@ func validateTrack(t Track) error {
 	}
 	switch t.Packaging {
 	case PackagingLOC, PackagingMediaTimeline, PackagingEventTimeline,
-		PackagingMoQLog, PackagingMoQMetrics:
+		PackagingMoQLog, PackagingMoQMetrics, PackagingCMAF:
 	default:
 		return fmt.Errorf("unknown packaging %q (§5.2.4)", t.Packaging)
 	}
@@ -137,6 +176,14 @@ func validateTrack(t Track) error {
 
 	if live && t.TrackDuration != 0 {
 		return errors.New("trackDuration MUST NOT be present when isLive is true (§5.2.35)")
+	}
+
+	// CMSF §3.5.2.1 / §3.5.2.2 — SAP type is defined over 0-3 (§3.6.1).
+	if t.MaxGrpSapStartingType != nil && (*t.MaxGrpSapStartingType < 0 || *t.MaxGrpSapStartingType > 3) {
+		return fmt.Errorf("maxGrpSapStartingType %d out of range 0-3 (CMSF §3.5.2.1)", *t.MaxGrpSapStartingType)
+	}
+	if t.MaxObjSapStartingType != nil && (*t.MaxObjSapStartingType < 0 || *t.MaxObjSapStartingType > 3) {
+		return fmt.Errorf("maxObjSapStartingType %d out of range 0-3 (CMSF §3.5.2.2)", *t.MaxObjSapStartingType)
 	}
 	return nil
 }
