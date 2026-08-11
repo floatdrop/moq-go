@@ -89,6 +89,7 @@ If you need to reference the spec, fetch it from:
 - [MOQT Transport](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/)
 - [MOQT LOC](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/)
 - [MOQT MSF](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/)
+- [MOQT CMSF](https://datatracker.ietf.org/doc/draft-ietf-moq-cmsf/)
 
 Only retrieve the sections relevant to the task at hand.
 
@@ -96,7 +97,7 @@ Only retrieve the sections relevant to the task at hand.
 
 - **Spec-driven, with citations.** Comments cite draft sections (`§10.1`,
   `§11.4.2`) referencing the pinned draft versions
-  (`draft-ietf-moq-transport-19`, `-loc-04`, `-msf-01`) — the source of truth
+  (`draft-ietf-moq-transport-19`, `-loc-04`, `-msf-01`, `-cmsf-01`) — the source of truth
   when implementing or changing protocol behavior. See the Reference Documents
   section above for the datatracker links.
 - **Message types** implement `Append(*wire.Writer)` + `Parse(*wire.Reader)`;

@@ -2,8 +2,9 @@
 
 Tracks this codebase's implementation of
 [`draft-ietf-moq-transport-19`](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/19/)
-(plus [`-loc-04`](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) and
-[`-msf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) at the edges).
+(plus [`-loc-04`](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/),
+[`-msf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/), and
+[`-cmsf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-cmsf/) at the edges).
 
 ## Overall: ~97% complete
 

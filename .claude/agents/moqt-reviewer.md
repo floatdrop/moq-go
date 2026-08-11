@@ -35,7 +35,7 @@ Review unstaged/staged changes from `git diff HEAD` by default (or `git diff <ba
 
 ### 1. Spec compliance (your primary job — nothing else in this environment checks this)
 
-The pinned drafts are `draft-ietf-moq-transport-19`, `draft-ietf-moq-loc-02`, `draft-ietf-moq-msf-01` (see root `CLAUDE.md`).
+The pinned drafts are `draft-ietf-moq-transport-19`, `draft-ietf-moq-loc-04`, `draft-ietf-moq-msf-01`, `draft-ietf-moq-cmsf-01` (see root `CLAUDE.md`).
 
 For every changed function that implements wire behavior (message `Append`/`Parse`, request-stream handling in `pkg/moqt/session`, routing/caching in `pkg/relay`, error/reset codes, subgroup delta-encoding):
 
