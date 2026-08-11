@@ -69,11 +69,16 @@ func QUIC(ctx context.Context, addr string, o Options) (*session.Session, error)
 		EnableDatagrams:                  true,
 		EnableStreamResetPartialDelivery: true, // §11.4.3 RESET_STREAM_AT
 	}
-	qconn, err := quic.DialAddr(ctx, hostPort, tlsCfg, quicCfg)
+	// quicconn.Dial, not quic.DialAddr: it resolves a hostname to every address
+	// in RFC 6724 order and tries each, where quic.DialAddr would silently take
+	// the first IPv4 one and never fall back (see its doc comment). A CLI
+	// pointed at a dual-stack relay by name has to reach the same address the
+	// relay mesh does, or it diagnoses a connection nobody else is making.
+	conn, err := quicconn.Dial(ctx, hostPort, tlsCfg, quicCfg)
 	if err != nil {
-		return nil, fmt.Errorf("dial %s: %w", hostPort, err)
+		return nil, err
 	}
-	sess, err := session.Client(ctx, quicconn.New(qconn), opts...)
+	sess, err := session.Client(ctx, conn, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("moqt handshake: %w", err)
 	}

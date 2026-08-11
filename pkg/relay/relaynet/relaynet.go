@@ -103,12 +103,12 @@ func ListenQUIC(addr string, tlsCfg *tls.Config) (*quicconn.Listener, error) {
 // DialQUIC dials addr over raw QUIC with the relay's default QUIC tuning and
 // returns the established connection as a [session.Conn], ready for the relay to
 // drive the client-side MOQT SETUP on. It is the shape a relay Dialer expects.
+//
+// [quicconn.Dial] owns the address handling, including the multi-address,
+// RFC 6724-ordered resolution that keeps a dual-stack peer named by hostname
+// from being dialed over the wrong family — see its doc comment.
 func DialQUIC(ctx context.Context, addr string, tlsCfg *tls.Config) (session.Conn, error) {
-	qc, err := quic.DialAddr(ctx, addr, tlsCfg, defaultQUICConfig())
-	if err != nil {
-		return nil, err
-	}
-	return quicconn.New(qc), nil
+	return quicconn.Dial(ctx, addr, tlsCfg, defaultQUICConfig())
 }
 
 // SelfSignedCert generates an ephemeral ECDSA-P256 self-signed certificate for
