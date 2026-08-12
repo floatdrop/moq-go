@@ -37,6 +37,16 @@
 // SIGINT/SIGTERM shutdown, comes down before the GOAWAY drain rather than after
 // it. It says nothing about etcd reachability.
 //
+// Prometheus exposition rides that same port at <health-path>/metrics (turn it
+// off with -metrics=false). It is there rather than on a port of its own because
+// the decision is the same one: plain HTTP over TCP, unauthenticated, and an
+// operator who exposed the health check has already chosen for both. Liveness
+// says nothing about whether media is actually moving; these counters are where
+// that becomes visible — objects dropped and subgroup streams abandoned
+// mid-group, split by track, by subgroup, and by whether they were on the
+// cross-relay leg or a client's. See the command README for what to query when
+// a picture breaks up between keyframes.
+//
 // The TLS and cross-relay dial paths here are development-grade: an ephemeral
 // self-signed cert when -cert/-key are omitted, and peer dialing that skips
 // certificate verification. Production deployments should supply real certs and
@@ -58,6 +68,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay"
@@ -91,10 +104,31 @@ func main() {
 	// works and one where late arrivals see half of it.
 	catalogTrackName := flag.String("catalog-track-name", "catalog",
 		"track name whose Object Cache uses --catalog-ttl instead of the default; empty disables the override")
-	catalogTTL := flag.Duration("catalog-ttl", 0,
-		"per-object TTL for tracks matching --catalog-track-name; 0 means infinite retention (the FIFO size cap still applies)")
+	catalogTTL := flag.Duration(
+		"catalog-ttl",
+		0,
+		"per-object TTL for tracks matching --catalog-track-name; 0 means infinite retention (the FIFO size cap still applies)",
+	)
 	healthPath := flag.String("health-path", "/healthz",
 		"path on -health-addr that answers 200 OK")
+	// Prometheus rides the health port rather than getting one of its own:
+	// both are plain TCP HTTP for an orchestrator, both are unauthenticated,
+	// and an operator who has already decided to expose one has made the same
+	// decision for the other. It is a sub-path of -health-path so a single
+	// ingress rule covers both.
+	//
+	// A relay looks healthy right up until it isn't delivering media, because
+	// liveness says nothing about what the fanout is doing. These counters are
+	// where a media fault becomes visible: objects dropped per track and
+	// subgroup, subgroup streams reset before their group ended and why, and
+	// the cross-relay leg separately from clients.
+	metricsEnabled := flag.Bool("metrics", true,
+		"serve Prometheus metrics at <health-path>/metrics; requires -health-addr")
+	// Track names come off the wire, so they cannot become label values
+	// unfiltered — a publisher would be choosing this process's metric
+	// cardinality. Anything not listed here is counted under track="other".
+	metricsTracks := flag.String("metrics-track-names", "catalog,video,audio",
+		"comma-separated track names that keep their own `track` label; all others are counted as \"other\"")
 	// Nothing here is logged per group, per object or per frame — measured with
 	// two clients exchanging video and audio, the relay emitted nothing at all
 	// for a minute, at debug. It speaks while a session is set up and then goes
@@ -150,7 +184,15 @@ func main() {
 	// The health endpoint is plain HTTP over TCP on its own port: the MOQT port
 	// is UDP-only, so orchestrators and TCP probes have nothing to talk to there.
 	// Bind it with the rest of the fatal setup, before store.Close is deferred.
-	var healthSrv *http.Server
+	var (
+		healthSrv *http.Server
+		// metrics stays nil — and relay.Config.Metrics falls back to
+		// relay.NopMetrics — unless the endpoint that would expose it is
+		// actually being served. Counting into collectors nobody can scrape
+		// costs the fanout hot path for nothing.
+		metrics     relay.Metrics
+		metricsPath string
+	)
 	if *healthAddr != "" {
 		// r.URL.Path always begins with "/", so a path that doesn't would 404 every
 		// probe while the startup log still reports it as configured. Reject it here
@@ -166,18 +208,24 @@ func main() {
 			logger.Error("listen health", "addr", *healthAddr, "err", err)
 			os.Exit(1)
 		}
+		// The default registry, not a fresh one: the etcd client instruments
+		// its own gRPC calls into it, so scraping it reports on the discovery
+		// backend as well as the relay — and a relay that cannot reach etcd
+		// stops finding peers, which looks exactly like a media fault.
+		// promhttp.Handler serves it together with the standard Go runtime and
+		// process collectors.
+		var metricsHandler http.Handler
+		if *metricsEnabled {
+			// TrimSuffix so a -health-path of "/" yields "/metrics" rather
+			// than "//metrics", which no client would request.
+			metricsPath = strings.TrimSuffix(*healthPath, "/") + "/metrics"
+			pm := newPromMetrics(prometheus.DefaultRegisterer, strings.Split(*metricsTracks, ","))
+			registerBuildInfo(prometheus.DefaultRegisterer, version, commit, commitTime, dirty)
+			metrics = pm
+			metricsHandler = promhttp.Handler()
+		}
 		healthSrv = &http.Server{
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path != *healthPath {
-					http.NotFound(w, r)
-					return
-				}
-				w.WriteHeader(http.StatusOK)
-				// Body so a human running curl sees something; probes key on the
-				// status code. A failed write means the prober hung up mid-response,
-				// which is its problem, not a relay fault worth logging.
-				_, _ = io.WriteString(w, "ok\n")
-			}),
+			Handler: healthHandler(*healthPath, metricsPath, metricsHandler),
 			// An unauthenticated port on a public interface: bound the time a
 			// stalled client can hold a connection mid-header.
 			ReadHeaderTimeout: 5 * time.Second,
@@ -208,6 +256,7 @@ func main() {
 		"etcd_prefix", *prefix,
 		"health_addr", *healthAddr,
 		"health_path", *healthPath,
+		"metrics_path", metricsPath,
 	)
 
 	// Cross-relay dialing: peers advertise a RelayAddr in etcd; the relay dials it
@@ -226,6 +275,7 @@ func main() {
 			session.WithImplementation("mediamesh-relay-etcd/0.1"),
 		},
 		Logger:         logger,
+		Metrics:        metrics,
 		Discovery:      store,
 		RelayAddr:      *relayAddr,
 		Dialer:         dialer,
@@ -271,6 +321,35 @@ func main() {
 		stop()
 		<-healthClosed
 	}
+}
+
+// healthHandler routes the health port: exact-match liveness at healthPath,
+// Prometheus at metricsPath, 404 for everything else.
+//
+// Deliberately not an http.ServeMux. healthPath is operator-supplied, and since
+// Go 1.22 a ServeMux pattern containing "{" is parsed as a wildcard — a path
+// that happens to contain one would either panic at registration or silently
+// match more than it was meant to. Two string comparisons have neither
+// failure mode.
+//
+// metricsHandler nil means metrics are disabled; metricsPath is then ignored
+// and falls through to the 404.
+func healthHandler(healthPath, metricsPath string, metricsHandler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if metricsHandler != nil && r.URL.Path == metricsPath {
+			metricsHandler.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path != healthPath {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		// Body so a human running curl sees something; probes key on the
+		// status code. A failed write means the prober hung up mid-response,
+		// which is its problem, not a relay fault worth logging.
+		_, _ = io.WriteString(w, "ok\n")
+	})
 }
 
 // unstamped is what buildInfo reports for a field the toolchain left out, so an
