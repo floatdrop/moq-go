@@ -53,6 +53,35 @@ jobs:
           go-version-file: go.mod
       - run: go test -race ./...
 
+  # pkg/relay/discovery/{etcd,nats} are separate Go modules, so `go test ./...`
+  # from the root never sees them — they went unbuilt, untested, unlinted and
+  # unscanned here for their whole existence, while relay-etcd is the binary the
+  # multi-instance deployments run. Both already had test suites; nothing ran
+  # them. They `replace github.com/floatdrop/moq-go => ../../../..`, so this job
+  # is also the guard that a change to the root module's API doesn't break the
+  # discovery backends — which is precisely the breakage the root suite cannot
+  # see. Their tests are hermetic (embedded in-process etcd/NATS), so no
+  # services are needed.
+  submodules:
+    name: Submodule ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [etcd, nats]
+    defaults:
+      run:
+        working-directory: pkg/relay/discovery/${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: pkg/relay/discovery/${{ matrix.module }}/go.mod
+      - run: go build ./...
+      - run: go test -race ./...
+      - run: go vet ./...
+
   coverage:
     name: Coverage floors
     runs-on: ubuntu-latest
@@ -71,6 +100,11 @@ jobs:
   bench:
     name: Benchmarks (smoke)
     runs-on: ubuntu-latest
+    # This job is the only thing that runs the sessiontest bufPipe (via
+    # BenchmarkFanoutBuffered, which the -skip in `make bench` excludes but this
+    # target deliberately keeps). That is mutex/cond code, so a deadlock here
+    # would otherwise hang for GitHub's 6h default instead of failing fast.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
