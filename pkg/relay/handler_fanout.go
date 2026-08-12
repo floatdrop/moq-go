@@ -155,6 +155,10 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		return
 	}
 
+	// One TrackRef for the whole stream: it allocates, and everything below
+	// that reports it does so per object.
+	ref := h.trackRef(entry.FullName)
+
 	// §11.4.2 mode 0b01: the Subgroup ID is implied by the stream's FIRST
 	// object's ID. Everything from here on keys on hdr.SubgroupID — the
 	// shared-subgroup key, the cache (and thus FETCH responses), and the
@@ -188,7 +192,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		sg.Mu.Lock()
 		set.gen = gen
 		for _, sub := range initialSubs {
-			h.openWriterForSub(ctx, set.hdr, sub, set.writers, pubTimeouts)
+			h.openWriterForSub(ctx, set.hdr, sub, set.writers, pubTimeouts, ref)
 		}
 		sg.Mu.Unlock()
 	}
@@ -332,6 +336,11 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			continue // redundant copy already forwarded by a peer upstream.
 		}
 
+		// Counted after the dedup claim, so this is objects the relay is
+		// actually responsible for delivering — not raw wire arrivals, which
+		// on a redundantly-fed track would double-count.
+		h.metrics.ObjectReceived(ref, hdr.SubgroupID)
+
 		// Deliver to the shared writer set under sg.Mu so joiner detection, writer
 		// open, and the publish loop are atomic against a concurrent contributor
 		// and the last-contributor teardown.
@@ -362,7 +371,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		newSubs, set.gen = entry.UpdateLargestAndDetectNew(loc,
 			func(s *registry.DownstreamSub) bool { _, ok := set.writers[s]; return ok }, set.gen)
 		for _, sub := range newSubs {
-			h.openWriterForSub(ctx, set.hdr, sub, set.writers, entry.DeliveryTimeouts())
+			h.openWriterForSub(ctx, set.hdr, sub, set.writers, entry.DeliveryTimeouts(), ref)
 		}
 
 		// §5.1.2 filter evaluation per-subscriber, pre-enqueue. A filter miss
@@ -418,6 +427,7 @@ func (h *sessionHandler) openWriterForSub(
 	sub *registry.DownstreamSub,
 	writers map[*registry.DownstreamSub]*subgroupWriter,
 	pubTimeouts message.DeliveryTimeouts,
+	ref TrackRef,
 ) {
 	if _, already := writers[sub]; already {
 		return
@@ -442,6 +452,7 @@ func (h *sessionHandler) openWriterForSub(
 		done:                make(chan struct{}),
 		log:                 h.log,
 		metrics:             h.metrics,
+		ref:                 ref,
 		maxDropsBeforeReset: h.maxDropsBeforeReset,
 		maxLag:              h.maxFanoutLag,
 		// §8: the two halves stay apart. The §12.1 / §12.2 first-object
@@ -494,15 +505,19 @@ type subgroupWriter struct {
 	// escape hatch for a writer wedged on a subscriber that stopped
 	// reading (close only closes the inbox, and the §8 lag check runs
 	// only between dequeues).
-	ctx                 context.Context
-	cancelIO            context.CancelFunc
-	hdr                 message.SubgroupHeader          // template; TrackAlias already remapped
-	out                 *session.OutgoingSubgroupStream // nil until run opens it lazily
-	unbridge            func() bool                     // stops the current stream's ctx→Cancel bridge
-	inbox               chan fwdObject
-	done                chan struct{}
-	log                 *slog.Logger
-	metrics             Metrics
+	ctx      context.Context
+	cancelIO context.CancelFunc
+	hdr      message.SubgroupHeader          // template; TrackAlias already remapped
+	out      *session.OutgoingSubgroupStream // nil until run opens it lazily
+	unbridge func() bool                     // stops the current stream's ctx→Cancel bridge
+	inbox    chan fwdObject
+	done     chan struct{}
+	log      *slog.Logger
+	metrics  Metrics
+	// ref labels every Metrics call this writer makes. Built once by
+	// openWriterForSub because constructing it allocates (see
+	// [sessionHandler.trackRef]) and publish runs per object.
+	ref                 TrackRef
 	maxDropsBeforeReset int
 	maxLag              time.Duration
 	// pubTimeouts and subTimeouts are the §8 delivery-timeout halves for this
@@ -541,9 +556,9 @@ func (w *subgroupWriter) publish(fwd fwdObject) {
 	fwd.enqueuedAt = time.Now()
 	select {
 	case w.inbox <- fwd:
-		w.metrics.ObjectForwarded()
+		w.metrics.ObjectForwarded(w.ref, w.hdr.SubgroupID)
 	default:
-		w.metrics.ObjectDropped()
+		w.metrics.ObjectDropped(w.ref, w.hdr.SubgroupID)
 		w.dropsMu.Lock()
 		w.drops++
 		drops := w.drops
@@ -692,6 +707,7 @@ func (w *subgroupWriter) run() {
 		// drop, REQUEST_UPDATE end-shift, or out-of-order inbound —
 		// reset the current outbound stream and open a new one.
 		if hasWritten && fwd.absID != prevID+1 {
+			w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseGap)
 			if !reopen(fwd.first) {
 				failWrites()
 				continue
@@ -734,12 +750,14 @@ func (w *subgroupWriter) run() {
 				w.log.Debug("fanout: delivery timeout, abandoning subgroup stream",
 					"sub_id", w.sub.ID, "group", w.hdr.GroupID,
 					"subgroup", w.hdr.SubgroupID)
+				w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseDeliveryTimeout)
 				w.out = nil
 				failWrites()
 				continue
 			}
 			w.log.Debug("fanout: WriteObject failed",
 				"sub_id", w.sub.ID, "err", err.Error())
+			w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseWriteError)
 			w.out.Cancel(moqt.StreamResetInternalError)
 			w.out = nil
 			failWrites()
@@ -771,10 +789,12 @@ func (w *subgroupWriter) run() {
 		// drop-cap backstop is server-side resource pressure, so it uses
 		// EXCESSIVE_LOAD. A lag breach wins if both fired.
 		resetCode := moqt.StreamResetTooFarBehind
+		cause := ResetCauseTooFarBehind
 		if dropCapped && !lagExceeded {
 			resetCode = moqt.StreamResetExcessiveLoad
+			cause = ResetCauseExcessiveLoad
 		}
-		w.metrics.SubscriptionResetSlowReader()
+		w.metrics.SubscriptionResetSlowReader(w.ref, cause)
 		// Refuse further enqueues so contributors stop stamping objects into
 		// an inbox nobody drains. The channel itself stays open (publish and
 		// close serialize under sg.Mu; the writer must not close it from
@@ -822,6 +842,7 @@ func (w *subgroupWriter) run() {
 		// inboundResetCode carries the §3.3.4 reason (CANCELLED for an
 		// upstream reset / ctx-cancel, MALFORMED_TRACK for a §11.4.3
 		// post-terminal-object violation).
+		w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseInboundReset)
 		w.out.Cancel(inboundResetCode)
 		return
 	}

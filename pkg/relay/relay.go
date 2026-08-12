@@ -350,6 +350,7 @@ func New(listener Listener, cfg Config) *Relay {
 			relayAddr:    cfg.RelayAddr,
 			sessionOpts:  cfg.SessionOptions,
 			log:          r.log,
+			metrics:      cfg.Metrics,
 			serveSession: r.serveUpstreamSession,
 			fanIn:        cfg.UpstreamFanIn,
 		})
@@ -367,7 +368,7 @@ func New(listener Listener, cfg Config) *Relay {
 func (r *Relay) serveUpstreamSession(sess *session.Session, onClose func()) {
 	r.handlers.Go(func() {
 		defer onClose()
-		r.serveSession(r.upstreams.baseCtx, sess)
+		r.serveSession(r.upstreams.baseCtx, sess, LegUpstream)
 	})
 }
 
@@ -517,7 +518,7 @@ func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
 		return
 	}
 
-	r.serveSession(ctx, sess)
+	r.serveSession(ctx, sess, LegLocal)
 }
 
 // serveSession runs the per-session lifecycle for a Session that has already
@@ -530,11 +531,12 @@ func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
 // identically to an accepted one: it lands in r.sessions (covered by Stop's
 // GOAWAY/drain) and its handler fans out inbound data + routes FETCH responses.
 // The only difference is the SETUP role (Server vs Client), handled by the
-// caller before calling this.
-func (r *Relay) serveSession(ctx context.Context, sess *session.Session) {
-	r.addSession(sess)
+// caller before calling this — and leg, which records that difference for
+// [Metrics] so cross-relay traffic is separable from client traffic.
+func (r *Relay) serveSession(ctx context.Context, sess *session.Session, leg Leg) {
+	r.addSession(sess, leg)
 	defer func() {
-		r.removeSession(sess)
+		r.removeSession(sess, leg)
 		// Belt-and-suspenders: per-request handlers unregister themselves on
 		// clean shutdown, but a handler that raced past Stop or wedged could
 		// leave dangling refs. Sweep both registries so the post-condition
@@ -550,7 +552,7 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session) {
 
 	handler := newSessionHandler(
 		sess, r.log, r.tracks, r.names,
-		r.cfg.Authorizer, r.cfg.Metrics, r.fetch, r.upstreams,
+		r.cfg.Authorizer, r.cfg.Metrics, leg, r.fetch, r.upstreams,
 		r.cfg.Discovery, r.cfg.RelayAddr,
 		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,
@@ -684,12 +686,12 @@ func (r *Relay) Stop(ctx context.Context) error {
 	return firstErr
 }
 
-func (r *Relay) addSession(s *session.Session) {
+func (r *Relay) addSession(s *session.Session, leg Leg) {
 	r.sessionsMu.Lock()
 	r.sessions[s] = struct{}{}
 	shuttingDown := r.shuttingDown
 	r.sessionsMu.Unlock()
-	r.cfg.Metrics.SessionOpened()
+	r.cfg.Metrics.SessionOpened(leg)
 
 	// Straggler cover: if shutdown was already in progress when we registered,
 	// Stop's snapshot — taken under sessionsMu together with the shuttingDown
@@ -723,11 +725,11 @@ func (r *Relay) drainStraggler(s *session.Session) {
 	_ = s.Close(moqt.SessionGoawayTimeout, "relay shutdown")
 }
 
-func (r *Relay) removeSession(s *session.Session) {
+func (r *Relay) removeSession(s *session.Session, leg Leg) {
 	r.sessionsMu.Lock()
 	delete(r.sessions, s)
 	r.sessionsMu.Unlock()
-	r.cfg.Metrics.SessionClosed()
+	r.cfg.Metrics.SessionClosed(leg)
 }
 
 // beginShutdown marks the relay as shutting down and returns a snapshot of the

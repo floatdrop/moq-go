@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"errors"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -21,25 +22,94 @@ type recordingMetrics struct {
 
 	sessionsOpened atomic.Int64
 	sessionsClosed atomic.Int64
+	upstreamOpened atomic.Int64
 	subsOpened     atomic.Int64
 	subsClosed     atomic.Int64
+	received       atomic.Int64
 	forwarded      atomic.Int64
 	dropped        atomic.Int64
 	slowReset      atomic.Int64
 	fetchServed    atomic.Int64
 	fetchObjects   atomic.Int64
+	dialFailed     atomic.Int64
+	nsResolved     atomic.Int64
+
+	// mu guards the label observations below. The counters above stay atomic
+	// because they are written from the per-object fanout path; these are
+	// read once at the end of a test.
+	mu         sync.Mutex
+	trackNames map[string]int
+	subgroups  map[uint64]int
+	resets     map[relay.ResetCause]int
 }
 
-func (m *recordingMetrics) SessionOpened()               { m.sessionsOpened.Add(1) }
-func (m *recordingMetrics) SessionClosed()               { m.sessionsClosed.Add(1) }
-func (m *recordingMetrics) SubscriptionOpened()          { m.subsOpened.Add(1) }
-func (m *recordingMetrics) SubscriptionClosed()          { m.subsClosed.Add(1) }
-func (m *recordingMetrics) ObjectForwarded()             { m.forwarded.Add(1) }
-func (m *recordingMetrics) ObjectDropped()               { m.dropped.Add(1) }
-func (m *recordingMetrics) SubscriptionResetSlowReader() { m.slowReset.Add(1) }
-func (m *recordingMetrics) FetchServed(n int) {
+func (m *recordingMetrics) note(t relay.TrackRef, subgroup uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.trackNames == nil {
+		m.trackNames = make(map[string]int)
+		m.subgroups = make(map[uint64]int)
+	}
+	m.trackNames[t.Name+"/"+t.Leg.String()]++
+	m.subgroups[subgroup]++
+}
+
+func (m *recordingMetrics) SessionOpened(leg relay.Leg) {
+	m.sessionsOpened.Add(1)
+	if leg == relay.LegUpstream {
+		m.upstreamOpened.Add(1)
+	}
+}
+func (m *recordingMetrics) SessionClosed(relay.Leg)           { m.sessionsClosed.Add(1) }
+func (m *recordingMetrics) SubscriptionOpened(relay.TrackRef) { m.subsOpened.Add(1) }
+func (m *recordingMetrics) SubscriptionClosed(relay.TrackRef) { m.subsClosed.Add(1) }
+
+func (m *recordingMetrics) ObjectReceived(relay.TrackRef, uint64) {
+	m.received.Add(1)
+}
+
+func (m *recordingMetrics) ObjectForwarded(t relay.TrackRef, subgroup uint64) {
+	m.forwarded.Add(1)
+	m.note(t, subgroup)
+}
+
+func (m *recordingMetrics) ObjectDropped(t relay.TrackRef, subgroup uint64) {
+	m.dropped.Add(1)
+	m.note(t, subgroup)
+}
+
+func (m *recordingMetrics) SubgroupStreamReset(_ relay.TrackRef, _ uint64, cause relay.ResetCause) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.resets == nil {
+		m.resets = make(map[relay.ResetCause]int)
+	}
+	m.resets[cause]++
+}
+
+func (m *recordingMetrics) SubscriptionResetSlowReader(_ relay.TrackRef, cause relay.ResetCause) {
+	m.slowReset.Add(1)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.resets == nil {
+		m.resets = make(map[relay.ResetCause]int)
+	}
+	m.resets[cause]++
+}
+
+func (m *recordingMetrics) FetchServed(_ relay.TrackRef, n int) {
 	m.fetchServed.Add(1)
 	m.fetchObjects.Add(int64(n))
+}
+
+func (m *recordingMetrics) UpstreamDialFailed(string) { m.dialFailed.Add(1) }
+func (m *recordingMetrics) NamespaceResolved(int)     { m.nsResolved.Add(1) }
+
+// resetCount reports how many times cause was recorded.
+func (m *recordingMetrics) resetCount(cause relay.ResetCause) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.resets[cause]
 }
 
 // TestMetricsHooks drives a publish → subscribe → forward → fetch flow through
@@ -138,6 +208,35 @@ func TestMetricsHooks(t *testing.T) {
 	}
 	if got := rec.dropped.Load(); got != 0 {
 		t.Errorf("ObjectDropped = %d, want 0", got)
+	}
+	// With one subscriber, received and forwarded are one-to-one.
+	if got := rec.received.Load(); got != int64(sgCount) {
+		t.Errorf("ObjectReceived = %d, want %d", got, sgCount)
+	}
+	// The labels must carry the track name and the leg the session sits on.
+	// Both peers dialled in, so everything here is LegLocal — an upstream leg
+	// only appears on a relay that dialled out (cross_relay_test.go).
+	rec.mu.Lock()
+	names := maps.Clone(rec.trackNames)
+	subgroups := maps.Clone(rec.subgroups)
+	rec.mu.Unlock()
+	if got := names["cam1/local"]; got != sgCount {
+		t.Errorf("forwarded objects labelled cam1/local = %d, want %d (saw %v)", got, sgCount, names)
+	}
+	if got := subgroups[0]; got != sgCount {
+		t.Errorf("forwarded objects on subgroup 0 = %d, want %d (saw %v)", got, sgCount, subgroups)
+	}
+	// A clean, gapless subgroup must not report any stream reset: the reset
+	// counters are only meaningful if the healthy path leaves them at zero.
+	for _, c := range []relay.ResetCause{
+		relay.ResetCauseGap,
+		relay.ResetCauseDeliveryTimeout,
+		relay.ResetCauseWriteError,
+		relay.ResetCauseInboundReset,
+	} {
+		if got := rec.resetCount(c); got != 0 {
+			t.Errorf("SubgroupStreamReset(%s) = %d on a clean subgroup, want 0", c, got)
+		}
 	}
 	// Lifecycle opens: publisher + subscriber sessions, one subscription.
 	if got := rec.sessionsOpened.Load(); got < 2 {

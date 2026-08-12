@@ -28,13 +28,18 @@ import (
 // datagram loops on separate goroutines, plus per-request handler goroutines
 // spawned by the dispatch loop and tracked via wg for a clean join on teardown.
 type sessionHandler struct {
-	sess                *session.Session
-	log                 *slog.Logger
-	tracks              *registry.TrackRegistry
-	names               *registry.NamespaceRegistry
-	auth                Authorizer
-	metrics             Metrics
-	fetch               *registry.FetchRouter
+	sess    *session.Session
+	log     *slog.Logger
+	tracks  *registry.TrackRegistry
+	names   *registry.NamespaceRegistry
+	auth    Authorizer
+	metrics Metrics
+	fetch   *registry.FetchRouter
+	// leg records whether this session was dialled by the relay
+	// (LegUpstream) or by the peer (LegLocal). Every [Metrics] call this
+	// handler makes carries it, so an operator can separate what the
+	// cross-relay hop is doing from what clients are doing.
+	leg                 Leg
 	upstreams           *upstreamPool
 	discovery           discovery.DiscoveryStore
 	relayAddr           string
@@ -90,6 +95,7 @@ func newSessionHandler(
 	names *registry.NamespaceRegistry,
 	auth Authorizer,
 	metrics Metrics,
+	leg Leg,
 	fetch *registry.FetchRouter,
 	upstreams *upstreamPool,
 	discovery discovery.DiscoveryStore,
@@ -108,6 +114,7 @@ func newSessionHandler(
 		names:               names,
 		auth:                auth,
 		metrics:             metrics,
+		leg:                 leg,
 		fetch:               fetch,
 		upstreams:           upstreams,
 		discovery:           discovery,
@@ -120,6 +127,17 @@ func newSessionHandler(
 		joinLocNotify:       make(chan struct{}),
 		relayGo:             relayGo,
 	}
+}
+
+// trackRef labels a [Metrics] event with the track it happened on and the leg
+// this session sits on.
+//
+// track.FullTrackName holds the name as []byte, so this conversion allocates.
+// Callers MUST hoist it out of any per-object loop — build one TrackRef when a
+// stream, subscription or FETCH begins and reuse it — because [Metrics]
+// promises implementations a hot path with nothing to spare.
+func (h *sessionHandler) trackRef(name track.FullTrackName) TrackRef {
+	return TrackRef{Name: string(name.Name), Leg: h.leg}
 }
 
 // handleInboundGoaway implements §10.4: when the peer sends GOAWAY, grant the
@@ -608,7 +626,7 @@ func (h *sessionHandler) serveFetchObjects(
 	}
 
 	written, err := streamFetchObjects(out, objs)
-	h.metrics.FetchServed(written)
+	h.metrics.FetchServed(h.trackRef(fullName), written)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH stream write failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))
