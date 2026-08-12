@@ -169,6 +169,7 @@ grouped here by the file they live in:
 | Topic | Example function(s) |
 |---|---|
 | MSF catalogs (build / parse / delta) | `ExampleBeginBroadcast`, `Example_subscribeCatalog`, `ExampleApply` |
+| CMSF CMAF packaging + DRM (CMSF) | `Example_contentProtection`, `ExampleSAPRecord` |
 
 The two demo commands — [`cmd/clock`](cmd/clock) and
 [`cmd/msfdemo`](cmd/msfdemo) — are complete, runnable versions of these patterns

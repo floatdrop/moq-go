@@ -101,7 +101,8 @@ type Accessibility struct {
 //   - clone operation entries: ParentName required (§5.1.6).
 //
 // Pointer-typed fields (IsLive, TargetLatency, RenderGroup, AltGroup,
-// TemporalID, SpatialID, Buffers, Template) distinguish "field absent"
+// TemporalID, SpatialID, Buffers, Template, MaxGrpSapStartingType,
+// MaxObjSapStartingType) distinguish "field absent"
 // from "field set to zero/false". The remaining numeric / string fields
 // use omitempty because zero is never a valid catalog value (e.g.
 // bitrate=0).
