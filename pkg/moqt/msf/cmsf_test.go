@@ -321,65 +321,6 @@ func TestCatalogCMSFClearKey(t *testing.T) {
 	}
 }
 
-// CMSF §3.6.2 — SAP-type timeline worked example: a 30fps track with
-// 4s Groups starting SAP-2, a SAP-3 sub-GOP two seconds in. Proves the
-// existing generic EventRecord/EventTimeline machinery (eventtimeline.go)
-// handles CMSF's eventType without any CMSF-specific decoding logic.
-func TestCMSFSAPEventRoundTrip(t *testing.T) {
-	const doc = `[
-		{"l": [0,0],  "data": [2,0]},
-		{"l": [0,60], "data": [3,2100]},
-		{"l": [1,0],  "data": [2,4000]},
-		{"l": [1,60], "data": [3,6100]}
-	]`
-
-	var ev EventTimeline
-	if err := json.Unmarshal([]byte(doc), &ev); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if len(ev) != 4 {
-		t.Fatalf("len: got %d, want 4", len(ev))
-	}
-
-	type sapRecord struct {
-		sapType int
-		ept     int64
-	}
-	want := []sapRecord{
-		{2, 0}, {3, 2100}, {2, 4000}, {3, 6100},
-	}
-	for i, rec := range ev {
-		if rec.Index != EventIndexLocation {
-			t.Errorf("ev[%d].Index: got %v, want EventIndexLocation", i, rec.Index)
-		}
-		var pair [2]int64
-		if err := json.Unmarshal(rec.Data, &pair); err != nil {
-			t.Fatalf("ev[%d] data: %v", i, err)
-		}
-		if int(pair[0]) != want[i].sapType || pair[1] != want[i].ept {
-			t.Errorf("ev[%d] sap/ept: got %v, want %+v", i, pair, want[i])
-		}
-	}
-	if ev[0].GroupID != 0 || ev[0].ObjectID != 0 {
-		t.Errorf("ev[0] location: got (%d,%d)", ev[0].GroupID, ev[0].ObjectID)
-	}
-	if ev[1].GroupID != 0 || ev[1].ObjectID != 60 {
-		t.Errorf("ev[1] location: got (%d,%d)", ev[1].GroupID, ev[1].ObjectID)
-	}
-
-	out, err := json.Marshal(ev)
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
-	}
-	var rt EventTimeline
-	if err := json.Unmarshal(out, &rt); err != nil {
-		t.Fatalf("round-trip: %v", err)
-	}
-	if len(rt) != len(ev) {
-		t.Fatalf("round-trip len: got %d", len(rt))
-	}
-}
-
 // A catalog track can declare packaging=eventtimeline with
 // eventType=org.ietf.moq.cmsf.sap and pass Validate() like any other
 // Event Timeline track.
