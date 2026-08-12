@@ -5,6 +5,10 @@
      globs draft-*, so builds need no edit. -->
 [![CI](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml/badge.svg?branch=draft-19)](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml?query=branch%3Adraft-19)
 [![Go Reference](https://pkg.go.dev/badge/github.com/floatdrop/moq-go.svg)](https://pkg.go.dev/github.com/floatdrop/moq-go)
+<!-- Static, and refreshed by `make cover-badge` — not a live service. CI's
+     coverage job gates per-package floors (coverage-floors.txt); this figure is
+     the whole-suite number from -coverpkg, which is the one worth advertising. -->
+[![Coverage](https://img.shields.io/badge/coverage-86%25-green.svg)](coverage-floors.txt)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
 [![Discord](https://img.shields.io/discord/1124083992740761730?logo=Discord&logoColor=%235865F2&label=join&color=%235865F2)](https://discord.moq.dev/)
 
