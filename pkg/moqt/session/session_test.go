@@ -87,6 +87,62 @@ func openPairWithLimits(t *testing.T, aBidiLimit int) (*session.Session, *sessio
 	return aSess, bSess
 }
 
+// TestClientSendsPathAndAuthority covers WithPath and WithAuthority, which had
+// no test of any kind despite internal/dial putting AUTHORITY on every
+// native-QUIC connection this repo makes.
+//
+// It asserts the option arrives under the right §15.4 codepoint, not merely
+// that some option arrived: the value travelling under the wrong key is the
+// failure a peer actually suffers, and §10.3 has it ignore the unrecognized
+// option silently rather than error. Byte-level encoding is pinned separately
+// in message.TestSetupOptionGoldenBytes.
+func TestClientSendsPathAndAuthority(t *testing.T) {
+	ctx := t.Context()
+	clientConn, serverConn := sessiontest.NewConnPair()
+
+	var (
+		wg                     sync.WaitGroup
+		clientSess, serverSess *session.Session
+		clientErr, serverErr   error
+	)
+	wg.Go(func() {
+		clientSess, clientErr = session.Client(ctx, clientConn,
+			session.WithPath("/relay?room=1"),
+			session.WithAuthority("relay.example:4433"),
+		)
+	})
+	wg.Go(func() {
+		serverSess, serverErr = session.Server(ctx, serverConn)
+	})
+	wg.Wait()
+
+	if clientErr != nil {
+		t.Fatalf("client Open: %v", clientErr)
+	}
+	if serverErr != nil {
+		t.Fatalf("server Open: %v", serverErr)
+	}
+	t.Cleanup(func() {
+		_ = clientSess.Close(moqt.SessionNoError, "test cleanup")
+		_ = serverSess.Close(moqt.SessionNoError, "test cleanup")
+	})
+
+	want := map[uint64]string{
+		uint64(message.SetupOptionPath):      "/relay?room=1",
+		uint64(message.SetupOptionAuthority): "relay.example:4433",
+	}
+	got := make(map[uint64]string)
+	for _, opt := range serverSess.PeerOptions() {
+		got[opt.Type] = string(opt.ByteVal)
+	}
+	for typ, val := range want {
+		if got[typ] != val {
+			t.Errorf("server saw option 0x%02X = %q, want %q (all: %+v)",
+				typ, got[typ], val, serverSess.PeerOptions())
+		}
+	}
+}
+
 func TestHandshakeExchangesPeerOptions(t *testing.T) {
 	client, server := openPair(t)
 
