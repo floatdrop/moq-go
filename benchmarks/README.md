@@ -36,9 +36,43 @@ marginal per-subscriber cost.
 
 ### Running
 
-```sh
-go test -run='^$' -bench=. -skip='FanoutBuffered|FanoutQUIC' -benchmem -count=10 ./pkg/... 2>/dev/null
-```
+The suite runs in two tiers, because the full one takes **4m30s** — too slow to
+sit in the loop after every change, which is exactly when a new allocation is
+cheapest to notice.
+
+| Tier | Command | Cost | Gives you |
+|---|---|---|---|
+| Quick | `make bench-quick` | ~5s | `allocs/op`, `B/op` |
+| Full | `make bench` | ~4m30s | `allocs/op`, `B/op`, **`ns/op`** |
+| Smoke | `make bench-smoke` | ~7s | compiles and runs, no numbers |
+
+**Run the quick tier after every change to a hot path.** Run the full tier
+before claiming a timing result, before refreshing the baseline, and when the
+quick tier shows something you're about to act on.
+
+#### Why the quick tier works
+
+`make bench-quick` replaces `-count=10` at the default 1s-per-benchmark with a
+fixed `-benchtime=500x -count=1`. Allocation counts are deterministic *per
+iteration*, so they do not need a long run to stabilize — only enough
+iterations to amortize per-run setup, which for this suite is reached by 500.
+Measured against the full run, the quick tier reports **identical `allocs/op`
+for every benchmark except the two relay fanout ones**, at 1/60th the wall
+clock.
+
+#### What the quick tier is not
+
+- **`ns/op` from `make bench-quick` is meaningless.** 500 iterations does not
+  warm caches or amortize setup: `Fanout1to1` reads ~2.4x slower there than it
+  actually is. Anything about time comes from `make bench`, no exceptions.
+- **`BenchmarkFanout1toN` carries ~±2 allocs of real scheduling noise**, in both
+  tiers (the full `-count=10` run itself reports 130 and 131 across samples),
+  and can read further off under a loaded machine. It is a 64-subscriber
+  multi-goroutine fanout, so its per-op allocations genuinely depend on
+  scheduling; `-p 1` does not fix this. Treat only a shift well outside that
+  band as signal, and confirm it with the full tier before acting.
+
+#### The flags, if you run it by hand
 
 - `-run='^$'` skips the normal tests (no name matches), so only benchmarks run.
 - `-skip='FanoutBuffered|FanoutQUIC'` excludes the throughput probes (below),
@@ -49,10 +83,12 @@ go test -run='^$' -bench=. -skip='FanoutBuffered|FanoutQUIC' -benchmem -count=10
   benchmarks already silence the relay logger; this catches residual transport
   noise) so **stdout** stays `benchstat`-parseable.
 
-Compile-and-run smoke check (no timing):
+Narrow either tier to the packages you touched with `BENCH_PKGS`, which cuts the
+quick tier to about a second:
 
 ```sh
-go test -run='^$' -bench=. -benchtime=1x ./...
+make bench-quick BENCH_PKGS=./pkg/moqt/wire/
+make bench BENCH_PKGS='./pkg/relay/ ./pkg/relay/cache/'
 ```
 
 ## Throughput probes (non-regression)
@@ -82,10 +118,8 @@ is the headline per-stream ceiling.
 ```sh
 go install golang.org/x/perf/cmd/benchstat@latest
 
-# base commit
-go test -run='^$' -bench=. -skip='FanoutBuffered|FanoutQUIC' -benchmem -count=10 ./pkg/... > old.txt 2>/dev/null
-# after your change
-go test -run='^$' -bench=. -skip='FanoutBuffered|FanoutQUIC' -benchmem -count=10 ./pkg/... > new.txt 2>/dev/null
+git stash && make bench > old.txt          # base commit
+git stash pop && make bench > new.txt      # after your change
 
 benchstat old.txt new.txt
 ```
@@ -99,12 +133,11 @@ blocker — those allocations multiply by the per-object call rate.
 [`baseline-go1.26.txt`](baseline-go1.26.txt) is a committed reference run of the
 regression suite on one machine (the `goos`/`goarch`/`cpu` header records which).
 Use it as a sanity check and as the `old.txt` for a quick local diff. Refresh it
-deliberately — never silently — when an intentional performance change lands:
+deliberately — never silently — when an intentional performance change lands, and
+say in the commit message why the numbers moved:
 
 ```sh
-go test -run='^$' -bench=. -skip='FanoutBuffered|FanoutQUIC' -benchmem -count=10 \
-  ./pkg/moqt/wire/ ./pkg/moqt/message/ ./pkg/moqt/session/ ./pkg/relay/ ./pkg/relay/cache/ \
-  > benchmarks/baseline-go1.26.txt 2>/dev/null
+make bench-baseline
 ```
 
 Absolute numbers are not portable across machines, so don't gate CI on them. The
@@ -113,7 +146,8 @@ the same machine.
 
 ## CI
 
-A compile-and-run smoke job (`-bench=. -benchtime=1x -count=1`) keeps the
-benchmarks from bit-rotting. CI runners are too noisy for timing assertions, so
-there are no pass/fail thresholds — timing comparison stays a local/manual
-`benchstat` step.
+The `Benchmarks (smoke)` job runs `make bench-smoke` — compile-and-run,
+one iteration each — which keeps the benchmarks from bit-rotting into something
+that no longer builds. CI runners are too noisy for timing *or* allocation
+assertions, so there are no pass/fail thresholds; comparison stays a local
+`make bench-quick` / `benchstat` step.

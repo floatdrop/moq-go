@@ -1,0 +1,27 @@
+# Per-package statement-coverage floors, enforced by `make cover-check`.
+#
+# Regenerate with `make cover-floors` — never hand-edit. Raising a floor is
+# a deliberate act: do it in the same commit as the tests that earned it, so
+# the diff shows what was covered and why.
+#
+# Each floor is the lowest of 3 sampled runs, and the check allows a
+# further 0.5pp of slack. See scripts/check-coverage.sh.
+#
+# <package> <floor %>
+github.com/floatdrop/moq-go/pkg/moqt/loc 97.6
+github.com/floatdrop/moq-go/pkg/moqt/message 88.4
+github.com/floatdrop/moq-go/pkg/moqt/msf 81.3
+github.com/floatdrop/moq-go/pkg/moqt/session 85.4
+github.com/floatdrop/moq-go/pkg/moqt/session/internal/conntest 0.0
+github.com/floatdrop/moq-go/pkg/moqt/session/quicconn 63.8
+github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest 19.5
+github.com/floatdrop/moq-go/pkg/moqt/session/wtconn 50.8
+github.com/floatdrop/moq-go/pkg/moqt/track 100.0
+github.com/floatdrop/moq-go/pkg/moqt/uri 98.3
+github.com/floatdrop/moq-go/pkg/moqt/wire 79.9
+github.com/floatdrop/moq-go/pkg/relay 83.5
+github.com/floatdrop/moq-go/pkg/relay/cache 84.9
+github.com/floatdrop/moq-go/pkg/relay/discovery 88.3
+github.com/floatdrop/moq-go/pkg/relay/internal/registry 74.6
+github.com/floatdrop/moq-go/pkg/relay/internal/relaytest 0.0
+github.com/floatdrop/moq-go/pkg/relay/relaynet 79.3

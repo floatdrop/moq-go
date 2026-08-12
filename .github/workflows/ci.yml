@@ -53,6 +53,36 @@ jobs:
           go-version-file: go.mod
       - run: go test -race ./...
 
+  coverage:
+    name: Coverage floors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # Fails if any package drops below its floor in coverage-floors.txt.
+      # Floors were recorded on linux/amd64 to match this runner, as the lowest
+      # of three sampled runs, and the check allows a further 0.5pp for the
+      # timing-dependent branches in session/relay. Raise a floor with
+      # `make cover-floors`; there is no table to hand-edit.
+      - run: make cover-check
+
+  bench:
+    name: Benchmarks (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      # Compile-and-run only, one iteration each (~7s). CI runners are far too
+      # noisy for timing or allocation assertions, so this asserts nothing about
+      # the numbers — it only keeps a benchmark from silently rotting into
+      # something that no longer builds or panics. Regression comparison is the
+      # local `make bench-quick` / `benchstat` step; see benchmarks/README.md.
+      - run: make bench-smoke
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

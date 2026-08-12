@@ -5,6 +5,8 @@
 # exercising both raw QUIC (moqt://) and WebTransport (https://) transports.
 
 .PHONY: build test test-race lint \
+        bench bench-quick bench-smoke bench-baseline \
+        cover cover-gaps cover-html cover-check cover-floors \
         interop interop-quic interop-webtransport interop-matrix interop-build interop-certs interop-clean \
         interop-client interop-client-build
 
@@ -23,6 +25,91 @@ test-race:
 
 lint:
 	golangci-lint run
+
+# ---------------------------------------------------------------------------
+# Benchmarks
+# ---------------------------------------------------------------------------
+#
+# Two tiers, because the full suite is too slow to run after every slice of
+# work. See benchmarks/README.md for what each one is and is not evidence of.
+#
+#   bench-quick  ~5s    allocs/op and B/op only — the per-change guard
+#   bench        ~4m30s allocs/op, B/op AND ns/op — feeds benchstat
+#
+# The throughput probes are excluded from both: they are "how fast can it go"
+# measurements, not regression signals.
+BENCH_SKIP  := FanoutBuffered|FanoutQUIC
+BENCH_PKGS  ?= ./pkg/...
+# Fixed iteration counts, not a duration. allocs/op is deterministic per
+# iteration, so a short fixed run reproduces it exactly while costing ~1s per
+# package; 500x is where the relay fanout benchmarks amortize their per-run
+# setup and converge on the same counts the full suite reports.
+BENCH_QUICK_TIME := 500x
+
+# The per-change guard. ns/op from this target is MEANINGLESS — 500 iterations
+# is far too few to amortize setup or warm caches, and Fanout1to1 reads 2-3x
+# slower here than it truly is. Read allocs/op and B/op; use `make bench` for
+# anything about time.
+bench-quick:
+	go test -run='^$$' -bench=. -skip='$(BENCH_SKIP)' -benchmem \
+		-benchtime=$(BENCH_QUICK_TIME) -count=1 $(BENCH_PKGS) 2>/dev/null
+
+# The full regression suite. -count=10 gives benchstat enough samples for a
+# stable mean and variance; redirect to a file and compare two of them.
+bench:
+	go test -run='^$$' -bench=. -skip='$(BENCH_SKIP)' -benchmem \
+		-count=10 $(BENCH_PKGS) 2>/dev/null
+
+# Compile-and-run check only, one iteration each — catches a benchmark that no
+# longer builds or panics. Includes the throughput probes deliberately; they
+# bit-rot too. This is the CI job.
+bench-smoke:
+	go test -run='^$$' -bench=. -benchtime=1x -count=1 ./... >/dev/null
+
+# Refresh the committed reference run. Deliberate, never silent: do this only
+# when an intentional performance change lands, and say so in the commit.
+bench-baseline:
+	go test -run='^$$' -bench=. -skip='$(BENCH_SKIP)' -benchmem -count=10 \
+		./pkg/moqt/wire/ ./pkg/moqt/message/ ./pkg/moqt/session/ ./pkg/relay/ ./pkg/relay/cache/ \
+		> benchmarks/baseline-go1.26.txt 2>/dev/null
+
+# ---------------------------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------------------------
+
+COVER_PROFILE ?= coverage.out
+
+# Scoped to the library by default. The cmd/* binaries are thin wiring over
+# these packages and are covered end-to-end by the interop suite instead, so
+# including them buries the actionable gaps under ~250 lines of 0.0% main().
+# Override to see everything: make cover COVER_PKGS=./...
+COVER_PKGS ?= ./pkg/...
+
+# Per-package summary. Informational; `cover-check` is the gate.
+cover:
+	go test -cover $(COVER_PKGS)
+
+# Every function the tests never reach, least-covered first. Untested code is
+# either a missing test or dead code; this is the list that decides which.
+cover-gaps:
+	@go test -coverprofile=$(COVER_PROFILE) $(COVER_PKGS) >/dev/null
+	@go tool cover -func=$(COVER_PROFILE) | grep -v '100.0%' | sort -k3 -n
+
+cover-html:
+	@go test -coverprofile=$(COVER_PROFILE) $(COVER_PKGS) >/dev/null
+	go tool cover -html=$(COVER_PROFILE)
+
+# Gate: no package may fall below its floor in coverage-floors.txt. This is what
+# CI runs, and it is the enforcement — there is no table to hand-maintain.
+cover-check:
+	@./scripts/check-coverage.sh
+
+# Re-measure and rewrite the floors. Run this when you have RAISED coverage, and
+# commit the result alongside the tests that earned it. Samples the suite three
+# times and keeps the per-package minimum, so a floor is the bottom of the band
+# and not a lucky run.
+cover-floors:
+	@./scripts/check-coverage.sh --update
 
 # ---------------------------------------------------------------------------
 # Interop testing
