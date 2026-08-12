@@ -3,6 +3,8 @@ package msf
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -257,6 +259,202 @@ func TestDeltaUpdateOrder(t *testing.T) {
 	}
 }
 
+// Clone overlay carries CMSF fields (maxGrpSapStartingType,
+// maxObjSapStartingType, contentProtectionRefIDs) from the clone entry,
+// and the child's ContentProtectionRefIDs slice is independent of the
+// parent's after cloning.
+func TestDeltaCloneOverlaysCMSFFields(t *testing.T) {
+	base := Catalog{
+		Version: "draft-01",
+		Tracks: []Track{
+			{
+				Name:                    "video",
+				Packaging:               PackagingCMAF,
+				IsLive:                  new(true),
+				ContentProtectionRefIDs: []string{"1"},
+			},
+		},
+		ContentProtections: []ContentProtection{
+			{
+				RefID:      "1",
+				DefaultKID: []string{testKID},
+				Scheme:     SchemeCBCS,
+				DRMSystem:  DRMSystem{SystemID: DRMSystemIDWidevine},
+			},
+			{
+				RefID:      "2",
+				DefaultKID: []string{testKID},
+				Scheme:     SchemeCBCS,
+				DRMSystem:  DRMSystem{SystemID: DRMSystemIDPlayReady},
+			},
+		},
+	}
+
+	delta := Catalog{
+		DeltaUpdate: []DeltaOp{
+			{
+				Op: DeltaOpClone,
+				Tracks: []Track{
+					{
+						ParentName:              "video",
+						Name:                    "video-hi",
+						MaxGrpSapStartingType:   new(2),
+						MaxObjSapStartingType:   new(3),
+						ContentProtectionRefIDs: []string{"1", "2"},
+					},
+				},
+			},
+		},
+	}
+
+	out, err := Apply(base, delta)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	var clone Track
+	for _, tr := range out.Tracks {
+		if tr.Name == "video-hi" {
+			clone = tr
+			break
+		}
+	}
+	if clone.MaxGrpSapStartingType == nil || *clone.MaxGrpSapStartingType != 2 {
+		t.Errorf("clone MaxGrpSapStartingType: %v", clone.MaxGrpSapStartingType)
+	}
+	if clone.MaxObjSapStartingType == nil || *clone.MaxObjSapStartingType != 3 {
+		t.Errorf("clone MaxObjSapStartingType: %v", clone.MaxObjSapStartingType)
+	}
+	if !reflect.DeepEqual(clone.ContentProtectionRefIDs, []string{"1", "2"}) {
+		t.Errorf("clone ContentProtectionRefIDs: %v", clone.ContentProtectionRefIDs)
+	}
+
+	// Mutating the clone's slice must not affect the parent's.
+	clone.ContentProtectionRefIDs[0] = "mutated"
+	if out.Tracks[0].ContentProtectionRefIDs[0] != "1" {
+		t.Errorf("parent ContentProtectionRefIDs mutated: %v", out.Tracks[0].ContentProtectionRefIDs)
+	}
+}
+
+// A clone entry that omits contentProtectionRefIDs inherits the
+// parent's — and must not share its backing array, which is the case
+// the overlay path alone does not copy.
+func TestDeltaCloneInheritedSliceIsNotAliased(t *testing.T) {
+	base := Catalog{
+		Version: "draft-01",
+		Tracks: []Track{
+			{
+				Name:                    "video",
+				Packaging:               PackagingCMAF,
+				IsLive:                  new(true),
+				ContentProtectionRefIDs: []string{"1"},
+			},
+		},
+		ContentProtections: []ContentProtection{{
+			RefID:      "1",
+			DefaultKID: []string{testKID},
+			Scheme:     SchemeCBCS,
+			DRMSystem:  DRMSystem{SystemID: DRMSystemIDWidevine},
+		}},
+	}
+	delta := Catalog{
+		DeltaUpdate: []DeltaOp{
+			{Op: DeltaOpClone, Tracks: []Track{{ParentName: "video", Name: "video-hi"}}},
+		},
+	}
+
+	out, err := Apply(base, delta)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if !reflect.DeepEqual(out.Tracks[1].ContentProtectionRefIDs, []string{"1"}) {
+		t.Fatalf("clone did not inherit refIDs: %v", out.Tracks[1].ContentProtectionRefIDs)
+	}
+	out.Tracks[1].ContentProtectionRefIDs[0] = "mutated"
+	if out.Tracks[0].ContentProtectionRefIDs[0] != "1" {
+		t.Errorf("parent aliased the clone's slice: %v", out.Tracks[0].ContentProtectionRefIDs)
+	}
+}
+
+// A delta may carry the root-level arrays its added tracks reference:
+// §5.3 forbids only tracks and version at the root, while CMSF §3.1
+// and §4.1.2 require initRef and contentProtectionRefIDs to resolve.
+func TestApplyMergesRootLevelArrays(t *testing.T) {
+	base := Catalog{
+		Version:      "draft-01",
+		Tracks:       []Track{{Name: "a", Packaging: PackagingCMAF, IsLive: new(true), InitRef: "init-a"}},
+		InitDataList: []InitData{{ID: "init-a", Type: InitDataTypeInline, Data: "AAAA"}},
+	}
+	delta := Catalog{
+		InitDataList: []InitData{{ID: "init-b", Type: InitDataTypeInline, Data: "BBBB"}},
+		ContentProtections: []ContentProtection{{
+			RefID:      "1",
+			DefaultKID: []string{testKID},
+			Scheme:     SchemeCBCS,
+			DRMSystem:  DRMSystem{SystemID: DRMSystemIDWidevine},
+		}},
+		DeltaUpdate: []DeltaOp{{Op: DeltaOpAdd, Tracks: []Track{{
+			Name:                    "b",
+			Packaging:               PackagingCMAF,
+			IsLive:                  new(true),
+			InitRef:                 "init-b",
+			ContentProtectionRefIDs: []string{"1"},
+		}}}},
+	}
+	if err := delta.Validate(); err != nil {
+		t.Fatalf("delta Validate: %v", err)
+	}
+
+	out, err := Apply(base, delta)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	// The merged catalog must satisfy the referential integrity rules
+	// the added track depends on.
+	if err := out.Validate(); err != nil {
+		t.Fatalf("merged Validate: %v", err)
+	}
+	if len(out.InitDataList) != 2 || len(out.ContentProtections) != 1 {
+		t.Errorf("merged root arrays: init=%v cp=%v", out.InitDataList, out.ContentProtections)
+	}
+}
+
+// Re-sending an identical root-level entry is idempotent; redefining
+// one with different content is rejected.
+func TestApplyRootArrayRedefinition(t *testing.T) {
+	cp := ContentProtection{
+		RefID:      "1",
+		DefaultKID: []string{testKID},
+		Scheme:     SchemeCBCS,
+		DRMSystem:  DRMSystem{SystemID: DRMSystemIDWidevine},
+	}
+	base := Catalog{
+		Version:            "draft-01",
+		Tracks:             []Track{{Name: "a", Packaging: PackagingCMAF, IsLive: new(true)}},
+		ContentProtections: []ContentProtection{cp},
+	}
+	noop := Catalog{
+		ContentProtections: []ContentProtection{cp},
+		DeltaUpdate:        []DeltaOp{{Op: DeltaOpRemove, Tracks: []Track{{Name: "a"}}}},
+	}
+	out, err := Apply(base, noop)
+	if err != nil {
+		t.Fatalf("identical re-send: %v", err)
+	}
+	if len(out.ContentProtections) != 1 {
+		t.Errorf("identical re-send duplicated the entry: %v", out.ContentProtections)
+	}
+
+	conflict := cp
+	conflict.Scheme = SchemeCENC
+	bad := Catalog{
+		ContentProtections: []ContentProtection{conflict},
+		DeltaUpdate:        []DeltaOp{{Op: DeltaOpRemove, Tracks: []Track{{Name: "a"}}}},
+	}
+	if _, err := Apply(base, bad); err == nil || !strings.Contains(err.Error(), "redefined") {
+		t.Errorf("expected redefinition error, got: %v", err)
+	}
+}
+
 // A delta catalog round-trips without emitting a "tracks" key (§5.3).
 func TestDeltaMarshalOmitsTracks(t *testing.T) {
 	c := Catalog{
@@ -278,5 +476,31 @@ func TestDeltaMarshalOmitsTracks(t *testing.T) {
 	}
 	if _, ok := m["deltaUpdate"]; !ok {
 		t.Errorf("delta catalog missing deltaUpdate key: %s", raw)
+	}
+}
+
+// Whether initRef and contentProtectionRefIDs resolve is cross-document
+// state, so Apply — not Validate — has to catch a delta that adds a
+// track referencing entries no catalog in the chain declares.
+func TestApplyRejectsDanglingReferences(t *testing.T) {
+	base := Catalog{
+		Version: "draft-01",
+		Tracks:  []Track{{Name: "a", Packaging: PackagingCMAF, IsLive: new(true)}},
+	}
+	delta := Catalog{
+		DeltaUpdate: []DeltaOp{{Op: DeltaOpAdd, Tracks: []Track{{
+			Name:                    "b",
+			Packaging:               PackagingCMAF,
+			IsLive:                  new(true),
+			InitRef:                 "missing-init",
+			ContentProtectionRefIDs: []string{"missing-cp"},
+		}}}},
+	}
+	// The delta alone is well-formed: §5.3 field rules all hold.
+	if err := delta.Validate(); err != nil {
+		t.Fatalf("delta Validate: %v", err)
+	}
+	if _, err := Apply(base, delta); err == nil || !strings.Contains(err.Error(), "missing-init") {
+		t.Errorf("expected dangling initRef error from Apply, got: %v", err)
 	}
 }

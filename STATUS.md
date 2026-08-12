@@ -2,8 +2,9 @@
 
 Tracks this codebase's implementation of
 [`draft-ietf-moq-transport-19`](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/19/)
-(plus [`-loc-04`](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) and
-[`-msf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) at the edges).
+(plus [`-loc-04`](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/),
+[`-msf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/), and
+[`-cmsf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-cmsf/) at the edges).
 
 ## Overall: ~97% complete
 
@@ -48,9 +49,16 @@ By package, bottom-up along the dependency stack:
   for unknown IDs, an RFC 6464 audio-level codec, and AVC/HEVC NAL framing
   detection.
 - **`msf`** — `Catalog`/`Track` JSON (independent and delta catalogs, with
-  `Apply` replaying delta operations in document order), group-ID sequencing,
-  the Media and Event Timeline record formats, the `BeginBroadcast`/
-  `EndBroadcast*` workflow helpers, and `Catalog.Validate`.
+  `Apply` replaying delta operations in document order and merging the
+  root-level `initDataList`/`contentProtections` a delta carries), group-ID
+  sequencing, the Media and Event Timeline record formats, the
+  `BeginBroadcast`/`EndBroadcast*` workflow helpers, and `Catalog.Validate`.
+  CMSF (`-cmsf-01`) adds `cmaf` packaging, the two max-SAP-starting-type track
+  fields, the `SAPRecord` codec for SAP Type timeline tracks (§3.6.1), and the
+  root-level `contentProtections` array with its DRM system metadata (§4.1) —
+  validated down to the Table 3 scheme enum and the UUID forms §4.1.1.2 /
+  §4.1.1.4.1 require. CMSF §4.2's `sinf`/`schm`/`schi`/`tenc` requirement lives
+  inside the opaque Base64 init data, which this package does not parse.
 - **`relay`** — routes objects through a track registry with per-subscription
   live fanout under a §8 slow-reader policy, merges multiple upstream publishers
   per track (§9.5) with §2.1 {Group, Object} dedup and survivor-continues

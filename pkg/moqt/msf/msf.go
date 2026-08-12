@@ -3,7 +3,10 @@
 // numbering (§6.1), and the Media Timeline (§7) and Event Timeline (§8)
 // tracks. MSF sits on top of [github.com/floatdrop/moq-go/pkg/moqt/loc]
 // — MSF catalogs declare LOC-packaged tracks and LOC media flows on
-// the streams those tracks open.
+// the streams those tracks open. cmsf.go adds the CMAF-packaging catalog
+// extension described by draft-ietf-moq-cmsf-01 (§3 CMAF Packaging, §4
+// Content Protection): CMAF-packaged tracks and DRM content-protection
+// signaling on the same catalog document.
 //
 // This package is library-shaped: it produces and parses the documents
 // that a publisher emits and a subscriber consumes, but it does not own
@@ -17,12 +20,15 @@ package msf
 const Version = "draft-01"
 
 // Packaging values for the track Packaging field (§5.2.4, Table 4).
+// PackagingCMAF is defined by draft-ietf-moq-cmsf-01 §3.5.1, not base
+// MSF; every track carrying CMAF-packaged media MUST declare it.
 const (
 	PackagingLOC           = "loc"
 	PackagingMediaTimeline = "mediatimeline"
 	PackagingEventTimeline = "eventtimeline"
 	PackagingMoQLog        = "moqlog"
 	PackagingMoQMetrics    = "moqmetrics"
+	PackagingCMAF          = "cmaf"
 )
 
 // Track role values (§5.2.6, Table 5). Custom roles are allowed as

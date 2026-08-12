@@ -16,6 +16,7 @@ publisher/subscriber CLIs.
 - [Media over QUIC Transport (MoQT)](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) — `draft-ietf-moq-transport-19`
 - [Low Overhead Media Container (LOC)](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) — `draft-ietf-moq-loc-04`
 - [MoQ Streaming Format (MSF)](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) — `draft-ietf-moq-msf-01`
+- [CMAF-compliant MSF (CMSF)](https://datatracker.ietf.org/doc/draft-ietf-moq-cmsf/) — `draft-ietf-moq-cmsf-01`
 
 This is library + reference-relay code, not a media player. Payloads are opaque
 to every layer — applications plug their own codec stack in at the LOC boundary.
@@ -169,6 +170,7 @@ grouped here by the file they live in:
 | Topic | Example function(s) |
 |---|---|
 | MSF catalogs (build / parse / delta) | `ExampleBeginBroadcast`, `Example_subscribeCatalog`, `ExampleApply` |
+| CMSF CMAF packaging + DRM (CMSF) | `Example_contentProtection`, `ExampleSAPRecord` |
 
 The two demo commands — [`cmd/clock`](cmd/clock) and
 [`cmd/msfdemo`](cmd/msfdemo) — are complete, runnable versions of these patterns
