@@ -15,7 +15,7 @@
 //     only consumers of stored data are the FETCH handlers, which
 //     can't see anything Get / GetRange filters out.
 //
-// The §10.2.11 LARGEST_OBJECT watermark is maintained outside the ring,
+// The §10.2.16 LARGEST_OBJECT watermark is maintained outside the ring,
 // under the same mutex, and is monotonic — evictions and TTL expiry
 // don't roll it back.
 package cache

@@ -933,3 +933,130 @@ func TestSubscribe_NoAliasCollisionWhenAlsoPublishing(t *testing.T) {
 	}
 	defer subStream.Close()
 }
+
+// TestPublish_SavesLargestObjectFromPublish pins §10.2.16 item 1 on the PUBLISH
+// path: a LARGEST_OBJECT on an inbound PUBLISH is one of the values the relay's
+// own watermark MUST be the largest of, so it has to reach the track entry even
+// though no object has arrived yet.
+//
+// Observable through the next SUBSCRIBE: §10.2.16 requires the relay to include
+// LARGEST_OBJECT once objects exist on the track, and that value is the
+// subscriber's Joining Location for a §10.12.2 Joining FETCH. Before the fix the
+// parameter was dropped, so the relay claimed to know nothing and the backfill
+// was unreachable.
+func TestPublish_SavesLargestObjectFromPublish(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	ns := wire.TrackNamespace{[]byte("video")}
+	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
+		Namespace:  ns,
+		Name:       []byte("cam1"),
+		TrackAlias: 42,
+		Parameters: message.Parameters{message.LargestObjectParam(5, 9)},
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer pubStream.Close()
+
+	subSess := dialAnotherClient(t, pubSess)
+	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte("cam1")})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer subReq.Close()
+
+	p, ok := subReq.OK.Parameters.Find(message.ParamLargestObject)
+	if !ok {
+		t.Fatalf("SUBSCRIBE_OK omitted LARGEST_OBJECT; the PUBLISH's value never "+
+			"reached the entry (params=%v)", subReq.OK.Parameters)
+	}
+	if p.Group != 5 || p.Object != 9 {
+		t.Errorf("SUBSCRIBE_OK LARGEST_OBJECT = {%d,%d}, want {5,9}", p.Group, p.Object)
+	}
+}
+
+// TestPublish_ForwardedPublishCarriesEntryLargestObject pins the other half of
+// §10.2.16 for the PUBLISH-forwarding path: the relay MUST send the largest of
+// everything it has observed, so the LARGEST_OBJECT on a PUBLISH it generates for
+// a SUBSCRIBE_TRACKS holder is re-derived from the track entry rather than copied
+// through from the upstream's own PUBLISH.
+//
+// Two publishers on one track (§9.5) is what separates the two behaviours. The
+// second announces a *lower* watermark than the first, so copying it through
+// would advertise {3,4} when the relay has already observed {9,9} — a value below
+// its own maximum, which is exactly what §10.2.16 forbids. With one publisher the
+// two readings coincide and the bug is invisible, which is why this test needs
+// the second one.
+func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
+	t.Parallel()
+	subSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+	})
+	if err != nil {
+		t.Fatalf("SubscribeTracks: %v", err)
+	}
+	defer subStream.Close()
+
+	ns := wire.TrackNamespace{[]byte("video"), []byte("cam7")}
+
+	// First publisher sets the entry's watermark to {9,9}.
+	pubA := dialAnotherClient(t, subSess)
+	pubStreamA, err := pubA.Publish(t.Context(), &message.Publish{
+		Namespace:  ns,
+		Name:       []byte("rtp"),
+		TrackAlias: 99,
+		Parameters: message.Parameters{message.LargestObjectParam(9, 9)},
+	})
+	if err != nil {
+		t.Fatalf("Publish A: %v", err)
+	}
+	defer pubStreamA.Close()
+	if _, err := subSess.AcceptRequest(t.Context()); err != nil {
+		t.Fatalf("AcceptRequest (A): %v", err)
+	}
+
+	// Second publisher on the SAME track announces a lower one.
+	pubB := dialAnotherClient(t, subSess)
+	pubStreamB, err := pubB.Publish(t.Context(), &message.Publish{
+		Namespace:  ns,
+		Name:       []byte("rtp"),
+		TrackAlias: 100,
+		Parameters: message.Parameters{message.LargestObjectParam(3, 4)},
+	})
+	if err != nil {
+		t.Fatalf("Publish B: %v", err)
+	}
+	defer pubStreamB.Close()
+
+	req, err := subSess.AcceptRequest(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptRequest (B): %v", err)
+	}
+	pub, ok := req.First.(*message.Publish)
+	if !ok {
+		t.Fatalf("got %T, want *message.Publish", req.First)
+	}
+	// Exactly one LARGEST_OBJECT: the upstream's copy is stripped and the
+	// entry's is appended, so a duplicate would mean the strip broke.
+	var seen int
+	for _, p := range pub.Parameters {
+		if p.Type != message.ParamLargestObject {
+			continue
+		}
+		seen++
+		if p.Group != 9 || p.Object != 9 {
+			t.Errorf("forwarded LARGEST_OBJECT = {%d,%d}, want {9,9} — the relay "+
+				"advertised publisher B's lower value instead of its own maximum",
+				p.Group, p.Object)
+		}
+	}
+	if seen != 1 {
+		t.Errorf("forwarded PUBLISH carried %d LARGEST_OBJECT parameters, want exactly 1", seen)
+	}
+}

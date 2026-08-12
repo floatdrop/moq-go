@@ -1045,3 +1045,167 @@ func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 		t.Error("Start did not return after Stop")
 	}
 }
+
+// TestCrossRelay_JoiningFetchBackfillsPublishOnceTrack pins §5.1: a relay MUST
+// save the Largest Location an upstream communicated in SUBSCRIBE_OK, because
+// that value is the Joining Location its own downstream subscribers need.
+//
+// The track here is published *once* and then goes quiet, which is what makes
+// the omission fatal rather than merely late. A live subscription carries only
+// future objects, so the sole route to content published before the subscriber
+// arrived is the §10.12.2 Joining FETCH — and that is refused with INVALID_RANGE
+// when the relay has no Joining Location to compute a range from. Before the
+// fix, relay A learned no watermark from B's SUBSCRIBE_OK, omitted
+// LARGEST_OBJECT from its own SUBSCRIBE_OK (violating §10.2.16), and rejected
+// the backfill; the subscriber never saw the track's contents at all.
+//
+// An MSF catalog is exactly this shape — published on join, republished only
+// when a participant's tracks change — so in a conference across two relays the
+// participant behind that catalog stayed invisible for the whole call.
+func TestCrossRelay_JoiningFetchBackfillsPublishOnceTrack(t *testing.T) {
+	t.Parallel()
+
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+
+	ctx := t.Context()
+
+	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
+	relayA := startTestRelay(ctx, relay.Config{
+		Discovery: store,
+		RelayAddr: "relay-A",
+		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
+			if addr == "relay-B" {
+				return relayB.l.Dial()
+			}
+			return nil, fmt.Errorf("no relay at %q", addr)
+		},
+	})
+
+	// Publisher on B publishes the whole track, then stops. Nothing is written
+	// after the subscriber joins, so live delivery cannot cover any of it.
+	pubSess := dialClient(t, relayB)
+	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()})
+	if err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	const pubAlias = uint64(7)
+	pubReq, err := pubSess.Publish(ctx, &message.Publish{
+		Namespace:  videoNS(),
+		Name:       []byte("catalog"),
+		TrackAlias: pubAlias,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	pubSg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDExplicit,
+		TrackAlias:     pubAlias,
+		GroupID:        0,
+		SubgroupID:     0,
+	})
+	if err != nil {
+		t.Fatalf("OpenSubgroup: %v", err)
+	}
+	const sgCount = 3
+	for i := range sgCount {
+		if err := pubSg.WriteObject(&message.SubgroupObject{
+			ObjectIDDelta: 0,
+			Payload:       []byte{byte('A' + i)},
+		}); err != nil {
+			t.Fatalf("WriteObject #%d: %v", i, err)
+		}
+	}
+	if err := pubSg.Close(); err != nil {
+		t.Fatalf("pubSg.Close: %v", err)
+	}
+
+	// Let B's fanout observe the objects, so B has a watermark to report in its
+	// SUBSCRIBE_OK. Without this the test could pass for the wrong reason: B
+	// omitting LARGEST_OBJECT because it genuinely knows nothing yet is not the
+	// bug under test.
+	time.Sleep(100 * time.Millisecond)
+
+	// Subscriber joins on A, which has no local publisher and follows Discovery
+	// to B. Bind the message so its assigned Request ID can anchor the Joining
+	// FETCH below (Subscribe mutates RequestID via AllocRequestID).
+	subSess := dialClient(t, relayA)
+	subMsg := &message.Subscribe{Namespace: videoNS(), Name: []byte("catalog")}
+	subReq, err := subSess.Subscribe(ctx, subMsg)
+	if err != nil {
+		t.Fatalf("cross-relay Subscribe: %v", err)
+	}
+
+	// §10.2.16: "If Objects have been published on this Track the Publisher MUST
+	// include this parameter." A is the publisher for this subscriber, and B has
+	// told it objects exist, so its SUBSCRIBE_OK has to carry the watermark.
+	// This is the assertion the fix turns green on the wire.
+	if _, ok := subReq.OK.Parameters.Find(message.ParamLargestObject); !ok {
+		t.Fatalf("A's SUBSCRIBE_OK omitted LARGEST_OBJECT; it learned no Joining "+
+			"Location from B's SUBSCRIBE_OK (params=%v)", subReq.OK.Parameters)
+	}
+
+	// The Joining FETCH is the only way this subscriber can reach content
+	// published before it arrived. A's own cache is empty — its upstream uses the
+	// §9.4 Largest Object filter — so answering means stitching from B (§9.4).
+	fetchReq, err := subSess.Fetch(ctx, &message.Fetch{
+		FetchType: message.FetchTypeRelativeJoining,
+		Joining: &message.JoiningFetch{
+			JoiningRequestID: subMsg.RequestID,
+			JoiningStart:     0, // the largest group itself
+		},
+		Parameters: message.Parameters{message.GroupOrderParam(message.GroupOrderAscending)},
+	})
+	if err != nil {
+		t.Fatalf("joining FETCH rejected, so the backfill is unreachable: %v", err)
+	}
+	defer fetchReq.Close()
+
+	type fetchResult struct {
+		n   int
+		err error
+	}
+	done := make(chan fetchResult, 1)
+	go func() {
+		ds, err := subSess.AcceptDataStream(ctx)
+		if err != nil {
+			done <- fetchResult{err: err}
+			return
+		}
+		fs, ok := ds.(*session.IncomingFetchStream)
+		if !ok {
+			done <- fetchResult{err: fmt.Errorf("got %T, want *session.IncomingFetchStream", ds)}
+			return
+		}
+		var n int
+		for {
+			if _, err := fs.ReadObject(); err != nil {
+				done <- fetchResult{n: n}
+				return
+			}
+			n++
+		}
+	}()
+
+	select {
+	case res := <-done:
+		if res.err != nil {
+			t.Fatalf("reading the joining FETCH response: %v", res.err)
+		}
+		if res.n != sgCount {
+			t.Errorf("joining FETCH returned %d objects, want %d — the backfill "+
+				"did not cover the group published before the subscriber joined",
+				res.n, sgCount)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("joining FETCH response did not arrive within deadline")
+	}
+
+	_ = subReq.Close()
+	_ = pubReq.Close()
+	_ = pns.Close()
+	_ = subSess.Close(0, "done")
+	_ = pubSess.Close(0, "done")
+	relayA.stop(t)
+	relayB.stop(t)
+}

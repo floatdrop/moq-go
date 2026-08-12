@@ -621,7 +621,7 @@ func TestFetch_JoiningFetchRelativeCurrentGroup(t *testing.T) {
 	}
 	t.Cleanup(func() { subStream.Close() })
 
-	// §10.2.11: relay MUST include LARGEST_OBJECT now that objects
+	// §10.2.16: relay MUST include LARGEST_OBJECT now that objects
 	// have been cached.
 	lp, hasLargest := subStream.OK.Parameters.Find(message.ParamLargestObject)
 	if !hasLargest {

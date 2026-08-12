@@ -63,13 +63,13 @@ type TrackEntry struct {
 
 	// LargestObject is the (Group, Object) high-water mark observed for
 	// this track, updated by the fanout path on every incoming object and
-	// by upstream control messages that carry a LARGEST_OBJECT value. §10.2.11
+	// by upstream control messages that carry a LARGEST_OBJECT value. §10.2.16
 	// requires the relay to advertise the *maximum* of these in any
 	// outbound message that includes LARGEST_OBJECT.
 	//
 	// The companion HasLargestObject flag distinguishes "no objects
 	// observed yet" from "the first object was published at Location
-	// {0, 0}" — §10.2.11 reserves wire-level omission for the former
+	// {0, 0}" — §10.2.16 reserves wire-level omission for the former
 	// and the in-memory mirror needs the same distinction. Callers
 	// SHOULD read via [TrackEntry.GetLargest] rather than touching
 	// these fields directly so the lock is honoured.
@@ -272,7 +272,7 @@ func (e *TrackEntry) ReleaseSubgroup(key SubgroupKey) (last bool) {
 // UpdateLargest moves the entry's LargestObject forward. The very first
 // call flips the "has any object been observed" bit regardless of value,
 // so that a publisher whose first Object is at Location {0, 0} is still
-// distinguishable from "no objects observed yet" — §10.2.11 reserves the
+// distinguishable from "no objects observed yet" — §10.2.16 reserves the
 // wire-level omission of LARGEST_OBJECT for the latter, and the
 // in-memory mirror needs the same distinction. Subsequent calls advance
 // the watermark only when loc is strictly greater than the current
@@ -295,7 +295,7 @@ func (e *TrackEntry) UpdateLargest(loc message.Location) bool {
 // GetLargest returns the current largest-object watermark and a bool that is
 // true iff at least one object has been observed on this track. The bool
 // distinguishes "no objects observed yet" from "first object was published at
-// Location {0, 0}" — §10.2.11 reserves wire-level omission of LARGEST_OBJECT
+// Location {0, 0}" — §10.2.16 reserves wire-level omission of LARGEST_OBJECT
 // for the former, so the in-memory mirror needs the same distinction.
 func (e *TrackEntry) GetLargest() (message.Location, bool) {
 	e.mu.RLock()

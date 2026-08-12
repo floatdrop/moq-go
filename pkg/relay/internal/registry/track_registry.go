@@ -300,7 +300,7 @@ type addUpstreamConfig struct {
 // publish triggered by the same call sees them. Without this, a
 // caller that sets Properties after AddUpstream returns sees an
 // initial Discovery event with empty Properties followed by no
-// update — the §10.2.11 / §9.6 properties end up missing from the
+// update — the §9.6 properties end up missing from the
 // cross-relay record. Passing them through AddUpstream avoids the gap.
 func WithProperties(props []byte) AddUpstreamOption {
 	return func(c *addUpstreamConfig) {
