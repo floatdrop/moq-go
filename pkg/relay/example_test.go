@@ -74,8 +74,8 @@ type objectCounter struct {
 	dropped   atomic.Int64
 }
 
-func (m *objectCounter) ObjectForwarded() { m.forwarded.Add(1) }
-func (m *objectCounter) ObjectDropped()   { m.dropped.Add(1) }
+func (m *objectCounter) ObjectForwarded(relay.TrackRef, uint64) { m.forwarded.Add(1) }
+func (m *objectCounter) ObjectDropped(relay.TrackRef, uint64)   { m.dropped.Add(1) }
 
 // Observing relay activity. Config.Metrics receives lifecycle and hot-path
 // events so you can export them to any telemetry backend without the relay

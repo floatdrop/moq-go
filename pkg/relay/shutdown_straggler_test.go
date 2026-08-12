@@ -59,7 +59,7 @@ func TestRelay_addSessionDrainsStraggler(t *testing.T) {
 	}
 
 	// addSession must observe shuttingDown and take ownership of the drain.
-	r.addSession(serverSess)
+	r.addSession(serverSess, LegLocal)
 
 	// drainStraggler must GOAWAY the peer...
 	select {

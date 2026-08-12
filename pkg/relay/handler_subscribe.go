@@ -161,8 +161,9 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	}
 	sub.SetLargestAtSubscribe(snapshotLargest, snapshotHas)
 
-	h.metrics.SubscriptionOpened()
-	defer h.metrics.SubscriptionClosed()
+	subRef := h.trackRef(fullName)
+	h.metrics.SubscriptionOpened(subRef)
+	defer h.metrics.SubscriptionClosed(subRef)
 
 	// Register the Joining Location for this subscription so a later
 	// Joining FETCH (§10.12.2) referencing msg.RequestID can recover the

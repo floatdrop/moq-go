@@ -39,6 +39,7 @@ type upstreamPool struct {
 	relayAddr    string
 	sessionOpts  []session.Option
 	log          *slog.Logger
+	metrics      Metrics
 	baseCtx      context.Context
 	cancelBase   context.CancelFunc
 	serveSession func(sess *session.Session, onClose func())
@@ -72,6 +73,7 @@ type upstreamPoolConfig struct {
 	relayAddr    string
 	sessionOpts  []session.Option
 	log          *slog.Logger
+	metrics      Metrics
 	serveSession func(sess *session.Session, onClose func())
 	// fanIn is Config.UpstreamFanIn verbatim; zero (the default) means
 	// unbounded fan-in.
@@ -82,12 +84,20 @@ func newUpstreamPool(cfg upstreamPoolConfig) *upstreamPool {
 	// The pool's base context spans its whole lifetime: dialled sessions and
 	// their handler loops run under it, and close() cancels it from Relay.Stop.
 	base, cancel := context.WithCancel(context.Background())
+	// [New] already defaults Config.Metrics, but the pool is also constructed
+	// directly (tests), and resolveUpstreams calls into this on a path that
+	// only runs once a cross-relay subscribe happens — a nil here would be a
+	// panic nothing local reproduces.
+	if cfg.metrics == nil {
+		cfg.metrics = NopMetrics{}
+	}
 	return &upstreamPool{
 		dialer:       cfg.dialer,
 		discovery:    cfg.discovery,
 		relayAddr:    cfg.relayAddr,
 		sessionOpts:  cfg.sessionOpts,
 		log:          cfg.log,
+		metrics:      cfg.metrics,
 		baseCtx:      base,
 		cancelBase:   cancel,
 		serveSession: cfg.serveSession,
@@ -146,6 +156,7 @@ func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamesp
 	p.log.LogAttrs(ctx, slog.LevelInfo, "upstream pool: FindNamespace resolved",
 		slog.String("namespace", fmt.Sprintf("%v", ns)),
 		slog.Int("advertisers_found", len(infos)))
+	p.metrics.NamespaceResolved(len(infos))
 	// Rank so the dial order is identical fleet-wide; a positive fanIn then
 	// takes the same top-fanIn upstreams everywhere.
 	rankByAffinity(ns, infos)
@@ -164,6 +175,7 @@ func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamesp
 			p.log.LogAttrs(ctx, slog.LevelDebug, "upstream pool dial failed",
 				slog.String("relay_addr", info.RelayAddr),
 				slog.String("err", err.Error()))
+			p.metrics.UpstreamDialFailed(info.RelayAddr)
 			continue // fall through to the next-ranked relay
 		}
 		out = append(out, sess)

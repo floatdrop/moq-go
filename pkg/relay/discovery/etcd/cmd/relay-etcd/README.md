@@ -57,6 +57,8 @@ nothing to pass at build time. Three things to know when reading it:
 | `-relay-addr` | — | Address peers use to dial this relay, advertised in etcd. Empty = single-instance (not reachable by peers). Must be directly dialable — never a load-balancer address, since it is also the self-exclusion key that stops a relay dialing its own advertisements. |
 | `-health-addr` | — | TCP address for the HTTP health endpoint. Empty (the default) disables it. |
 | `-health-path` | `/healthz` | Path on `-health-addr` that answers `200 OK`; anything else there gets `404`. Ignored unless `-health-addr` is set. |
+| `-metrics` | `true` | Serve Prometheus metrics at `<health-path>/metrics`. Requires `-health-addr`. |
+| `-metrics-track-names` | `catalog,video,audio` | Track names that keep their own `track` label. Every other name is counted as `track="other"`, so a publisher cannot choose this process's metric cardinality. |
 
 ## Transports
 
@@ -196,6 +198,88 @@ request the path as given (a trailing slash is significant).
 The port is unauthenticated, which is the other reason it is opt-in: when you do
 enable it, prefer an internal interface (`-health-addr 127.0.0.1:8080`) over
 `0.0.0.0`.
+
+## Metrics
+
+Prometheus exposition rides the same port, one level below `-health-path`:
+
+```sh
+go run ./cmd/relay-etcd -health-addr 127.0.0.1:9000
+curl -s http://localhost:9000/healthz/metrics
+```
+
+It is on that port because the decision is the same one: both are plain HTTP
+over TCP, both are unauthenticated, and an operator who exposed one has already
+chosen for the other. `-metrics=false` turns it off and restores the `404`.
+
+The scrape carries the standard Go runtime and process collectors, the etcd
+client's own gRPC instrumentation (so a relay partitioned from etcd is visible
+here even though the health check still reports `200`), and:
+
+| Metric | Type | Labels | What it answers |
+|---|---|---|---|
+| `moqt_relay_build_info` | gauge | `version`, `commit`, `commit_time`, `dirty` | Always 1. Which build — so a change in any series below can be attributed to a rollout. |
+| `moqt_relay_sessions` | gauge | `leg` | Live sessions. `leg="upstream"` is the cross-relay hop. |
+| `moqt_relay_subscriptions` | gauge | `track`, `leg` | Subscriptions being fanned out. |
+| `moqt_relay_objects_received_total` | counter | `track`, `leg`, `subgroup` | Objects the relay took responsibility for, after §2.1 duplicate suppression. |
+| `moqt_relay_objects_forwarded_total` | counter | `track`, `leg`, `subgroup` | Objects enqueued for a subscriber, once **per subscriber**. |
+| `moqt_relay_objects_dropped_total` | counter | `track`, `leg`, `subgroup` | Objects shed because a subscriber's send queue was full (§8). |
+| `moqt_relay_subgroup_stream_resets_total` | counter | `track`, `leg`, `subgroup`, `cause` | Subgroup streams abandoned mid-group, by cause. |
+| `moqt_relay_subscription_resets_total` | counter | `track`, `leg`, `cause` | Subscriptions terminated for falling behind (§3.3.4). |
+| `moqt_relay_fetches_served_total` | counter | `track`, `leg` | FETCHes answered from the object cache. |
+| `moqt_relay_fetch_objects_served_total` | counter | `track`, `leg` | Objects returned across those FETCHes. |
+| `moqt_relay_upstream_dial_failures_total` | counter | — | Failed relay-to-relay dials to a peer advertised in etcd. |
+| `moqt_relay_namespace_lookups_total` | counter | `result` | Discovery lookups on the cross-relay path; `result="empty"` means nobody advertised the namespace. |
+
+### Reading a mesh
+
+`leg` records **who dialled whom**, because that is the only thing a relay knows
+for certain about a peer. A peer relay that dials *in* is `leg="local"`, exactly
+like a browser — the MOQT implementation string a peer volunteers is not
+something to build an operator-facing label on.
+
+That is why a hop is read from both ends. The consuming relay reports it as
+`leg="upstream"`; the producing relay reports the same hop inside its
+`leg="local"` traffic. Objects that leave one and never arrive at the other went
+missing in between:
+
+```promql
+# cross-relay ingress, per instance
+sum by (instance, track) (rate(moqt_relay_objects_received_total{leg="upstream"}[1m]))
+```
+
+### When the picture breaks up between keyframes
+
+That symptom is a group losing objects after its keyframe, so start with the two
+counters that mean exactly that:
+
+```promql
+# subgroup streams abandoned mid-group, by cause
+sum by (cause, track, subgroup) (rate(moqt_relay_subgroup_stream_resets_total[1m]))
+
+# objects shed under send-queue pressure
+sum by (track, subgroup) (rate(moqt_relay_objects_dropped_total[1m]))
+```
+
+`subgroup` is the discriminator worth reading first. A publisher striping
+temporal layers across subgroups puts the base layer in subgroup 0 and the
+disposable enhancement layers above it, so drops on `subgroup="1"` may be the
+design working while drops on `subgroup="0"` are the picture breaking.
+
+`cause` then says which mechanism fired: `delivery_timeout` is §8 giving up on a
+stream, `too_far_behind` is a subscriber losing the whole subscription, `gap` is
+a §11.4.3 reopen (correct behaviour, but it is the *consequence* of an earlier
+drop and the subscriber still sees the hole), and `inbound_reset` means the loss
+happened upstream of this relay — chase it on the instance one hop closer to the
+publisher.
+
+### Cardinality
+
+Both `track` and `subgroup` come off the wire, chosen by the publisher, so
+neither reaches a label unfiltered. Track names outside `-metrics-track-names`
+are counted as `track="other"`; Subgroup IDs of 3 and above are counted as
+`subgroup="3+"`. The peer address in a failed upstream dial is deliberately not
+a label at all — it is in the `debug` log instead.
 
 ## Security
 
