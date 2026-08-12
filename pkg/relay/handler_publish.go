@@ -67,8 +67,15 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	//   - The OK must still be the stream's next message: registration
 	//     makes the sub reachable by §9.2 / §10.2.13 propagation, whose
 	//     REQUEST_UPDATE writes serialize behind the OK on the same lock.
+	// entry is hoisted out of the closure because the PUBLISH forwarded to each
+	// subscriber below has to read the track's own watermark back off it.
+	var entry *registry.TrackEntry
 	if err := sub.Broker.WriteMessageAfterSetup(func() error {
-		h.tracks.AddUpstream(fullName, sub, registry.WithProperties(msg.TrackProperties))
+		entry, _ = h.tracks.AddUpstream(fullName, sub, registry.WithProperties(msg.TrackProperties))
+		// §10.2.16 item 1 names PUBLISH alongside SUBSCRIBE_OK: a publisher
+		// offering a track that already has content reports its largest
+		// Location here, before any object arrives to establish one.
+		saveLargestLocation(entry, msg.Parameters)
 		return nil
 	}, &message.RequestOK{}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH REQUEST_OK write failed",
@@ -117,7 +124,7 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 			Namespace:       msg.Namespace,
 			Name:            msg.Name,
 			TrackAlias:      msg.TrackAlias, // not yet remapped per-session
-			Parameters:      publishParamsForSubscriber(msg.Parameters, sub),
+			Parameters:      publishParamsForSubscriber(msg.Parameters, sub, entry),
 			TrackProperties: msg.TrackProperties,
 		}
 		// OpenPublish is non-blocking (§6.1): if the subscriber's stream
@@ -160,10 +167,24 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 // (otherwise omitted → the default 1), and GROUP_ORDER is copied from the
 // subscriber's request when it specified one (otherwise omitted, so the
 // publisher's default applies).
-func publishParamsForSubscriber(upstream message.Parameters, sub *registry.SubscriberEntry) message.Parameters {
-	out := make(message.Parameters, 0, len(upstream)+2)
+//
+// LARGEST_OBJECT is likewise not copied through. §10.2.16 requires a relay to
+// send the largest of every value it has observed, and the upstream's own figure
+// is only one of those: with a second upstream on the track, or with objects
+// already received, forwarding it verbatim would advertise a watermark below the
+// relay's own — so it is re-derived from the entry, which
+// [saveLargestLocation] has already folded this PUBLISH's value into.
+// §10.2.16 reserves omission for "no objects observed", which is what an entry
+// with no watermark means.
+func publishParamsForSubscriber(
+	upstream message.Parameters,
+	sub *registry.SubscriberEntry,
+	entry *registry.TrackEntry,
+) message.Parameters {
+	out := make(message.Parameters, 0, len(upstream)+3)
 	for _, p := range upstream {
-		if p.Type == message.ParamForward || p.Type == message.ParamGroupOrder {
+		if p.Type == message.ParamForward || p.Type == message.ParamGroupOrder ||
+			p.Type == message.ParamLargestObject {
 			continue
 		}
 		out = append(out, p)
@@ -173,6 +194,9 @@ func publishParamsForSubscriber(upstream message.Parameters, sub *registry.Subsc
 	}
 	if sub.GroupOrder != 0 {
 		out = append(out, message.GroupOrderParam(message.GroupOrder(sub.GroupOrder)))
+	}
+	if largest, ok := entry.GetLargest(); ok {
+		out = append(out, message.LargestObjectParam(largest.Group, largest.Object))
 	}
 	return out
 }

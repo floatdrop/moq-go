@@ -61,7 +61,7 @@ type sessionHandler struct {
 	relayGo func(func())
 
 	// joinLocs maps a downstream SUBSCRIBE's Request ID to the track
-	// name and §10.2.11 LARGEST_OBJECT snapshot captured when the relay
+	// name and §10.2.16 LARGEST_OBJECT snapshot captured when the relay
 	// sent SUBSCRIBE_OK. A subsequent Joining FETCH (§10.12.2) references
 	// the same Request ID to recover the snapshot and compute its end
 	// location contiguous with the live subscription.
@@ -138,6 +138,44 @@ func newSessionHandler(
 // promises implementations a hot path with nothing to spare.
 func (h *sessionHandler) trackRef(name track.FullTrackName) TrackRef {
 	return TrackRef{Name: string(name.Name), Leg: h.leg}
+}
+
+// saveLargestLocation folds a LARGEST_OBJECT parameter the upstream sent into
+// the track's watermark.
+//
+// §10.2.16 is the operative rule and it is addressed to relays specifically: a
+// relay MUST set LARGEST_OBJECT to the largest of (1) any value received from
+// the upstream publisher in SUBSCRIBE_OK, PUBLISH or REQUEST_UPDATE_OK, and
+// (2) the largest Location of an Object received on an upstream subscription.
+// §9.4 makes that binding here ("Relays MUST follow the constraints on
+// LARGEST_OBJECT defined in Section 10.2.16"). Only (2) was implemented, so the
+// relay advertised a watermark built purely from objects it had watched arrive.
+//
+// Call this on every path carrying the parameter, unconditionally.
+// [registry.TrackEntry.UpdateLargest] keeps the maximum, which is exactly what
+// §10.2.16 asks for, so a value already overtaken changes nothing.
+//
+// Do NOT narrow this to the Forward-State transition. §5.1 says "A publisher
+// MUST save the Largest Location communicated in SUBSCRIBE_OK, PUBLISH or
+// REQUEST_UPDATE_OK that changes the Forward State from 0 to 1", and that
+// qualifier is about what an endpoint may use as *its own* Joining Location —
+// §10.2.16's relay rule carries no such condition. The distinction is
+// load-bearing: subscribeUpstreamOnSession sends FORWARD=0 whenever no
+// downstream wants forwarding, so on that path §5.1's sentence does not apply
+// at all, and reading it as the authority here reintroduces the bug below.
+//
+// What that bug was: a relay is the publisher for its own downstream
+// subscribers (§9.4), so a freshly established cross-relay subscription
+// reported no Largest Object until the first object happened to flow. For a
+// track published *once* that never happens — the live subscription carries
+// only future objects, and the §10.12.2 Joining FETCH that exists to backfill
+// the rest is refused with INVALID_RANGE for having no Joining Location. An MSF
+// catalog is exactly that shape, so across two relays the participant its
+// catalog described stayed invisible for the whole call.
+func saveLargestLocation(entry *registry.TrackEntry, ps message.Parameters) {
+	if p, ok := ps.Find(message.ParamLargestObject); ok {
+		entry.UpdateLargest(message.Location{Group: p.Group, Object: p.Object})
+	}
 }
 
 // handleInboundGoaway implements §10.4: when the peer sends GOAWAY, grant the

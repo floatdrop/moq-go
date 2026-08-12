@@ -382,10 +382,16 @@ func (h *sessionHandler) propagateNewGroupUpstream(
 		if !up.IsEstablished() {
 			continue
 		}
-		if _, err := up.Update(ctx, message.Parameters{message.NewGroupRequestParam(value)}); err != nil {
+		resp, err := up.Update(ctx, message.Parameters{message.NewGroupRequestParam(value)})
+		if err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream NEW_GROUP_REQUEST REQUEST_UPDATE failed",
 				slog.String("err", err.Error()))
+			continue
 		}
+		// §10.2.16 item 1 names REQUEST_UPDATE_OK too, and this is one: the
+		// response was previously discarded, so a watermark the upstream
+		// reported here never reached the entry.
+		saveLargestLocation(entry, resp.Parameters)
 	}
 }
 
@@ -412,9 +418,7 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 			continue
 		}
 		up.SetForwardState(1)
-		if p, ok := resp.Parameters.Find(message.ParamLargestObject); ok {
-			entry.UpdateLargest(message.Location{Group: p.Group, Object: p.Object})
-		}
+		saveLargestLocation(entry, resp.Parameters)
 	}
 }
 
@@ -589,6 +593,11 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// downstream leaves (see [registry.TrackRegistry.RemoveDownstream]).
 	upstreamSub.OnDemand = true
 	entry, _ := h.tracks.AddUpstream(fullName, upstreamSub, registry.WithProperties(upstreamStream.OK.TrackProperties))
+	// §10.2.16 item 1: a LARGEST_OBJECT in this SUBSCRIBE_OK is one of the
+	// values the relay's own watermark MUST be the largest of. Unconditional on
+	// purpose — see [saveLargestLocation] for why the §5.1 Forward-State
+	// qualifier must not be applied here.
+	saveLargestLocation(entry, upstreamStream.OK.Parameters)
 
 	// The reader's lifetime is tied to the UPSTREAM stream, not to the
 	// downstream subscriber whose SUBSCRIBE happened to trigger this
