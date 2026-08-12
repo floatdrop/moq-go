@@ -208,7 +208,7 @@ func TestTrackRegistry_RemoveUnknownIsNoop(t *testing.T) {
 	}
 }
 
-// TestTrackRegistry_UpdateLargestMonotonic verifies the §10.2.11 rule: the
+// TestTrackRegistry_UpdateLargestMonotonic verifies the §10.2.16 rule: the
 // watermark only ever advances, and the bool return reports whether an
 // advance happened.
 func TestTrackRegistry_UpdateLargestMonotonic(t *testing.T) {

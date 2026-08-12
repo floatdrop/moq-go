@@ -70,7 +70,7 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		return
 	}
 
-	// §10.2.11: a forwarded datagram counts towards the track's
+	// §10.2.16: a forwarded datagram counts towards the track's
 	// LARGEST_OBJECT watermark just like a subgroup object does.
 	entry.UpdateLargest(message.Location{Group: d.GroupID, Object: d.ObjectID})
 

@@ -360,7 +360,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			Payload:           obj.Payload,
 		})
 
-		// Atomically bump §10.2.11 LARGEST_OBJECT and snapshot any Downstream
+		// Atomically bump §10.2.16 LARGEST_OBJECT and snapshot any Downstream
 		// subs that joined since the last scan. The entry.mu acquisition inside
 		// serialises with handleSubscribe's AddDownstreamSnapshotLargest: a new
 		// sub either snapshots the pre-update Largest AND appears in newSubs

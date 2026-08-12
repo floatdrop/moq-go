@@ -15,7 +15,7 @@ import (
 // a track's Properties and existence, answered without creating a subscription
 // or round-tripping upstream. The reply is REQUEST_OK (aliased as
 // [message.TrackStatusOK]) carrying the same Track Properties block SUBSCRIBE_OK
-// would, plus §10.2.11 LARGEST_OBJECT when objects have been forwarded.
+// would, plus §10.2.16 LARGEST_OBJECT when objects have been forwarded.
 //
 // It answers from the track registry when metadata exists, falls back to an
 // empty TRACK_STATUS_OK when only the namespace is advertised locally, and
@@ -29,7 +29,7 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 	entry, known := h.tracks.Get(fullName.Key())
 	// Answer TRACK_STATUS_OK for any entry with metadata to surface: Properties
-	// or a §10.2.11 LargestObject watermark. Either field alone is useful.
+	// or a §10.2.16 LargestObject watermark. Either field alone is useful.
 	var (
 		largest    message.Location
 		hasLargest bool
@@ -44,7 +44,7 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 			reply.TrackProperties = entry.GetProperties()
 		}
 		if hasLargest {
-			// §10.2.11: omit LARGEST_OBJECT when no objects have
+			// §10.2.16: omit LARGEST_OBJECT when no objects have
 			// been observed; emit it (and the watermark) otherwise.
 			reply.Parameters = append(reply.Parameters,
 				message.LargestObjectParam(largest.Group, largest.Object))
