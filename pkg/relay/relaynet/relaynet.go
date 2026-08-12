@@ -90,16 +90,6 @@ func InsecureClientTLSConfig(alpns []string) *tls.Config {
 	}
 }
 
-// ListenQUIC binds a raw-QUIC MOQT listener on addr with the relay's default
-// QUIC tuning and wraps it as a relay [session.Conn] source.
-func ListenQUIC(addr string, tlsCfg *tls.Config) (*quicconn.Listener, error) {
-	ql, err := quic.ListenAddr(addr, tlsCfg, defaultQUICConfig())
-	if err != nil {
-		return nil, err
-	}
-	return quicconn.NewListener(ql), nil
-}
-
 // DialQUIC dials addr over raw QUIC with the relay's default QUIC tuning and
 // returns the established connection as a [session.Conn], ready for the relay to
 // drive the client-side MOQT SETUP on. It is the shape a relay Dialer expects.

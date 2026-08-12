@@ -532,32 +532,16 @@ func (d *DownstreamSub) EffectiveStreamPriority(
 	}
 }
 
-// PassesFilter reports whether the object at {group, object} matches the
-// subscription's §5.1.2 filter. An unset filter (nil) is treated as
-// unfiltered: every object passes.
-//
-// The filter is evaluated against the subscribe-time LargestObject snapshot,
-// per §5.1.2 — *not* the live TrackEntry watermark. Re-evaluating against the
-// live watermark would let a subscription's effective start location drift
-// forward as objects arrive, which would silently drop the very objects the
-// subscriber asked to receive.
-func (d *DownstreamSub) PassesFilter(group, object uint64) bool {
-	d.mu.RLock()
-	f := d.Filter
-	largest := d.LargestAtSubscribe
-	has := d.HasLargestAtSubscribe
-	d.mu.RUnlock()
-	if f == nil {
-		return true
-	}
-	return f.Matches(group, object, largest.Group, largest.Object, has)
-}
-
 // ForwardDecision folds the §9.2 Forward-State gate and the §5.1.2 filter
 // test the fanout applies to every object into a single lock acquisition.
-// The per-object × per-subscriber loop would otherwise call ForwardState,
-// PassesFilter, and (on a miss) GetFilter separately — three RLock round-trips
-// on the same mutex per object per subscriber.
+// The per-object × per-subscriber loop would otherwise take three RLock
+// round-trips on the same mutex per object per subscriber.
+//
+// The §5.1.2 filter is evaluated against the subscribe-time LargestObject
+// snapshot, *not* the live TrackEntry watermark. Re-evaluating against the
+// live watermark would let a subscription's effective start location drift
+// forward as objects arrive, silently dropping the very objects the
+// subscriber asked to receive.
 //
 // forward is true when the object should be enqueued. It ANDs the §9.2 Forward
 // State, the §5.1.2 Location filter, and the §5.1.3 Range Filters

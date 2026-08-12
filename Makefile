@@ -4,7 +4,7 @@
 # moq-interop-runner registry) against the relay built from this repository,
 # exercising both raw QUIC (moqt://) and WebTransport (https://) transports.
 
-.PHONY: build test test-race lint \
+.PHONY: build test test-race test-submodules test-all lint \
         bench bench-quick bench-smoke bench-baseline \
         cover cover-gaps cover-html cover-check cover-floors cover-total cover-badge \
         interop interop-quic interop-webtransport interop-matrix interop-build interop-certs interop-clean \
@@ -22,6 +22,21 @@ test:
 
 test-race:
 	go test -race ./...
+
+# pkg/relay/discovery/{etcd,nats} are separate Go modules — `go test ./...` from
+# the root does not reach them, so `make test` alone says nothing about the
+# discovery backends or the relay-etcd/relay-nats binaries. Their tests are
+# hermetic (embedded in-process etcd/NATS servers); no daemons required.
+SUBMODULES := pkg/relay/discovery/etcd pkg/relay/discovery/nats
+
+test-submodules:
+	@for m in $(SUBMODULES); do \
+		echo ">> $$m"; \
+		(cd $$m && go build ./... && go test -race ./...) || exit 1; \
+	done
+
+# Everything the root suite covers, plus the submodules it cannot see.
+test-all: test test-submodules
 
 lint:
 	golangci-lint run

@@ -63,15 +63,12 @@ func (s *Session) controlRecvLoop() {
 			if s.sessionDoneAlready() {
 				return
 			}
-			// Most control-plane violations close with PROTOCOL_VIOLATION,
-			// but some rules mandate a specific code (e.g. §10.4 GOAWAY
-			// Request-ID parity → INVALID_REQUEST_ID) — handlers carry it
-			// via *sessionCloseError.
-			code := moqt.SessionProtocolViolation
-			if ce, ok := errors.AsType[*sessionCloseError](err); ok {
-				code = ce.code
-			}
-			_ = s.Close(code, err.Error())
+			// Every violation dispatchControl can report is a §3.5
+			// PROTOCOL_VIOLATION: the only messages it accepts after SETUP are
+			// GOAWAY (§10.4), a duplicate SETUP, and anything table 5 in §10
+			// disallows outright. A rule mandating a different close code would
+			// need the handler to carry it out of here.
+			_ = s.Close(moqt.SessionProtocolViolation, err.Error())
 			return
 		}
 	}
@@ -99,12 +96,3 @@ func (s *Session) dispatchControl(msg message.Message) error {
 		return fmt.Errorf("unexpected %s on control stream", msg.Type())
 	}
 }
-
-// sessionCloseError is a control-dispatch error that mandates a specific
-// §3.5 SESSION_ERROR close code instead of the default PROTOCOL_VIOLATION.
-type sessionCloseError struct {
-	code moqt.SessionErrorCode
-	msg  string
-}
-
-func (e *sessionCloseError) Error() string { return e.msg }
