@@ -37,9 +37,22 @@ A few specifics:
 - **The `modernize` linter** is enabled. golangci-lint bundles a snapshot that
   predates the `errorsastype` analyzer, so until it catches up, run that check
   standalone (see `CLAUDE.md` for the exact command).
-- **Benchmarks** live alongside the wire codec and session/relay hot paths:
-  `go test -run='^$' -bench=. -benchmem ./...`. See `benchmarks/README.md` for
-  the `benchstat` regression-comparison workflow.
+- **Benchmarks** live alongside the wire codec and session/relay hot paths. Run
+  `make bench-quick` (~5s) after a change to any of them and compare `allocs/op`
+  against `benchmarks/baseline-go1.26.txt`; that metric multiplies by the
+  live-stream object rate, so an unexplained increase is a blocker. `make bench`
+  (~4m30s) is the full suite and the only one whose `ns/op` means anything. See
+  `benchmarks/README.md`.
+- **Coverage** is gated. `make cover-check` fails if any package falls below its
+  floor in `coverage-floors.txt`, and CI runs the same command. If you've raised
+  coverage, run `make cover-floors` to re-record the floors and commit that with
+  your tests — the file is generated, never hand-edited. Floors ratchet one way:
+  `cover-floors` refuses to lower one, so a failing check can't be silenced by
+  regenerating (pass `--allow-lower` to the script if a drop is genuinely
+  correct, and explain it in the commit). When the gate fires,
+  `make cover-gaps COVER_PKGS=./pkg/relay/` lists the functions no test reaches.
+  A brand-new package fails the check until its floor is recorded; that's
+  intended.
 
 ### Interoperability
 
@@ -81,7 +94,15 @@ behavior.
 - Keep changes focused; one logical change per pull request.
 - Match the surrounding code's style, naming, and comment density.
 - Add or update tests for the behavior you change — the suite is hermetic
-  (no network, no fixtures), so new tests should be too.
+  (no network, no fixtures), so new tests should be too. **Run a new test
+  against the unpatched code first and confirm it fails**, then say so in the
+  description. A test that has never been seen red may be asserting something
+  the code already did; commit `fea80fc` is the cautionary tale, a production
+  outage that every existing test passed straight through.
+- Ask rather than assume. If the request or the draft is ambiguous in a way that
+  changes what gets built, raise it before writing the code — a wrong assumption
+  in wire-format code round-trips cleanly through our own codec and passes the
+  whole suite.
 - Make sure `go build ./...`, `go test ./...`, and `golangci-lint run` all pass.
   Run `-race` and the interop suite when your change warrants it (see above).
 - Write a clear PR description: what changed, why, and which draft sections (if
