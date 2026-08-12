@@ -1,6 +1,7 @@
 package msf
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"reflect"
@@ -53,34 +54,99 @@ func (c *Catalog) validateIndependent() error {
 	if err := validateContentProtections(c); err != nil {
 		return err
 	}
+	if err := validateTrackReferences(c); err != nil {
+		return err
+	}
 	return nil
 }
 
 // validateContentProtections enforces draft-ietf-moq-cmsf-01 §4.1.1's
-// per-entry required fields and refID uniqueness, then §4.1.2's
-// referential integrity: every track's ContentProtectionRefIDs entry
-// MUST name a RefID present in c.ContentProtections.
+// per-entry required fields and refID uniqueness.
 func validateContentProtections(c *Catalog) error {
-	refIDs := make(map[string]struct{}, len(c.ContentProtections))
+	seen := make(map[string]struct{}, len(c.ContentProtections))
 	for i, cp := range c.ContentProtections {
 		if cp.RefID == "" {
 			return fmt.Errorf("moqt/msf: contentProtections[%d]: refID is required (CMSF §4.1.1.1)", i)
 		}
-		if _, dup := refIDs[cp.RefID]; dup {
+		if _, dup := seen[cp.RefID]; dup {
 			return fmt.Errorf("moqt/msf: contentProtections[%d]: duplicate refID %q (CMSF §4.1.1.1)", i, cp.RefID)
 		}
-		refIDs[cp.RefID] = struct{}{}
-		if len(cp.DefaultKID) == 0 {
-			return fmt.Errorf("moqt/msf: contentProtections[%d]: defaultKID is required (CMSF §4.1.1.2)", i)
-		}
-		if cp.Scheme == "" {
-			return fmt.Errorf("moqt/msf: contentProtections[%d]: scheme is required (CMSF §4.1.1.3)", i)
-		}
-		if cp.DRMSystem.SystemID == "" {
-			return fmt.Errorf("moqt/msf: contentProtections[%d]: drmSystem.systemID is required (CMSF §4.1.1.4.1)", i)
+		seen[cp.RefID] = struct{}{}
+		if err := validateContentProtection(cp); err != nil {
+			return fmt.Errorf("moqt/msf: contentProtections[%d]: %w", i, err)
 		}
 	}
+	return nil
+}
+
+// validateContentProtection checks one entry's required fields, the
+// §4.1.1.3 scheme enumeration and the UUID forms §4.1.1.2 / §4.1.1.4.1
+// require.
+func validateContentProtection(cp ContentProtection) error {
+	if len(cp.DefaultKID) == 0 {
+		return errors.New("defaultKID is required (CMSF §4.1.1.2)")
+	}
+	for j, kid := range cp.DefaultKID {
+		if !isUUID(kid) {
+			return fmt.Errorf("defaultKID[%d] %q is not a UUID string (CMSF §4.1.1.2)", j, kid)
+		}
+	}
+	switch cp.Scheme {
+	case "":
+		return errors.New("scheme is required (CMSF §4.1.1.3)")
+	case SchemeCENC, SchemeCBCS:
+	default:
+		return fmt.Errorf("unknown scheme %q (CMSF §4.1.1.3, Table 3)", cp.Scheme)
+	}
+	return validateDRMSystem(cp.DRMSystem)
+}
+
+// validateDRMSystem checks the §4.1.1.4 DRM System object: the
+// systemID UUID (§4.1.1.4.1) and the required url of every URL object
+// that is present (§4.1.1.4.2, §4.1.1.4.3).
+func validateDRMSystem(ds DRMSystem) error {
+	if ds.SystemID == "" {
+		return errors.New("drmSystem.systemID is required (CMSF §4.1.1.4.1)")
+	}
+	if !isUUID(ds.SystemID) {
+		return fmt.Errorf("drmSystem.systemID %q is not a UUID string (CMSF §4.1.1.4.1)", ds.SystemID)
+	}
+	urls := []struct {
+		name string
+		ref  *URLRef
+		sec  string
+	}{
+		{"laURL", ds.LAURL, "§4.1.1.4.2"},
+		{"certURL", ds.CertURL, "§4.1.1.4.3"},
+	}
+	for _, u := range urls {
+		if u.ref != nil && u.ref.URL == "" {
+			return fmt.Errorf("drmSystem.%s: url is required (CMSF %s)", u.name, u.sec)
+		}
+	}
+	return nil
+}
+
+// validateTrackReferences enforces the catalog's two referential
+// integrity rules: Track.InitRef names an initDataList entry (§5.2.13,
+// CMSF §3.1) and every Track.ContentProtectionRefIDs entry names a
+// contentProtections entry (CMSF §4.1.2).
+func validateTrackReferences(c *Catalog) error {
+	initIDs := make(map[string]struct{}, len(c.InitDataList))
+	for _, init := range c.InitDataList {
+		initIDs[init.ID] = struct{}{}
+	}
+	refIDs := make(map[string]struct{}, len(c.ContentProtections))
+	for _, cp := range c.ContentProtections {
+		refIDs[cp.RefID] = struct{}{}
+	}
 	for i, tr := range c.Tracks {
+		if tr.InitRef != "" {
+			if _, ok := initIDs[tr.InitRef]; !ok {
+				return fmt.Errorf(
+					"moqt/msf: tracks[%d]: initRef %q has no initDataList entry (§5.2.13)", i, tr.InitRef)
+			}
+		}
 		for _, ref := range tr.ContentProtectionRefIDs {
 			if _, ok := refIDs[ref]; !ok {
 				return fmt.Errorf(
@@ -92,6 +158,17 @@ func validateContentProtections(c *Catalog) error {
 	return nil
 }
 
+// isUUID reports whether s has the
+// "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" form that CMSF §4.1.1.2 and
+// §4.1.1.4.1 require of key and DRM system identifiers.
+func isUUID(s string) bool {
+	if len(s) != 36 || s[8] != '-' || s[13] != '-' || s[18] != '-' || s[23] != '-' {
+		return false
+	}
+	_, err := hex.DecodeString(s[:8] + s[9:13] + s[14:18] + s[19:23] + s[24:])
+	return err == nil
+}
+
 func (c *Catalog) validateDelta() error {
 	if c.Version != "" {
 		return errors.New("moqt/msf: delta update must not contain version (§5.3)")
@@ -101,6 +178,11 @@ func (c *Catalog) validateDelta() error {
 	}
 	if len(c.DeltaUpdate) == 0 {
 		return errors.New("moqt/msf: delta update must contain at least one operation (§5.3)")
+	}
+	// A delta MAY carry the root-level arrays its added tracks
+	// reference; [Apply] merges them. Their own field rules still hold.
+	if err := validateContentProtections(c); err != nil {
+		return err
 	}
 	for i, op := range c.DeltaUpdate {
 		if err := validateDeltaOp(op); err != nil {
@@ -178,12 +260,33 @@ func validateTrack(t Track) error {
 		return errors.New("trackDuration MUST NOT be present when isLive is true (§5.2.35)")
 	}
 
-	// CMSF §3.5.2.1 / §3.5.2.2 — SAP type is defined over 0-3 (§3.6.1).
+	return validateSapStartingTypes(t)
+}
+
+// validateSapStartingTypes bounds the two CMSF §3.5.2 track fields.
+// §3.5.2.1 and §3.5.2.2 define them as plain numbers without stating a
+// range, so the bounds come from the sections that constrain the SAP
+// types themselves.
+func validateSapStartingTypes(t Track) error {
+	// §3.6.1 defines the SAP type value space CMSF signals as 0-3, so
+	// neither field can name a type outside it.
 	if t.MaxGrpSapStartingType != nil && (*t.MaxGrpSapStartingType < 0 || *t.MaxGrpSapStartingType > 3) {
-		return fmt.Errorf("maxGrpSapStartingType %d out of range 0-3 (CMSF §3.5.2.1)", *t.MaxGrpSapStartingType)
+		return fmt.Errorf("maxGrpSapStartingType %d out of range 0-3 (CMSF §3.6.1)", *t.MaxGrpSapStartingType)
 	}
 	if t.MaxObjSapStartingType != nil && (*t.MaxObjSapStartingType < 0 || *t.MaxObjSapStartingType > 3) {
-		return fmt.Errorf("maxObjSapStartingType %d out of range 0-3 (CMSF §3.5.2.2)", *t.MaxObjSapStartingType)
+		return fmt.Errorf("maxObjSapStartingType %d out of range 0-3 (CMSF §3.6.1)", *t.MaxObjSapStartingType)
+	}
+	// §3.4 additionally requires every Group to "begin with an Object
+	// containing a stream access point (SAP) type 1 or 2", so on a CMAF
+	// track the maximum type a Group starts with is 1 or 2. §3.4 sits
+	// under §3 "CMAF Packaging" and says nothing about the Groups of a
+	// track using any other packaging, so the tighter bound applies
+	// only here.
+	if t.Packaging == PackagingCMAF && t.MaxGrpSapStartingType != nil &&
+		(*t.MaxGrpSapStartingType < 1 || *t.MaxGrpSapStartingType > 2) {
+		return fmt.Errorf(
+			"maxGrpSapStartingType %d out of range 1-2 for packaging %q (CMSF §3.4)",
+			*t.MaxGrpSapStartingType, PackagingCMAF)
 	}
 	return nil
 }
