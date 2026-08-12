@@ -7,17 +7,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// DataStreamHeader is the parsed leading header of an inbound MoQT data
-// uni-stream. Concrete header types (SubgroupHeader, FetchHeader) implement
-// it. Callers receive it via session.AcceptDataStream and discriminate with
-// a type-switch.
-type DataStreamHeader interface {
-	// RawType returns the leading Type varint as it appeared on the wire
-	// (§11.4.2 / §11.5). The concrete type is the primary discriminator;
-	// RawType is for diagnostics and logging.
-	RawType() uint64
-}
-
 // UnknownDataStreamTypeError is returned when the leading Type of an inbound
 // data uni-stream is not one of the recognized data-stream types. The caller
 // (typically session.AcceptDataStream) resets the underlying stream before

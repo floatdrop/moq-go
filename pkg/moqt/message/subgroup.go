@@ -117,9 +117,6 @@ func (h SubgroupHeader) Type() uint64 {
 	return t
 }
 
-// RawType returns the wire Type byte. Required by DataStreamHeader.
-func (h SubgroupHeader) RawType() uint64 { return h.Type() }
-
 // DecodeSubgroupHeaderType parses a wire Type byte (§11.4.2) into the
 // flag fields of a SubgroupHeader. TrackAlias is left zero — the header
 // parser reads it from the following varint. Returns an error if t is

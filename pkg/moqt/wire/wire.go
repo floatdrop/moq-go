@@ -152,9 +152,6 @@ func (w *Writer) Bytes() []byte { return w.buf }
 // Reset clears the writer's buffer, allowing it to be reused.
 func (w *Writer) Reset() { w.buf = w.buf[:0] }
 
-// Len returns the number of bytes written so far.
-func (w *Writer) Len() int { return len(w.buf) }
-
 // Varint appends a MoQT leading-ones varint (§1.4.1).
 func (w *Writer) Varint(v uint64) { w.buf = AppendVarint(w.buf, v) }
 

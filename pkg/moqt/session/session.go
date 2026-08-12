@@ -30,14 +30,6 @@ const (
 	roleServer
 )
 
-// String returns "client" or "server".
-func (r role) String() string {
-	if r == roleServer {
-		return "server"
-	}
-	return "client"
-}
-
 // Session represents one MoQT session over a Conn after the SETUP handshake
 // has completed. The Session owns the control-stream goroutines until Close
 // is called.
