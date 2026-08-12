@@ -6,7 +6,7 @@
 
 .PHONY: build test test-race lint \
         bench bench-quick bench-smoke bench-baseline \
-        cover cover-gaps cover-html cover-check cover-floors \
+        cover cover-gaps cover-html cover-check cover-floors cover-total cover-badge \
         interop interop-quic interop-webtransport interop-matrix interop-build interop-certs interop-clean \
         interop-client interop-client-build
 
@@ -103,6 +103,16 @@ cover-html:
 # CI runs, and it is the enforcement — there is no table to hand-maintain.
 cover-check:
 	@./scripts/check-coverage.sh
+
+# Whole-suite coverage (-coverpkg): what the suite actually exercises, crediting
+# a package for the code other packages' tests reach. Informational, NOT a gate —
+# see the header of the script for why it would make a bad one.
+cover-total:
+	@./scripts/coverage-total.sh
+
+# Same, and refresh the README badge from the result.
+cover-badge:
+	@./scripts/coverage-total.sh --badge
 
 # Re-measure and rewrite the floors. Run this when you have RAISED coverage, and
 # commit the result alongside the tests that earned it. Samples the suite three

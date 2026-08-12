@@ -61,6 +61,7 @@ make bench-quick                            # ~5s  allocs/op guard — run after
 make bench                                  # ~4m30s full suite incl. ns/op — for timing claims only
 make cover-check                            # CI's coverage gate — no package below its floor
 make cover-gaps                             # every function the tests never reach, least-covered first
+make cover-total                            # whole-suite coverage (-coverpkg); informational, not a gate
 make cover-floors                           # rewrite coverage-floors.txt after RAISING coverage
 ```
 
@@ -288,15 +289,46 @@ untested code there.
 
 Everything under `pkg/` is gated, **including the test helpers**. `sessiontest`
 (19.5%), `relaytest` and `conntest` (0.0%) have floors like everything else.
-Their numbers are low because coverage counts the package under test and not the
-harness, so a helper exercised by nearly every test in the repo still scores
-near zero. Don't read those figures as neglect — but do expect the gate to fire
-if you refactor a helper and its self-coverage falls, and expect a brand-new
-helper package to fail as `NEW` until you record its floor.
+Expect the gate to fire if you refactor a helper and its self-coverage falls,
+and a brand-new helper package to fail as `NEW` until you record its floor.
 
-The transport adapters (`quicconn` 63.8%, `wtconn` 50.8%) are the real gap, and
-worth understanding before you trust a green suite. What's uncovered there is
-not error handling — it's the core delegation surface: `Dial`, `OpenStream`,
+### Read the floors as narrow, because they are
+
+Every number in `coverage-floors.txt` credits a package **only for what its own
+tests reach**. That is the Go default, and it is the right choice for a
+regression gate — a drop names the package whose tests regressed, and
+integration tests walking the same code cannot prop the number back up. But it
+systematically understates how much of the tree is exercised, because most of
+`wire` is driven by `message`/`session`/`relay` tests rather than its own.
+
+```sh
+make cover-total    # whole-suite view via -coverpkg; informational, not a gate
+```
+
+**The suite covers 86.3% of `pkg/`.** Don't read a low floor as a thin package
+without checking that number first:
+
+| | floor says | actually exercised |
+|---|---|---|
+| `wire` | 79.9% | **96.4%** |
+| `relay/internal/registry` | 74.6% | **93.3%** |
+| `relay/cache` | 84.9% | **94.2%** |
+| `conntest` | 0.0% | **76.5%** |
+| `sessiontest` | 19.5% | **54.4%** |
+
+So `wire` and `registry` are not the weak spots their floors suggest, and the
+helpers' near-zero figures are an artifact of who gets the credit, not neglect.
+
+`make cover-total` is deliberately **not** the gate. As one it would let someone
+delete a package's unit tests while integration tests kept the number green —
+`fea80fc`'s failure mode wearing a different hat.
+
+**`wtconn` is the one real gap**, and it is the exception that proves the point
+above: whole-suite attribution barely moves it (50.8% → 52.5%), so the suite
+genuinely does not drive it. `quicconn` recovers to 73.9%, less alarming than
+its 63.8% floor but still the second-thinnest. Worth understanding before you
+trust a green suite. What's uncovered there is not error handling — it's the
+core delegation surface: `Dial`, `OpenStream`,
 `AcceptStream`, `Read`/`Write`/`Close`, `SendDatagram`/`ReceiveDatagram`. The
 hermetic suite drives `sessiontest` instead, so these one-line hand-offs to
 quic-go and webtransport-go are only ever exercised by the interop jobs.

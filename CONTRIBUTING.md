@@ -53,6 +53,12 @@ A few specifics:
   `make cover-gaps COVER_PKGS=./pkg/relay/` lists the functions no test reaches.
   A brand-new package fails the check until its floor is recorded; that's
   intended.
+- **Whole-suite coverage** is a separate, non-gating view: `make cover-total`
+  credits each package for code that *any* test reaches, which the floors
+  deliberately don't. The floors are the better regression signal; this is the
+  more honest headline number, currently 86.3%. `make cover-badge` refreshes the
+  README badge from it — it's a static badge, so it only changes when someone
+  runs that.
 
 ### Interoperability
 
