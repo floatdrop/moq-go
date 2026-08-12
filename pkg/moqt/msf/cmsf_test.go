@@ -3,6 +3,7 @@ package msf
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -396,5 +397,66 @@ func TestValidateCMSFSAPTrackOK(t *testing.T) {
 	}
 	if err := c.Validate(); err != nil {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// Fields this package has no typed home for — §4.1.1.4.4's
+// Authorization URL, whose JSON key the draft never names, and
+// producer-defined keys on both the contentProtections entry and its
+// drmSystem — survive a parse and re-marshal through Extras.
+func TestContentProtectionRoundTripPreservesFields(t *testing.T) {
+	const doc = `{
+		"version": "draft-01",
+		"contentProtections": [
+			{
+				"refID": "1",
+				"defaultKID": ["01234567-89ab-cdef-0123-456789abcdef"],
+				"scheme": "cbcs",
+				"drmSystem": {
+					"systemID": "94ce86fb-07ff-4f43-adb8-93d2fa968ca2",
+					"laURL": {"url": "https://fps.example.com/licenses"},
+					"certURL": {"url": "https://fps.example.com/cert"},
+					"authorizationURL": {"url": "https://authz.example.com", "type": "bearer"},
+					"robustness": "HW_SECURE_ALL",
+					"vendorSystemKey": 42
+				},
+				"vendorEntryKey": "keep me"
+			}
+		],
+		"tracks": [
+			{"name": "v", "packaging": "cmaf", "isLive": true, "contentProtectionRefIDs": ["1"]}
+		]
+	}`
+
+	var c Catalog
+	if err := json.Unmarshal([]byte(doc), &c); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	cp := c.ContentProtections[0]
+	authz, ok := cp.DRMSystem.Extras["authorizationURL"].(map[string]any)
+	if !ok {
+		t.Fatalf("authorizationURL not captured in Extras: %v", cp.DRMSystem.Extras)
+	}
+	if authz["url"] != "https://authz.example.com" || authz["type"] != "bearer" {
+		t.Errorf("authorizationURL: %v", authz)
+	}
+	if cp.Extras["vendorEntryKey"] != "keep me" {
+		t.Errorf("entry extras: %v", cp.Extras)
+	}
+	if cp.DRMSystem.Extras["vendorSystemKey"] != float64(42) {
+		t.Errorf("drmSystem extras: %v", cp.DRMSystem.Extras)
+	}
+
+	out, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	for _, want := range []string{"authorizationURL", "vendorEntryKey", "vendorSystemKey", "HW_SECURE_ALL"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("round-trip dropped %q: %s", want, out)
+		}
 	}
 }
