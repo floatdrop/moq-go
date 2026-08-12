@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -140,6 +141,68 @@ func TestClientSendsPathAndAuthority(t *testing.T) {
 			t.Errorf("server saw option 0x%02X = %q, want %q (all: %+v)",
 				typ, got[typ], val, serverSess.PeerOptions())
 		}
+	}
+}
+
+// TestClientRejectsServerSentPathAndAuthority covers the receive side of
+// §10.3.1.1/§10.3.1.2. PATH and AUTHORITY are client-to-server only: each
+// section says the option MUST NOT be used by the server and that a session
+// receiving one from a server MUST be closed, with INVALID_PATH and
+// INVALID_AUTHORITY respectively — 0x8 and 0x19 in the §3.5 registry.
+//
+// Until this landed the client stored whatever the server sent and inspected
+// none of it, so a server could hand a client a PATH and the session carried on
+// — the four §3.5 codes for these two options sat in errors.go with no
+// reference anywhere, which is how the omission stayed invisible.
+//
+// The server here is deliberately misused: Option applies to both roles, so
+// session.WithPath on a Server is exactly the spec violation under test.
+func TestClientRejectsServerSentPathAndAuthority(t *testing.T) {
+	tests := []struct {
+		name     string
+		opt      session.Option
+		wantCode moqt.SessionErrorCode
+	}{
+		{"PATH", session.WithPath("/relay"), moqt.SessionInvalidPath},
+		{"AUTHORITY", session.WithAuthority("relay.example:4433"), moqt.SessionInvalidAuthority},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := t.Context()
+			clientConn, serverConn := sessiontest.NewConnPair()
+
+			var (
+				wg                   sync.WaitGroup
+				clientSess           *session.Session
+				clientErr, serverErr error
+			)
+			wg.Go(func() {
+				clientSess, clientErr = session.Client(ctx, clientConn)
+			})
+			wg.Go(func() {
+				var srv *session.Session
+				srv, serverErr = session.Server(ctx, serverConn, tt.opt)
+				if srv != nil {
+					t.Cleanup(func() { _ = srv.Close(moqt.SessionNoError, "test cleanup") })
+				}
+			})
+			wg.Wait()
+
+			if clientErr == nil {
+				_ = clientSess.Close(moqt.SessionNoError, "test cleanup")
+				t.Fatalf("client accepted a server-sent %s option; want the session refused", tt.name)
+			}
+			if clientSess != nil {
+				t.Errorf("client returned a session alongside the error: %+v", clientSess)
+			}
+			// The reason travels to the peer, so it should name the offending
+			// option rather than being a bare "protocol violation".
+			if !strings.Contains(clientErr.Error(), tt.name) {
+				t.Errorf("error %q does not name the %s option", clientErr, tt.name)
+			}
+			_ = serverErr // the server's own Open may succeed or fail depending on close timing
+		})
 	}
 }
 

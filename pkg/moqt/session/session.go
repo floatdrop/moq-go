@@ -8,6 +8,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -174,6 +175,10 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 		_ = conn.CloseWithError(uint64(moqt.SessionProtocolViolation), err.Error())
 		return nil, err
 	}
+	if code, err := s.checkPeerSetupOptions(); err != nil {
+		_ = conn.CloseWithError(uint64(code), err.Error())
+		return nil, err
+	}
 
 	go s.controlSendLoop()
 	go s.controlRecvLoop()
@@ -184,6 +189,55 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 // PeerOptions returns the SETUP options the peer advertised. The returned
 // slice aliases internal state and must not be mutated.
 func (s *Session) PeerOptions() []wire.KVPair { return s.peerOptions }
+
+// checkPeerSetupOptions enforces the receive side of the PATH (§10.3.1.2) and
+// AUTHORITY (§10.3.1.1) setup options. Each says the option "MUST NOT be used
+// by the server, or when WebTransport is used", and that a session receiving
+// one from a server MUST be closed — with INVALID_PATH and INVALID_AUTHORITY
+// respectively, whose numeric values come from the §3.5 registry. Returns that
+// close code and the reason, or a nil error when the peer's options are
+// acceptable.
+//
+// Only the server-sent case is enforced here, and deliberately so — the other
+// two conditions each section names need machinery this package does not have:
+//
+//   - "on a WebTransport session" needs the Conn to say which transport it is,
+//     and Conn has no such predicate. Adding one is a change to the central
+//     interface that all three adapters must then implement.
+//   - "does not support the path/authority" needs the server to be told which
+//     paths and authorities it serves, which is configuration that does not
+//     exist yet. Note this is the *server-side* check, and a server that never
+//     learns its own names cannot make it.
+//
+// Enforcing the first alone is still worth doing: it is unambiguous, needs no
+// new API, and it is the direction a conforming peer cannot protect us from,
+// since a client has no other way to notice a server misusing these options.
+func (s *Session) checkPeerSetupOptions() (moqt.SessionErrorCode, error) {
+	if s.role != roleClient {
+		return moqt.SessionNoError, nil
+	}
+	for _, opt := range s.peerOptions {
+		switch message.SetupOption(opt.Type) {
+		case message.SetupOptionPath:
+			return moqt.SessionInvalidPath,
+				errors.New("server sent a PATH setup option, which is client-only (§10.3.1.2)")
+		case message.SetupOptionAuthority:
+			return moqt.SessionInvalidAuthority,
+				errors.New("server sent an AUTHORITY setup option, which is client-only (§10.3.1.1)")
+		case message.SetupOptionAuthorizationToken,
+			message.SetupOptionMaxAuthTokenCache,
+			message.SetupOptionMaxFilterRanges,
+			message.SetupOptionMOQTImplementation,
+			message.SetupOptionMaxRequestUpdates:
+			// Legal in both directions. Listed rather than folded into the
+			// default so that adding a §10.3.1 option fails the exhaustive
+			// linter until someone decides whether a server may send it.
+		default:
+			// §10.3 requires a receiver ignore options it does not recognize.
+		}
+	}
+	return moqt.SessionNoError, nil
+}
 
 // MaxFilterRanges returns the MAX_FILTER_RANGES value this session advertised
 // (§10.3.1.6) — the total Range Filter range budget it will accept on any one
