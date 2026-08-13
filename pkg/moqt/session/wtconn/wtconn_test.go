@@ -352,3 +352,27 @@ func TestListener_AcceptYieldsSessionConn(t *testing.T) {
 		t.Fatalf("second Close = %v, want nil", err)
 	}
 }
+
+// TestConnReportsWebTransport pins the optional capability the session layer
+// asserts for when refusing to send PATH or AUTHORITY: §10.3.1.1 and §10.3.1.2
+// forbid both options on a WebTransport session, because HTTP/3 already carries
+// that information in the CONNECT request.
+//
+// It is asserted through the same anonymous interface the session layer uses,
+// not through the concrete type, so this fails if the method is ever renamed —
+// which would otherwise silently downgrade the guard to "not WebTransport" and
+// let the forbidden options back onto the wire.
+func TestConnReportsWebTransport(t *testing.T) {
+	client, server := newLoopbackConns(t)
+
+	for name, conn := range map[string]session.Conn{"client": client, "server": server} {
+		wt, ok := conn.(interface{ IsWebTransport() bool })
+		if !ok {
+			t.Fatalf("%s conn does not implement IsWebTransport; the session layer's "+
+				"guard against PATH/AUTHORITY over WebTransport silently stops working", name)
+		}
+		if !wt.IsWebTransport() {
+			t.Errorf("%s conn reported IsWebTransport() = false", name)
+		}
+	}
+}

@@ -102,12 +102,24 @@ func (bp *bufPipe) write(p []byte) (int, error) {
 // read drains up to len(p) bytes, blocking while the buffer is empty. Once the
 // writer has closed and the buffer is empty it returns werr (io.EOF on a clean
 // close).
+//
+// The two half-closes are deliberately asymmetric. A writer close is reported
+// only after the buffer drains — that is what makes this a buffered pipe, and
+// it matches io.Pipe for a clean Close. A reader close takes effect at once,
+// buffered bytes or not: it models QUIC STOP_SENDING, and a stream that kept
+// handing back objects after the session reset it would let a test observe
+// delivery production never performs. Checking rerr before the drain loop is
+// also what gives the reader's own error precedence over a writer close that
+// lands afterwards, so a reset is not reported as a clean io.EOF.
 func (bp *bufPipe) read(p []byte) (int, error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
 	bp.mu.Lock()
 	defer bp.mu.Unlock()
+	if bp.rerr != nil {
+		return 0, bp.rerr
+	}
 	for bp.n == 0 {
 		if bp.werr != nil {
 			return 0, bp.werr

@@ -90,6 +90,17 @@ func (c *conn) CloseWithError(code uint64, reason string) error {
 
 func (c *conn) Context() context.Context { return c.s.Context() }
 
+// IsWebTransport reports that this Conn runs over WebTransport, which
+// §10.3.1.1 and §10.3.1.2 make relevant: the PATH and AUTHORITY setup options
+// MUST NOT be used on a WebTransport session, since HTTP/3 already carries that
+// information in the CONNECT request. The session layer asserts for this
+// method to refuse those options before sending them.
+//
+// Not part of [session.Conn] on purpose — one rule needs it, and putting it on
+// the interface would tax every adapter, third-party ones included, for a check
+// the QUIC adapters answer trivially.
+func (c *conn) IsWebTransport() bool { return true }
+
 func (c *conn) SendDatagram(payload []byte) error {
 	return c.s.SendDatagram(payload)
 }
