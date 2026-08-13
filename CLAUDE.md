@@ -305,8 +305,10 @@ systematically understates how much of the tree is exercised, because most of
 make cover-total    # whole-suite view via -coverpkg; informational, not a gate
 ```
 
-**The suite covers 86.3% of `pkg/`.** Don't read a low floor as a thin package
-without checking that number first:
+CI publishes that same figure to Coveralls on every build (`make cover-profile`
+feeds it), so the README badge is the live number and nothing here needs
+hand-updating. **Don't read a low floor as a thin package without checking it
+first** — the gap between the two views is large and uneven:
 
 | | floor says | actually exercised |
 |---|---|---|
@@ -318,6 +320,8 @@ without checking that number first:
 
 So `wire` and `registry` are not the weak spots their floors suggest, and the
 helpers' near-zero figures are an artifact of who gets the credit, not neglect.
+(Those illustrative pairs are a snapshot; `make cover-total` prints the current
+split.)
 
 `make cover-total` is deliberately **not** the gate. As one it would let someone
 delete a package's unit tests while integration tests kept the number green —
