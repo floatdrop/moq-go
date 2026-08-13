@@ -170,6 +170,44 @@ func TestPublishNamespace_AuthDenialUsesPolicyCode(t *testing.T) {
 	}
 }
 
+// TestSubscribeNamespace_AuthDenialUsesPolicyCode is
+// [TestPublishNamespace_AuthDenialUsesPolicyCode] for the SUBSCRIBE_NAMESPACE
+// arm. Each namespace handler calls its own Authorize method and each has its
+// own reject-before-register early return, so one arm passing says nothing
+// about the others — a handler that skipped the check, or checked after
+// registering, would leave this suite green.
+func TestSubscribeNamespace_AuthDenialUsesPolicyCode(t *testing.T) {
+	t.Parallel()
+	auth := &denyAuthorizer{err: relay.Deny(moqt.RequestUnauthorized, "no subscribing")}
+	clientSess, teardown := connectRelay(t, relay.Config{Authorizer: auth})
+	defer teardown()
+
+	_, err := clientSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
+		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+	})
+	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
+	if got := auth.subscribeNamespaceCalls.Load(); got != 1 {
+		t.Errorf("subscribeNamespaceCalls = %d, want 1", got)
+	}
+}
+
+// TestSubscribeTracks_AuthDenialUsesPolicyCode is the same for the
+// SUBSCRIBE_TRACKS arm.
+func TestSubscribeTracks_AuthDenialUsesPolicyCode(t *testing.T) {
+	t.Parallel()
+	auth := &denyAuthorizer{err: relay.Deny(moqt.RequestUnauthorized, "no tracks")}
+	clientSess, teardown := connectRelay(t, relay.Config{Authorizer: auth})
+	defer teardown()
+
+	_, err := clientSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+	})
+	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
+	if got := auth.subscribeTracksCalls.Load(); got != 1 {
+		t.Errorf("subscribeTracksCalls = %d, want 1", got)
+	}
+}
+
 // ----- shared helpers --------------------------------------------------
 
 // dialAnotherClient opens a fresh client session on the same in-process
