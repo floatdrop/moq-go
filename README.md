@@ -1,15 +1,7 @@
 # moq-go
 
-<!-- Badges take a single branch and no globs, so this one names the current
-     draft explicitly; update it on a draft bump. The CI push filter itself
-     globs draft-*, so builds need no edit. -->
 [![CI](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml/badge.svg?branch=draft-19)](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml?query=branch%3Adraft-19)
 [![Go Reference](https://pkg.go.dev/badge/github.com/floatdrop/moq-go.svg)](https://pkg.go.dev/github.com/floatdrop/moq-go)
-<!-- Pushed by CI's coverage job on every build, so it needs no manual refresh.
-     Like the CI badge it names one branch and no globs; update it on a draft
-     bump. The figure is the whole-suite -coverpkg number over ./pkg/..., which
-     is not what CI gates on — coverage-floors.txt holds the per-package floors,
-     and those credit a package only for what its own tests reach. -->
 [![Coverage](https://coveralls.io/repos/github/floatdrop/moq-go/badge.svg?branch=draft-19)](https://coveralls.io/github/floatdrop/moq-go?branch=draft-19)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
 [![Discord](https://img.shields.io/discord/1124083992740761730?logo=Discord&logoColor=%235865F2&label=join&color=%235865F2)](https://discord.moq.dev/)
