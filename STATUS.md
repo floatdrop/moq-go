@@ -263,9 +263,8 @@ Out of scope in the relay's cross-instance routing: multi-hop **loop detection**
 (the only guard is skipping the relay's own `RelayAddr`), an upstream
 **connection-health / redial policy** beyond dial-on-demand, and GOAWAY
 **cascading**. `cmd/relay` stays single-instance by choice — the distributed
-`DiscoveryStore` backends ship as their own binaries (`relay-etcd`,
-`relay-nats`) in their own modules, so the core module never pulls in an etcd or
-NATS client.
+`DiscoveryStore` backend ships as its own binary (`relay-etcd`) in its own
+module, so the core module never pulls in an etcd client.
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
 
