@@ -79,20 +79,48 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", "0.0.0.0:4433", "listen address; serves raw QUIC and WebTransport on this one UDP port")
-	certFile := flag.String("cert", "", "TLS certificate file (PEM); a self-signed dev cert is generated if empty")
-	keyFile := flag.String("key", "", "TLS private key file (PEM); generated with -cert if empty")
-	endpoints := flag.String("etcd-endpoints", "127.0.0.1:2379",
+	// The signal context lives here rather than in run so that run is callable
+	// from a test with an ordinary cancellable context, and so a test never
+	// installs process-wide signal handlers.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	err := run(ctx, os.Args[1:], os.Stderr)
+	// Not deferred: os.Exit below would skip it, and unregistering the signal
+	// handlers is the one piece of cleanup that has to happen either way.
+	stop()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+// run is main's body with the process-global edges pulled out: it takes its
+// arguments rather than reading os.Args, parses into its own FlagSet rather
+// than the package-level one, and returns errors rather than calling os.Exit.
+//
+// That last part is not only for tests. os.Exit skips deferred functions, so
+// the original had to order its fatal paths around store.Close being deferred
+// and say so in a comment; returning an error removes the hazard rather than
+// documenting it.
+//
+// It returns when ctx is cancelled and the GOAWAY drain has finished.
+func run(ctx context.Context, args []string, errOut io.Writer) error {
+	fs := flag.NewFlagSet("relay-etcd", flag.ContinueOnError)
+	fs.SetOutput(errOut)
+
+	addr := fs.String("addr", "0.0.0.0:4433", "listen address; serves raw QUIC and WebTransport on this one UDP port")
+	certFile := fs.String("cert", "", "TLS certificate file (PEM); a self-signed dev cert is generated if empty")
+	keyFile := fs.String("key", "", "TLS private key file (PEM); generated with -cert if empty")
+	endpoints := fs.String("etcd-endpoints", "127.0.0.1:2379",
 		"comma-separated etcd client endpoints")
-	prefix := flag.String("etcd-prefix", "/moqt/discovery/",
+	prefix := fs.String("etcd-prefix", "/moqt/discovery/",
 		"root key prefix scoping all of this relay's etcd data; isolate meshes or share a cluster by varying it")
-	leaseTTL := flag.Duration("etcd-lease-ttl", 15*time.Second,
+	leaseTTL := fs.Duration("etcd-lease-ttl", 15*time.Second,
 		"etcd lease TTL bounding how long this relay's advertisements survive after it stops heartbeating")
-	relayAddr := flag.String("relay-addr", "",
+	relayAddr := fs.String("relay-addr", "",
 		"address peers use to dial this relay, advertised in etcd; empty = single-instance (not reachable by peers)")
-	wtPath := flag.String("webtransport-path", "/moq",
+	wtPath := fs.String("webtransport-path", "/moq",
 		"HTTP/3 path browsers use for the WebTransport CONNECT (raw QUIC ignores it)")
-	healthAddr := flag.String("health-addr", "",
+	healthAddr := fs.String("health-addr", "",
 		"TCP address for the HTTP health endpoint; empty (the default) disables it")
 	// A relay serving MSF has to keep catalogs longer than media. A catalog is
 	// published once on join and republished only when a participant's tracks
@@ -102,14 +130,14 @@ func main() {
 	// that participant's nickname, version or tracks. cmd/relay has always set
 	// this; this binary did not, which is the difference between a room that
 	// works and one where late arrivals see half of it.
-	catalogTrackName := flag.String("catalog-track-name", "catalog",
+	catalogTrackName := fs.String("catalog-track-name", "catalog",
 		"track name whose Object Cache uses --catalog-ttl instead of the default; empty disables the override")
-	catalogTTL := flag.Duration(
+	catalogTTL := fs.Duration(
 		"catalog-ttl",
 		0,
 		"per-object TTL for tracks matching --catalog-track-name; 0 means infinite retention (the FIFO size cap still applies)",
 	)
-	healthPath := flag.String("health-path", "/healthz",
+	healthPath := fs.String("health-path", "/healthz",
 		"path on -health-addr that answers 200 OK")
 	// Prometheus rides the health port rather than getting one of its own:
 	// both are plain TCP HTTP for an orchestrator, both are unauthenticated,
@@ -122,12 +150,12 @@ func main() {
 	// where a media fault becomes visible: objects dropped per track and
 	// subgroup, subgroup streams reset before their group ended and why, and
 	// the cross-relay leg separately from clients.
-	metricsEnabled := flag.Bool("metrics", true,
+	metricsEnabled := fs.Bool("metrics", true,
 		"serve Prometheus metrics at <health-path>/metrics; requires -health-addr")
 	// Track names come off the wire, so they cannot become label values
 	// unfiltered — a publisher would be choosing this process's metric
 	// cardinality. Anything not listed here is counted under track="other".
-	metricsTracks := flag.String("metrics-track-names", "catalog,video,audio",
+	metricsTracks := fs.String("metrics-track-names", "catalog,video,audio",
 		"comma-separated track names that keep their own `track` label; all others are counted as \"other\"")
 	// Nothing here is logged per group, per object or per frame — measured with
 	// two clients exchanging video and audio, the relay emitted nothing at all
@@ -142,14 +170,15 @@ func main() {
 	// address and configuration it came up on, and quic-go reporting that the
 	// kernel refused it the UDP receive buffer it asked for — a packet-loss
 	// problem worth hearing about unprompted rather than discovering later.
-	logLevel := flag.String("log-level", "info",
+	logLevel := fs.String("log-level", "info",
 		"log verbosity: debug, info, warn or error")
-	flag.Parse()
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 
 	level, err := parseLogLevel(*logLevel)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(2)
+		return err
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
@@ -157,29 +186,29 @@ func main() {
 	// Log the build before any fatal setup, so a bug report about a relay that
 	// died on TLS or the listener still identifies which binary died.
 	version, commit, commitTime, dirty := buildInfo()
-	logger.Info("relay-etcd build",
+	logger.InfoContext(ctx, "relay-etcd build",
 		"version", version,
 		"commit", commit,
 		"commit_time", commitTime,
 		"dirty", dirty,
 	)
 
-	// Do the fatal-on-error setup (TLS, listener) before opening the store, so
-	// no os.Exit path runs after store.Close() is deferred (which it would skip).
+	// TLS and the listener come before the store purely for ordering clarity now:
+	// run returns errors instead of calling os.Exit, so deferred cleanup always
+	// runs and the original hazard this ordering worked around is gone.
 	// Advertise both mappings' ALPNs — "moqt-NN" for raw QUIC and "h3" for
 	// WebTransport (§3.1) — so relaynet.Listen can decide per connection. Clients
 	// pick their transport by URL scheme, peers keep dialing raw QUIC, and no
 	// transport choice has to be agreed deployment-wide.
 	tlsCfg, err := relaynet.TLSConfig(*certFile, *keyFile, relaynet.DualALPNs)
 	if err != nil {
-		logger.Error("build TLS config", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("build TLS config: %w", err)
 	}
 	listener, err := relaynet.Listen(*addr, *wtPath, tlsCfg, logger)
 	if err != nil {
-		logger.Error("listen", "addr", *addr, "err", err)
-		os.Exit(1)
+		return fmt.Errorf("listen on %s: %w", *addr, err)
 	}
+	defer listener.Close()
 
 	// The health endpoint is plain HTTP over TCP on its own port: the MOQT port
 	// is UDP-only, so orchestrators and TCP probes have nothing to talk to there.
@@ -198,15 +227,13 @@ func main() {
 		// probe while the startup log still reports it as configured. Reject it here
 		// rather than silently rewriting what the operator asked for.
 		if !strings.HasPrefix(*healthPath, "/") {
-			logger.Error("invalid -health-path: must begin with /", "path", *healthPath)
-			os.Exit(1)
+			return fmt.Errorf("invalid -health-path %q: must begin with /", *healthPath)
 		}
 		// noctx forbids the plain net.Listen form.
 		var lc net.ListenConfig
-		healthLn, err := lc.Listen(context.Background(), "tcp", *healthAddr)
+		healthLn, err := lc.Listen(ctx, "tcp", *healthAddr)
 		if err != nil {
-			logger.Error("listen health", "addr", *healthAddr, "err", err)
-			os.Exit(1)
+			return fmt.Errorf("listen health on %s: %w", *healthAddr, err)
 		}
 		// The default registry, not a fresh one: the etcd client instruments
 		// its own gRPC calls into it, so scraping it reports on the discovery
@@ -232,7 +259,7 @@ func main() {
 		}
 		go func() {
 			if err := healthSrv.Serve(healthLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				logger.Error("serve health", "addr", *healthAddr, "err", err)
+				logger.ErrorContext(ctx, "serve health", "addr", *healthAddr, "err", err)
 			}
 		}()
 	}
@@ -243,12 +270,11 @@ func main() {
 		etcd.WithLogger(logger),
 	)
 	if err != nil {
-		logger.Error("open etcd discovery store", "err", err)
-		os.Exit(1)
+		return fmt.Errorf("open etcd discovery store: %w", err)
 	}
 	defer store.Close()
 
-	logger.Info("relay-etcd listening",
+	logger.InfoContext(ctx, "relay-etcd listening",
 		"addr", listener.Addr().String(),
 		"webtransport_path", *wtPath,
 		"relay_addr", *relayAddr,
@@ -285,6 +311,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Derived so the health watcher below can be woken when Run returns on its
+	// own, without cancelling the caller's context.
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+
 	// On a signal, fail health probes as soon as the shutdown *starts* rather than
 	// once it finishes, so a load balancer stops steering new connections here
 	// while the relay is still draining GOAWAY — the same ordering as the etcd
@@ -296,11 +327,15 @@ func main() {
 		healthClosed = make(chan struct{})
 		go func() {
 			defer close(healthClosed)
-			<-ctx.Done()
-			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			<-runCtx.Done()
+			// WithoutCancel, not Background: this runs *because* runCtx was
+			// cancelled, so a derived context would already be done and the
+			// shutdown would get no grace period at all. Keeping ctx's values
+			// preserves any logging or tracing scope the caller installed.
+			shutCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			defer cancel()
 			if err := healthSrv.Shutdown(shutCtx); err != nil {
-				logger.Error("shut down health endpoint", "err", err)
+				logger.ErrorContext(shutCtx, "shut down health endpoint", "err", err)
 			}
 		}()
 	}
@@ -309,18 +344,18 @@ func main() {
 	// finished and it keeps live sessions out of ctx's cancellation scope. Both
 	// matter: exiting main mid-drain, or letting the signal cancel the session
 	// handlers, means peers never see the GOAWAY.
-	if err := r.Run(ctx, 10*time.Second); err != nil {
-		// Log rather than os.Exit so the deferred store.Close() and stop()
-		// run: os.Exit would skip them.
-		logger.Error("relay run", "err", err)
-	}
+	runErr := r.Run(runCtx, 10*time.Second)
 
 	if healthClosed != nil {
-		// Run can return without a signal, leaving the watcher parked on ctx.Done.
-		// Cancel so it wakes, then wait for the port to actually close.
+		// Run can return without a signal, leaving the watcher parked on
+		// runCtx.Done. Cancel so it wakes, then wait for the port to close.
 		stop()
 		<-healthClosed
 	}
+	if runErr != nil {
+		return fmt.Errorf("relay run: %w", runErr)
+	}
+	return nil
 }
 
 // healthHandler routes the health port: exact-match liveness at healthPath,
