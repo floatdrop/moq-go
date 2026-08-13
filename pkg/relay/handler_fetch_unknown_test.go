@@ -88,46 +88,19 @@ func unknownGapTopology(
 	// a fetch that lands early gets a legitimately different answer, with the
 	// unknown-range floor sitting wherever the cache happened to reach.
 	//
-	// Callers paper over that with a retry loop. This makes the precondition
-	// the helper already claims ("populates the relay's cache with the
-	// [liveLo, liveHi] tail") actually hold before it returns: every group is
-	// forwarded to this subscriber, which it cannot be until the relay has
-	// ingested it.
-	seeded := make(chan struct{})
-	go func() {
-		seen := make(map[uint64]bool, liveHi-liveLo+1)
-		for {
-			ds, err := live.AcceptDataStream(t.Context())
-			if err != nil {
-				return
-			}
-			sg, ok := ds.(*session.IncomingSubgroupStream)
-			if !ok {
-				continue
-			}
-			for {
-				if _, err := sg.ReadObject(); err != nil {
-					break
-				}
-			}
-			g := sg.Header.GroupID
-			if g >= liveLo && g <= liveHi && !seen[g] {
-				seen[g] = true
-				if uint64(len(seen)) == liveHi-liveLo+1 {
-					close(seeded)
-				}
-			}
-		}
-	}()
+	// Wait on the RELAY's watermark rather than on this subscriber receiving
+	// everything. The cache is the precondition the callers actually depend on,
+	// and a subscriber is the wrong proxy for it: the relay may drop or reset a
+	// lagging one (§3.3.4), so under load "the subscriber saw every group" can
+	// stay false forever while the cache is perfectly well populated. An
+	// earlier version of this barrier asserted exactly that and timed out under
+	// -race. TRACK_STATUS_OK carries LARGEST_OBJECT (§10.2.16), so the relay
+	// answers the question directly.
+	go drainAll(t.Context(), live)
 
-	select {
-	case <-seeded:
-	case <-time.After(15 * time.Second):
-		t.Fatal("the relay never forwarded the whole live tail, so its cache was " +
-			"never seeded and any fetch assertion below would be meaningless")
-	}
-
-	return dialAnotherClient(t, upSess)
+	fetchClient := dialAnotherClient(t, upSess)
+	waitRelayLargest(t, fetchClient, ns, name, liveHi, 0)
+	return fetchClient
 }
 
 // tryFetchElems issues one standalone FETCH for [0, {lastGroup, 1}) with the
