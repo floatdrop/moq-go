@@ -13,7 +13,10 @@ func TestParseLogLevel(t *testing.T) {
 		"warning": slog.LevelWarn,
 		"error":   slog.LevelError,
 		// Tolerated because these arrive from a ConfigMap or an env var,
-		// where stray whitespace and capitals are ordinary.
+		// where stray whitespace and capitals are ordinary. The padding is the
+		// point of the case, so gocritic's suspicious-whitespace warning is
+		// inverted here.
+		//nolint:gocritic // mapKey: the whitespace is deliberate, see above
 		"  INFO ": slog.LevelInfo,
 		"Debug":   slog.LevelDebug,
 	}

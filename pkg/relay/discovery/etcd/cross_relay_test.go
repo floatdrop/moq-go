@@ -75,6 +75,13 @@ func TestCrossRelayEtcd_OnDemandSubscribe(t *testing.T) {
 		t.Fatalf("Publish: %v", err)
 	}
 
+	// PublishNamespace returns once relay B has the advertisement; B writes it
+	// to etcd asynchronously, and A can only route once its own Store can read
+	// it back. Waiting for that is the difference between a deterministic test
+	// and one that fails on a loaded runner with "no publisher for namespace" —
+	// which is exactly how this test flaked in CI.
+	waitForNamespace(t, storeA, videoNS())
+
 	// Subscriber connects to A and subscribes. Subscribe returns only after A
 	// has resolved the track through etcd and established its upstream to B, so
 	// the full chain is live by the time we push objects.
@@ -263,4 +270,28 @@ func dialEtcdClient(t *testing.T, tr *etcdTestRelay) *session.Session {
 		t.Fatalf("session.Client: %v", err)
 	}
 	return sess
+}
+
+// waitForNamespace blocks until store can read ns back out of etcd, which is
+// the point at which a relay using that Store can route to it.
+//
+// The write is asynchronous: PublishNamespace returns as soon as the relay it
+// was sent to has the advertisement, but that relay's Store then writes to etcd
+// and the *other* relay's Store has to observe it. Subscribing before that
+// resolves is refused with "no publisher for namespace" — a real failure mode,
+// just not the one any of these tests are about.
+func waitForNamespace(t *testing.T, store *etcdstore.Store, ns wire.TrackNamespace) {
+	t.Helper()
+	ctx := t.Context()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		infos, err := store.FindNamespace(ctx, ns)
+		if err == nil && len(infos) > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("namespace %v never became visible through etcd (last err: %v)", ns, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
