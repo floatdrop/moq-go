@@ -50,6 +50,9 @@ devenv.local.nix
 .direnv/
 /relay
 /msfdemo
-# relay-etcd binary when built in-place from the etcd submodule
-# (anchored so it never matches the cmd/relay-etcd source directory)
+# relay-etcd binaries left by `go build` — one for a build from the submodule
+# root, one for a build inside the command's own directory. Both are named
+# after the directory they land in, so neither pattern can be relaxed into the
+# other without also ignoring the source directory itself.
 /pkg/relay/discovery/etcd/relay-etcd
+/pkg/relay/discovery/etcd/cmd/relay-etcd/relay-etcd
