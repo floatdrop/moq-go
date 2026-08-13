@@ -31,12 +31,23 @@ import (
 // here and cancelled via tb.Cleanup.
 func connectRelay(tb testing.TB, cfg relay.Config) (clientSess *session.Session, teardown func()) {
 	tb.Helper()
+	return connectRelayOn(tb, cfg, newPipeListener())
+}
+
+// connectRelayOn is [connectRelay] against a caller-supplied listener, for
+// tests that need to configure it first — setting pipeListener.fault to make
+// the relay's own writes fail, for one.
+func connectRelayOn(
+	tb testing.TB,
+	cfg relay.Config,
+	l *pipeListener,
+) (clientSess *session.Session, teardown func()) {
+	tb.Helper()
 	if cfg.GoawayTimeout == 0 {
 		cfg.GoawayTimeout = 50 * time.Millisecond
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	tb.Cleanup(cancel)
-	l := newPipeListener()
 	r := relay.New(l, cfg)
 	startErr := make(chan error, 1)
 	go func() { startErr <- r.Start(ctx) }()

@@ -312,3 +312,45 @@ func waitFor(t *testing.T, d time.Duration, cond func() bool, msg string) {
 		t.Fatal(msg)
 	}
 }
+
+// TestLegString and TestResetCauseString pin the metric label values.
+//
+// These strings are an external contract, not a debug convenience: they become
+// label values in an operator's Prometheus/OTel backend, where renaming one
+// silently splits a time series in two and breaks every dashboard and alert
+// built on it. The doc comments promise them "stable" — this is what holds
+// them to that.
+//
+// The unknown arm carries its own weight. Both types document that a value
+// they do not recognise renders as "unknown" rather than as a number,
+// precisely so a new enum member added upstream cannot turn a bounded label
+// into unbounded label cardinality.
+func TestLegString(t *testing.T) {
+	t.Parallel()
+	for leg, want := range map[relay.Leg]string{
+		relay.LegLocal:    "local",
+		relay.LegUpstream: "upstream",
+		relay.Leg(99):     "unknown",
+	} {
+		if got := leg.String(); got != want {
+			t.Errorf("Leg(%d).String() = %q, want %q", int(leg), got, want)
+		}
+	}
+}
+
+func TestResetCauseString(t *testing.T) {
+	t.Parallel()
+	for cause, want := range map[relay.ResetCause]string{
+		relay.ResetCauseGap:             "gap",
+		relay.ResetCauseDeliveryTimeout: "delivery_timeout",
+		relay.ResetCauseTooFarBehind:    "too_far_behind",
+		relay.ResetCauseExcessiveLoad:   "excessive_load",
+		relay.ResetCauseInboundReset:    "inbound_reset",
+		relay.ResetCauseWriteError:      "write_error",
+		relay.ResetCause(99):            "unknown",
+	} {
+		if got := cause.String(); got != want {
+			t.Errorf("ResetCause(%d).String() = %q, want %q", int(cause), got, want)
+		}
+	}
+}

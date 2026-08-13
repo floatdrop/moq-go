@@ -9,21 +9,21 @@
 #
 # <package> <floor %>
 github.com/floatdrop/moq-go/pkg/moqt/loc 97.6
-github.com/floatdrop/moq-go/pkg/moqt/message 88.5
+github.com/floatdrop/moq-go/pkg/moqt/message 91.8
 github.com/floatdrop/moq-go/pkg/moqt/msf 92.1
-github.com/floatdrop/moq-go/pkg/moqt/session 87.1
+github.com/floatdrop/moq-go/pkg/moqt/session 87.2
 github.com/floatdrop/moq-go/pkg/moqt/session/internal/conntest 0.0
-github.com/floatdrop/moq-go/pkg/moqt/session/quicconn 63.8
-github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest 47.2
-github.com/floatdrop/moq-go/pkg/moqt/session/wtconn 66.1
+github.com/floatdrop/moq-go/pkg/moqt/session/quicconn 65.2
+github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest 72.3
+github.com/floatdrop/moq-go/pkg/moqt/session/wtconn 69.4
 github.com/floatdrop/moq-go/pkg/moqt/track 100.0
 github.com/floatdrop/moq-go/pkg/moqt/uri 98.3
 github.com/floatdrop/moq-go/pkg/moqt/wire 80.7
-github.com/floatdrop/moq-go/pkg/relay 83.7
+github.com/floatdrop/moq-go/pkg/relay 85.4
 github.com/floatdrop/moq-go/pkg/relay/cache 84.9
 github.com/floatdrop/moq-go/pkg/relay/discovery 88.3
 github.com/floatdrop/moq-go/pkg/relay/discovery/etcd 85.3
-github.com/floatdrop/moq-go/pkg/relay/discovery/etcd/cmd/relay-etcd 31.3
+github.com/floatdrop/moq-go/pkg/relay/discovery/etcd/cmd/relay-etcd 63.3
 github.com/floatdrop/moq-go/pkg/relay/internal/registry 75.6
 github.com/floatdrop/moq-go/pkg/relay/internal/relaytest 0.0
 github.com/floatdrop/moq-go/pkg/relay/relaynet 83.3

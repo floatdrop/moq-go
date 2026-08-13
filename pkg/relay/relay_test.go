@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,6 +29,28 @@ type pipeListener struct {
 	// down (because it wrongly inherited a cancelled context) lose the race
 	// deterministically instead of ~half the time.
 	closeDelay time.Duration
+
+	// faultFor, when non-nil, is consulted for each server-side conn in dial
+	// order from 1; a non-nil return wraps that conn in [sessiontest.Faulty].
+	// Wrapping the relay's side is the only way to reach its "write failed"
+	// branches, because an in-process pipe never fails a write on its own, and
+	// selecting by dial ordinal keeps a test from faulting the other clients
+	// it needs working. See [faultConn] for the common single-client case.
+	faultFor func(conn int) sessiontest.FaultFunc
+
+	dialled atomic.Int64
+}
+
+// faultConn builds a [pipeListener.faultFor] that faults only the nth dialled
+// conn, counting from 1 — connectRelay's client is 1 and each subsequent
+// dialAnotherClient takes the next ordinal.
+func faultConn(n int, fault sessiontest.FaultFunc) func(int) sessiontest.FaultFunc {
+	return func(conn int) sessiontest.FaultFunc {
+		if conn == n {
+			return fault
+		}
+		return nil
+	}
 }
 
 func newPipeListener() *pipeListener {
@@ -52,6 +75,11 @@ func (l *pipeListener) Dial() (session.Conn, error) {
 // negative limit means unlimited.
 func (l *pipeListener) DialWithLimits(clientBidi, serverBidi int) (session.Conn, error) {
 	clientConn, serverConn := sessiontest.NewConnPairWithLimits(clientBidi, serverBidi)
+	if l.faultFor != nil {
+		if fault := l.faultFor(int(l.dialled.Add(1))); fault != nil {
+			serverConn = sessiontest.Faulty(serverConn, fault)
+		}
+	}
 	select {
 	case l.conns <- serverConn:
 		return clientConn, nil
