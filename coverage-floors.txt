@@ -10,7 +10,7 @@
 # <package> <floor %>
 github.com/floatdrop/moq-go/pkg/moqt/loc 97.6
 github.com/floatdrop/moq-go/pkg/moqt/message 88.5
-github.com/floatdrop/moq-go/pkg/moqt/msf 81.3
+github.com/floatdrop/moq-go/pkg/moqt/msf 92.1
 github.com/floatdrop/moq-go/pkg/moqt/session 86.7
 github.com/floatdrop/moq-go/pkg/moqt/session/internal/conntest 0.0
 github.com/floatdrop/moq-go/pkg/moqt/session/quicconn 63.8
