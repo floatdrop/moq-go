@@ -2,7 +2,9 @@ package relay_test
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -291,10 +293,41 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 
+	// The upstream runs on its own goroutine and answers BOTH the on-demand
+	// SUBSCRIBE that fills the relay's cache and the stitch FETCH. Any error
+	// there ends the loop, and because a dead upstream shows up only as a
+	// downstream FETCH that is never serviceable, the test would otherwise
+	// spend its whole budget retrying and then report "never served a stitched
+	// FETCH" — true, but silent about the cause. Record the first failure and
+	// print it with the timeout.
+	var (
+		upMu   sync.Mutex
+		upFail error
+	)
+	noteUpstream := func(err error) {
+		upMu.Lock()
+		defer upMu.Unlock()
+		if upFail == nil {
+			upFail = err
+		}
+	}
+	upstreamNote := func() string {
+		upMu.Lock()
+		defer upMu.Unlock()
+		if upFail == nil {
+			return ""
+		}
+		return fmt.Sprintf("; the upstream goroutine had already stopped: %v", upFail)
+	}
+
 	go func() {
 		for {
 			req, err := upSess.AcceptRequest(t.Context())
 			if err != nil {
+				// A cancelled test context is the normal way out.
+				if t.Context().Err() == nil {
+					noteUpstream(fmt.Errorf("AcceptRequest: %w", err))
+				}
 				return
 			}
 			switch m := req.First.(type) {
@@ -303,16 +336,23 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 					return
 				}
 				for g := stitchLiveLo; g <= stitchLiveHi; g++ {
-					sg, err := upSess.OpenSubgroup(message.SubgroupHeader{
+					sg, err := openSubgroupWaiting(t, upSess, message.SubgroupHeader{
 						SubgroupIDMode: message.SubgroupIDImplicitZero,
 						TrackAlias:     upstreamAlias,
 						GroupID:        g,
 					})
 					if err != nil {
+						noteUpstream(fmt.Errorf("OpenSubgroup group %d: %w", g, err))
 						return
 					}
-					_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte{byte('a' + g)}})
-					_ = sg.Close()
+					if err := sg.WriteObject(&message.SubgroupObject{Payload: []byte{byte('a' + g)}}); err != nil {
+						noteUpstream(fmt.Errorf("WriteObject group %d: %w", g, err))
+						return
+					}
+					if err := sg.Close(); err != nil {
+						noteUpstream(fmt.Errorf("Close group %d: %w", g, err))
+						return
+					}
 				}
 			case *message.Fetch:
 				if opts.onFetch == nil {
@@ -343,8 +383,8 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 			return objs
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("the relay never served a stitched FETCH (last: served=%v objects=%d)",
-				served, len(objs))
+			t.Fatalf("the relay never served a stitched FETCH (last: served=%v objects=%d)%s",
+				served, len(objs), upstreamNote())
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -444,4 +484,34 @@ func stitchedGroups(objs []*session.DecodedFetchObject) []uint64 {
 		groups = append(groups, o.GroupID)
 	}
 	return groups
+}
+
+// openSubgroupWaiting opens a subgroup stream, waiting out a temporarily
+// exhausted stream limit instead of treating it as fatal.
+//
+// sessiontest hands opened streams to the peer through a bounded queue and
+// reports a full one as [session.ErrNoStreamCredit] — the in-process stand-in
+// for a peer that has not raised MAX_STREAMS yet. The relay drains that queue
+// continuously, so the condition clears on its own; a publisher pushing a
+// burst of groups just has to wait, exactly as it would against a real peer.
+// Treating it as terminal would end the upstream loop over a transient
+// condition.
+func openSubgroupWaiting(
+	t *testing.T,
+	sess *session.Session,
+	hdr message.SubgroupHeader,
+) (*session.OutgoingSubgroupStream, error) {
+	t.Helper()
+	deadline := time.Now().After
+	start := time.Now()
+	for {
+		sg, err := sess.OpenSubgroup(hdr)
+		if !errors.Is(err, session.ErrNoStreamCredit) {
+			return sg, err
+		}
+		if deadline(start.Add(5 * time.Second)) {
+			return nil, err
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }

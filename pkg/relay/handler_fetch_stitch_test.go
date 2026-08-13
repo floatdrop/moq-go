@@ -55,7 +55,11 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 					return
 				}
 				for g := liveLo; g <= liveHi; g++ {
-					sg, err := upSess.OpenSubgroup(message.SubgroupHeader{
+					// Wait out a temporarily exhausted stream limit rather
+					// than ending the loop over it — this goroutine also
+					// answers the stitch FETCH below, so dying here strands
+					// the test on an unserviceable downstream request.
+					sg, err := openSubgroupWaiting(t, upSess, message.SubgroupHeader{
 						SubgroupIDMode: message.SubgroupIDImplicitZero,
 						TrackAlias:     upstreamAlias,
 						GroupID:        g,
