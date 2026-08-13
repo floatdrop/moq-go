@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 )
 
 // ErrShortBuffer is returned when a read would consume bytes past the end of
@@ -121,13 +122,12 @@ func (r *Reader) VarintBytes() ([]byte, error) {
 // maximum allowed length is 1024 bytes; exceeding this yields an error that
 // the caller should map to PROTOCOL_VIOLATION.
 func (r *Reader) ReasonPhrase() (string, error) {
-	const maxLen = 1024
 	n, err := r.Varint()
 	if err != nil {
 		return "", err
 	}
-	if n > maxLen {
-		return "", fmt.Errorf("moqt/wire: reason phrase length %d exceeds %d", n, maxLen)
+	if n > MaxReasonPhraseBytes {
+		return "", fmt.Errorf("moqt/wire: reason phrase length %d exceeds %d", n, MaxReasonPhraseBytes)
 	}
 	b, err := r.FixedBytes(int(n))
 	if err != nil {
@@ -167,10 +167,37 @@ func (w *Writer) VarintBytes(p []byte) {
 	w.FixedBytes(p)
 }
 
-// ReasonPhrase appends a reason phrase per §1.4.4. Strings longer than 1024
-// bytes will be encoded as-is; the receiver will reject them. Callers should
-// validate input length before serialization.
-func (w *Writer) ReasonPhrase(s string) { w.VarintBytes([]byte(s)) }
+// MaxReasonPhraseBytes is the §1.4.4 cap on an encoded reason phrase. [Reader]
+// rejects anything longer, and [Writer.ReasonPhrase] truncates to it.
+const MaxReasonPhraseBytes = 1024
+
+// ReasonPhrase appends a reason phrase per §1.4.4, truncating to
+// [MaxReasonPhraseBytes].
+//
+// Truncating rather than encoding as-is because a Writer method has no way to
+// report an error, so the alternative is emitting a frame that every conforming
+// peer must treat as a PROTOCOL_VIOLATION — losing the tail of a diagnostic
+// string is strictly better than losing the session that was trying to report
+// it. The reason phrase is not always ours to bound: REQUEST_ERROR and
+// PUBLISH_ERROR carry one built from a token verifier's error text, and a
+// third-party [TokenVerifier] can return a string of any length.
+//
+// The cut lands on a rune boundary, since §1.4.4 specifies UTF-8 and slicing
+// mid-rune would produce a phrase the peer decodes as replacement characters.
+func (w *Writer) ReasonPhrase(s string) {
+	if len(s) > MaxReasonPhraseBytes {
+		s = s[:MaxReasonPhraseBytes]
+		// Drop a rune the cut split (and any invalid trailing bytes with it).
+		for len(s) > 0 {
+			if r, size := utf8.DecodeLastRuneInString(s); r == utf8.RuneError && size <= 1 {
+				s = s[:len(s)-1]
+				continue
+			}
+			break
+		}
+	}
+	w.VarintBytes([]byte(s))
+}
 
 // Decoder is the read-side interface shared by Reader (in-memory) and
 // StreamReader (streaming io.Reader). Parse methods in the message package

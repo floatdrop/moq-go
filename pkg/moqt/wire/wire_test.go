@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestVarintRoundTrip(t *testing.T) {
@@ -89,6 +90,47 @@ func TestReasonPhraseRoundTrip(t *testing.T) {
 		if got != s {
 			t.Fatalf("ReasonPhrase round-trip: got %q, want %q", got, s)
 		}
+	}
+}
+
+// TestReasonPhraseWriterTruncates covers the send side of the §1.4.4 cap, which
+// the Reader has always enforced and the Writer did not.
+//
+// The asymmetry was reachable, not theoretical: REQUEST_ERROR and PUBLISH_ERROR
+// carry a reason built from a token verifier's error text, and a third-party
+// TokenVerifier can return a string of any length. Encoding it as-is produced a
+// frame every conforming peer must treat as a PROTOCOL_VIOLATION — so an
+// over-long diagnostic killed the session it was trying to describe.
+func TestReasonPhraseWriterTruncates(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{"ascii", strings.Repeat("x", 4096)},
+		// Multi-byte runes so the 1024-byte cut lands mid-rune: 1024 is not a
+		// multiple of 3, so a naive slice would emit a partial rune.
+		{"multibyte", strings.Repeat("☃", 2048)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := NewWriter(nil)
+			w.ReasonPhrase(tt.in)
+
+			got, err := NewReader(w.Bytes()).ReasonPhrase()
+			if err != nil {
+				t.Fatalf("our own encoding was rejected by our own Reader: %v", err)
+			}
+			if len(got) > MaxReasonPhraseBytes {
+				t.Errorf("encoded %d bytes, want <= %d", len(got), MaxReasonPhraseBytes)
+			}
+			if !strings.HasPrefix(tt.in, got) {
+				t.Errorf("truncation is not a prefix of the input")
+			}
+			if !utf8.ValidString(got) {
+				t.Errorf("truncation split a rune: %q", got[max(0, len(got)-8):])
+			}
+		})
 	}
 }
 
