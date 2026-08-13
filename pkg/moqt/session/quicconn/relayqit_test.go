@@ -3,6 +3,7 @@ package quicconn_test
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"testing"
 	"time"
 
@@ -127,14 +128,21 @@ func publishPeer(t *testing.T, sess *session.Session, id string) wire.TrackNames
 // awaitPeerAndFetchCatalog discovers selfID's view of the namespace, waits for
 // the announce whose suffix is wantID (skipping its own), then pairs SUBSCRIBE
 // (FilterLargestObject) with a relative Joining FETCH against wantID's catalog.
+// catalogStepTimeout budgets each discovery step. Loopback QUIC on a busy CI
+// runner is a great deal slower than on a developer machine — real handshakes,
+// real packetisation, several sessions competing — and the previous 3s was
+// tight enough that a contended runner failed here with nothing actually
+// broken.
+const catalogStepTimeout = 15 * time.Second
+
 // Fails if the FETCH is rejected.
-func awaitPeerAndFetchCatalog(t *testing.T, sess *session.Session, selfID, wantID string) {
+func awaitPeerAndFetchCatalog(t *testing.T, sess *session.Session, selfID, wantID string) error {
 	t.Helper()
 	nsStream, err := sess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
 		TrackNamespacePrefix: wire.Namespace("room"),
 	})
 	if err != nil {
-		t.Fatalf("[%s] SubscribeNamespace: %v", selfID, err)
+		return fmt.Errorf("[%s] SubscribeNamespace: %w", selfID, err)
 	}
 	t.Cleanup(func() { nsStream.Close() })
 
@@ -159,10 +167,11 @@ func awaitPeerAndFetchCatalog(t *testing.T, sess *session.Session, selfID, wantI
 	select {
 	case e := <-found:
 		if e != nil {
-			t.Fatalf("[%s] await %s announce: %v", selfID, wantID, e)
+			return fmt.Errorf("[%s] await %s announce: %w", selfID, wantID, e)
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatalf("[%s] no NAMESPACE announce for %s within 3s", selfID, wantID)
+	case <-time.After(catalogStepTimeout):
+		return fmt.Errorf("[%s] no NAMESPACE announce for %s within %s",
+			selfID, wantID, catalogStepTimeout)
 	}
 
 	ns := wire.Namespace("room", wantID)
@@ -174,7 +183,7 @@ func awaitPeerAndFetchCatalog(t *testing.T, sess *session.Session, selfID, wantI
 	}
 	subStream, err := sess.Subscribe(t.Context(), subMsg)
 	if err != nil {
-		t.Fatalf("[%s] Subscribe %s catalog: %v", selfID, wantID, err)
+		return fmt.Errorf("[%s] Subscribe %s catalog: %w", selfID, wantID, err)
 	}
 	t.Cleanup(func() { subStream.Close() })
 
@@ -183,8 +192,10 @@ func awaitPeerAndFetchCatalog(t *testing.T, sess *session.Session, selfID, wantI
 		FetchType: message.FetchTypeRelativeJoining,
 		Joining:   &message.JoiningFetch{JoiningRequestID: subMsg.RequestID, JoiningStart: 0},
 	}); ferr != nil {
-		t.Fatalf("[%s] joining FETCH for %s failed (hasLargest=%v): %v", selfID, wantID, hasLargest, ferr)
+		return fmt.Errorf("[%s] joining FETCH for %s failed (hasLargest=%v): %w",
+			selfID, wantID, hasLargest, ferr)
 	}
+	return nil
 }
 
 // TestReproRelayCatalogOverQUIC: one publisher, one subscriber, real relay over
@@ -196,7 +207,9 @@ func TestReproRelayCatalogOverQUIC(t *testing.T) {
 	publishPeer(t, pub, "peerA")
 
 	sub := dialRelayClient(t, addr, quicCfg)
-	awaitPeerAndFetchCatalog(t, sub, "peerB", "peerA")
+	if err := awaitPeerAndFetchCatalog(t, sub, "peerB", "peerA"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestReproRelayMutualConference reproduces a mutual conferencing topology: two
@@ -211,14 +224,17 @@ func TestReproRelayMutualConference(t *testing.T) {
 	publishPeer(t, a, "peerA")
 	publishPeer(t, b, "peerB")
 
-	done := make(chan struct{}, 2)
-	go func() { awaitPeerAndFetchCatalog(t, a, "peerA", "peerB"); done <- struct{}{} }()
-	go func() { awaitPeerAndFetchCatalog(t, b, "peerB", "peerA"); done <- struct{}{} }()
+	done := make(chan error, 2)
+	go func() { done <- awaitPeerAndFetchCatalog(t, a, "peerA", "peerB") }()
+	go func() { done <- awaitPeerAndFetchCatalog(t, b, "peerB", "peerA") }()
 	for range 2 {
 		select {
-		case <-done:
-		case <-time.After(8 * time.Second):
-			t.Fatal("mutual catalog fetch did not complete within 8s")
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * catalogStepTimeout):
+			t.Fatalf("mutual catalog fetch did not complete within %s", 2*catalogStepTimeout)
 		}
 	}
 }
