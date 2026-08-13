@@ -8,7 +8,6 @@ package session
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -171,6 +170,12 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 	}
 	s.nextRequestID.Store(first)
 
+	// Before the handshake, so an option we must not send is never sent. The
+	// conn is left untouched and un-closed: nothing has been written to it, so
+	// disposing of it stays the caller's choice.
+	if err := checkOutboundSetupOptions(r, conn, cfg.setupOptions); err != nil {
+		return nil, err
+	}
 	if err := s.handshake(ctx, cfg.setupOptions); err != nil {
 		_ = conn.CloseWithError(uint64(moqt.SessionProtocolViolation), err.Error())
 		return nil, err
@@ -190,40 +195,96 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 // slice aliases internal state and must not be mutated.
 func (s *Session) PeerOptions() []wire.KVPair { return s.peerOptions }
 
+// webTransportConn is an optional capability a Conn adapter may implement to
+// report that it runs over WebTransport. An adapter that does not implement it
+// is treated as native QUIC, so the checks below are best-effort — they cover
+// the wtconn adapter in this repo, not a third-party WebTransport adapter that
+// stays silent.
+//
+// Deliberately not a Conn method: only the §10.3.1 PATH/AUTHORITY rules need
+// it, and per CLAUDE.md anything added to that interface must land in all three
+// adapters plus any external one.
+type webTransportConn interface {
+	IsWebTransport() bool
+}
+
+func overWebTransport(conn Conn) bool {
+	wt, ok := conn.(webTransportConn)
+	return ok && wt.IsWebTransport()
+}
+
+// checkOutboundSetupOptions enforces the send side of PATH (§10.3.1.2) and
+// AUTHORITY (§10.3.1.1). Each says the option "MUST NOT be used by the server,
+// or when WebTransport is used" — so unlike checkPeerSetupOptions, which
+// handles what a peer did to us, this catches what we are about to do to a
+// peer, before the SETUP goes out.
+//
+// It fails the open rather than dropping the offending option, because silently
+// discarding it would leave a client believing it had requested an authority
+// the server never saw.
+func checkOutboundSetupOptions(r role, conn Conn, opts []wire.KVPair) error {
+	for _, opt := range opts {
+		var name string
+		switch message.SetupOption(opt.Type) {
+		case message.SetupOptionPath:
+			name = "PATH"
+		case message.SetupOptionAuthority:
+			name = "AUTHORITY"
+		case message.SetupOptionAuthorizationToken,
+			message.SetupOptionMaxAuthTokenCache,
+			message.SetupOptionMaxFilterRanges,
+			message.SetupOptionMOQTImplementation,
+			message.SetupOptionMaxRequestUpdates:
+			continue
+		default:
+			continue
+		}
+		if r == roleServer {
+			return fmt.Errorf("moqt/session: %s setup option is client-only (§10.3.1)", name)
+		}
+		if overWebTransport(conn) {
+			return fmt.Errorf(
+				"moqt/session: %s setup option must not be used on a WebTransport session (§10.3.1); "+
+					"HTTP/3 carries the path and authority in the CONNECT request", name)
+		}
+	}
+	return nil
+}
+
 // checkPeerSetupOptions enforces the receive side of the PATH (§10.3.1.2) and
-// AUTHORITY (§10.3.1.1) setup options. Each says the option "MUST NOT be used
-// by the server, or when WebTransport is used", and that a session receiving
-// one from a server MUST be closed — with INVALID_PATH and INVALID_AUTHORITY
-// respectively, whose numeric values come from the §3.5 registry. Returns that
-// close code and the reason, or a nil error when the peer's options are
-// acceptable.
+// AUTHORITY (§10.3.1.1) setup options. Each names three conditions under which
+// a received option MUST close the session — it came from a server, it arrived
+// on a WebTransport session, or the server does not support the value — with
+// INVALID_PATH and INVALID_AUTHORITY respectively, whose numeric values come
+// from the §3.5 registry. Returns that close code and the reason, or a nil
+// error when the peer's options are acceptable.
 //
-// Only the server-sent case is enforced here, and deliberately so — the other
-// two conditions each section names need machinery this package does not have:
+// The first two are enforced. The third is not: it needs the server to be told
+// which paths and authorities it serves, and that configuration does not exist
+// — a server that never learns its own names cannot check them.
 //
-//   - "on a WebTransport session" needs the Conn to say which transport it is,
-//     and Conn has no such predicate. Adding one is a change to the central
-//     interface that all three adapters must then implement.
-//   - "does not support the path/authority" needs the server to be told which
-//     paths and authorities it serves, which is configuration that does not
-//     exist yet. Note this is the *server-side* check, and a server that never
-//     learns its own names cannot make it.
-//
-// Enforcing the first alone is still worth doing: it is unambiguous, needs no
-// new API, and it is the direction a conforming peer cannot protect us from,
-// since a client has no other way to notice a server misusing these options.
+// Note the asymmetry with the role gate. A server ignores these options over
+// native QUIC because receiving them there is precisely what they are for; it
+// must still reject them over WebTransport, where §10.3.1 forbids them
+// outright and HTTP/3 carries the same information in the CONNECT request.
 func (s *Session) checkPeerSetupOptions() (moqt.SessionErrorCode, error) {
-	if s.role != roleClient {
+	overWT := overWebTransport(s.conn)
+	if s.role != roleClient && !overWT {
 		return moqt.SessionNoError, nil
+	}
+	violation := func(name string) error {
+		if overWT {
+			return fmt.Errorf(
+				"peer sent a %s setup option on a WebTransport session (§10.3.1)", name)
+		}
+		return fmt.Errorf("server sent a %s setup option, which is client-only (§10.3.1)", name)
 	}
 	for _, opt := range s.peerOptions {
 		switch message.SetupOption(opt.Type) {
 		case message.SetupOptionPath:
-			return moqt.SessionInvalidPath,
-				errors.New("server sent a PATH setup option, which is client-only (§10.3.1.2)")
+			return moqt.SessionInvalidPath, violation("PATH")
 		case message.SetupOptionAuthority:
-			return moqt.SessionInvalidAuthority,
-				errors.New("server sent an AUTHORITY setup option, which is client-only (§10.3.1.1)")
+			return moqt.SessionInvalidAuthority, violation("AUTHORITY")
 		case message.SetupOptionAuthorizationToken,
 			message.SetupOptionMaxAuthTokenCache,
 			message.SetupOptionMaxFilterRanges,

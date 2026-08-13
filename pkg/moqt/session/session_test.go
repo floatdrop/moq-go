@@ -1,6 +1,7 @@
 package session_test
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"sync"
@@ -155,38 +156,47 @@ func TestClientSendsPathAndAuthority(t *testing.T) {
 // — the four §3.5 codes for these two options sat in errors.go with no
 // reference anywhere, which is how the omission stayed invisible.
 //
-// The server here is deliberately misused: Option applies to both roles, so
-// session.WithPath on a Server is exactly the spec violation under test.
+// The offending peer is hand-rolled rather than built from session.Server,
+// because a moq-go server now refuses to send these at all (see
+// TestRefusesToSendPathOrAuthority). That is the honest shape anyway: the
+// scenario under test is a non-conforming third-party server.
 func TestClientRejectsServerSentPathAndAuthority(t *testing.T) {
 	tests := []struct {
-		name     string
-		opt      session.Option
-		wantCode moqt.SessionErrorCode
+		name string
+		opt  wire.KVPair
 	}{
-		{"PATH", session.WithPath("/relay"), moqt.SessionInvalidPath},
-		{"AUTHORITY", session.WithAuthority("relay.example:4433"), moqt.SessionInvalidAuthority},
+		{"PATH", message.PathOption("/relay")},
+		{"AUTHORITY", message.AuthorityOption("relay.example:4433")},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := t.Context()
+			// Bounded so a failure inside the hand-rolled peer below surfaces
+			// as a one-second deadline rather than parking session.Client until
+			// the package-wide 10-minute panic.
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			t.Cleanup(cancel)
 			clientConn, serverConn := sessiontest.NewConnPair()
 
-			var (
-				wg                   sync.WaitGroup
-				clientSess           *session.Session
-				clientErr, serverErr error
-			)
+			var wg sync.WaitGroup
 			wg.Go(func() {
-				clientSess, clientErr = session.Client(ctx, clientConn)
-			})
-			wg.Go(func() {
-				var srv *session.Session
-				srv, serverErr = session.Server(ctx, serverConn, tt.opt)
-				if srv != nil {
-					t.Cleanup(func() { _ = srv.Close(moqt.SessionNoError, "test cleanup") })
+				// Both sides of SETUP are symmetric uni-streams: send ours,
+				// then drain theirs so the client's send half never blocks.
+				send, err := serverConn.OpenUniStream()
+				if err != nil {
+					t.Errorf("hand-rolled server: OpenUniStream: %v", err)
+					return
+				}
+				if err := message.Marshal(send, &message.Setup{Options: []wire.KVPair{tt.opt}}); err != nil {
+					t.Errorf("hand-rolled server: Marshal SETUP: %v", err)
+					return
+				}
+				if recv, err := serverConn.AcceptUniStream(ctx); err == nil {
+					_, _ = message.Parse(recv)
 				}
 			})
+
+			clientSess, clientErr := session.Client(ctx, clientConn)
 			wg.Wait()
 
 			if clientErr == nil {
@@ -201,7 +211,121 @@ func TestClientRejectsServerSentPathAndAuthority(t *testing.T) {
 			if !strings.Contains(clientErr.Error(), tt.name) {
 				t.Errorf("error %q does not name the %s option", clientErr, tt.name)
 			}
-			_ = serverErr // the server's own Open may succeed or fail depending on close timing
+		})
+	}
+}
+
+// webTransportConn makes a sessiontest pipe claim to be WebTransport, which is
+// all the session layer's optional-capability assertion looks for. A real
+// WebTransport session is not needed to test the guard, and wiring one up here
+// would test webtransport-go rather than this rule.
+type webTransportConn struct{ session.Conn }
+
+func (webTransportConn) IsWebTransport() bool { return true }
+
+// TestServerRejectsPathOrAuthorityOverWebTransport covers the second of the
+// three conditions §10.3.1.1/§10.3.1.2 name: an option "received while
+// WebTransport is used" MUST close the session, whichever side received it.
+//
+// A server ignores these over native QUIC because receiving them there is what
+// they are for, so the role gate alone is not enough — without the transport
+// check the relay's WebTransport listener accepts a session an interop peer
+// expects to be rejected, and nothing logs it.
+func TestServerRejectsPathOrAuthorityOverWebTransport(t *testing.T) {
+	tests := []struct {
+		name string
+		opt  wire.KVPair
+	}{
+		{"PATH", message.PathOption("/relay")},
+		{"AUTHORITY", message.AuthorityOption("relay.example:4433")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			t.Cleanup(cancel)
+			clientConn, serverConn := sessiontest.NewConnPair()
+
+			var wg sync.WaitGroup
+			wg.Go(func() {
+				send, err := clientConn.OpenUniStream()
+				if err != nil {
+					t.Errorf("hand-rolled client: OpenUniStream: %v", err)
+					return
+				}
+				if err := message.Marshal(send, &message.Setup{Options: []wire.KVPair{tt.opt}}); err != nil {
+					t.Errorf("hand-rolled client: Marshal SETUP: %v", err)
+					return
+				}
+				if recv, err := clientConn.AcceptUniStream(ctx); err == nil {
+					_, _ = message.Parse(recv)
+				}
+			})
+
+			sess, err := session.Server(ctx, webTransportConn{serverConn})
+			wg.Wait()
+
+			if err == nil {
+				_ = sess.Close(moqt.SessionNoError, "test cleanup")
+				t.Fatalf(
+					"server accepted a %s option over WebTransport; §10.3.1 requires the session be closed",
+					tt.name)
+			}
+			if !strings.Contains(err.Error(), "WebTransport") {
+				t.Errorf("error %q does not explain the WebTransport restriction", err)
+			}
+		})
+	}
+}
+
+// TestRefusesToSendPathOrAuthority covers the send side of §10.3.1.1/§10.3.1.2:
+// each says PATH and AUTHORITY "MUST NOT be used by the server, or when
+// WebTransport is used". Before this, nothing stopped either — a WebTransport
+// client calling WithAuthority produced a session a strict server would close,
+// and the only thing preventing it was cmd/interop-client remembering not to.
+//
+// The open fails rather than dropping the option, so a caller cannot end up
+// believing it requested an authority the peer never saw.
+func TestRefusesToSendPathOrAuthority(t *testing.T) {
+	opts := map[string]session.Option{
+		"PATH":      session.WithPath("/relay"),
+		"AUTHORITY": session.WithAuthority("relay.example:4433"),
+	}
+
+	// The guard rejects before any I/O, so a correct implementation returns
+	// instantly. The deadline exists so that if the guard is ever removed the
+	// open fails in a second with a deadline error instead of blocking forever
+	// on a handshake with a peer that does not exist.
+	openCtx := func(t *testing.T) context.Context {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		t.Cleanup(cancel)
+		return ctx
+	}
+
+	for name, opt := range opts {
+		t.Run(name+"/server", func(t *testing.T) {
+			_, serverConn := sessiontest.NewConnPair()
+			sess, err := session.Server(openCtx(t), serverConn, opt)
+			if err == nil {
+				_ = sess.Close(moqt.SessionNoError, "test cleanup")
+				t.Fatalf("server sent a %s option; §10.3.1 says it MUST NOT", name)
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error %q does not name the %s option", err, name)
+			}
+		})
+
+		t.Run(name+"/webtransport", func(t *testing.T) {
+			clientConn, _ := sessiontest.NewConnPair()
+			sess, err := session.Client(openCtx(t), webTransportConn{clientConn}, opt)
+			if err == nil {
+				_ = sess.Close(moqt.SessionNoError, "test cleanup")
+				t.Fatalf("client sent a %s option over WebTransport; §10.3.1 says it MUST NOT", name)
+			}
+			if !strings.Contains(err.Error(), "WebTransport") {
+				t.Errorf("error %q does not explain the WebTransport restriction", err)
+			}
 		})
 	}
 }
