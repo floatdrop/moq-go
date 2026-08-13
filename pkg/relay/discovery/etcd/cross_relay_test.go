@@ -272,6 +272,13 @@ func dialEtcdClient(t *testing.T, tr *etcdTestRelay) *session.Session {
 	return sess
 }
 
+// etcdWaitBudget bounds the polls below. These exit the moment their condition
+// holds, so a generous budget costs a passing run nothing; it only decides how
+// much slowness counts as broken. An embedded etcd plus two relays is heavy,
+// and this suite runs roughly 3.5x slower in a CPU-constrained container than
+// on a developer machine — enough that 10s failed there with nothing wrong.
+const etcdWaitBudget = 30 * time.Second
+
 // waitForNamespace blocks until store can read ns back out of etcd, which is
 // the point at which a relay using that Store can route to it.
 //
@@ -283,7 +290,7 @@ func dialEtcdClient(t *testing.T, tr *etcdTestRelay) *session.Session {
 func waitForNamespace(t *testing.T, store *etcdstore.Store, ns wire.TrackNamespace) {
 	t.Helper()
 	ctx := t.Context()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(etcdWaitBudget)
 	for {
 		infos, err := store.FindNamespace(ctx, ns)
 		if err == nil && len(infos) > 0 {

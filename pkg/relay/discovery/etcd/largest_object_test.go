@@ -30,7 +30,7 @@ func waitForLargest(
 ) {
 	t.Helper()
 	ctx := t.Context()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(etcdWaitBudget)
 	var last string
 	for {
 		req, err := sess.TrackStatus(ctx, &message.TrackStatus{

@@ -3,8 +3,10 @@ package relay_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -774,5 +776,143 @@ func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 	want := message.Location{Group: 0, Object: 3} // largest + 1
 	if ok.EndLocation != want {
 		t.Fatalf("FETCH_OK.EndLocation = %+v, want %+v", ok.EndLocation, want)
+	}
+}
+
+// waitRelayLargest polls TRACK_STATUS until the relay reports the given Largest
+// Location, so a test can depend on the fanout having observed objects without
+// sleeping for a duration that is either flaky or slow. TRACK_STATUS_OK carries
+// LARGEST_OBJECT (§10.2.16), which makes the relay's watermark observable over
+// the protocol itself.
+func waitRelayLargest(
+	t *testing.T,
+	sess *session.Session,
+	ns wire.TrackNamespace,
+	name []byte,
+	wantGroup, wantObject uint64,
+) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var last string
+	for {
+		req, err := sess.TrackStatus(t.Context(), &message.TrackStatus{
+			Namespace: ns,
+			Name:      name,
+		})
+		if err == nil {
+			p, ok := req.OK.Parameters.Find(message.ParamLargestObject)
+			_ = req.Close()
+			if ok && p.Group == wantGroup && p.Object == wantObject {
+				return
+			}
+			last = fmt.Sprintf("largest={%d,%d} present=%t", p.Group, p.Object, ok)
+		} else {
+			last = err.Error()
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("relay never reported largest {%d,%d}: %s", wantGroup, wantObject, last)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestFetch_JoiningRejectedWhenNoObjectsPublished pins the first of §10.12.2's
+// two INVALID_RANGE rules: "If no Objects have been published for the track the
+// publisher MUST respond with a REQUEST_ERROR with error code INVALID_RANGE."
+//
+// The track exists — a publisher has claimed it — so SUBSCRIBE succeeds and
+// simply carries no LARGEST_OBJECT, leaving the subscription's Joining Location
+// unset. A joining FETCH against it has no range to compute, and the code the
+// relay picks here is what tells a client "not yet" rather than "never": this
+// is the exact rejection a subscriber saw in the fea80fc outage, where the
+// cause was an upstream watermark being dropped rather than a genuinely empty
+// track.
+func TestFetch_JoiningRejectedWhenNoObjectsPublished(t *testing.T) {
+	t.Parallel()
+	pubSess, _, _ := publishAndCache(t) // track published, no objects written
+
+	subSess := dialAnotherClient(t, pubSess)
+	subMsg := &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{message.LocationFilterParam(
+			&message.LocationFilter{Type: message.FilterLargestObject},
+		)},
+	}
+	subStream, err := subSess.Subscribe(t.Context(), subMsg)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(func() { subStream.Close() })
+
+	// Precondition, and the reason the FETCH below must fail: §10.2.16 only
+	// obliges the publisher to send LARGEST_OBJECT once objects exist.
+	if _, ok := subStream.OK.Parameters.Find(message.ParamLargestObject); ok {
+		t.Fatal("SUBSCRIBE_OK carried LARGEST_OBJECT for a track with no objects")
+	}
+
+	_, err = subSess.Fetch(t.Context(), &message.Fetch{
+		FetchType: message.FetchTypeRelativeJoining,
+		Joining:   &message.JoiningFetch{JoiningRequestID: subMsg.RequestID, JoiningStart: 0},
+	})
+	requireRejectedWithCode(t, err, moqt.RequestInvalidRange)
+}
+
+// TestFetch_JoiningRejectedWhenStartExceedsLargestGroup pins §10.12.2's other
+// INVALID_RANGE case, for Relative Joining: the start is expressed as a count
+// of groups *back* from the Joining Location, so a count larger than the
+// largest group has no group to name.
+//
+// The check is belt-and-braces, and this test says so because mutation
+// testing proved it: deleting the guard does NOT change the code the peer
+// receives. The arithmetic is unsigned, so `jloc.largest.Group -
+// jf.JoiningStart` wraps to an enormous group, and the downstream
+// `endLoc.Less(startLoc)` guard then rejects with the same INVALID_RANGE.
+// Asserting the code alone therefore passes with the guard removed.
+//
+// So the reason phrase is asserted too — not as a style preference, but
+// because it is the only part of the response that distinguishes which rule
+// fired, and it travels to the peer in REQUEST_ERROR (§1.4.4) rather than
+// staying in our logs. Rewording it should be a deliberate act that updates
+// this test, and dropping the specific guard for the generic one should be
+// visible rather than silent.
+func TestFetch_JoiningRejectedWhenStartExceedsLargestGroup(t *testing.T) {
+	t.Parallel()
+	pubSess, _, publisherAlias := publishAndCache(t)
+
+	// One group only, so any JoiningStart above 0 is out of range.
+	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, 3 /*count*/)
+	waitRelayLargest(t, pubSess, wire.TrackNamespace{[]byte("video")}, []byte("cam1"), 0, 2)
+
+	subSess := dialAnotherClient(t, pubSess)
+	subMsg := &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{message.LocationFilterParam(
+			&message.LocationFilter{Type: message.FilterLargestObject},
+		)},
+	}
+	subStream, err := subSess.Subscribe(t.Context(), subMsg)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(func() { subStream.Close() })
+
+	lp, ok := subStream.OK.Parameters.Find(message.ParamLargestObject)
+	if !ok || lp.Group != 0 {
+		t.Fatalf("want a Joining Location in group 0, got %+v (present=%t)", lp, ok)
+	}
+
+	_, err = subSess.Fetch(t.Context(), &message.Fetch{
+		FetchType: message.FetchTypeRelativeJoining,
+		Joining:   &message.JoiningFetch{JoiningRequestID: subMsg.RequestID, JoiningStart: 5},
+	})
+	requireRejectedWithCode(t, err, moqt.RequestInvalidRange)
+
+	var rejected *session.RequestRejectedError
+	if errors.As(err, &rejected) && !strings.Contains(rejected.Reason, "relative joining start") {
+		t.Errorf("reason = %q, want the relative-start rule; the generic "+
+			"beyond-largest-object guard answered instead, so the specific "+
+			"check is not doing the work", rejected.Reason)
 	}
 }
