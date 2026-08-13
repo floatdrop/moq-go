@@ -3,6 +3,7 @@ package session_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -426,5 +427,49 @@ func TestProcessFollowupTokensRegistersAlias(t *testing.T) {
 	}
 	if len(req2.Tokens) != 1 || req2.Tokens[0].Type != 9 || string(req2.Tokens[0].Value) != "secret" {
 		t.Fatalf("req2 resolved token = %+v, want {9, secret}", req2.Tokens)
+	}
+}
+
+// errVerifierPolicy stands in for a sentinel a third-party TokenVerifier
+// defines and its callers match on.
+var errVerifierPolicy = errors.New("policy: subject not permitted")
+
+// TestVerifyRequestTokensPreservesVerifierSentinel covers the one thing
+// TokenDeniedError.Unwrap exists for.
+//
+// VerifyRequestTokens normalises a plain verifier error into a
+// *TokenDeniedError so the request layer has a REQUEST_ERROR code to send. That
+// normalisation is also where a third-party verifier's own sentinel would be
+// lost: the caller receives our type, not theirs. Unwrap is the documented
+// survival path, and nothing exercised it — the sibling test above asserts the
+// wrapping happens but never matches through it, which is why Unwrap sat at 0%.
+//
+// An authorization policy that cannot tell "denied because expired" from
+// "denied because forbidden" after the error crosses this boundary is a real
+// loss for anyone implementing TokenVerifier, and it would break silently:
+// errors.Is simply starts returning false.
+func TestVerifyRequestTokensPreservesVerifierSentinel(t *testing.T) {
+	verifier := session.TokenVerifierFunc(func(_ context.Context, _ *session.Session, _ session.ResolvedToken) error {
+		return fmt.Errorf("checking subject: %w", errVerifierPolicy)
+	})
+	client, server := openTokenPair(t, session.WithTokenVerifier(verifier))
+
+	sendSubscribeWithTokens(t, client, message.Token{
+		AliasType:  message.AliasTypeUseValue,
+		TokenType:  1,
+		TokenValue: []byte("v"),
+	})
+	req, err := server.AcceptRequest(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptRequest: %v", err)
+	}
+
+	err = server.VerifyRequestTokens(t.Context(), req)
+	if err == nil {
+		t.Fatal("VerifyRequestTokens accepted a token the verifier rejected")
+	}
+	if !errors.Is(err, errVerifierPolicy) {
+		t.Errorf("errors.Is could not reach the verifier's sentinel through "+
+			"TokenDeniedError; a policy cannot tell its own denials apart (err=%v)", err)
 	}
 }
