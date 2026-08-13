@@ -115,7 +115,8 @@ cover-html:
 	@go test -coverprofile=$(COVER_PROFILE) $(COVER_PKGS) >/dev/null
 	go tool cover -html=$(COVER_PROFILE)
 
-# Gate: no package may fall below its floor in coverage-floors.txt. This is what
+# Gate: no package may fall below its floor in coverage-floors.txt, across BOTH
+# modules — the root and pkg/relay/discovery/etcd. This is what
 # CI runs, and it is the enforcement — there is no table to hand-maintain.
 cover-check:
 	@./scripts/check-coverage.sh

@@ -282,10 +282,17 @@ The gate is a floor, not a ceiling, and it cannot see whether a covered line was
 ever *asserted* on — which is precisely the hole `fea80fc` fell through. Passing
 it is the start of gate 1, not a substitute for it.
 
-Only `cmd/*` and `internal/dial` are outside the gate, and only because
-`COVER_PKGS` defaults to `./pkg/...`. They're thin wiring over tested packages,
-covered end-to-end by the interop suite instead — not an invitation to add
-untested code there.
+The gate spans both modules. `pkg/relay/discovery/etcd` has its own `go.mod`, so
+`go test ./pkg/...` cannot reach it — `check-coverage.sh` measures it separately
+(`COVER_SUBMODULES`) and folds the result into the same floors file, which stays
+unambiguous because the names in it are full import paths. Without that the one
+distributed `DiscoveryStore` backend, and the `relay-etcd` binary the
+multi-instance deployments run, would be gated by nothing.
+
+Only `cmd/*` and `internal/dial` are outside, and only because `COVER_PKGS`
+defaults to `./pkg/...`. They're thin wiring over tested packages, covered
+end-to-end by the interop suite instead — not an invitation to add untested code
+there. The Coveralls badge is narrower still: it reports the root module only.
 
 Everything under `pkg/` is gated, **including the test helpers**. `sessiontest`
 (19.5%), `relaytest` and `conntest` (0.0%) have floors like everything else.

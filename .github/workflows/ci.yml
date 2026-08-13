@@ -107,9 +107,11 @@ jobs:
       # second number is the honest headline (most of wire is driven by
       # message/session/relay tests), the first is the better alarm.
       #
-      # Scoped to ./pkg/... — the cmd/* binaries are thin wiring covered by the
-      # interop jobs, and the etcd/nats submodules are separate Go modules whose
-      # coverage this profile does not include.
+      # Scoped to ./pkg/... of the root module — the cmd/* binaries are thin
+      # wiring covered by the interop jobs, and the etcd submodule is a separate
+      # Go module this profile does not include. Note the floors above DO gate
+      # etcd (check-coverage.sh measures it separately), so the badge is
+      # narrower than the gate; folding it in needs a parallel Coveralls upload.
       - run: make cover-profile
       - name: Upload to Coveralls
         uses: coverallsapp/github-action@v2
