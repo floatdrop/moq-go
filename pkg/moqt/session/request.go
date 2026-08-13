@@ -363,8 +363,9 @@ func resetStream(s Stream) {
 }
 
 // rejectStreamWithError applies [Request.RejectError]'s teardown on the
-// pre-Request path in AcceptRequest, where no *Request value exists yet.
-// Write/close failures are ignored: the stream is being abandoned regardless.
+// pre-Request path in AcceptRequest, where no *Request value exists yet. Its
+// error is dropped because there is nothing left to do with it: RejectError
+// has already reset the stream if the REQUEST_ERROR could not be sent.
 func rejectStreamWithError(stream Stream, code moqt.RequestErrorCode, reason string) {
 	_ = (&Request{Stream: stream}).RejectError(code, reason)
 }
@@ -596,11 +597,19 @@ func (r *Request) Reply(msg message.Message) error {
 // application processing, it SHOULD send a REQUEST_ERROR and FIN the stream.").
 // CancelRead ensures that any further data the peer sends after the rejection
 // does not queue in the transport buffer indefinitely.
+//
+// When the REQUEST_ERROR itself cannot be written, the stream is reset instead
+// and the write error returned. §3.3.3 gives a responder both exits —
+// REQUEST_ERROR plus FIN, or "Receivers cancel requests if they are unable to
+// or choose not to respond" — and a failed write has taken neither until the
+// reset lands. Returning early without it leaves the requester waiting on a
+// response that can never arrive, for as long as the session lives.
 func (r *Request) RejectError(code moqt.RequestErrorCode, reason string) error {
 	if err := message.Marshal(r.Stream, &message.RequestError{
 		ErrorCode:   code,
 		ErrorReason: reason,
 	}); err != nil {
+		resetStream(r.Stream)
 		return err
 	}
 	r.Stream.CancelRead(uint64(moqt.StreamResetInternalError))

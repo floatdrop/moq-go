@@ -36,12 +36,6 @@ const firstRequestStream = 3
 //
 // The relay's own writes are faulted by ordinal — [firstRequestStream] is the
 // stream carrying this REQUEST_ERROR.
-//
-// KNOWN GAP, deliberately not frozen here: [session.Request.RejectError]
-// returns as soon as the REQUEST_ERROR marshal fails, skipping the CancelRead
-// and FIN that §3.3.3 asks for, so the peer is left waiting on a stream that
-// can never produce anything. This test therefore asserts only that the first
-// request fails, not how.
 func TestSessionHandler_FailedRejectWriteKeepsTheSessionAlive(t *testing.T) {
 	t.Parallel()
 	auth := &denyAuthorizer{err: relay.Deny(moqt.RequestUnauthorized, "test denial")}
@@ -64,12 +58,18 @@ func TestSessionHandler_FailedRejectWriteKeepsTheSessionAlive(t *testing.T) {
 	}
 
 	// First SUBSCRIBE: denied by policy, and the relay's REQUEST_ERROR write
-	// fails. It must not succeed; how it fails is left unasserted while the
-	// gap above stands — today the deadline below is what ends this call.
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	// fails. The client cannot be told the reason, but it must be told the
+	// request is over — RejectError resets the stream when it cannot send the
+	// error (§3.3.3), so this call ends because the relay ended it, not
+	// because the deadline below expired.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	if _, err := clientSess.Subscribe(ctx, sub()); err == nil {
+	switch _, err := clientSess.Subscribe(ctx, sub()); {
+	case err == nil:
 		t.Fatal("first Subscribe succeeded; want failure — its REQUEST_ERROR write was faulted")
+	case errors.Is(err, context.DeadlineExceeded):
+		t.Fatal("first Subscribe ended on its own deadline: the relay left the request " +
+			"stream open after failing to write the REQUEST_ERROR")
 	}
 
 	// Second SUBSCRIBE on a fresh request stream: the session must still be
