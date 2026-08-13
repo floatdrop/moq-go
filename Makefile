@@ -23,11 +23,12 @@ test:
 test-race:
 	go test -race ./...
 
-# pkg/relay/discovery/{etcd,nats} are separate Go modules — `go test ./...` from
-# the root does not reach them, so `make test` alone says nothing about the
-# discovery backends or the relay-etcd/relay-nats binaries. Their tests are
-# hermetic (embedded in-process etcd/NATS servers); no daemons required.
-SUBMODULES := pkg/relay/discovery/etcd pkg/relay/discovery/nats
+# pkg/relay/discovery/etcd is a separate Go module — `go test ./...` from the
+# root does not reach it, so `make test` alone says nothing about the discovery
+# backend or the relay-etcd binary. Its tests are hermetic (an embedded
+# in-process etcd server); no daemons required. The list is plural because a
+# second backend module has lived here before and may again.
+SUBMODULES := pkg/relay/discovery/etcd
 
 test-submodules:
 	@for m in $(SUBMODULES); do \

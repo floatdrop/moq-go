@@ -42,10 +42,9 @@ go run ./cmd/msfdemo subscribe  # discovers the video track from the catalog
 
 For the simpler raw-MOQT case (no LOC/MSF), swap `msfdemo` for `clock`.
 
-`cmd/relay` is one instance; [`relay-etcd`](pkg/relay/discovery/etcd/cmd/relay-etcd)
-and [`relay-nats`](pkg/relay/discovery/nats/cmd/relay-nats) run several that route
-across each other. Each binary's README covers its flags, transports and
-deployment notes.
+`cmd/relay` is one instance;
+[`relay-etcd`](pkg/relay/discovery/etcd/cmd/relay-etcd) runs several that route
+across each other. Its README covers flags, transports and deployment notes.
 
 ## Using the library
 
