@@ -31,6 +31,13 @@ set -euo pipefail
 COVER_PKGS=${COVER_PKGS:-./pkg/...}
 COVERAGE_TOLERANCE=${COVERAGE_TOLERANCE:-0.5}
 FLOORS_FILE=${FLOORS_FILE:-coverage-floors.txt}
+# Separate Go modules, measured with their own `go test ./...` and folded into
+# the same floors file. `go test ./pkg/...` from the root cannot reach them, so
+# without this the one distributed DiscoveryStore backend — and the relay-etcd
+# binary the multi-instance deployments run — is gated by nothing. Package
+# names in the profile are full import paths, so one floors file stays
+# unambiguous across modules.
+COVER_SUBMODULES=${COVER_SUBMODULES:-pkg/relay/discovery/etcd}
 # --update samples the suite this many times and keeps the per-package minimum,
 # so a floor is the bottom of the observed band rather than whichever value one
 # lucky run happened to produce. Checking only ever needs one run.
@@ -73,6 +80,14 @@ for n in $(seq 1 "$runs"); do
 		cat "$tmp/raw" "$tmp/err" >&2
 		exit 1
 	fi
+	for m in $COVER_SUBMODULES; do
+		if ! (cd "$m" && go test -count=1 -cover ./...) >"$tmp/sub" 2>"$tmp/err"; then
+			echo "coverage run failed in $m — fix the tests first:" >&2
+			cat "$tmp/sub" "$tmp/err" >&2
+			exit 1
+		fi
+		cat "$tmp/sub" >>"$tmp/raw"
+	done
 	# `ok <pkg> <time> coverage: N% of statements` and the
 	# testless-but-instrumented `<pkg> coverage: N% of statements` both land
 	# here; `[no test files]` does not.
