@@ -1,6 +1,7 @@
 package wtconn_test
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -479,5 +480,38 @@ func TestRequestStreamOverWebTransport(t *testing.T) {
 	}
 	if string(obj.Payload) != string(want) {
 		t.Errorf("object payload = %q, want %q", obj.Payload, want)
+	}
+}
+
+// TestDatagramRoundTripOverWebTransport is the WebTransport half of the §11.3
+// datagram coverage: both Conn.SendDatagram and Conn.ReceiveDatagram were at
+// 0% across the whole suite here, so nothing had ever put a datagram through
+// this adapter.
+//
+// It matters more on this transport than on raw QUIC. A WebTransport datagram
+// is not a QUIC datagram — it is wrapped in an HTTP/3 datagram carrying the
+// session's quarter-stream ID (RFC 9297), so the payload the peer reads back
+// is only intact if that framing is applied and stripped correctly. A pipe
+// transport reproduces none of that, and neither does the raw-QUIC adapter.
+//
+// Datagrams are unreliable, so the send is retried; see
+// sendDatagramUntilReceived for why that does not weaken the assertion.
+func TestDatagramRoundTripOverWebTransport(t *testing.T) {
+	client, server := newLoopbackConns(t)
+	ctx := t.Context()
+
+	recv := make(chan []byte, 1)
+	go func() {
+		b, err := server.ReceiveDatagram(ctx)
+		if err != nil {
+			return
+		}
+		recv <- b
+	}()
+
+	want := []byte("moqt datagram over webtransport \x00\x01\x02 binary-safe")
+	got := conntest.SendDatagramUntilReceived(t, client.SendDatagram, recv, want)
+	if !bytes.Equal(got, want) {
+		t.Errorf("datagram payload = %q, want %q", got, want)
 	}
 }

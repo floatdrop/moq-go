@@ -51,3 +51,38 @@ func TLSConfig(t *testing.T, nextProtos ...string) *tls.Config {
 		NextProtos:   nextProtos,
 	}
 }
+
+// SendDatagramUntilReceived sends payload repeatedly until recv yields a
+// datagram or the deadline passes, and returns what arrived.
+//
+// Datagrams are unreliable by definition (§11.3), so a test that sent once and
+// asserted receipt would be asserting something the transport never promised —
+// and would fail occasionally against a correct implementation, which is the
+// worst kind of test. Retrying removes the loss lottery without weakening
+// anything: an adapter that never delivers still fails, just at the deadline
+// rather than on the first drop.
+//
+// It lives here because both transport adapters need it and neither can import
+// the other's test package.
+func SendDatagramUntilReceived(
+	t *testing.T,
+	send func([]byte) error,
+	recv <-chan []byte,
+	payload []byte,
+) []byte {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if err := send(payload); err != nil {
+			t.Fatalf("SendDatagram: %v", err)
+		}
+		select {
+		case got := <-recv:
+			return got
+		case <-time.After(50 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no datagram arrived; the adapter never delivered one")
+		}
+	}
+}

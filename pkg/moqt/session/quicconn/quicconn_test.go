@@ -1,6 +1,7 @@
 package quicconn_test
 
 import (
+	"bytes"
 	"crypto/tls"
 	"io"
 	"sync"
@@ -29,6 +30,12 @@ func newLoopbackConns(t *testing.T) (client, server session.Conn) {
 	quicCfg := &quic.Config{
 		MaxIdleTimeout:  5 * time.Second,
 		KeepAlivePeriod: 1 * time.Second,
+		// §11.3 objects travel as QUIC datagrams, and quic-go refuses
+		// SendDatagram unless both peers advertised support in their transport
+		// parameters. The relay enables this in production (relaynet's
+		// defaultQUICConfig), so leaving it off here made the loopback harness
+		// unrepresentative of the transport the adapter is actually used on.
+		EnableDatagrams: true,
 	}
 
 	ln, err := quic.ListenAddr("127.0.0.1:0", serverTLS, quicCfg)
@@ -268,5 +275,40 @@ func TestListener_AcceptYieldsSessionConn(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("Accept did not unblock within 2s of Close")
+	}
+}
+
+// TestDatagramRoundTripOverQUIC covers Conn.SendDatagram and
+// Conn.ReceiveDatagram on the real transport.
+//
+// §11.3 objects can travel as datagrams, and the relay forwards them
+// (handler_datagram.go), but every existing datagram test runs over the
+// in-process sessiontest pipe — which delivers them as ordinary buffered
+// writes. Nothing exercised the adapter that ships, so the two methods sat at
+// 0% across the whole suite, and the transport-parameter negotiation they
+// depend on was never performed in a test at all: quic-go refuses
+// SendDatagram outright unless both peers advertised support, which is a
+// failure mode a pipe cannot reproduce.
+//
+// The datagram is deliberately larger than a token payload but well inside a
+// loopback MTU, so this is testing the adapter rather than probing quic-go's
+// fragmentation boundary.
+func TestDatagramRoundTripOverQUIC(t *testing.T) {
+	client, server := newLoopbackConns(t)
+	ctx := t.Context()
+
+	recv := make(chan []byte, 1)
+	go func() {
+		b, err := server.ReceiveDatagram(ctx)
+		if err != nil {
+			return
+		}
+		recv <- b
+	}()
+
+	want := []byte("moqt datagram over real quic \x00\x01\x02 binary-safe")
+	got := conntest.SendDatagramUntilReceived(t, client.SendDatagram, recv, want)
+	if !bytes.Equal(got, want) {
+		t.Errorf("datagram payload = %q, want %q", got, want)
 	}
 }
