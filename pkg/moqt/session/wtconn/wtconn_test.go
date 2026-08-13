@@ -515,3 +515,15 @@ func TestDatagramRoundTripOverWebTransport(t *testing.T) {
 		t.Errorf("datagram payload = %q, want %q", got, want)
 	}
 }
+
+// TestConnConformance holds the WebTransport adapter to the shared
+// [session.Conn] contract. webtransport-go negotiates its stream limits over
+// capsules with no public knob to lower them, so the ErrNoStreamCredit subtest
+// skips here; everything else applies.
+func TestConnConformance(t *testing.T) {
+	conntest.RunSuite(t, conntest.Suite{
+		NewPair: func(t *testing.T, _ int64) (session.Conn, session.Conn) {
+			return newLoopbackConns(t)
+		},
+	})
+}

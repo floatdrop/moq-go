@@ -23,6 +23,15 @@ const testALPN = "moqt-test"
 // are closed via t.Cleanup.
 func newLoopbackConns(t *testing.T) (client, server session.Conn) {
 	t.Helper()
+	return newLoopbackConnsWithLimit(t, 0)
+}
+
+// newLoopbackConnsWithLimit is [newLoopbackConns] with a cap on how many
+// bidirectional streams the CLIENT may open. quic-go expresses that as the
+// SERVER's MaxIncomingStreams: the limit a peer advertises is what bounds the
+// opener. A non-positive limit leaves quic-go's default in place.
+func newLoopbackConnsWithLimit(t *testing.T, clientBidiLimit int64) (client, server session.Conn) {
+	t.Helper()
 	ctx := t.Context()
 
 	serverTLS := conntest.TLSConfig(t, testALPN)
@@ -38,7 +47,14 @@ func newLoopbackConns(t *testing.T) (client, server session.Conn) {
 		EnableDatagrams: true,
 	}
 
-	ln, err := quic.ListenAddr("127.0.0.1:0", serverTLS, quicCfg)
+	serverCfg := quicCfg
+	if clientBidiLimit > 0 {
+		cfg := *quicCfg
+		cfg.MaxIncomingStreams = clientBidiLimit
+		serverCfg = &cfg
+	}
+
+	ln, err := quic.ListenAddr("127.0.0.1:0", serverTLS, serverCfg)
 	if err != nil {
 		t.Fatalf("ListenAddr: %v", err)
 	}
@@ -311,4 +327,14 @@ func TestDatagramRoundTripOverQUIC(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Errorf("datagram payload = %q, want %q", got, want)
 	}
+}
+
+// TestConnConformance holds the quic-go adapter to the shared [session.Conn]
+// contract. quic-go takes the bidi limit as MaxIncomingStreams on the SERVER,
+// which is what bounds how many streams the client may open.
+func TestConnConformance(t *testing.T) {
+	conntest.RunSuite(t, conntest.Suite{
+		SupportsBidiLimit: true,
+		NewPair:           newLoopbackConnsWithLimit,
+	})
 }
