@@ -2,8 +2,7 @@
 #
 # Whole-suite coverage: what fraction of pkg/ the test suite actually exercises.
 #
-#   scripts/coverage-total.sh           # print the total and the per-package split
-#   scripts/coverage-total.sh --badge   # ...and refresh the README badge
+#   scripts/coverage-total.sh   # print the total and the per-package split
 #
 # This is NOT the gate — `make cover-check` is, and it deliberately measures
 # something narrower. The gate credits each package only for what its OWN tests
@@ -24,11 +23,8 @@
 set -euo pipefail
 
 COVER_PKGS=${COVER_PKGS:-./pkg/...}
-README=${README:-README.md}
 
-badge=no
 case "${1:-}" in
-	--badge | -b) badge=yes ;;
 	--help | -h)
 		awk 'NR == 1 { next }
 		     /^#/ { sub(/^# ?/, ""); print; next }
@@ -74,30 +70,3 @@ END {
 
 echo
 echo "  whole-suite total: ${total}%"
-
-[ "$badge" = no ] && exit 0
-
-# Rounded to a whole percent on purpose. The suite's timing-dependent branches
-# move the total ~0.1-0.3pp between runs on unchanged code, and a badge carrying
-# a decimal would produce a README diff every time anyone regenerated it.
-rounded=$(printf '%.0f' "$total")
-
-case $rounded in
-	9[0-9] | 100) color=brightgreen ;;
-	8[0-9]) color=green ;;
-	7[0-9]) color=yellowgreen ;;
-	6[0-9]) color=yellow ;;
-	5[0-9]) color=orange ;;
-	*) color=red ;;
-esac
-
-if ! grep -q 'img.shields.io/badge/coverage-' "$README"; then
-	echo "no coverage badge found in $README — add one first, this only refreshes it" >&2
-	exit 1
-fi
-
-# Rewrite just the percentage and colour inside the existing badge URL.
-new="https://img.shields.io/badge/coverage-${rounded}%25-${color}.svg"
-sed -i.bak -E "s|https://img\.shields\.io/badge/coverage-[0-9.]+%25-[a-z]+\.svg|$new|" "$README"
-rm -f "$README.bak"
-echo "  badge updated: ${rounded}% (${color}), from a measured ${total}%"

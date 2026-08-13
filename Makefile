@@ -6,7 +6,7 @@
 
 .PHONY: build test test-race test-submodules test-all lint \
         bench bench-quick bench-smoke bench-baseline \
-        cover cover-gaps cover-html cover-check cover-floors cover-total cover-badge \
+        cover cover-gaps cover-html cover-check cover-floors cover-total cover-profile \
         interop interop-quic interop-webtransport interop-matrix interop-build interop-certs interop-clean \
         interop-client interop-client-build
 
@@ -125,9 +125,12 @@ cover-check:
 cover-total:
 	@./scripts/coverage-total.sh
 
-# Same, and refresh the README badge from the result.
-cover-badge:
-	@./scripts/coverage-total.sh --badge
+# The same measurement as cover-total, written as a Go coverprofile for upload
+# to Coveralls. -coverpkg so the reported figure matches the badge and
+# `cover-total`, rather than the deliberately narrower per-package numbers the
+# floors gate on.
+cover-profile:
+	go test -count=1 -coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_PROFILE) $(COVER_PKGS)
 
 # Re-measure and rewrite the floors. Run this when you have RAISED coverage, and
 # commit the result alongside the tests that earned it. Samples the suite three

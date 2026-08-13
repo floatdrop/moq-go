@@ -56,9 +56,9 @@ A few specifics:
 - **Whole-suite coverage** is a separate, non-gating view: `make cover-total`
   credits each package for code that *any* test reaches, which the floors
   deliberately don't. The floors are the better regression signal; this is the
-  more honest headline number, currently 86.3%. `make cover-badge` refreshes the
-  README badge from it — it's a static badge, so it only changes when someone
-  runs that.
+  more honest headline number, and it's what the README's Coveralls badge
+  shows. CI publishes it on every build via `make cover-profile`, so there is
+  nothing to refresh by hand.
 
 ### Interoperability
 

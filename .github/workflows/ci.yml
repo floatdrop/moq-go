@@ -97,6 +97,25 @@ jobs:
       # `make cover-floors`; there is no table to hand-edit.
       - run: make cover-check
 
+      # The floors above are the gate; Coveralls is the published figure and
+      # gates nothing. They measure deliberately different things: a floor
+      # credits a package only for what its OWN tests reach, which is the right
+      # signal for attributing a regression, while this profile is built with
+      # -coverpkg so a package gets credit for code any test exercises. The
+      # second number is the honest headline (most of wire is driven by
+      # message/session/relay tests), the first is the better alarm.
+      #
+      # Scoped to ./pkg/... — the cmd/* binaries are thin wiring covered by the
+      # interop jobs, and the etcd/nats submodules are separate Go modules whose
+      # coverage this profile does not include.
+      - run: make cover-profile
+      - name: Upload to Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          file: coverage.out
+          format: golang
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
   bench:
     name: Benchmarks (smoke)
     runs-on: ubuntu-latest
