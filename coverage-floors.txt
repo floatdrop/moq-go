@@ -15,7 +15,7 @@ github.com/floatdrop/moq-go/pkg/moqt/session 86.7
 github.com/floatdrop/moq-go/pkg/moqt/session/internal/conntest 0.0
 github.com/floatdrop/moq-go/pkg/moqt/session/quicconn 63.8
 github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest 47.2
-github.com/floatdrop/moq-go/pkg/moqt/session/wtconn 51.6
+github.com/floatdrop/moq-go/pkg/moqt/session/wtconn 66.1
 github.com/floatdrop/moq-go/pkg/moqt/track 100.0
 github.com/floatdrop/moq-go/pkg/moqt/uri 98.3
 github.com/floatdrop/moq-go/pkg/moqt/wire 80.7

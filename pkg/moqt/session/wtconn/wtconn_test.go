@@ -17,9 +17,11 @@ import (
 	"github.com/quic-go/webtransport-go"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
+	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/internal/conntest"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/wtconn"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
 // newLoopbackConns spins up a real loopback WebTransport connection on
@@ -374,5 +376,108 @@ func TestConnReportsWebTransport(t *testing.T) {
 		if !wt.IsWebTransport() {
 			t.Errorf("%s conn reported IsWebTransport() = false", name)
 		}
+	}
+}
+
+// TestRequestStreamOverWebTransport pushes a real PUBLISH request and an object
+// through the adapter, because until this existed `go test` never opened a
+// single request stream over WebTransport.
+//
+// TestWebTransportHandshake completes SETUP, but SETUP travels on uni-streams;
+// Conn.OpenStream is reached only from openRequest/openAllocRequest, the
+// openers for SUBSCRIBE, PUBLISH, FETCH and the namespace requests. So the
+// whole bidi path — OpenStream, AcceptStream, and every bidiStream method —
+// sat at 0%, and every request over WebTransport was exercised solely by the
+// Docker interop job. What CLAUDE.md calls the core session pattern was
+// untested on one of the two real transports.
+//
+// The assertions are deliberately end-to-end rather than per-method: a request
+// that is accepted, answered, and followed by an object the peer reads back
+// proves the adapter's bidi plumbing carries both directions, which is the
+// thing the interop job was the only witness to.
+func TestRequestStreamOverWebTransport(t *testing.T) {
+	ctx := t.Context()
+	clientConn, serverConn := newLoopbackConns(t)
+
+	var (
+		wg                     sync.WaitGroup
+		clientSess, serverSess *session.Session
+		clientErr, serverErr   error
+	)
+	wg.Go(func() { serverSess, serverErr = session.Server(ctx, serverConn) })
+	wg.Go(func() { clientSess, clientErr = session.Client(ctx, clientConn) })
+	wg.Wait()
+	if clientErr != nil {
+		t.Fatalf("client Open: %v", clientErr)
+	}
+	if serverErr != nil {
+		t.Fatalf("server Open: %v", serverErr)
+	}
+	t.Cleanup(func() {
+		_ = clientSess.Close(moqt.SessionNoError, "test cleanup")
+		_ = serverSess.Close(moqt.SessionNoError, "test cleanup")
+	})
+
+	// Server side: accept the request stream (Conn.AcceptStream) and answer on
+	// it (bidiStream.Write).
+	accepted := make(chan *session.Request, 1)
+	go func() {
+		req, err := serverSess.AcceptRequest(ctx)
+		if err != nil {
+			return
+		}
+		if err := req.Reply(&message.RequestOK{}); err != nil {
+			return
+		}
+		accepted <- req
+	}()
+
+	// Client side: open the request stream (Conn.OpenStream) and read the reply
+	// off it (bidiStream.Read).
+	pub, err := clientSess.Publish(ctx, &message.Publish{
+		Namespace: wire.Namespace("demo"),
+		Name:      []byte("video"),
+	})
+	if err != nil {
+		t.Fatalf("Publish over WebTransport: %v", err)
+	}
+	t.Cleanup(func() { _ = pub.Close() })
+
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("PUBLISH request never arrived over WebTransport")
+	}
+
+	// And the data plane on top of it: one object out, the same object back.
+	sg, err := pub.OpenSubgroup(message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDImplicitZero,
+		GroupID:        0,
+	})
+	if err != nil {
+		t.Fatalf("OpenSubgroup: %v", err)
+	}
+	want := []byte("hello over webtransport")
+	if err := sg.WriteObjectAt(0, &message.SubgroupObject{Payload: want}); err != nil {
+		t.Fatalf("WriteObjectAt: %v", err)
+	}
+	if err := sg.Close(); err != nil {
+		t.Fatalf("subgroup Close: %v", err)
+	}
+
+	ds, err := serverSess.AcceptDataStream(ctx)
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	sub, ok := ds.(*session.IncomingSubgroupStream)
+	if !ok {
+		t.Fatalf("AcceptDataStream returned %T, want *session.IncomingSubgroupStream", ds)
+	}
+	obj, err := sub.ReadDecoded()
+	if err != nil {
+		t.Fatalf("ReadDecoded: %v", err)
+	}
+	if string(obj.Payload) != string(want) {
+		t.Errorf("object payload = %q, want %q", obj.Payload, want)
 	}
 }
