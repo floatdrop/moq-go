@@ -80,7 +80,52 @@ func unknownGapTopology(
 		t.Fatalf("live Subscribe: %v", err)
 	}
 	t.Cleanup(func() { _ = liveReq.Close() })
-	go drainAll(t.Context(), live)
+
+	// Subscribe returning only means the subscription exists; the upstream
+	// writes the groups afterwards, from its own goroutine. Returning here
+	// would hand back a fetch client while the cache is still filling, and
+	// every caller's expected answer is stated in terms of a *full* tail — so
+	// a fetch that lands early gets a legitimately different answer, with the
+	// unknown-range floor sitting wherever the cache happened to reach.
+	//
+	// Callers paper over that with a retry loop. This makes the precondition
+	// the helper already claims ("populates the relay's cache with the
+	// [liveLo, liveHi] tail") actually hold before it returns: every group is
+	// forwarded to this subscriber, which it cannot be until the relay has
+	// ingested it.
+	seeded := make(chan struct{})
+	go func() {
+		seen := make(map[uint64]bool, liveHi-liveLo+1)
+		for {
+			ds, err := live.AcceptDataStream(t.Context())
+			if err != nil {
+				return
+			}
+			sg, ok := ds.(*session.IncomingSubgroupStream)
+			if !ok {
+				continue
+			}
+			for {
+				if _, err := sg.ReadObject(); err != nil {
+					break
+				}
+			}
+			g := sg.Header.GroupID
+			if g >= liveLo && g <= liveHi && !seen[g] {
+				seen[g] = true
+				if uint64(len(seen)) == liveHi-liveLo+1 {
+					close(seeded)
+				}
+			}
+		}
+	}()
+
+	select {
+	case <-seeded:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the relay never forwarded the whole live tail, so its cache was " +
+			"never seeded and any fetch assertion below would be meaningless")
+	}
 
 	return dialAnotherClient(t, upSess)
 }
