@@ -13,9 +13,9 @@ github.com/floatdrop/moq-go/pkg/moqt/message 91.8
 github.com/floatdrop/moq-go/pkg/moqt/msf 92.1
 github.com/floatdrop/moq-go/pkg/moqt/session 87.2
 github.com/floatdrop/moq-go/pkg/moqt/session/internal/conntest 0.0
-github.com/floatdrop/moq-go/pkg/moqt/session/quicconn 65.2
-github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest 72.3
-github.com/floatdrop/moq-go/pkg/moqt/session/wtconn 69.4
+github.com/floatdrop/moq-go/pkg/moqt/session/quicconn 73.9
+github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest 75.4
+github.com/floatdrop/moq-go/pkg/moqt/session/wtconn 75.8
 github.com/floatdrop/moq-go/pkg/moqt/track 100.0
 github.com/floatdrop/moq-go/pkg/moqt/uri 98.3
 github.com/floatdrop/moq-go/pkg/moqt/wire 80.7

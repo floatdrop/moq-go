@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/session/internal/conntest"
 )
 
 // TestOpenStream_UnlimitedByDefault verifies the default NewConnPair grants
@@ -61,4 +62,23 @@ func TestOpenStream_CreditIsPerEndpoint(t *testing.T) {
 			t.Fatalf("b.OpenStream #%d: %v", i, err)
 		}
 	}
+}
+
+// TestConnConformance holds the in-process adapter to the same [session.Conn]
+// contract as the two real transports. It is the one the hermetic suite drives
+// everywhere else, so a divergence here means every other test in the tree is
+// asserting against semantics the real transports do not have.
+func TestConnConformance(t *testing.T) {
+	conntest.RunSuite(t, conntest.Suite{
+		SupportsBidiLimit: true,
+		NewPair: func(_ *testing.T, bidiLimit int64) (session.Conn, session.Conn) {
+			// The suite's 0 means "no cap"; NewConnPairWithLimits spells that
+			// as a negative limit and would read 0 as "no streams at all".
+			limit := int(bidiLimit)
+			if limit <= 0 {
+				limit = -1
+			}
+			return NewConnPairWithLimits(limit, -1)
+		},
+	})
 }
