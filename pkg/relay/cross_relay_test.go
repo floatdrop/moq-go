@@ -627,6 +627,202 @@ func TestCrossRelay_WatchNamespacesForward(t *testing.T) {
 	relayA.stop(t)
 }
 
+// TestCrossRelay_WatchNamespacesForwardsUnpublish is the withdrawal half of
+// TestCrossRelay_WatchNamespacesForward: when a remote relay retracts a
+// namespace, the local SUBSCRIBE_NAMESPACE holder learns of it via
+// NAMESPACE_DONE.
+//
+// Until this existed the OpUnpublish arm of forwardNamespaceEvent was taken by
+// no test at all. OpUnpublish itself is asserted on all over the suite, but
+// every one of those stops at the store boundary — memory_test.go,
+// etcd_test.go, and discovery_integration_test.go check the event comes *out*
+// of WatchNamespaces, not that the relay reflects it onward. So the arm could
+// be deleted with the suite still green, while a downstream subscriber
+// silently never learned the namespace had gone away.
+func TestCrossRelay_WatchNamespacesForwardsUnpublish(t *testing.T) {
+	t.Parallel()
+
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+
+	ctx := t.Context()
+
+	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
+
+	subSess := dialClient(t, relayA)
+	nsReq, err := subSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
+		TrackNamespacePrefix: videoNS(),
+	})
+	if err != nil {
+		t.Fatalf("SubscribeNamespace: %v", err)
+	}
+
+	remoteNS := wire.TrackNamespace{[]byte("video"), []byte("cam1")}
+
+	// Same re-advertise ticker as TestCrossRelay_WatchNamespacesForward, and for
+	// the same reason: the watcher registers asynchronously in Start and
+	// MemoryStore does not replay history to new watchers. Reading the NAMESPACE
+	// back is what proves the watch is live, which is in turn what makes the
+	// single Unpublish below observable.
+	stopInject := make(chan struct{})
+	var stopOnce sync.Once
+	stopInjector := func() { stopOnce.Do(func() { close(stopInject) }) }
+	go func() {
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			_ = store.PublishNamespace(ctx, discovery.NamespaceInfo{
+				Prefix:    remoteNS,
+				RelayAddr: "relay-C",
+			})
+			select {
+			case <-stopInject:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer stopInjector()
+
+	if got := relaytest.ReadNextMessage(t, nsReq, time.After(2*time.Second)); !isNamespace(got) {
+		t.Fatalf("got %T, want *message.Namespace before the retraction", got)
+	}
+	stopInjector()
+
+	// The advertisement has to still be in the store for the retraction to emit
+	// anything — UnpublishNamespace on a missing entry is a silent no-op, which
+	// would leave this test hanging on a NAMESPACE_DONE that was never sent.
+	if err := store.UnpublishNamespace(ctx, remoteNS, "relay-C"); err != nil {
+		t.Fatalf("UnpublishNamespace: %v", err)
+	}
+
+	// Ticks queued before the injector stopped may still be in flight, so skip
+	// any duplicate NAMESPACE sitting ahead of the NAMESPACE_DONE.
+	var done *message.NamespaceDone
+	for range 32 {
+		switch got := relaytest.ReadNextMessage(t, nsReq, time.After(2*time.Second)).(type) {
+		case *message.Namespace:
+			continue
+		case *message.NamespaceDone:
+			done = got
+		default:
+			t.Fatalf("got %T, want *message.NamespaceDone", got)
+		}
+		break
+	}
+	if done == nil {
+		t.Fatal("no NAMESPACE_DONE within 32 messages")
+	}
+	if len(done.TrackNamespaceSuffix) != 1 || string(done.TrackNamespaceSuffix[0]) != "cam1" {
+		t.Fatalf("NAMESPACE_DONE suffix = %v, want [cam1]", done.TrackNamespaceSuffix)
+	}
+
+	_ = nsReq.Close()
+	_ = subSess.Close(0, "done")
+	relayA.stop(t)
+}
+
+// TestCrossRelay_WatchNamespacesSkipsTrackSubscribers pins the WantsTracks skip
+// in forwardNamespaceEvent: a SUBSCRIBE_TRACKS holder must NOT be sent the
+// NAMESPACE reflected from a remote relay's advertisement. Those holders
+// receive forwarded PUBLISH messages (§6.1 / §10.19), and a relay cannot
+// synthesize a remote PUBLISH from a namespace advertisement alone.
+//
+// The SUBSCRIBE_NAMESPACE holder here is load-bearing, not decoration. A bare
+// "nothing arrived on the SUBSCRIBE_TRACKS stream" assertion would pass just as
+// well if the watch never fired, if the prefix never matched, or if the relay
+// never started — the control subscriber is what distinguishes "delivered, then
+// deliberately skipped" from "never delivered to anyone".
+func TestCrossRelay_WatchNamespacesSkipsTrackSubscribers(t *testing.T) {
+	t.Parallel()
+
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+
+	ctx := t.Context()
+
+	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
+
+	// Both holders register on the same prefix before any event is injected, so
+	// each tick below is offered to both and only the skip separates them.
+	nsSess := dialClient(t, relayA)
+	nsReq, err := nsSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
+		TrackNamespacePrefix: videoNS(),
+	})
+	if err != nil {
+		t.Fatalf("SubscribeNamespace: %v", err)
+	}
+
+	trSess := dialClient(t, relayA)
+	trSub, err := trSess.SubscribeTracks(ctx, &message.SubscribeTracks{
+		TrackNamespacePrefix: videoNS(),
+	})
+	if err != nil {
+		t.Fatalf("SubscribeTracks: %v", err)
+	}
+
+	stopInject := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			_ = store.PublishNamespace(ctx, discovery.NamespaceInfo{
+				Prefix:    wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+				RelayAddr: "relay-C",
+			})
+			select {
+			case <-stopInject:
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer close(stopInject)
+
+	got := relaytest.ReadNextMessage(t, nsReq, time.After(2*time.Second))
+	nsMsg, ok := got.(*message.Namespace)
+	if !ok {
+		t.Fatalf("got %T, want *message.Namespace", got)
+	}
+	if len(nsMsg.TrackNamespaceSuffix) != 1 || string(nsMsg.TrackNamespaceSuffix[0]) != "cam1" {
+		t.Fatalf("NAMESPACE suffix = %v, want [cam1]", nsMsg.TrackNamespaceSuffix)
+	}
+
+	// The event was delivered and the ticker keeps re-delivering it, so anything
+	// on the SUBSCRIBE_TRACKS stream now is the skip having been dropped.
+	//
+	// A Parse *error* fails just as loudly as a message. A stream that died is
+	// not a stream that was correctly skipped, and treating the two alike is how
+	// this assertion would stay green if the relay started resetting the
+	// SUBSCRIBE_TRACKS stream on a namespace event, or if SubscribeTracks
+	// stopped establishing it at all — the regressions it exists to catch. The
+	// reader is left blocked in Parse on the way out; it unblocks when the test
+	// closes the stream, and the buffered channel keeps it from leaking.
+	type parsed struct {
+		msg message.Message
+		err error
+	}
+	quiet := make(chan parsed, 1)
+	go func() {
+		msg, err := message.Parse(trSub)
+		quiet <- parsed{msg: msg, err: err}
+	}()
+	select {
+	case p := <-quiet:
+		if p.err != nil {
+			t.Fatalf("SUBSCRIBE_TRACKS stream failed instead of staying quiet: %v", p.err)
+		}
+		t.Fatalf("unexpected %T on the SUBSCRIBE_TRACKS stream", p.msg)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	_ = nsReq.Close()
+	_ = trSub.Close()
+	_ = nsSess.Close(0, "done")
+	_ = trSess.Close(0, "done")
+	relayA.stop(t)
+}
+
 // TestCrossRelay_SubscribeNamespaceSeedsRemote pins the seed side of
 // cross-relay namespace discovery: a SUBSCRIBE_NAMESPACE holder is told about a
 // namespace a *remote* relay advertised BEFORE the subscriber (and before this
