@@ -22,21 +22,25 @@ import (
 // arriving late and not arriving are different failures.
 func TestLiveWriterDropsWhatIsAlreadyLate(t *testing.T) {
 	var buf bytes.Buffer
-	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, &buf, []byte("INIT"))
+	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, &buf, []byte("<INIT>"))
 	if live == nil {
 		t.Fatal("newLiveWriter returned nil for -out -")
 	}
 
-	live.add(arrival{Group: 0, Object: 0, Payload: []byte("a")})
-	live.add(arrival{Group: 1, Object: 0, Payload: []byte("c")}) // opens a group: taken
-	live.add(arrival{Group: 0, Object: 1, Payload: []byte("b")}) // overtaken: skipped
-	live.add(arrival{Group: 1, Object: 1, Payload: []byte("d")})
+	live.add(arrival{Group: 0, Object: 0, Payload: []byte("<A>")})
+	live.add(arrival{Group: 1, Object: 0, Payload: []byte("<C>")}) // opens a group: taken
+	live.add(arrival{Group: 0, Object: 1, Payload: []byte("<B>")}) // overtaken: skipped
+	live.add(arrival{Group: 1, Object: 1, Payload: []byte("<D>")})
 	if err := live.close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 
-	if got := buf.String(); got != "INITacd" {
-		t.Errorf("stream = %q, want %q: the late object must not be written", got, "INITacd")
+	// Payloads in order, and the overtaken one absent. Checked by position
+	// rather than by exact bytes, since each segment is now headed by a
+	// styp — see writeWhole.
+	assertPayloadOrder(t, buf.Bytes(), "<INIT>", "<A>", "<C>", "<D>")
+	if bytes.Contains(buf.Bytes(), []byte("<B>")) {
+		t.Error("the late object was written")
 	}
 	if skipped, queueFull, _ := live.dropped(); skipped != 1 || queueFull != 0 {
 		t.Errorf("dropped = (skipped %d, queueFull %d), want (1, 0)", skipped, queueFull)
@@ -187,7 +191,7 @@ func TestFinishRunAcceptsAWriterThatWritesNothing(t *testing.T) {
 // before the delivery report, losing the run's entire output to a crash in
 // its wind-down.
 func TestLiveWriterCloseWhileReadersAreStillAdding(t *testing.T) {
-	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, io.Discard, []byte("INIT"))
+	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, io.Discard, []byte("<INIT>"))
 
 	stop := make(chan struct{})
 	var readers sync.WaitGroup
@@ -199,7 +203,7 @@ func TestLiveWriterCloseWhileReadersAreStillAdding(t *testing.T) {
 					return
 				default:
 				}
-				live.add(arrival{Group: g, Object: i, Payload: []byte("x")})
+				live.add(arrival{Group: g, Object: i, Payload: []byte("<X>")})
 			}
 		})
 	}
@@ -211,7 +215,7 @@ func TestLiveWriterCloseWhileReadersAreStillAdding(t *testing.T) {
 	}
 	// Adds keep coming afterwards, as they do from a reader the bounded
 	// drain did not wait for. They must be refused, not fatal.
-	live.add(arrival{Group: 99, Object: 0, Payload: []byte("x")})
+	live.add(arrival{Group: 99, Object: 0, Payload: []byte("<X>")})
 
 	close(stop)
 	readers.Wait()
@@ -227,21 +231,24 @@ func TestLiveWriterCloseWhileReadersAreStillAdding(t *testing.T) {
 // viewer expects, instead of breaking.
 func TestLiveWriterResyncsAtAGroupBoundary(t *testing.T) {
 	var buf bytes.Buffer
-	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, &buf, []byte("I"))
+	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, &buf, []byte("<INIT>"))
 
-	live.add(arrival{Group: 0, Object: 0, Payload: []byte("a")})
-	live.add(arrival{Group: 0, Object: 1, Payload: []byte("b")})
+	live.add(arrival{Group: 0, Object: 0, Payload: []byte("<A>")})
+	live.add(arrival{Group: 0, Object: 1, Payload: []byte("<B>")})
 	// Object 2 never arrives — the queue overflowed, or it was lost.
-	live.add(arrival{Group: 0, Object: 3, Payload: []byte("c")}) // mid-group: refused
-	live.add(arrival{Group: 0, Object: 4, Payload: []byte("d")}) // still mid-group
-	live.add(arrival{Group: 1, Object: 0, Payload: []byte("e")}) // a group opens: resume
-	live.add(arrival{Group: 1, Object: 1, Payload: []byte("f")})
+	live.add(arrival{Group: 0, Object: 3, Payload: []byte("<C>")}) // mid-group: refused
+	live.add(arrival{Group: 0, Object: 4, Payload: []byte("<D>")}) // still mid-group
+	live.add(arrival{Group: 1, Object: 0, Payload: []byte("<E>")}) // a group opens: resume
+	live.add(arrival{Group: 1, Object: 1, Payload: []byte("<F>")})
 	if err := live.close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 
-	if got := buf.String(); got != "Iabef" {
-		t.Errorf("stream = %q, want %q: nothing may be written into a hole", got, "Iabef")
+	assertPayloadOrder(t, buf.Bytes(), "<INIT>", "<A>", "<B>", "<E>", "<F>")
+	for _, gone := range []string{"<C>", "<D>"} {
+		if bytes.Contains(buf.Bytes(), []byte(gone)) {
+			t.Errorf("object %q was written into a hole", gone)
+		}
 	}
 	skipped, _, resyncs := live.dropped()
 	if skipped != 2 {
@@ -261,18 +268,35 @@ func TestLiveWriterResyncsAtAGroupBoundary(t *testing.T) {
 // wire that a player reported as "non monotonically increasing dts".
 func TestLiveWriterNeverRewinds(t *testing.T) {
 	var buf bytes.Buffer
-	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, &buf, []byte("I"))
+	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, &buf, []byte("<INIT>"))
 
-	live.add(arrival{Group: 5, Object: 0, Payload: []byte("a")})
-	live.add(arrival{Group: 5, Object: 1, Payload: []byte("b")})
+	live.add(arrival{Group: 5, Object: 0, Payload: []byte("<A>")})
+	live.add(arrival{Group: 5, Object: 1, Payload: []byte("<B>")})
 	// An earlier Group turning up late. It opens a Group, but it is behind.
-	live.add(arrival{Group: 3, Object: 0, Payload: []byte("x")})
-	live.add(arrival{Group: 6, Object: 0, Payload: []byte("c")})
+	live.add(arrival{Group: 3, Object: 0, Payload: []byte("<X>")})
+	live.add(arrival{Group: 6, Object: 0, Payload: []byte("<C>")})
 	if err := live.close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
 
-	if got := buf.String(); got != "Iabc" {
-		t.Errorf("stream = %q, want %q: a late group must not rewind the stream", got, "Iabc")
+	assertPayloadOrder(t, buf.Bytes(), "<INIT>", "<A>", "<B>", "<C>")
+	if bytes.Contains(buf.Bytes(), []byte("<X>")) {
+		t.Error("a late group rewound the stream")
+	}
+}
+
+// assertPayloadOrder checks that each marker appears in the stream, in the
+// order given. Each segment carries a styp header, so the payloads are not
+// contiguous and exact comparison would only be asserting the header's
+// bytes.
+func assertPayloadOrder(t *testing.T, stream []byte, markers ...string) {
+	t.Helper()
+	at := 0
+	for _, m := range markers {
+		i := bytes.Index(stream[at:], []byte(m))
+		if i < 0 {
+			t.Fatalf("%q missing from the stream, or out of order after the previous marker", m)
+		}
+		at += i + len(m)
 	}
 }

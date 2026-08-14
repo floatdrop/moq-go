@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"sync/atomic"
@@ -248,6 +249,7 @@ func (l *liveWriter) dropped() (skipped int, queueFull int64, resyncs int) {
 type cmafEmitter struct {
 	init    []byte
 	written bool
+	buf     bytes.Buffer
 }
 
 func (e *cmafEmitter) Emit(w io.Writer, a arrival) error {
@@ -257,8 +259,28 @@ func (e *cmafEmitter) Emit(w io.Writer, a arrival) error {
 		}
 		e.written = true
 	}
-	if _, err := w.Write(a.Payload); err != nil {
-		return fmt.Errorf("video: write object: %w", err)
+	// Assembled first, then written once. See writeWhole.
+	e.buf.Reset()
+	if err := segmentType().Encode(&e.buf); err != nil {
+		return fmt.Errorf("video: encode styp: %w", err)
+	}
+	e.buf.Write(a.Payload)
+	return writeWhole(w, e.buf.Bytes())
+}
+
+// writeWhole puts a complete segment on the wire in a single write.
+//
+// Not an optimisation. mp4ff encodes a fragment box by box, so writing
+// straight to the pipe puts a dozen small writes on it and a demuxer
+// reading the other end can wake on half a moof. ffmpeg's mov demuxer then
+// sanity-checks the trun against how much input it thinks remains, gets a
+// negative answer — "trun sample count 1 exceeds the -188 samples the
+// input can hold" — and gives up, which mpv reports as end of file a few
+// seconds in. The same bytes read from a file, where no read ever lands
+// mid-box, parse perfectly.
+func writeWhole(w io.Writer, b []byte) error {
+	if _, err := w.Write(b); err != nil {
+		return fmt.Errorf("video: write segment: %w", err)
 	}
 	return nil
 }
@@ -278,6 +300,7 @@ type legacyEmitter struct {
 	seq     uint32
 	held    legacyFrame
 	holding bool
+	buf     bytes.Buffer
 	// base is the timestamp of the first frame written, which every later
 	// decode time is measured from. See write.
 	base uint64
@@ -296,26 +319,12 @@ func (e *legacyEmitter) Emit(w io.Writer, a arrival) error {
 		return nil
 	}
 	if !e.started {
-		// Nothing can be written before a keyframe: the parameter sets are
-		// in it, and so is the first decodable picture.
-		if !avc.IsIDRSample(frame.Sample) {
-			return nil
-		}
-		// Checked rather than inferred from legacyInit failing: a keyframe
-		// without parameter sets means waiting for the next one, while a
-		// keyframe whose parameter sets will not build a descriptor is a
-		// real failure and must not be mistaken for one worth waiting on.
-		if spss, ppss := avc.GetParameterSets(frame.Sample); len(spss) == 0 || len(ppss) == 0 {
-			return nil
-		}
-		init, err := legacyInit([]legacyFrame{frame})
-		if err != nil {
+		if err := e.start(w, frame); err != nil {
 			return err
 		}
-		if err := init.Encode(w); err != nil {
-			return fmt.Errorf("video: write init: %w", err)
+		if !e.started {
+			return nil // still waiting for a keyframe with parameter sets
 		}
-		e.started, e.base = true, frame.Timestamp
 	}
 	if e.holding {
 		if err := e.write(w, e.held, sampleDuration(e.held.Timestamp, frame.Timestamp)); err != nil {
@@ -323,6 +332,36 @@ func (e *legacyEmitter) Emit(w io.Writer, a arrival) error {
 		}
 	}
 	e.held, e.holding = frame, true
+	return nil
+}
+
+// start writes the header once a frame arrives that can open the stream:
+// a keyframe, since it is both a decodable picture and where the parameter
+// sets are. Leaves started false when this frame is not one, so the caller
+// keeps waiting.
+func (e *legacyEmitter) start(w io.Writer, frame legacyFrame) error {
+	if !avc.IsIDRSample(frame.Sample) {
+		return nil
+	}
+	// Checked rather than inferred from legacyInit failing: a keyframe
+	// without parameter sets means waiting for the next one, while a
+	// keyframe whose parameter sets will not build a descriptor is a real
+	// failure and must not be mistaken for one worth waiting on.
+	if spss, ppss := avc.GetParameterSets(frame.Sample); len(spss) == 0 || len(ppss) == 0 {
+		return nil
+	}
+	init, err := legacyInit([]legacyFrame{frame})
+	if err != nil {
+		return err
+	}
+	e.buf.Reset()
+	if err := init.Encode(&e.buf); err != nil {
+		return fmt.Errorf("video: encode init: %w", err)
+	}
+	if err := writeWhole(w, e.buf.Bytes()); err != nil {
+		return err
+	}
+	e.started, e.base = true, frame.Timestamp
 	return nil
 }
 
@@ -336,7 +375,24 @@ func (e *legacyEmitter) Flush(w io.Writer) error {
 	return e.write(w, e.held, 1)
 }
 
-// write emits one frame as its own fragment.
+// segmentType prefixes each fragment written to a live pipe.
+//
+// Without it ffmpeg's mov demuxer loses track of how much input is left
+// when fragments arrive slowly over a non-seekable pipe, and rejects the
+// stream: "trun sample count 1 exceeds the -150 samples the input can
+// hold" — a negative capacity — after which mpv reports EOF and exits.
+// The same bytes read from a file, or poured through a pipe at once, parse
+// perfectly, which is what made this look like a timing fault for so long.
+//
+// A styp is what a CMAF segment carries at its head, so this is what the
+// format expects rather than a workaround: it tells a reader where one
+// self-contained piece ends and the next begins.
+func segmentType() *mp4.StypBox {
+	return mp4.NewStyp("cmfs", 0, []string{"cmfc", "iso6", "msdh"})
+}
+
+// write emits one frame as its own fragment, headed by a styp so a demuxer
+// reading a pipe can tell where it starts.
 func (e *legacyEmitter) write(w io.Writer, frame legacyFrame, dur uint32) error {
 	e.seq++
 	frag, err := mp4.CreateFragment(e.seq, legacyTrackID)
@@ -368,8 +424,13 @@ func (e *legacyEmitter) write(w io.Writer, frame legacyFrame, dur uint32) error 
 		DecodeTime: max(frame.Timestamp, e.base) - e.base,
 		Data:       frame.Sample,
 	})
-	if err := frag.Encode(w); err != nil {
-		return fmt.Errorf("video: write fragment %d: %w", e.seq, err)
+	// Assembled whole — styp and fragment together — then written once.
+	e.buf.Reset()
+	if err := segmentType().Encode(&e.buf); err != nil {
+		return fmt.Errorf("video: encode styp: %w", err)
 	}
-	return nil
+	if err := frag.Encode(&e.buf); err != nil {
+		return fmt.Errorf("video: encode fragment %d: %w", e.seq, err)
+	}
+	return writeWhole(w, e.buf.Bytes())
 }

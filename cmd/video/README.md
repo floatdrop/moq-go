@@ -155,6 +155,19 @@ mean carrying an H.264 decoder, and every terminal player already has one.
 `mpv --vo=tct` and `chafa` both render into a terminal — `brew install mpv`
 if neither is present.
 
+Each segment goes out headed by a `styp` and written in a single call.
+Neither is cosmetic: `mp4ff` encodes a fragment box by box, and a player
+reading the other end of a pipe can wake on half a `moof`, at which point
+ffmpeg's demuxer sanity-checks the `trun` against how much input it thinks
+remains, gets a negative answer, and stops — which mpv reports as end of
+file a few seconds in. The same bytes read from a file always parsed
+perfectly, which is what made it look like a timing fault.
+
+It is better rather than perfect: ffmpeg's mov demuxer still occasionally
+rejects fragmented MP4 that trickles over a non-seekable pipe. If playback
+stops early, `-out` to a file and play that — the file is always intact,
+and the delivery report will tell you whether the transport was at fault.
+
 **In this mode the timing figures are consumer-bound.** A player that pauses
 stops reading the pipe, the writer waits, and the Objects behind it are
 stamped when they are read rather than when they landed — so `latency` and

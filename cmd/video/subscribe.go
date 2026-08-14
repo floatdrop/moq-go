@@ -116,6 +116,33 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	}
 	defer sub.Close()
 	slog.InfoContext(ctx, "video SUBSCRIBE_OK", "alias", sub.TrackAlias())
+
+	// Serve the subscription's request stream.
+	//
+	// It stays open for the life of the subscription and somebody has to
+	// read it: PUBLISH_DONE arrives there, and so does anything else the
+	// publisher or relay has to say about this track. Left unread, a
+	// subscription that ended looked exactly like one that had gone quiet
+	// — the run sat waiting out its timeout with no media and nothing to
+	// show for it, which is what a player at the end of the pipe sees as
+	// the picture stopping after a few seconds.
+	ended := make(chan *message.PublishDone, 1)
+	go func() {
+		err := sub.Broker().Serve(ctx, func(m message.Message) bool {
+			if done, ok := m.(*message.PublishDone); ok {
+				select {
+				case ended <- done:
+				default:
+				}
+				return false
+			}
+			slog.DebugContext(ctx, "subscription message", "type", m.Type().String())
+			return true
+		})
+		if err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "subscription request stream closed", tint.Err(err))
+		}
+	}()
 	// Each Group on its own goroutine. [session.Demux] dispatches inline —
 	// SubgroupHandler's own documentation says so — meaning a handler that
 	// reads a subgroup to EOF holds the accept loop for as long as that
@@ -157,6 +184,9 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	case <-ctx.Done():
 	case <-watch.ended:
 		slog.InfoContext(ctx, "publisher ended the broadcast")
+	case done := <-ended:
+		slog.WarnContext(ctx, "the publisher ended this subscription, so no more media is coming",
+			"code", done.StatusCode, "streams", done.StreamCount, "reason", done.ErrorReason)
 	case err := <-loopDone:
 		if err != nil && !errors.Is(err, context.Canceled) {
 			slog.WarnContext(ctx, "data stream loop stopped", tint.Err(err))
@@ -288,6 +318,18 @@ func mediaWriterFor(packaging string, init []byte) mediaWriter {
 type parkingLot struct {
 	mu      sync.Mutex
 	streams map[uint64][]*session.IncomingSubgroupStream
+	// handlers is what makes the window close. Demux looks its handler up
+	// and releases its lock before calling OnUnknown, so a stream can be
+	// on its way here at the moment the alias is registered — and parking
+	// it then leaves it held by nobody, since release has already run.
+	// Recorded here, the same alias dispatches straight through instead.
+	//
+	// Left unfixed this stalled whole runs: a subgroup stream parked and
+	// never read holds its flow control open, the relay stops opening new
+	// ones, and the subscription goes quiet with no error anywhere. A run
+	// took two Groups in 185ms and then nothing for 28 seconds, with the
+	// Group IDs showing three more the relay never managed to send.
+	handlers map[uint64]func(*session.IncomingSubgroupStream)
 }
 
 // parkLimit is how many streams may wait for their alias at once — a few
@@ -295,24 +337,34 @@ type parkingLot struct {
 // trip. Past it the oldest is reset, which is §11.4.2's other option.
 const parkLimit = 8
 
-// hold parks one stream.
+// hold parks one stream, or dispatches it if its alias is already known.
 func (p *parkingLot) hold(s *session.IncomingSubgroupStream) {
+	alias := s.Header.TrackAlias
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	if h := p.handlers[alias]; h != nil {
+		p.mu.Unlock()
+		h(s)
+		return
+	}
 	if p.streams == nil {
 		p.streams = make(map[uint64][]*session.IncomingSubgroupStream)
 	}
-	alias := s.Header.TrackAlias
 	p.streams[alias] = append(p.streams[alias], s)
 	for len(p.streams[alias]) > parkLimit {
 		p.streams[alias][0].Cancel(moqt.StreamResetCancelled)
 		p.streams[alias] = p.streams[alias][1:]
 	}
+	p.mu.Unlock()
 }
 
-// release hands every stream parked under alias to h, and reports how many.
+// release hands every stream parked under alias to h, and registers h so
+// that nothing else is ever parked under it.
 func (p *parkingLot) release(alias uint64, h func(*session.IncomingSubgroupStream)) int {
 	p.mu.Lock()
+	if p.handlers == nil {
+		p.handlers = make(map[uint64]func(*session.IncomingSubgroupStream))
+	}
+	p.handlers[alias] = h
 	held := p.streams[alias]
 	delete(p.streams, alias)
 	p.mu.Unlock()
