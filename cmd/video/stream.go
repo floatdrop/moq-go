@@ -32,17 +32,25 @@ import (
 // because whether the transport delivered it and whether it was still
 // useful are different questions.
 //
-// The writing happens on a goroutine of its own, behind a queue, so a
-// consumer that pauses briefly does not stall the reads. When the queue
-// fills, the reads do wait: this is the mode for watching, and a player
-// handed a stream with holes in it stops, which is not a measurement worth
-// protecting. Dropping instead cost 2.7 seconds of playback — a 64-deep
-// queue is 2.7s at 24fps, so a player that buffers ahead at startup
-// emptied it, and everything after was discarded.
+// The writing happens on a goroutine of its own, behind a queue, and never
+// waits for the consumer. Both of the obvious alternatives were tried
+// against a real player and both failed:
 //
-// The cost is stated rather than hidden: with -out - the timing figures
-// are consumer-bound, because a stalled reader now shows up as arrivals
-// stamped late. Measure with -out to a file, or with no -out at all.
+//   - Dropping whatever overflowed a small queue handed the player a
+//     stream with holes mid-Group, and it stopped. A 64-deep queue is 2.7s
+//     at 24fps, which a player empties while it buffers at startup, so
+//     playback broke after about two seconds every time.
+//   - Waiting for the consumer put a pipe into the read path. The Group
+//     readers backed up behind it, so the run received 176 Objects where
+//     it should have had 700, and 92 of them were counted out-of-order —
+//     reordering this tool invented by blocking its own reads.
+//
+// So it drops, but never into the middle of a Group. Once anything is
+// lost, the writer waits for the next Group boundary before writing again:
+// every Group opens on a sync sample, so that is a point the decoder can
+// restart from. The player skips ahead instead of breaking, the reads
+// never wait, and the report keeps measuring the transport rather than the
+// consumer.
 type liveWriter struct {
 	emitter liveEmitter
 	w       io.Writer
@@ -57,23 +65,23 @@ type liveWriter struct {
 	quit chan struct{}
 	done chan struct{}
 
-	// stalled counts what was dropped because the writer had already been
-	// told to stop. The rest is owned by the writer goroutine alone and is
-	// only read once done is closed.
+	// stalled counts what the queue had no room for. The rest is owned by
+	// the writer goroutine alone and is only read once done is closed.
 	stalled atomic.Int64
 
 	haveLast bool
 	last     arrival
 	late     int
-	err      error
+	// resyncs counts how many times the stream had to skip forward to a
+	// Group boundary, which is what a viewer sees as a jump.
+	resyncs int
+	err     error
 }
 
-// liveQueue is how many arrivals may wait for the writer.
-//
-// Two seconds of video at the frame rates this sees, which is longer than
-// any hiccup worth absorbing and shorter than the point at which a player
-// that has genuinely stopped reading would hold megabytes hostage.
-const liveQueue = 64
+// liveQueue is how many arrivals may wait for the writer — twenty seconds
+// of video at the rates this sees, so an ordinary player's startup buffer
+// and any hiccup short of a real stall pass through without a resync.
+const liveQueue = 512
 
 // liveEmitter turns arrivals into bytes on the fly. Emit may write nothing
 // for an arrival — the legacy path holds each frame until the next one
@@ -117,7 +125,13 @@ func (l *liveWriter) run() {
 			// arrived before the run ended, and stopping on the signal
 			// alone would throw away up to a queue's worth of media that
 			// the report goes on counting as delivered.
-			for {
+			//
+			// Bounded by what is queued at this instant, not drained until
+			// empty: the Group readers are still adding — the drain that
+			// precedes close is bounded, and a broadcast that never ends
+			// keeps arriving — so "until empty" is a state that never comes
+			// and close would wait out its own timeout every run.
+			for n := len(l.queue); n > 0; n-- {
 				select {
 				case a := <-l.queue:
 					l.emit(a)
@@ -125,19 +139,40 @@ func (l *liveWriter) run() {
 					return
 				}
 			}
+			return
 		}
 	}
 }
 
-// emit writes one arrival, in send order. Called only from run, which is
-// why neither the ordering state nor the emitter needs a lock.
+// emit writes one arrival, in send order and without gaps. Called only
+// from run, which is why neither the ordering state nor the emitter needs
+// a lock.
+//
+// An Object that does not continue what was last written is only taken if
+// it opens a Group, which is where a decoder can restart. Anything else is
+// skipped, so a hole caused by a full queue or by a late arrival costs the
+// rest of that Group rather than the stream.
 func (l *liveWriter) emit(a arrival) {
 	if l.err != nil {
 		return
 	}
-	if l.haveLast && bySendOrder(a, l.last) <= 0 {
-		l.late++
-		return
+	if l.haveLast {
+		// Never backwards. Opening a Group makes an Object a place to
+		// resume from, but only if it is ahead of what has already gone
+		// out — a Group that arrives late is behind the stream, and
+		// writing it rewinds the timeline. That underflowed the emitter's
+		// rebase and put negative decode times on the wire.
+		if bySendOrder(a, l.last) <= 0 {
+			l.late++
+			return
+		}
+		if !continues(l.last, a) {
+			if !opensGroup(a) {
+				l.late++
+				return
+			}
+			l.resyncs++
+		}
 	}
 	l.haveLast, l.last = true, a
 	if err := l.emitter.Emit(l.w, a); err != nil {
@@ -145,15 +180,28 @@ func (l *liveWriter) emit(a arrival) {
 	}
 }
 
-// add queues one arrival, waiting if the writer is behind and giving up
-// only once the writer has been told to stop.
+// continues reports whether b is the Object immediately after a.
+func continues(a, b arrival) bool {
+	return b.Group == a.Group && b.Object == a.Object+1
+}
+
+// opensGroup reports whether a is the first Object of its Group, which is
+// the only place a decoder can be picked up again. Object IDs count from
+// zero within a Group on every publisher this reads — its own, and the
+// hang publisher measured against cdn.moq.pro.
+func opensGroup(a arrival) bool {
+	return a.Object == 0
+}
+
+// add queues one arrival. Never blocks: a consumer that has stopped
+// reading must not reach back into the reads that are being measured.
 func (l *liveWriter) add(a arrival) {
 	if l == nil {
 		return
 	}
 	select {
 	case l.queue <- a:
-	case <-l.quit:
+	default:
 		l.stalled.Add(1)
 	}
 }
@@ -184,14 +232,15 @@ func (l *liveWriter) close() error {
 	return l.emitter.Flush(l.w)
 }
 
-// dropped reports what never reached the consumer, by reason: Objects that
-// arrived behind media already written, and Objects that arrived after the
-// writer had been stopped. Only valid after close.
-func (l *liveWriter) dropped() (late int, stalled int64) {
+// dropped reports what never reached the consumer: Objects skipped because
+// they did not continue the stream, Objects the queue had no room for, and
+// how many times playback had to jump to a Group boundary to recover. Only
+// valid after close.
+func (l *liveWriter) dropped() (skipped int, queueFull int64, resyncs int) {
 	if l == nil {
-		return 0, 0
+		return 0, 0, 0
 	}
-	return l.late, l.stalled.Load()
+	return l.late, l.stalled.Load(), l.resyncs
 }
 
 // cmafEmitter streams a CMAF broadcast: the header once, then every
@@ -302,6 +351,10 @@ func (e *legacyEmitter) write(w io.Writer, frame legacyFrame, dur uint32) error 
 			Size: uint32(len(frame.Sample)),
 		},
 		// Rebased on the first frame written, as the file writer does.
+		// Guarded, because the subtraction is unsigned: a frame behind the
+		// base would wrap to an enormous decode time rather than a small
+		// negative one. liveWriter.emit is what keeps that from arising;
+		// this is the belt to its braces.
 		//
 		// The publisher's clock is an arbitrary origin — bbb.hang's runs
 		// around 5.8 days — and handing a player a stream that opens
@@ -312,7 +365,7 @@ func (e *legacyEmitter) write(w io.Writer, frame legacyFrame, dur uint32) error 
 		// the wire (measured: zero duplicates, zero decreases, deltas
 		// alternating 41667/41666 µs for 24 fps). Only the deltas carry
 		// meaning, so the origin may as well be zero.
-		DecodeTime: frame.Timestamp - e.base,
+		DecodeTime: max(frame.Timestamp, e.base) - e.base,
 		Data:       frame.Sample,
 	})
 	if err := frag.Encode(w); err != nil {

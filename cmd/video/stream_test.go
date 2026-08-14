@@ -28,8 +28,8 @@ func TestLiveWriterDropsWhatIsAlreadyLate(t *testing.T) {
 	}
 
 	live.add(arrival{Group: 0, Object: 0, Payload: []byte("a")})
-	live.add(arrival{Group: 1, Object: 0, Payload: []byte("c")})
-	live.add(arrival{Group: 0, Object: 1, Payload: []byte("b")}) // overtaken
+	live.add(arrival{Group: 1, Object: 0, Payload: []byte("c")}) // opens a group: taken
+	live.add(arrival{Group: 0, Object: 1, Payload: []byte("b")}) // overtaken: skipped
 	live.add(arrival{Group: 1, Object: 1, Payload: []byte("d")})
 	if err := live.close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -38,8 +38,8 @@ func TestLiveWriterDropsWhatIsAlreadyLate(t *testing.T) {
 	if got := buf.String(); got != "INITacd" {
 		t.Errorf("stream = %q, want %q: the late object must not be written", got, "INITacd")
 	}
-	if late, stalled := live.dropped(); late != 1 || stalled != 0 {
-		t.Errorf("dropped = (late %d, stalled %d), want (1, 0)", late, stalled)
+	if skipped, queueFull, _ := live.dropped(); skipped != 1 || queueFull != 0 {
+		t.Errorf("dropped = (skipped %d, queueFull %d), want (1, 0)", skipped, queueFull)
 	}
 }
 
@@ -60,7 +60,7 @@ func TestLiveWriterHandlesNoWriter(t *testing.T) {
 	if err := live.close(); err != nil {
 		t.Errorf("close on a nil writer: %v", err)
 	}
-	if late, stalled := live.dropped(); late != 0 || stalled != 0 {
+	if skipped, queueFull, resyncs := live.dropped(); skipped != 0 || queueFull != 0 || resyncs != 0 {
 		t.Error("a nil writer cannot have dropped anything")
 	}
 }
@@ -215,4 +215,64 @@ func TestLiveWriterCloseWhileReadersAreStillAdding(t *testing.T) {
 
 	close(stop)
 	readers.Wait()
+}
+
+// TestLiveWriterResyncsAtAGroupBoundary is what keeps a player alive when
+// the consumer falls behind.
+//
+// A hole mid-Group leaves the decoder with frames referencing a picture it
+// never got, and players stop on that. Every Group opens on a sync sample,
+// so once anything is missing the only safe thing to write next is the
+// start of a Group — the picture jumps forward, which is what a live
+// viewer expects, instead of breaking.
+func TestLiveWriterResyncsAtAGroupBoundary(t *testing.T) {
+	var buf bytes.Buffer
+	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, &buf, []byte("I"))
+
+	live.add(arrival{Group: 0, Object: 0, Payload: []byte("a")})
+	live.add(arrival{Group: 0, Object: 1, Payload: []byte("b")})
+	// Object 2 never arrives — the queue overflowed, or it was lost.
+	live.add(arrival{Group: 0, Object: 3, Payload: []byte("c")}) // mid-group: refused
+	live.add(arrival{Group: 0, Object: 4, Payload: []byte("d")}) // still mid-group
+	live.add(arrival{Group: 1, Object: 0, Payload: []byte("e")}) // a group opens: resume
+	live.add(arrival{Group: 1, Object: 1, Payload: []byte("f")})
+	if err := live.close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if got := buf.String(); got != "Iabef" {
+		t.Errorf("stream = %q, want %q: nothing may be written into a hole", got, "Iabef")
+	}
+	skipped, _, resyncs := live.dropped()
+	if skipped != 2 {
+		t.Errorf("skipped = %d, want 2 (the two mid-group objects)", skipped)
+	}
+	if resyncs != 1 {
+		t.Errorf("resyncs = %d, want 1", resyncs)
+	}
+}
+
+// TestLiveWriterNeverRewinds covers the other half of the resync rule.
+//
+// Opening a Group makes an Object somewhere a decoder can resume, but only
+// if it is ahead of what has already been written. A Group that arrives
+// late is behind the stream, and taking it rewinds the timeline — which
+// underflowed the emitter's unsigned rebase and put decode times on the
+// wire that a player reported as "non monotonically increasing dts".
+func TestLiveWriterNeverRewinds(t *testing.T) {
+	var buf bytes.Buffer
+	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, &buf, []byte("I"))
+
+	live.add(arrival{Group: 5, Object: 0, Payload: []byte("a")})
+	live.add(arrival{Group: 5, Object: 1, Payload: []byte("b")})
+	// An earlier Group turning up late. It opens a Group, but it is behind.
+	live.add(arrival{Group: 3, Object: 0, Payload: []byte("x")})
+	live.add(arrival{Group: 6, Object: 0, Payload: []byte("c")})
+	if err := live.close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	if got := buf.String(); got != "Iabc" {
+		t.Errorf("stream = %q, want %q: a late group must not rewind the stream", got, "Iabc")
+	}
 }

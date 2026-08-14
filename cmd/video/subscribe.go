@@ -230,10 +230,10 @@ func finishRun(
 	// stopped, so the end of the stream would silently go missing — and any
 	// error it hit would land nowhere.
 	liveErr := live.close()
-	if late, stalled := live.dropped(); late+int(stalled) > 0 {
-		slog.WarnContext(ctx, "objects were left out of the stream; "+
-			"the report below still counts them as received",
-			"behindWhatWasWritten", late, "arrivedAfterTheWriterStopped", stalled)
+	if skipped, queueFull, resyncs := live.dropped(); skipped+int(queueFull) > 0 {
+		slog.WarnContext(ctx, "the consumer could not keep up, so the stream skipped "+
+			"forward to group boundaries; the report below still counts every object as received",
+			"objectsSkipped", skipped, "queueFull", queueFull, "jumps", resyncs)
 	}
 	if n := nonMonotonicTimestamps.Load(); n > 0 {
 		slog.WarnContext(ctx, "the publisher's timestamps did not always rise between "+
@@ -583,10 +583,11 @@ func readGroup(
 			// this one outlives the loop.
 			Payload: bytes.Clone(obj.Payload),
 		}
-		// Out before counted: what a pipe is watching should not wait on the
-		// bookkeeping, and add drops the payload when nothing is retaining it.
-		live.add(a)
+		// Counted first. The recorder is what the report is built from and
+		// it never waits; handing the media over first would put the writer
+		// between the read and the measurement of it.
 		rec.add(a)
+		live.add(a)
 	}
 }
 
