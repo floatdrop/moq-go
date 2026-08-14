@@ -35,12 +35,12 @@ Requires Go 1.26 or newer.
 Run the stack locally, each command in its own terminal:
 
 ```sh
-go run ./cmd/relay              # ephemeral self-signed cert on :4433
-go run ./cmd/msfdemo publish    # MSF catalog + LOC video frames
-go run ./cmd/msfdemo subscribe  # discovers the video track from the catalog
+go run ./cmd/relay                             # ephemeral self-signed cert on :4433
+go run ./cmd/video -in clip.mp4 publish        # MSF catalog + CMAF-packaged video
+go run ./cmd/video -out /tmp/recv.mp4 subscribe # reassembles it and reports delivery
 ```
 
-For the simpler raw-MOQT case (no LOC/MSF), swap `msfdemo` for `clock`.
+For the simpler raw-MOQT case (no MSF/CMSF), swap `video` for `clock`.
 
 `cmd/relay` is one instance;
 [`relay-etcd`](pkg/relay/discovery/etcd/cmd/relay-etcd) runs several that route
@@ -170,8 +170,10 @@ grouped here by the file they live in:
 | CMSF CMAF packaging + DRM (CMSF) | `Example_contentProtection`, `ExampleSAPRecord` |
 
 The two demo commands — [`cmd/clock`](cmd/clock) and
-[`cmd/msfdemo`](cmd/msfdemo) — are complete, runnable versions of these patterns
-end to end; each has its own README with sequence diagrams.
+[`cmd/video`](cmd/video) — are complete, runnable versions of these patterns
+end to end; each has its own README. `cmd/video` streams a real media file as a
+CMSF broadcast and reports what the transport did to it, which is also the tool
+to reach for when a player is showing artefacts and the cause is unclear.
 
 A per-feature breakdown of draft-19 completeness, the full list of what's
 implemented per package, and known limitations live in

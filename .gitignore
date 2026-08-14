@@ -53,7 +53,7 @@ CLAUDE.local.md
 devenv.local.nix
 .direnv/
 /relay
-/msfdemo
+/video
 # relay-etcd binaries left by `go build` — one for a build from the submodule
 # root, one for a build inside the command's own directory. Both are named
 # after the directory they land in, so neither pattern can be relaxed into the

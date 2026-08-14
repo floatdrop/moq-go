@@ -120,7 +120,7 @@ already advertised across the mesh and then followed live.
 Cross-relay routing keys on **namespace advertisements**: a publisher must
 `PUBLISH_NAMESPACE` for its tracks to be discoverable across the mesh (a bare
 `PUBLISH` registers the track only on its local relay). The `clock` and
-`msfdemo` demo clients publish a track without advertising its namespace, so
+`video` demo clients publish a track without advertising its namespace, so
 they exercise a single relay rather than the mesh. For a runnable end-to-end
 example of the full cross-relay path — two relays, separate etcd-backed stores,
 publisher on one and subscriber on the other — see `TestCrossRelayEtcd_OnDemandSubscribe`

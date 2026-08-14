@@ -87,8 +87,8 @@ Run the stack locally (each in its own terminal):
 
 ```sh
 go run ./cmd/relay              # self-signed cert on :4433
-go run ./cmd/msfdemo publish    # or ./cmd/clock for the raw-MOQT (no LOC/MSF) demo
-go run ./cmd/msfdemo subscribe
+go run ./cmd/video -in clip.mp4 publish    # or ./cmd/clock for the raw-MOQT demo
+go run ./cmd/video -out /tmp/recv.mp4 subscribe
 ```
 
 ## Architecture

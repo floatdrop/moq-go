@@ -84,7 +84,7 @@ By package, bottom-up along the dependency stack:
 | §       | Feature                              | Status | Notes |
 |---------|--------------------------------------|--------|-------|
 | 3.1     | Session establishment                | DONE   | SETUP handshake in `handshake.go`. |
-| 3.1.1   | MOQT URI scheme                      | DONE   | `pkg/moqt/uri` parses/validates `moqt://` (scheme, non-empty host, default port 443, well-known, https conversion); `msfdemo -addr` accepts a URI and feeds AUTHORITY/PATH options. |
+| 3.1.1   | MOQT URI scheme                      | DONE   | `pkg/moqt/uri` parses/validates `moqt://` (scheme, non-empty host, default port 443, well-known, https conversion); `video -addr` accepts a URI and feeds AUTHORITY/PATH options. |
 | 3.1.2   | Fragment identifiers (`#type:value`) | DONE   | `uri.Parse` validates the `type:value` grammar (type ∈ [a-z0-9-]); fragment is kept local and dropped from the https URL. |
 | 3.1.3   | Dereferencing a MOQT URI             | DONE   | A client offers either mapping's ALPN and the server picks: `relaynet.Listen` advertises `moqt-NN` + `h3` on one socket and dispatches on the negotiated protocol; `uri.HTTPSURL` derives the https form; `cmd/interop-client` switches adapter on the URL scheme. |
 | 3.1.4   | WebTransport                         | DONE   | `wtconn` adapter (webtransport-go); MOQT identifiers offered as the WebTransport sub-protocol both ways. |

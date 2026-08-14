@@ -5,6 +5,7 @@ go 1.26
 toolchain go1.26.6
 
 require (
+	github.com/Eyevinn/mp4ff v0.55.0
 	github.com/lmittmann/tint v1.2.0
 	github.com/quic-go/quic-go v0.61.0
 	github.com/quic-go/webtransport-go v0.12.0
