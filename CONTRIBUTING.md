@@ -43,22 +43,21 @@ A few specifics:
   live-stream object rate, so an unexplained increase is a blocker. `make bench`
   (~4m30s) is the full suite and the only one whose `ns/op` means anything. See
   `benchmarks/README.md`.
-- **Coverage** is gated. `make cover-check` fails if any package falls below its
-  floor in `coverage-floors.txt`, and CI runs the same command. If you've raised
-  coverage, run `make cover-floors` to re-record the floors and commit that with
-  your tests — the file is generated, never hand-edited. Floors ratchet one way:
-  `cover-floors` refuses to lower one, so a failing check can't be silenced by
-  regenerating (pass `--allow-lower` to the script if a drop is genuinely
-  correct, and explain it in the commit). When the gate fires,
-  `make cover-gaps COVER_PKGS=./pkg/relay/` lists the functions no test reaches.
-  A brand-new package fails the check until its floor is recorded; that's
-  intended.
-- **Whole-suite coverage** is a separate, non-gating view: `make cover-total`
-  credits each package for code that *any* test reaches, which the floors
-  deliberately don't. The floors are the better regression signal; this is the
-  more honest headline number, and it's what the README's Coveralls badge
-  shows. CI publishes it on every build via `make cover-profile`, so there is
-  nothing to refresh by hand.
+- **Coverage is measured, not enforced.** Nothing in CI fails on a drop — the
+  per-package floors were removed deliberately. `make cover-total` prints the
+  published figure: whole-suite coverage across both modules, measured with
+  `-coverpkg` so a package is credited for every line the suite exercises
+  rather than only for what its own tests reach. CI runs the same measurement
+  on every push, puts the per-package table on the run's summary page, and
+  publishes a line-by-line report to <https://floatdrop.github.io/moq-go/>,
+  which is what the README badge links to. `make cover-site` builds that report
+  locally if you want to see it before pushing.
+- **Because the gate is gone, the check is yours to make.** CI will not tell you
+  that a slice of work landed untested. Look at the number before you push, and
+  `make cover-gaps COVER_PKGS=./pkg/relay/` to list the functions no test
+  reaches, least-covered first — then decide per entry whether it wants a test
+  or wants deleting. Coverage is a floor, not a target: it proves a line ran,
+  never that anything asserted what it did.
 
 ### Interoperability
 

@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml/badge.svg?branch=draft-19)](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml?query=branch%3Adraft-19)
 [![Go Reference](https://pkg.go.dev/badge/github.com/floatdrop/moq-go.svg)](https://pkg.go.dev/github.com/floatdrop/moq-go)
-[![Coverage](https://coveralls.io/repos/github/floatdrop/moq-go/badge.svg?branch=draft-19)](https://coveralls.io/github/floatdrop/moq-go?branch=draft-19)
+[![Coverage](https://img.shields.io/endpoint?url=https://floatdrop.github.io/moq-go/coverage.json)](https://floatdrop.github.io/moq-go/)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
 [![Discord](https://img.shields.io/discord/1124083992740761730?logo=Discord&logoColor=%235865F2&label=join&color=%235865F2)](https://discord.moq.dev/)
 

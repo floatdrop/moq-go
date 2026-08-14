@@ -17,6 +17,10 @@ coverage.*
 *.coverprofile
 profile.cov
 
+# The coverage report site built by `make cover-site`. CI regenerates it on
+# every run and publishes it to Pages; there is nothing here to commit.
+/site/
+
 # Dependency directories (remove the comment below to include it)
 # vendor/
 

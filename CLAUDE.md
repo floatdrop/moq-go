@@ -59,10 +59,9 @@ golangci-lint run                           # lint/format check (.golangci.yml)
 
 make bench-quick                            # ~5s  allocs/op guard — run after every hot-path change
 make bench                                  # ~4m30s full suite incl. ns/op — for timing claims only
-make cover-check                            # CI's coverage gate — no package below its floor
 make cover-gaps                             # every function the tests never reach, least-covered first
-make cover-total                            # whole-suite coverage (-coverpkg); informational, not a gate
-make cover-floors                           # rewrite coverage-floors.txt after RAISING coverage
+make cover-total                            # the published figure (-coverpkg, both modules) — nothing gates on it
+make cover-site                             # ...plus the report CI publishes to Pages, to preview locally
 ```
 
 `make bench-quick BENCH_PKGS=./pkg/moqt/wire/` narrows either benchmark tier to
@@ -222,7 +221,7 @@ reading — and never quote timing from the quick tier.
 representative case per code path); keep it that way, but don't let a new
 per-object path in unmeasured.
 
-### 4. Coverage must not go down
+### 4. Coverage is measured, not enforced
 
 Untested code is dead code: either it has a caller whose behavior nobody is
 checking, or it has no caller at all. Coverage is a floor, not a target — it
@@ -230,126 +229,64 @@ proves a line ran, not that anything asserted what it did (see `fea80fc` above,
 where the lines ran fine). Don't chase the number with tests that execute code
 without asserting on it.
 
-This is enforced, not aspirational. Per-package floors live in
-`coverage-floors.txt` and CI fails the build when one is breached:
+**Nothing gates on it.** The per-package floors and `coverage-floors.txt` were
+removed deliberately. CI measures coverage on every push and publishes it, but
+no job fails on a drop — a slice of work can land untested with the build fully
+green. That check is yours to make, not CI's:
 
 ```sh
-make cover-check    # the gate — the same command CI runs
-make cover-floors   # re-measure and rewrite the floors, after you RAISE coverage
-```
-
-**Never hand-edit `coverage-floors.txt`.** Regenerate it with `make
-cover-floors` and commit it alongside the tests that earned the gain, so the
-diff shows what got covered and why.
-
-**The floors ratchet one way.** `make cover-floors` will not lower one — it
-keeps the existing value and tells you what it refused. That's deliberate:
-regenerating is the obvious thing to try when the check fails, and a tool that
-quietly accepted the lower number would launder away every regression it just
-caught. When a drop is genuinely correct — you deleted tested code, or moved it
-to another package — say so explicitly and explain it in the commit:
-
-```sh
-./scripts/check-coverage.sh --update --allow-lower
-```
-
-Three more behaviors worth knowing before CI surprises you:
-
-- **A new package with no floor fails the build.** Deliberate: that failure is
-  the moment a package's coverage gets recorded, and skipping it is how a
-  package joins the tree untested and stays that way. Fix with `make
-  cover-floors`.
-- **A 0.5pp tolerance** sits on top of every floor, because `session` and
-  `relay` have timing-dependent teardown and error branches that don't run every
-  time — they move ~0.4pp run to run on an unchanged commit. Floors are the
-  lowest of three sampled runs, so that slack sits on top of an already
-  pessimistic number. A real regression is far larger, being whole functions
-  going unrun.
-- **Floors are recorded on linux/amd64** to match the CI runner. They land
-  within 0.2pp of macOS/arm64, well inside the tolerance, so `make cover-check`
-  passing locally means it passes in CI.
-
-When the gate does fire, the list of what to actually do is per-package:
-
-```sh
+make cover-total    # the published figure: whole-suite, across both modules
+make cover-site     # ...plus the report CI publishes, to preview it locally
+make cover          # per-package, each credited only for its OWN tests
 make cover-gaps COVER_PKGS=./pkg/relay/cache/   # least-covered functions first
 ```
 
-Read it and decide, per entry, *missing test* or *delete it*. Repo-wide it's
-~390 lines, so it's only useful scoped.
+Read `cover-gaps` and decide, per entry, *missing test* or *delete it*.
+Repo-wide it's ~390 lines, so it's only useful scoped.
 
-The gate is a floor, not a ceiling, and it cannot see whether a covered line was
-ever *asserted* on — which is precisely the hole `fea80fc` fell through. Passing
-it is the start of gate 1, not a substitute for it.
+Where the numbers surface: the README badge reads a shields endpoint published
+to <https://floatdrop.github.io/moq-go/>, which also serves a line-by-line HTML
+report per module — that page is the replacement for what Coveralls used to
+answer, i.e. *which lines in this file are uncovered*. Each CI run additionally
+prints the per-package table on its own summary page, so a drop is visible in
+the run that caused it without opening anything.
 
-The gate spans both modules. `pkg/relay/discovery/etcd` has its own `go.mod`, so
-`go test ./pkg/...` cannot reach it — `check-coverage.sh` measures it separately
-(`COVER_SUBMODULES`) and folds the result into the same floors file, which stays
-unambiguous because the names in it are full import paths. Without that the one
-distributed `DiscoveryStore` backend, and the `relay-etcd` binary the
-multi-instance deployments run, would be gated by nothing.
+**The published figure is the `-coverpkg` view**, crediting a package for every
+line the suite exercises rather than only for what its own tests reach. The two
+differ a lot and unevenly: `wire`'s own tests reach ~81% of it while the suite
+as a whole drives ~97%, because most of `wire` runs under `message`, `session`,
+and `relay` tests. `make cover` shows the narrow view and `make cover-total` the
+published one — don't read a low number from the former as a thin package
+without checking the latter.
+
+It spans both modules. `pkg/relay/discovery/etcd` has its own `go.mod`, so
+`go test ./pkg/...` cannot reach it; `scripts/coverage-report.sh` runs it
+separately (`COVER_SUBMODULES`) and concatenates the profile, which stays
+unambiguous because profile blocks are keyed by full import path. Without that
+the one distributed `DiscoveryStore` backend, and the `relay-etcd` binary the
+multi-instance deployments run, would be invisible.
 
 Only `cmd/*` and `internal/dial` are outside, and only because `COVER_PKGS`
 defaults to `./pkg/...`. They're thin wiring over tested packages, covered
 end-to-end by the interop suite instead — not an invitation to add untested code
-there. The Coveralls badge is narrower still: it reports the root module only.
+there. The test helpers are *in*: `sessiontest`, `relaytest`, and `conntest` are
+measured like everything else, so expect the number to move when you refactor
+one.
 
-Everything under `pkg/` is gated, **including the test helpers**. `sessiontest`
-(19.5%), `relaytest` and `conntest` (0.0%) have floors like everything else.
-Expect the gate to fire if you refactor a helper and its self-coverage falls,
-and a brand-new helper package to fail as `NEW` until you record its floor.
+**The transport adapters are where a healthy number still misleads you.** The
+shared `Conn` conformance suite (`77ba4ec`) drives all three adapters over
+in-process plumbing, which is why `quicconn` and `wtconn` now read in the
+high-seventies-to-eighties rather than the fifties. What it cannot reach is
+everything that touches a real transport: `quicconn.Dial` and `wtconn.upgrade`
+are the actual network dial and HTTP/3 upgrade and sit at 0% and ~55%, and the
+error halves of `OpenStream`/`AcceptStream` need a transport that fails. Those
+run only in the interop jobs.
 
-### Read the floors as narrow, because they are
-
-Every number in `coverage-floors.txt` credits a package **only for what its own
-tests reach**. That is the Go default, and it is the right choice for a
-regression gate — a drop names the package whose tests regressed, and
-integration tests walking the same code cannot prop the number back up. But it
-systematically understates how much of the tree is exercised, because most of
-`wire` is driven by `message`/`session`/`relay` tests rather than its own.
-
-```sh
-make cover-total    # whole-suite view via -coverpkg; informational, not a gate
-```
-
-CI publishes that same figure to Coveralls on every build (`make cover-profile`
-feeds it), so the README badge is the live number and nothing here needs
-hand-updating. **Don't read a low floor as a thin package without checking it
-first** — the gap between the two views is large and uneven:
-
-| | floor says | actually exercised |
-|---|---|---|
-| `wire` | 79.9% | **96.4%** |
-| `relay/internal/registry` | 74.6% | **93.3%** |
-| `relay/cache` | 84.9% | **94.2%** |
-| `conntest` | 0.0% | **76.5%** |
-| `sessiontest` | 19.5% | **54.4%** |
-
-So `wire` and `registry` are not the weak spots their floors suggest, and the
-helpers' near-zero figures are an artifact of who gets the credit, not neglect.
-(Those illustrative pairs are a snapshot; `make cover-total` prints the current
-split.)
-
-`make cover-total` is deliberately **not** the gate. As one it would let someone
-delete a package's unit tests while integration tests kept the number green —
-`fea80fc`'s failure mode wearing a different hat.
-
-**`wtconn` is the one real gap**, and it is the exception that proves the point
-above: whole-suite attribution barely moves it (50.8% → 52.5%), so the suite
-genuinely does not drive it. `quicconn` recovers to 73.9%, less alarming than
-its 63.8% floor but still the second-thinnest. Worth understanding before you
-trust a green suite. What's uncovered there is not error handling — it's the
-core delegation surface: `Dial`, `OpenStream`,
-`AcceptStream`, `Read`/`Write`/`Close`, `SendDatagram`/`ReceiveDatagram`. The
-hermetic suite drives `sessiontest` instead, so these one-line hand-offs to
-quic-go and webtransport-go are only ever exercised by the interop jobs.
-
-The practical consequence: when you add transport behavior to `Conn`/`Stream`
-and land it in all three adapters (see Architecture), the two real ones ship
-**untested by `go test`**. Run `make interop-loopback` for that change — it is
-the only thing covering both mappings, and a stale flag in
-`entrypoint-relay.sh` once broke the WebTransport path with the whole unit suite
-green.
+So when you add transport behavior to `Conn`/`Stream` and land it in all three
+adapters (see Architecture), the two real ones ship covered by conformance but
+unproven against quic-go and webtransport-go. Run `make interop-loopback` for
+that change — a stale flag in `entrypoint-relay.sh` once broke the WebTransport
+path with the whole unit suite green.
 
 ### 5. `/moqt-review`
 

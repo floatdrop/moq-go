@@ -8,8 +8,10 @@ on:
     # to it went unbuilt until someone noticed. draft-* covers the current draft
     # branch and the next one without an edit.
     #
-    # The README badge still needs a literal — GitHub badges take one branch and
-    # no globs — so that is the only place a draft bump has to touch.
+    # Two places still need the literal branch name, so a draft bump has to
+    # touch both: the README's CI badge (GitHub badges take one branch and no
+    # globs) and the publish-coverage job below, which must not deploy Pages
+    # from anything but the default branch.
     branches: ['draft-*']
   # Lets the third-party interop job below be run on demand while it is ungated.
   workflow_dispatch:
@@ -84,41 +86,70 @@ jobs:
       - run: go test -race ./...
       - run: go vet ./...
 
+  # Measures coverage and builds the report site. Deliberately NOT a gate on
+  # coverage: there is no floor left to breach, so no drop can fail it. The
+  # signal is the README badge and the published report, both read by hand. See
+  # CLAUDE.md "Coverage is measured, not enforced" for the trade-off accepted
+  # here.
+  #
+  # It can still go red, because coverage is measured by running the suite and
+  # an unmeasurable suite is a failure worth surfacing. When it does, read it as
+  # a duplicate of the Test job rather than as anything about coverage.
   coverage:
-    name: Coverage floors
+    name: Coverage report
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      # Fails if any package drops below its floor in coverage-floors.txt.
-      # Floors were recorded on linux/amd64 to match this runner, as the lowest
-      # of three sampled runs, and the check allows a further 0.5pp for the
-      # timing-dependent branches in session/relay. Raise a floor with
-      # `make cover-floors`; there is no table to hand-edit.
-      - run: make cover-check
-
-      # The floors above are the gate; Coveralls is the published figure and
-      # gates nothing. They measure deliberately different things: a floor
-      # credits a package only for what its OWN tests reach, which is the right
-      # signal for attributing a regression, while this profile is built with
-      # -coverpkg so a package gets credit for code any test exercises. The
-      # second number is the honest headline (most of wire is driven by
-      # message/session/relay tests), the first is the better alarm.
-      #
-      # Scoped to ./pkg/... of the root module — the cmd/* binaries are thin
-      # wiring covered by the interop jobs, and the etcd submodule is a separate
-      # Go module this profile does not include. Note the floors above DO gate
-      # etcd (check-coverage.sh measures it separately), so the badge is
-      # narrower than the gate; folding it in needs a parallel Coveralls upload.
-      - run: make cover-profile
-      - name: Upload to Coveralls
-        uses: coverallsapp/github-action@v2
+      # Spans BOTH modules — the root and pkg/relay/discovery/etcd, which has
+      # its own go.mod and which `go test ./pkg/...` cannot reach. Measured with
+      # -coverpkg, so a package is credited for every line the suite exercises
+      # rather than only for what its own tests reach; most of wire is driven by
+      # message/session/relay tests.
+      # pipefail is load-bearing: the default shell is `bash -e`, which takes a
+      # pipeline's status from its LAST command, so without it a failed suite
+      # would exit through tee as a success and this step would pass green.
+      - name: Measure
+        run: |
+          set -o pipefail
+          make cover-site | tee coverage-summary.txt
+      # Puts the per-package table on the run's summary page, so a regression is
+      # visible in the run that caused it without anyone opening the report.
+      - name: Job summary
+        run: |
+          {
+            echo '### Coverage'
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-pages-artifact@v3
         with:
-          file: coverage.out
-          format: golang
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: site
+
+  # Split from the job above so that one can run on every push and pull request
+  # while publishing stays on the default branch: a Pages deployment is
+  # repo-global, so deploying from a branch or a fork's PR would overwrite the
+  # published report with an unmerged one.
+  publish-coverage:
+    name: Publish coverage report
+    needs: coverage
+    if: github.event_name == 'push' && github.ref == 'refs/heads/draft-19'
+    runs-on: ubuntu-latest
+    # Job-level permissions replace the workflow's `contents: read` outright, so
+    # it has to be restated alongside the two Pages needs.
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
 
   bench:
     name: Benchmarks (smoke)

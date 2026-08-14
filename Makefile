@@ -6,7 +6,7 @@
 
 .PHONY: build test test-race test-submodules test-all lint \
         bench bench-quick bench-smoke bench-baseline \
-        cover cover-gaps cover-html cover-check cover-floors cover-total cover-profile \
+        cover cover-gaps cover-html cover-total cover-site \
         interop interop-quic interop-webtransport interop-matrix interop-build interop-certs interop-clean \
         interop-client interop-client-build
 
@@ -95,13 +95,17 @@ bench-baseline:
 
 COVER_PROFILE ?= coverage.out
 
+# Where `cover-site` writes the report CI publishes. Gitignored.
+COVER_SITE ?= site
+
 # Scoped to the library by default. The cmd/* binaries are thin wiring over
 # these packages and are covered end-to-end by the interop suite instead, so
 # including them buries the actionable gaps under ~250 lines of 0.0% main().
 # Override to see everything: make cover COVER_PKGS=./...
 COVER_PKGS ?= ./pkg/...
 
-# Per-package summary. Informational; `cover-check` is the gate.
+# Per-package summary, each package credited only for what its OWN tests reach.
+# The quickest local read; `cover-total` is the published view.
 cover:
 	go test -cover $(COVER_PKGS)
 
@@ -115,31 +119,19 @@ cover-html:
 	@go test -coverprofile=$(COVER_PROFILE) $(COVER_PKGS) >/dev/null
 	go tool cover -html=$(COVER_PROFILE)
 
-# Gate: no package may fall below its floor in coverage-floors.txt, across BOTH
-# modules — the root and pkg/relay/discovery/etcd. This is what
-# CI runs, and it is the enforcement — there is no table to hand-maintain.
-cover-check:
-	@./scripts/check-coverage.sh
-
-# Whole-suite coverage (-coverpkg): what the suite actually exercises, crediting
-# a package for the code other packages' tests reach. Informational, NOT a gate —
-# see the header of the script for why it would make a bad one.
+# Whole-suite coverage (-coverpkg) across BOTH modules — the root and
+# pkg/relay/discovery/etcd. Credits a package for the code any test reaches,
+# which is the figure the README badge and the published report show. Nothing
+# gates on it; see the script header.
 cover-total:
-	@./scripts/coverage-total.sh
+	@./scripts/coverage-report.sh
 
-# The same measurement as cover-total, written as a Go coverprofile for upload
-# to Coveralls. -coverpkg so the reported figure matches the badge and
-# `cover-total`, rather than the deliberately narrower per-package numbers the
-# floors gate on.
-cover-profile:
-	go test -count=1 -coverpkg=$(COVER_PKGS) -coverprofile=$(COVER_PROFILE) $(COVER_PKGS)
-
-# Re-measure and rewrite the floors. Run this when you have RAISED coverage, and
-# commit the result alongside the tests that earned it. Samples the suite three
-# times and keeps the per-package minimum, so a floor is the bottom of the band
-# and not a lucky run.
-cover-floors:
-	@./scripts/check-coverage.sh --update
+# The same measurement, plus the report site CI publishes to GitHub Pages:
+# a per-package index, a line-by-line HTML report per module, and the shields
+# endpoint JSON the badge reads. Open $(COVER_SITE)/index.html to preview
+# exactly what will be published.
+cover-site:
+	@./scripts/coverage-report.sh --site $(COVER_SITE)
 
 # ---------------------------------------------------------------------------
 # Interop testing
