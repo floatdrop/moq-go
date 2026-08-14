@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -105,6 +106,59 @@ func TestValidateTrackProperties_Empty(t *testing.T) {
 	}
 	if len(pairs) != 0 {
 		t.Fatalf("got %d pairs, want 0", len(pairs))
+	}
+}
+
+// TestValidateTrackProperties_MalformedBytes covers the parse-failure branch.
+// A truncated pair must surface as a parse error rather than as
+// *ErrUnsupportedMandatoryTrackProperty: §2.5.1 attaches specific remedies to
+// the latter — REQUEST_ERROR / UNSUPPORTED_EXTENSION when it arrives on
+// PUBLISH, cancelling the subscription or fetch (§3.3.3) when it arrives on
+// SUBSCRIBE_OK or FETCH_OK — none of which fit Track Properties that simply
+// would not decode.
+//
+// 0x02 is a one-byte Delta Type varint (§1.4.3). It resolves to Type 2 because
+// this is the first pair and the running type total starts at zero, and an even
+// Type carries a varint value — truncated off the end here.
+func TestValidateTrackProperties_MalformedBytes(t *testing.T) {
+	pairs, err := session.ValidateTrackProperties([]byte{0x02}, nil, "SUBSCRIBE_OK")
+	if err == nil {
+		t.Fatal("ValidateTrackProperties(truncated pair) = nil error, want a parse error")
+	}
+	if pairs != nil {
+		t.Errorf("pairs = %v, want nil on a parse failure", pairs)
+	}
+	if _, ok := errors.AsType[*session.ErrUnsupportedMandatoryTrackProperty](err); ok {
+		t.Errorf("error = %v, typed as *ErrUnsupportedMandatoryTrackProperty; "+
+			"a malformed pair is not an unsupported mandatory property", err)
+	}
+	if !strings.Contains(err.Error(), "SUBSCRIBE_OK") {
+		t.Errorf("error = %q, want it to name the caller's context", err)
+	}
+}
+
+// TestErrUnsupportedMandatoryTrackPropertyError pins the rendered message of
+// the exported error, which nothing else formats — the other tests all match it
+// by type, so the string itself went unchecked despite being public and
+// log-facing.
+//
+// It asserts the parts a reader depends on rather than the whole line: the
+// package prefix, the offending type in hex, the caller's context, and the
+// §2.5.1 reference. Full-string equality was the first cut and is worse — it
+// breaks on any behaviour-neutral rewording, and it cannot catch the stale
+// section number it appears to guard, since the expected text is a copy of the
+// format string and a renumbering would edit both together.
+func TestErrUnsupportedMandatoryTrackPropertyError(t *testing.T) {
+	err := &session.ErrUnsupportedMandatoryTrackProperty{
+		PropertyType: 0x5000,
+		Context:      "SUBSCRIBE_OK",
+	}
+	got := err.Error()
+	// "0x5000" covers the hex rendering: a %d or a dropped 0x prefix both miss.
+	for _, want := range []string{"moqt/session:", "0x5000", "SUBSCRIBE_OK", "§2.5.1"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Error() = %q, want it to contain %q", got, want)
+		}
 	}
 }
 

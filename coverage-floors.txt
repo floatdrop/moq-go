@@ -11,7 +11,7 @@
 github.com/floatdrop/moq-go/pkg/moqt/loc 97.6
 github.com/floatdrop/moq-go/pkg/moqt/message 91.8
 github.com/floatdrop/moq-go/pkg/moqt/msf 92.1
-github.com/floatdrop/moq-go/pkg/moqt/session 87.2
+github.com/floatdrop/moq-go/pkg/moqt/session 87.4
 github.com/floatdrop/moq-go/pkg/moqt/session/internal/conntest 0.0
 github.com/floatdrop/moq-go/pkg/moqt/session/quicconn 73.9
 github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest 75.4
