@@ -177,7 +177,12 @@ func stream(ctx context.Context, media *session.Publication, src *source, opts p
 				}
 				open, openGroup = sg, c.Group
 			}
-			if err := writeChunk(open, c); err != nil {
+			payload, err := src.chunkBytes(i, pass)
+			if err != nil {
+				cancelSubgroup(open)
+				return err
+			}
+			if err := writeChunk(open, c, payload); err != nil {
 				cancelSubgroup(open)
 				return err
 			}
@@ -226,14 +231,14 @@ func pace(
 
 // writeChunk writes one CMAF chunk as an Object, stamped with the send
 // time the subscriber measures latency against.
-func writeChunk(sg *session.OutgoingSubgroupStream, c *chunk) error {
+func writeChunk(sg *session.OutgoingSubgroupStream, c *chunk, payload []byte) error {
 	props := message.AppendTrackProperties([]wire.KVPair{{
 		Type:   propSendTime,
 		IntVal: uint64(time.Now().UnixMicro()),
 	}})
 	if err := sg.WriteObjectAt(c.Object, &message.SubgroupObject{
 		Properties: props,
-		Payload:    c.Data,
+		Payload:    payload,
 	}); err != nil {
 		return fmt.Errorf("video: write object %d/%d: %w", c.Group, c.Object, err)
 	}

@@ -377,3 +377,54 @@ func synthInit(t *testing.T) *mp4.InitSegment {
 	trak.Mdia.Minf.Stbl.Stsd.AddChild(entry)
 	return init
 }
+
+// TestChunkBytesContinuesTheTimelineOnARepeatPass is the fix for a stream
+// that rewound every lap.
+//
+// A repeat pass used to resend the bytes encoded at load, so every
+// fragment carried the decode time and the sequence number it had the
+// first time round. A subscriber writing that out got a file whose time
+// runs backwards once per loop: ffmpeg reads it as "DTS 0 < ... out of
+// order" and a player stops there.
+func TestChunkBytesContinuesTheTimelineOnARepeatPass(t *testing.T) {
+	src, err := openSource(writeSynthFile(t, "IPPIPP", true), 0)
+	if err != nil {
+		t.Fatalf("openSource: %v", err)
+	}
+	if src.MediaDuration == 0 {
+		t.Fatal("the source reports no media duration to advance the timeline by")
+	}
+
+	decodeTimes := func(pass int) []uint64 {
+		t.Helper()
+		var out []uint64
+		for i := range src.Chunks {
+			payload, err := src.chunkBytes(i, pass)
+			if err != nil {
+				t.Fatalf("chunkBytes(%d, %d): %v", i, pass, err)
+			}
+			f, err := mp4.DecodeFile(bytes.NewReader(append(bytes.Clone(src.Init), payload...)))
+			if err != nil {
+				t.Fatalf("parse chunk %d of pass %d: %v", i, pass, err)
+			}
+			frag := f.Segments[0].Fragments[0]
+			out = append(out, frag.Moof.Traf.Tfdt.BaseMediaDecodeTime())
+		}
+		return out
+	}
+
+	first, second := decodeTimes(0), decodeTimes(1)
+	for i := range first {
+		want := first[i] + src.MediaDuration
+		if second[i] != want {
+			t.Fatalf("pass 2 chunk %d decodes at %d, want %d (pass 1 plus one duration)",
+				i, second[i], want)
+		}
+	}
+	// And the whole of pass two must sit after the whole of pass one, which
+	// is what a player reads as one continuous timeline.
+	if second[0] <= first[len(first)-1] {
+		t.Errorf("pass 2 opens at %d, which is not after pass 1's last frame at %d",
+			second[0], first[len(first)-1])
+	}
+}

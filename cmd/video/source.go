@@ -44,6 +44,10 @@ type chunk struct {
 	// DecodeTime is the sample's absolute decode time in the track's media
 	// timescale, which is what the publisher paces against.
 	DecodeTime uint64
+	// Sample is what Data was built from, kept so a repeat pass can be
+	// re-encoded onto a timeline that continues rather than restarts. See
+	// [source.chunkBytes].
+	Sample mp4.FullSample
 }
 
 // source is a local video file re-packaged as a CMSF broadcast: one CMAF
@@ -70,6 +74,11 @@ type source struct {
 
 	Chunks []chunk
 	Groups uint64
+	// TrackID and MediaDuration are what a repeat pass needs to re-encode
+	// its fragments: the track they belong to, and how far to move the
+	// timeline on. MediaDuration is in Timescale units.
+	TrackID       uint32
+	MediaDuration uint64
 	// LeadingPictures reports Groups that open on an access point with
 	// leading pictures, which may make them SAP type 3 and so
 	// non-conformant with CMSF §3.4. See [hasLeadingPictures] for what
@@ -155,6 +164,8 @@ func openSource(path string, minGroupObjects int) (*source, error) {
 		mediaDur += uint64(samples[i].Dur)
 		payload += len(samples[i].Data)
 	}
+	src.TrackID = trackID
+	src.MediaDuration = mediaDur
 	src.Duration = time.Duration(mediaDur) * time.Second / time.Duration(timescale)
 	if src.Duration > 0 {
 		src.Framerate = float64(len(samples)) / src.Duration.Seconds()
@@ -170,6 +181,42 @@ func openSource(path string, minGroupObjects int) (*source, error) {
 	}
 	src.SHA256 = hex.EncodeToString(digest.Sum(nil))
 	return src, nil
+}
+
+// chunkBytes returns the Object payload for chunk i on the given pass.
+//
+// The first pass sends what was encoded at load; a later one is re-encoded
+// so its timeline continues instead of starting over. Both halves of a
+// fragment carry an origin: the tfdt says when the sample decodes, and the
+// mfhd sequence number orders the fragments. Resending pass one's bytes
+// leaves both where they were, so a subscriber writing the stream out gets
+// a file whose time runs backwards every lap — ffmpeg reads it as
+// "DTS 0 < 91648 out of order" and a player stops there.
+//
+// Re-encoded rather than patched in place: the fields sit at offsets that
+// depend on which optional trun flags mp4ff chose, and a debug tool is
+// exactly the wrong place to hand-decode a box layout it can ask for.
+func (s *source) chunkBytes(i, pass int) ([]byte, error) {
+	c := &s.Chunks[i]
+	if pass == 0 {
+		return c.Data, nil
+	}
+	sample := c.Sample
+	//nolint:gosec // G115: pass counts loops over a local file and is never negative here.
+	sample.DecodeTime += uint64(pass) * s.MediaDuration
+
+	//nolint:gosec // G115: pass and index are bounded by the run's own object count.
+	seq := uint32(pass*len(s.Chunks) + i + 1)
+	frag, err := mp4.CreateFragment(seq, s.TrackID)
+	if err != nil {
+		return nil, fmt.Errorf("video: create fragment %d: %w", seq, err)
+	}
+	frag.AddFullSample(sample)
+	var buf bytes.Buffer
+	if err := frag.Encode(&buf); err != nil {
+		return nil, fmt.Errorf("video: encode fragment %d: %w", seq, err)
+	}
+	return buf.Bytes(), nil
 }
 
 // videoTrak returns the file's first video track.
@@ -420,6 +467,7 @@ func chunkSamples(samples []mp4.FullSample, trackID uint32, minGroupObjects int)
 			Sync:         sync,
 			DecodeTime:   sample.DecodeTime,
 			Presentation: sample.PresentationTime(),
+			Sample:       sample,
 		})
 		object++
 	}
