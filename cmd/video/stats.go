@@ -65,14 +65,23 @@ func (r *recorder) add(a arrival) {
 	high := arrival{Group: r.maxGroup, Object: r.maxObject}
 	if !r.seen {
 		r.seen = true
-		r.first = a.At
+		r.first, r.last = a.At, a.At
 	} else if bySendOrder(a, high) < 0 {
 		r.outOfOrder++
 	}
 	if bySendOrder(high, a) < 0 {
 		r.maxGroup, r.maxObject = a.Group, a.Object
 	}
-	r.last = a.At
+	// Extremes rather than "latest wins". Readers run one per Group and
+	// stamp their arrivals before contending for this lock, so two that land
+	// microseconds apart can take it in the other order — which, assigned
+	// blindly, leaves last before first and prints a negative span.
+	if a.At.Before(r.first) {
+		r.first = a.At
+	}
+	if a.At.After(r.last) {
+		r.last = a.At
+	}
 	r.bytes += a.Bytes
 	r.arrivals = append(r.arrivals, a)
 }
@@ -134,10 +143,12 @@ func percentile(sorted []time.Duration, p float64) time.Duration {
 	return sorted[idx]
 }
 
-// report writes the run's summary. src describes what the publisher said
-// it was sending, and is compared against what arrived.
-func (r *recorder) report(w io.Writer, src broadcast, digest string) {
-	sorted := r.sorted()
+// report writes the run's summary over sorted — the same snapshot the
+// media file was written from, passed in rather than taken again so the
+// digest and the counts cannot describe different sets of Objects. src
+// describes what the publisher said it was sending, and is compared
+// against what arrived.
+func (r *recorder) report(w io.Writer, sorted []arrival, src broadcast, digest string) {
 	if len(sorted) == 0 {
 		fmt.Fprintln(w, "no objects received")
 		return

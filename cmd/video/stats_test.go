@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -150,13 +151,13 @@ func TestReportComparesAgainstTheSourceDigest(t *testing.T) {
 	rec.add(at(0, 1, 10))
 
 	var buf bytes.Buffer
-	rec.report(&buf, broadcast{Digest: "abc", Objects: 2, Bytes: 20}, "abc")
+	rec.report(&buf, rec.sorted(), broadcast{Digest: "abc", Objects: 2, Bytes: 20}, "abc")
 	if !strings.Contains(buf.String(), "MATCHES the source") {
 		t.Errorf("matching digests not reported as a match:\n%s", buf.String())
 	}
 
 	buf.Reset()
-	rec.report(&buf, broadcast{Digest: "abc", Objects: 2, Bytes: 20}, "def")
+	rec.report(&buf, rec.sorted(), broadcast{Digest: "abc", Objects: 2, Bytes: 20}, "def")
 	if !strings.Contains(buf.String(), "DIFFERS from the source") {
 		t.Errorf("differing digests not reported as a mismatch:\n%s", buf.String())
 	}
@@ -164,7 +165,7 @@ func TestReportComparesAgainstTheSourceDigest(t *testing.T) {
 
 func TestReportSaysSoWhenNothingArrived(t *testing.T) {
 	var buf bytes.Buffer
-	(&recorder{}).report(&buf, broadcast{}, "")
+	(&recorder{}).report(&buf, nil, broadcast{}, "")
 	if !strings.Contains(buf.String(), "no objects received") {
 		t.Errorf("empty run not reported:\n%s", buf.String())
 	}
@@ -179,5 +180,102 @@ func TestPercentile(t *testing.T) {
 		if got := percentile(sorted, tc.p); got != tc.want {
 			t.Errorf("percentile(%.2f) = %v, want %v", tc.p, got, tc.want)
 		}
+	}
+}
+
+// TestRecorderSpanSurvivesOutOfOrderTimestamps covers what concurrent
+// readers make reachable: one Group's reader can stamp an arrival and then
+// lose the race for the lock to a Group that landed later, so add sees
+// timestamps out of order. Assigning first/last blindly would leave last
+// before first, and the report's span and mean would come out negative.
+func TestRecorderSpanSurvivesOutOfOrderTimestamps(t *testing.T) {
+	rec := &recorder{}
+	rec.add(at(0, 0, 50))
+	rec.add(at(1, 0, 10)) // stamped earlier, recorded later
+	rec.add(at(0, 1, 90))
+	rec.add(at(1, 1, 30))
+
+	if rec.last.Before(rec.first) {
+		t.Fatalf("last %v is before first %v: the span is negative", rec.last, rec.first)
+	}
+	if got := rec.last.Sub(rec.first); got != 80*time.Millisecond {
+		t.Errorf("span = %v, want 80ms (the extremes, not the last two seen)", got)
+	}
+}
+
+// TestDrainedReportsWhetherReadersFinished pins the bound that stops a
+// still-arriving Group from being reported as loss — and the escape hatch
+// that stops a reader abandoned mid-Group from holding the report forever.
+func TestDrainedReportsWhetherReadersFinished(t *testing.T) {
+	var done sync.WaitGroup
+	done.Go(func() { time.Sleep(10 * time.Millisecond) })
+	if !drained(&done, time.Second) {
+		t.Error("drained reported a timeout for a reader that finished in time")
+	}
+
+	var stuck sync.WaitGroup
+	stuck.Add(1) // never released, as an abandoned stream's reader would be
+	if drained(&stuck, 20*time.Millisecond) {
+		t.Error("drained reported success for a reader that never finished")
+	}
+}
+
+// TestFinishRunWaitsForInFlightGroups is the regression test for a report
+// that invented loss.
+//
+// Groups are read concurrently and the terminator catalog is a stream of
+// its own, so the end-of-run signal can arrive while Objects are still
+// coming in. A run that counted straight from that signal printed the
+// undelivered tail as missing and wrote a truncated file — a delivery
+// failure produced by the tool rather than found by it.
+func TestFinishRunWaitsForInFlightGroups(t *testing.T) {
+	rec := &recorder{}
+	rec.add(at(0, 0, 0))
+
+	// A reader still draining its Group when the run is told to end.
+	var readers sync.WaitGroup
+	readers.Go(func() {
+		time.Sleep(30 * time.Millisecond)
+		rec.add(at(0, 1, 30))
+	})
+
+	var buf bytes.Buffer
+	sorted, err := finishRun(t.Context(), rec, &readers, "", broadcast{}, &buf)
+	if err != nil {
+		t.Fatalf("finishRun: %v", err)
+	}
+	if len(sorted) != 2 {
+		t.Fatalf("reported %d objects, want 2: the late one was counted as lost", len(sorted))
+	}
+	if strings.Contains(buf.String(), "1 missing") {
+		t.Errorf("report claims loss for an object that was still arriving:\n%s", buf.String())
+	}
+}
+
+// TestFinishRunStillReportsWhenAReaderNeverFinishes covers the other half:
+// the bound exists so an abandoned stream cannot hold the report forever.
+func TestFinishRunStillReportsWhenAReaderNeverFinishes(t *testing.T) {
+	rec := &recorder{}
+	rec.add(at(0, 0, 0))
+
+	var readers sync.WaitGroup
+	readers.Add(1) // never released, as a reader on an abandoned stream
+	defer readers.Done()
+
+	done := make(chan struct{})
+	var buf bytes.Buffer
+	go func() {
+		defer close(done)
+		if _, err := finishRun(t.Context(), rec, &readers, "", broadcast{}, &buf); err != nil {
+			t.Errorf("finishRun: %v", err)
+		}
+	}()
+	select {
+	case <-done:
+		if !strings.Contains(buf.String(), "delivery report") {
+			t.Errorf("no report was written:\n%s", buf.String())
+		}
+	case <-time.After(drainWait + 5*time.Second):
+		t.Fatal("finishRun never returned: the drain is unbounded")
 	}
 }

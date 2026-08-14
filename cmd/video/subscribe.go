@@ -88,8 +88,21 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	}
 	defer sub.Close()
 	slog.InfoContext(ctx, "video SUBSCRIBE_OK", "alias", sub.TrackAlias())
+	// Each Group on its own goroutine. [session.Demux] dispatches inline —
+	// SubgroupHandler's own documentation says so — meaning a handler that
+	// reads a subgroup to EOF holds the accept loop for as long as that
+	// Group's stream is open. Groups do overlap: §2.3.1 has it that "the
+	// amount of time elapsed between publishing an Object in Group ID N and
+	// in a Group ID > N, or even which will be published first, is not
+	// defined", and §13.5 that a publisher "prioritizes and transmits streams
+	// out of order". Reading them one at a time would order arrivals by
+	// stream completion rather than by when their bytes landed, which
+	// silently answers the two questions this tool exists to ask: reordering
+	// between Groups becomes invisible, and an Object that was waiting behind
+	// a still-open Group is reported as slow rather than as early.
+	var readers sync.WaitGroup
 	demux.HandleTrack(sub.TrackAlias(), func(s *session.IncomingSubgroupStream) {
-		readGroup(ctx, s, rec)
+		readers.Go(func() { readGroup(ctx, s, rec) })
 	})
 
 	// The run ends on Ctrl+C, on the §11.3 terminator catalog, or when the
@@ -106,16 +119,55 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 		}
 	}
 
-	sorted := rec.sorted()
-	digest, err := writeMedia(opts.Out, src.Init, sorted)
+	sorted, err := finishRun(ctx, rec, &readers, opts.Out, src, os.Stdout)
 	if err != nil {
 		return err
 	}
-	rec.report(os.Stdout, src, digest)
 	if opts.Out != "" {
 		slog.InfoContext(ctx, "wrote received media", "path", opts.Out, "objects", len(sorted))
 	}
 	return nil
+}
+
+// finishRun ends a run: it lets the in-flight Group readers finish, then
+// takes one snapshot and reports from it. Returns the snapshot.
+//
+// The draining is the part that matters, and the ordering here is the whole
+// of it. The terminator catalog arrives on a stream of its own, so with
+// every stream read concurrently it can be delivered while several Groups
+// are still coming in. Counting straight from the end-of-run signal would
+// print the undelivered tail as loss and write a truncated file whose digest
+// does not match — a delivery failure this tool invented, which is the one
+// result it must never produce.
+//
+// Bounded rather than open-ended: a publisher that died mid-Group leaves a
+// reader blocked until the session goes away, and a report that never prints
+// is its own kind of wrong. When the bound is hit the report still goes out,
+// with a warning that its loss figures may be the bound's doing.
+//
+// One snapshot, shared between the file and the report: taking a second for
+// the report would let the digest and the counts describe different sets of
+// Objects.
+func finishRun(
+	ctx context.Context,
+	rec *recorder,
+	readers *sync.WaitGroup,
+	out string,
+	src broadcast,
+	w io.Writer,
+) ([]arrival, error) {
+	if !drained(readers, drainWait) {
+		slog.WarnContext(ctx, "some groups were still arriving when the run ended; "+
+			"the report below may show their objects as missing",
+			"wait", drainWait)
+	}
+	sorted := rec.sorted()
+	digest, err := writeMedia(out, src.Init, sorted)
+	if err != nil {
+		return nil, err
+	}
+	rec.report(w, sorted, src, digest)
+	return sorted, nil
 }
 
 // catalogWatch is the subscriber's view of the catalog track: the first
@@ -180,17 +232,13 @@ func subscribeCatalog(
 		return nil, err
 	}
 	slog.InfoContext(ctx, "catalog SUBSCRIBE_OK", "alias", subscription.TrackAlias())
+	// On its own goroutine for the same reason the media track is: an inline
+	// handler owns the accept loop while it reads. A catalog stream carries
+	// one Object and closes, so it would not stall for long — but "not long"
+	// is a property of the publisher, not of this reader, and the terminator
+	// catalog arrives on a stream of its own while media streams are open.
 	demux.HandleTrack(subscription.TrackAlias(), func(s *session.IncomingSubgroupStream) {
-		for {
-			obj, err := s.ReadDecoded()
-			if err != nil {
-				if !errors.Is(err, io.EOF) {
-					slog.WarnContext(ctx, "read catalog error", tint.Err(err))
-				}
-				return
-			}
-			watch.deliver("subscribe", obj.Payload)
-		}
+		go readCatalogStream(ctx, s, watch)
 	})
 
 	fetch := &message.Fetch{
@@ -211,22 +259,54 @@ func subscribeCatalog(
 			tint.Err(err))
 		return func() {}, nil
 	}
+	// Spawned like the others, and for a sharper reason than symmetry: this
+	// stream is opened before the media SUBSCRIBE, and it stays open until
+	// the relay has finished serving the backfill range. An inline handler
+	// would park the accept loop inside it, so no media subgroup stream would
+	// ever be accepted and the run would report every Object missing — with
+	// the media handler's own goroutine never reached to prevent it.
 	demux.HandleFetch(fetch.RequestID, func(s *session.IncomingFetchStream) {
-		for {
-			obj, err := s.ReadDecoded()
-			if err != nil {
-				if !errors.Is(err, io.EOF) {
-					slog.WarnContext(ctx, "read catalog fetch error", tint.Err(err))
-				}
-				return
-			}
-			if obj.EndOfNonExistentRange || obj.EndOfUnknownRange {
-				continue
-			}
-			watch.deliver("fetch", obj.Payload)
-		}
+		go readCatalogFetch(ctx, s, watch)
 	})
 	return func() { _ = req.Close() }, nil
+}
+
+// readCatalogFetch drains the catalog backfill FETCH stream.
+func readCatalogFetch(ctx context.Context, s *session.IncomingFetchStream, watch *catalogWatch) {
+	for {
+		obj, err := s.ReadDecoded()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				slog.WarnContext(ctx, "read catalog fetch error", tint.Err(err))
+			}
+			return
+		}
+		if obj.EndOfNonExistentRange || obj.EndOfUnknownRange {
+			continue
+		}
+		watch.deliver("fetch", obj.Payload)
+	}
+}
+
+// drainWait bounds how long the run waits for in-flight Groups after it has
+// been told the broadcast ended. Generous, because it only delays the report
+// on a run that is already over, and short enough that an abandoned stream
+// does not hold the process.
+const drainWait = 5 * time.Second
+
+// drained waits for wg, reporting whether it finished within timeout.
+func drained(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // subscribeRetry is how often subscribeWhenPublished re-attempts the
@@ -265,6 +345,21 @@ func subscribeWhenPublished(
 			return nil, ctx.Err()
 		case <-time.After(subscribeRetry):
 		}
+	}
+}
+
+// readCatalogStream drains one catalog subgroup stream, handing each Object
+// to the watch.
+func readCatalogStream(ctx context.Context, s *session.IncomingSubgroupStream, watch *catalogWatch) {
+	for {
+		obj, err := s.ReadDecoded()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				slog.WarnContext(ctx, "read catalog error", tint.Err(err))
+			}
+			return
+		}
+		watch.deliver("subscribe", obj.Payload)
 	}
 }
 
