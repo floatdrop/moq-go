@@ -2,6 +2,8 @@ module github.com/floatdrop/moq-go/pkg/relay/discovery/etcd
 
 go 1.26.3
 
+toolchain go1.26.6
+
 replace github.com/floatdrop/moq-go => ../../../..
 
 require (

@@ -2,6 +2,8 @@ module github.com/floatdrop/moq-go
 
 go 1.26
 
+toolchain go1.26.6
+
 require (
 	github.com/lmittmann/tint v1.2.0
 	github.com/quic-go/quic-go v0.61.0
