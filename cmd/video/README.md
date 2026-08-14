@@ -36,8 +36,9 @@ go run ./cmd/video -in clip.mp4 publish
 | `-loop` | `1` | publish | Passes over the file; `0` repeats until interrupted |
 | `-gop` | `0` | publish | Minimum Objects per Group; `0` starts a Group at every sync sample |
 | `-delay` | `2s` | publish | Pause between the catalog and the first frame |
-| `-out` | — | subscribe | Where to reassemble the received media |
+| `-out` | — | subscribe | Where to reassemble the received media; `-` sends it to stdout |
 | `-wait` | `30s` | subscribe | How long to wait for a publisher on the namespace |
+| `-packaging` | `cmaf` | subscribe | `cmaf` for a broadcast this tool published, `legacy` for moq-lite/hang |
 
 Any MP4 the file reader understands works — progressive or already
 fragmented, AVC / HEVC / AV1 / VP9. Only the first video track is
@@ -112,6 +113,53 @@ The catalog declares `packaging: "cmaf"` (§3.5.1) and both SAP fields
 maxima, §3.4 pins a Group's first Object to SAP type 1 or 2 on a `cmaf`
 track, and `pkg/moqt/msf` rejects anything outside that. Input that may
 not satisfy §3.4 is flagged at publish time instead — see Limitations.
+
+## Subscribing to someone else's broadcast
+
+`-packaging legacy` reads the bare-bitstream tracks the moq-lite/hang stack
+serves, which is how you point this at a publisher that is not moq-go:
+
+```sh
+go run ./cmd/video -addr moqt://cdn.moq.pro/demo -ns bbb.hang \
+    -packaging legacy -out /tmp/bbb.mp4 subscribe
+```
+
+That produces a playable 1280x720 file and a delivery report. Such a track's
+Objects are a QUIC varint timestamp in microseconds followed by one Annex-B
+access unit — no container — and its catalog declares `packaging: "legacy"`,
+which is not an MSF §5.2.4 value, so `msf` rejects it and this mode treats
+validation as advisory. There is no `initDataList` entry either: the codec is
+`avc3`, so the parameter sets are in the bitstream and the SPS/PPS opening the
+first Group become the decoder configuration.
+
+Two things are dropped on the way into the file, and neither is dropped from
+the report: the frames ahead of the first keyframe, which a live join lands
+in the middle of and which reference a picture that was never sent; and the
+occasional access unit carrying no picture at all — one in a few hundred on
+`bbb.hang` holds a single reserved-type NALU. Both decode as errors, which in
+this tool would read as corruption.
+
+### Playing it
+
+`-out -` sends the media to stdout instead of to a file, so it can go
+straight into a player. The report moves to stderr to keep the pipe clean:
+
+```sh
+go run ./cmd/video -addr moqt://cdn.moq.pro/demo -ns bbb.hang \
+    -packaging legacy -out - subscribe | mpv --vo=tct -   # ASCII, in the terminal
+go run ./cmd/video ... -out - subscribe | ffplay -        # a window
+```
+
+Decoding is the player's job rather than this tool's: drawing frames would
+mean carrying an H.264 decoder, and every terminal player already has one.
+`mpv --vo=tct` and `chafa` both render into a terminal — `brew install mpv`
+if neither is present.
+
+What the report loses: latency needs the publisher's send stamp and the
+digest comparison needs the source counts, and a foreign broadcast declares
+neither. Ordering, loss, spacing and the playable file all still work — and
+they are measured against a publisher that shares no code with this one, which
+is the only way the numbers mean anything beyond moq-go agreeing with itself.
 
 ## Tracks
 

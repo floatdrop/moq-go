@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/msf"
@@ -105,18 +106,24 @@ type broadcast struct {
 	Bytes   int
 }
 
-// parseBroadcast picks the CMAF video track out of cat and resolves the
-// header it references.
-func parseBroadcast(cat msf.Catalog, fallbackNamespace string) (broadcast, error) {
+// parseBroadcast picks the video track of the given packaging out of cat
+// and, for CMAF, resolves the header it references.
+//
+// A legacy-packaged track carries no initialization header: its parameter
+// sets are in the bitstream, so there is nothing for the catalog to point
+// at and its absence is not an error. See legacy.go.
+func parseBroadcast(cat msf.Catalog, fallbackNamespace, packaging string) (broadcast, error) {
 	var out broadcast
 	for _, track := range cat.Tracks {
-		if track.Packaging == msf.PackagingCMAF && track.Role == msf.RoleVideo {
+		if track.Packaging == packaging && track.Role == msf.RoleVideo {
 			out.Track = track
 			break
 		}
 	}
 	if out.Track.Name == "" {
-		return broadcast{}, errors.New("video: catalog declares no CMAF video track")
+		return broadcast{}, fmt.Errorf(
+			"video: catalog declares no %s-packaged video track (it has %s)",
+			packaging, describeTracks(cat))
 	}
 
 	// §5.2.2: a track without an explicit namespace inherits the catalog
@@ -124,6 +131,10 @@ func parseBroadcast(cat msf.Catalog, fallbackNamespace string) (broadcast, error
 	out.Namespace = out.Track.Namespace
 	if out.Namespace == "" {
 		out.Namespace = fallbackNamespace
+	}
+
+	if packaging == legacyPackaging {
+		return withSourceCounts(out, cat), nil
 	}
 
 	if out.Track.InitRef == "" {
@@ -143,7 +154,13 @@ func parseBroadcast(cat msf.Catalog, fallbackNamespace string) (broadcast, error
 	if len(out.Init) == 0 {
 		return broadcast{}, fmt.Errorf("video: no inline init data for initRef %q", out.Track.InitRef)
 	}
+	return withSourceCounts(out, cat), nil
+}
 
+// withSourceCounts copies this tool's own producer-defined root fields onto
+// the broadcast. They are absent from any catalog this tool did not write,
+// which is what leaves the report with nothing to compare against.
+func withSourceCounts(out broadcast, cat msf.Catalog) broadcast {
 	if digest, ok := cat.Extras[sourceDigestKey].(string); ok {
 		out.Digest = digest
 	}
@@ -155,5 +172,18 @@ func parseBroadcast(cat msf.Catalog, fallbackNamespace string) (broadcast, error
 	if size, ok := cat.Extras[sourceBytesKey].(float64); ok {
 		out.Bytes = int(size)
 	}
-	return out, nil
+	return out
+}
+
+// describeTracks lists a catalog's tracks as name/packaging pairs, so a
+// failure to find the wanted one says what was on offer instead.
+func describeTracks(cat msf.Catalog) string {
+	if len(cat.Tracks) == 0 {
+		return "no tracks"
+	}
+	described := make([]string, 0, len(cat.Tracks))
+	for _, track := range cat.Tracks {
+		described = append(described, fmt.Sprintf("%s (%s/%s)", track.Name, track.Packaging, track.Role))
+	}
+	return strings.Join(described, ", ")
 }

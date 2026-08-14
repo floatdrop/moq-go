@@ -247,6 +247,26 @@ func round(d time.Duration) time.Duration {
 	return d.Round(100 * time.Microsecond)
 }
 
+// mediaStdout is the -out value that sends the media to stdout instead of
+// to a file, so it can be piped straight into a player. Such a run writes
+// through [liveWriter] as Objects arrive, never through the file writers
+// below, which is why they need no stdout case.
+const mediaStdout = "-"
+
+// reportWriter is where the delivery report goes: stderr when the media has
+// taken stdout, so a pipe carries media and nothing else.
+func reportWriter(out string) io.Writer {
+	if out == mediaStdout {
+		return os.Stderr
+	}
+	return os.Stdout
+}
+
+// noMedia is the reassembly for a run that has already written its media
+// as it arrived. There is no file to hash, so it reports no digest and the
+// report simply omits the comparison.
+func noMedia(string, []arrival) (string, error) { return "", nil }
+
 // writeMedia reassembles the received Objects into a playable file: the
 // CMAF header the catalog carried, followed by every Object's payload in
 // (Group, Object) order. It returns the digest of what it wrote, which is

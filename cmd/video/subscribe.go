@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -33,6 +34,11 @@ type subscribeOptions struct {
 	// Wait is how long to keep retrying the catalog SUBSCRIBE while nobody
 	// is publishing the namespace yet.
 	Wait time.Duration
+	// Packaging selects which video track to read and how to reassemble it:
+	// msf.PackagingCMAF for a broadcast this tool published, or
+	// legacyPackaging for the bare-bitstream tracks the moq-lite/hang stack
+	// serves. See legacy.go.
+	Packaging string
 }
 
 func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
@@ -43,9 +49,27 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	}
 	defer sess.Close(moqt.SessionNoError, "bye")
 
-	watch := &catalogWatch{first: make(chan msf.Catalog, 1), ended: make(chan struct{})}
+	legacy := opts.Packaging == legacyPackaging
+	watch := &catalogWatch{
+		lenient: legacy,
+		first:   make(chan msf.Catalog, 1),
+		ended:   make(chan struct{}),
+	}
 	demux := session.NewDemux()
+	park := &parkingLot{}
 	demux.OnUnknown(func(ds session.DataStream) {
+		if s, ok := ds.(*session.IncomingSubgroupStream); ok {
+			// Parked, not reset. A relay starts pushing a track's subgroup
+			// streams as soon as it has accepted the SUBSCRIBE, which can be
+			// before SUBSCRIBE_OK has come back and told us the Track Alias
+			// to register a handler under — so the first Groups of a live
+			// broadcast routinely arrive with nowhere to go. Resetting them
+			// loses that media at best, and measured against cdn.moq.pro it
+			// did worse: two streams reset on arrival and the subscription
+			// then delivered nothing at all for the rest of the run.
+			park.hold(s)
+			return
+		}
 		slog.WarnContext(ctx, "unexpected data stream", "type", fmt.Sprintf("%T", ds))
 		ds.Cancel(moqt.StreamResetInternalError)
 	})
@@ -68,7 +92,7 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	case cat = <-watch.first:
 	}
 
-	src, err := parseBroadcast(cat, opts.Namespace)
+	src, err := parseBroadcast(cat, opts.Namespace, opts.Packaging)
 	if err != nil {
 		return err
 	}
@@ -77,7 +101,11 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 		"width", src.Track.Width, "height", src.Track.Height,
 		"initBytes", len(src.Init), "sourceObjects", src.Objects)
 
-	rec := &recorder{keepPayload: opts.Out != ""}
+	// A live pipe writes each Object as it lands, so nothing needs keeping:
+	// the digest and the byte comparison want the whole broadcast in memory,
+	// and a stream being watched has no end to compare against anyway.
+	live := newLiveWriter(opts.Out, opts.Packaging, os.Stdout, src.Init)
+	rec := &recorder{keepPayload: opts.Out != "" && live == nil}
 	sub, err := sess.Subscribe(ctx, &message.Subscribe{
 		Namespace:  wire.Namespace(src.Namespace),
 		Name:       []byte(src.Track.Name),
@@ -101,9 +129,25 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	// between Groups becomes invisible, and an Object that was waiting behind
 	// a still-open Group is reported as slow rather than as early.
 	var readers sync.WaitGroup
-	demux.HandleTrack(sub.TrackAlias(), func(s *session.IncomingSubgroupStream) {
-		readers.Go(func() { readGroup(ctx, s, rec) })
-	})
+	handle := func(s *session.IncomingSubgroupStream) {
+		readers.Go(func() { readGroup(ctx, s, rec, live) })
+	}
+	demux.HandleTrack(sub.TrackAlias(), handle)
+	// Whatever arrived before the alias was known. Released after the
+	// handler is registered, so a stream cannot be parked and replayed at
+	// once and end up read twice.
+	if released := park.release(sub.TrackAlias(), handle); released > 0 {
+		// Said plainly because it moves the report's own numbers. These
+		// Groups arrived first and were read last, in a burst, and arrival
+		// is stamped at read — so their Objects count as out-of-order and
+		// pull the spacing percentiles down, for a delay this subscriber
+		// introduced rather than one the transport did.
+		slog.InfoContext(ctx, "picked up groups that arrived before the subscription was answered; "+
+			"their objects are stamped when read, so they will show in the report as out-of-order "+
+			"and unusually closely spaced",
+			"streams", released)
+	}
+	defer park.discard()
 
 	// The run ends on Ctrl+C, on the §11.3 terminator catalog, or when the
 	// session goes away — whichever comes first. The report is written in
@@ -119,11 +163,23 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 		}
 	}
 
-	sorted, err := finishRun(ctx, rec, &readers, opts.Out, src, os.Stdout)
+	// A live run has written its media already, frame by frame. It still
+	// needs a writer, since finishRun calls one unconditionally — one that
+	// does nothing, rather than none at all.
+	writer, out := mediaWriterFor(opts.Packaging, src.Init), opts.Out
+	if live != nil {
+		writer, out = noMedia, ""
+	}
+	sorted, err := finishRun(ctx, rec, &readers, out, src, writer, live, reportWriter(opts.Out))
 	if err != nil {
 		return err
 	}
-	if opts.Out != "" {
+	if legacy && len(sorted) > 0 {
+		// Nothing about a foreign broadcast is declared up front, so what it
+		// turned out to hold is only knowable after the fact.
+		slog.InfoContext(ctx, "legacy stream", "contents", legacySummary(sorted))
+	}
+	if opts.Out != "" && opts.Out != mediaStdout {
 		slog.InfoContext(ctx, "wrote received media", "path", opts.Out, "objects", len(sorted))
 	}
 	return nil
@@ -148,12 +204,16 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 // One snapshot, shared between the file and the report: taking a second for
 // the report would let the digest and the counts describe different sets of
 // Objects.
+// The reassembly differs by packaging while nothing else does, so it comes
+// in as a function rather than as a branch inside the run's wind-down.
 func finishRun(
 	ctx context.Context,
 	rec *recorder,
 	readers *sync.WaitGroup,
 	out string,
 	src broadcast,
+	write mediaWriter,
+	live *liveWriter,
 	w io.Writer,
 ) ([]arrival, error) {
 	if !drained(readers, drainWait) {
@@ -161,19 +221,99 @@ func finishRun(
 			"the report below may show their objects as missing",
 			"wait", drainWait)
 	}
-	sorted := rec.sorted()
-	digest, err := writeMedia(out, src.Init, sorted)
-	if err != nil {
-		return nil, err
+
+	// After the drain, never before: a reader still running would otherwise
+	// have its last frame arrive to a writer that had already flushed and
+	// stopped, so the end of the stream would silently go missing — and any
+	// error it hit would land nowhere.
+	liveErr := live.close()
+	if late, stalled := live.dropped(); late+int(stalled) > 0 {
+		slog.WarnContext(ctx, "objects were left out of the stream; "+
+			"the report below still counts them as received",
+			"behindWhatWasWritten", late, "writerTooFarBehind", stalled)
 	}
+
+	sorted := rec.sorted()
+	digest, err := write(out, sorted)
+
+	// Reported whatever happened to the media. The report is the point of
+	// the run; losing it because a file could not be written, or because
+	// the player at the end of a pipe quit, would throw away the answer to
+	// keep the packaging.
 	rec.report(w, sorted, src, digest)
-	return sorted, nil
+	return sorted, cmp.Or(err, liveErr)
+}
+
+// mediaWriter reassembles the received Objects into a playable file at
+// path, returning its digest. An empty path skips the file.
+type mediaWriter func(path string, sorted []arrival) (string, error)
+
+// mediaWriterFor returns the reassembly for a packaging: concatenation for
+// CMAF, where every Object is already a chunk of the output file, and a
+// rebuild for legacy, where the Objects are a bare bitstream that has to be
+// put into a container first.
+func mediaWriterFor(packaging string, init []byte) mediaWriter {
+	if packaging == legacyPackaging {
+		return writeLegacyMedia
+	}
+	return func(path string, sorted []arrival) (string, error) {
+		return writeMedia(path, init, sorted)
+	}
+}
+
+// parkingLot holds subgroup streams that arrived before anything was
+// registered to read them, keyed by Track Alias.
+//
+// The window is real and unavoidable: a subscriber learns a track's alias
+// from its SUBSCRIBE_OK, and the relay may push the track's first streams
+// before that reply has been read.
+type parkingLot struct {
+	mu      sync.Mutex
+	streams map[uint64][]*session.IncomingSubgroupStream
+}
+
+// hold parks one stream.
+func (p *parkingLot) hold(s *session.IncomingSubgroupStream) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.streams == nil {
+		p.streams = make(map[uint64][]*session.IncomingSubgroupStream)
+	}
+	p.streams[s.Header.TrackAlias] = append(p.streams[s.Header.TrackAlias], s)
+}
+
+// release hands every stream parked under alias to h, and reports how many.
+func (p *parkingLot) release(alias uint64, h func(*session.IncomingSubgroupStream)) int {
+	p.mu.Lock()
+	held := p.streams[alias]
+	delete(p.streams, alias)
+	p.mu.Unlock()
+	for _, s := range held {
+		h(s)
+	}
+	return len(held)
+}
+
+// discard resets whatever is still parked, so a stream for a track nobody
+// claimed does not sit open for the life of the session.
+func (p *parkingLot) discard() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, held := range p.streams {
+		for _, s := range held {
+			s.Cancel(moqt.StreamResetInternalError)
+		}
+	}
+	clear(p.streams)
 }
 
 // catalogWatch is the subscriber's view of the catalog track: the first
 // catalog it can act on, and the terminator that says the broadcast is
 // over (§11.3).
 type catalogWatch struct {
+	// lenient accepts a catalog that fails msf validation. See deliver.
+	lenient bool
+
 	first chan msf.Catalog
 	// ended is closed once, by whichever reader sees the terminator first.
 	ended     chan struct{}
@@ -189,8 +329,24 @@ func (w *catalogWatch) deliver(source string, payload []byte) {
 		return
 	}
 	if err := cat.Validate(); err != nil {
-		slog.Warn("catalog invalid", slog.String("source", source), tint.Err(err))
-		return
+		// Fatal for a catalog this tool wrote, advisory for one it did not.
+		// A foreign broadcast is exactly what the legacy path is for, and
+		// its catalog fails validation by construction — msf rejects
+		// packaging "legacy" because §5.2.4 does not define it, which is
+		// right of the library and unhelpful here. Dropping the catalog
+		// would leave the run waiting forever for a valid one.
+		if !w.lenient {
+			slog.Warn("catalog invalid", slog.String("source", source), tint.Err(err))
+			return
+		}
+		// Warn, not Debug: the handler is pinned at Info, so a Debug line
+		// here could never print, and the relaxation covers every validation
+		// error rather than only the unknown-packaging one it is meant for.
+		// A catalog malformed for some other reason would otherwise be
+		// accepted in silence and surface as "no legacy-packaged video
+		// track", which reads as the publisher not offering one.
+		slog.Warn("catalog does not validate; reading it anyway",
+			slog.String("source", source), tint.Err(err))
 	}
 	if cat.IsComplete {
 		w.closeOnce.Do(func() { close(w.ended) })
@@ -364,8 +520,13 @@ func readCatalogStream(ctx context.Context, s *session.IncomingSubgroupStream, w
 }
 
 // readGroup drains one Group's subgroup stream, timestamping every Object
-// as it lands.
-func readGroup(ctx context.Context, s *session.IncomingSubgroupStream, rec *recorder) {
+// as it lands and handing it to the live writer when there is one.
+func readGroup(
+	ctx context.Context,
+	s *session.IncomingSubgroupStream,
+	rec *recorder,
+	live *liveWriter,
+) {
 	for {
 		obj, err := s.ReadDecoded()
 		at := time.Now()
@@ -380,7 +541,7 @@ func readGroup(ctx context.Context, s *session.IncomingSubgroupStream, rec *reco
 			continue // an end-of-group / end-of-track status object, not media
 		}
 		sent, ok := sendTime(obj.Properties)
-		rec.add(arrival{
+		a := arrival{
 			Group:      obj.GroupID,
 			Object:     obj.ObjectID,
 			Bytes:      len(obj.Payload),
@@ -390,7 +551,11 @@ func readGroup(ctx context.Context, s *session.IncomingSubgroupStream, rec *reco
 			// ReadDecoded's payload is only valid until the next read, and
 			// this one outlives the loop.
 			Payload: bytes.Clone(obj.Payload),
-		})
+		}
+		// Out before counted: what a pipe is watching should not wait on the
+		// bookkeeping, and add drops the payload when nothing is retaining it.
+		live.add(a)
+		rec.add(a)
 	}
 }
 

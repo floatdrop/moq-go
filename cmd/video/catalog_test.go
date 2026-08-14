@@ -48,7 +48,7 @@ func TestCatalogRoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	got, err := parseBroadcast(back, "fallback")
+	got, err := parseBroadcast(back, "fallback", msf.PackagingCMAF)
 	if err != nil {
 		t.Fatalf("parseBroadcast: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestParseBroadcastRejectsACatalogWithNoCMAFTrack(t *testing.T) {
 		Role:      msf.RoleVideo,
 		IsLive:    &live,
 	}}, time.Time{})
-	if _, err := parseBroadcast(cat, "fallback"); err == nil {
+	if _, err := parseBroadcast(cat, "fallback", msf.PackagingCMAF); err == nil {
 		t.Fatal("parseBroadcast accepted a catalog with only a LOC track")
 	}
 }
@@ -114,7 +114,7 @@ func TestParseBroadcastRejectsAnUnresolvableInitRef(t *testing.T) {
 		t.Fatalf("buildCatalog: %v", err)
 	}
 	cat.InitDataList = nil
-	if _, err := parseBroadcast(cat, "fallback"); err == nil {
+	if _, err := parseBroadcast(cat, "fallback", msf.PackagingCMAF); err == nil {
 		t.Fatal("parseBroadcast accepted a track whose initRef names nothing")
 	}
 }
@@ -127,7 +127,7 @@ func TestParseBroadcastInheritsTheCatalogNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildCatalog: %v", err)
 	}
-	got, err := parseBroadcast(cat, "moq-example/video")
+	got, err := parseBroadcast(cat, "moq-example/video", msf.PackagingCMAF)
 	if err != nil {
 		t.Fatalf("parseBroadcast: %v", err)
 	}

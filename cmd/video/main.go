@@ -28,6 +28,7 @@ import (
 	"github.com/lmittmann/tint"
 
 	dialpkg "github.com/floatdrop/moq-go/internal/dial"
+	"github.com/floatdrop/moq-go/pkg/moqt/msf"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 )
 
@@ -47,6 +48,9 @@ func main() {
 		"publish: wait between the catalog and the first frame, so a subscriber can be in place")
 	wait := flag.Duration("wait", 30*time.Second,
 		"subscribe: how long to wait for a publisher on the namespace before giving up")
+	packaging := flag.String("packaging", msf.PackagingCMAF,
+		`subscribe: packaging of the track to read — "cmaf" for a broadcast this tool published, `+
+			`"legacy" for the bare-bitstream tracks moq-lite/hang serves`)
 	flag.Parse()
 
 	if flag.NArg() < 1 {
@@ -59,6 +63,15 @@ func main() {
 		Level:      slog.LevelInfo,
 		TimeFormat: time.TimeOnly,
 	})))
+
+	// Keep SIGPIPE from killing the run. Go's runtime turns a broken-pipe
+	// write to stdout or stderr into a fatal signal unless the program has
+	// asked for it — and the documented way to watch a stream is to pipe
+	// -out - into a player, whose quitting is a normal end. Left alone, the
+	// delivery report on stderr would never print, which is the one thing a
+	// run exists to produce. Notified and ignored, the write returns EPIPE
+	// and the wind-down reports it.
+	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	go func() {
@@ -83,10 +96,16 @@ func main() {
 			Delay:           *delay,
 		})
 	case "subscribe":
+		if *packaging != msf.PackagingCMAF && *packaging != legacyPackaging {
+			fmt.Fprintf(os.Stderr, "unknown -packaging %q (want %q or %q)\n",
+				*packaging, msf.PackagingCMAF, legacyPackaging)
+			os.Exit(1)
+		}
 		err = subscribe(ctx, *addr, subscribeOptions{
 			Namespace: *namespace,
 			Out:       *out,
 			Wait:      *wait,
+			Packaging: *packaging,
 		})
 	default:
 		fmt.Fprintf(os.Stderr, "unknown mode %q (want publish or subscribe)\n", flag.Arg(0))

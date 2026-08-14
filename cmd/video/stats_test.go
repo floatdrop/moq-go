@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/floatdrop/moq-go/pkg/moqt/msf"
 )
 
 // at builds an arrival at a fixed base time plus offset milliseconds, so
@@ -240,7 +242,16 @@ func TestFinishRunWaitsForInFlightGroups(t *testing.T) {
 	})
 
 	var buf bytes.Buffer
-	sorted, err := finishRun(t.Context(), rec, &readers, "", broadcast{}, &buf)
+	sorted, err := finishRun(
+		t.Context(),
+		rec,
+		&readers,
+		"",
+		broadcast{},
+		mediaWriterFor(msf.PackagingCMAF, nil),
+		nil,
+		&buf,
+	)
 	if err != nil {
 		t.Fatalf("finishRun: %v", err)
 	}
@@ -266,7 +277,16 @@ func TestFinishRunStillReportsWhenAReaderNeverFinishes(t *testing.T) {
 	var buf bytes.Buffer
 	go func() {
 		defer close(done)
-		if _, err := finishRun(t.Context(), rec, &readers, "", broadcast{}, &buf); err != nil {
+		if _, err := finishRun(
+			t.Context(),
+			rec,
+			&readers,
+			"",
+			broadcast{},
+			mediaWriterFor(msf.PackagingCMAF, nil),
+			nil,
+			&buf,
+		); err != nil {
 			t.Errorf("finishRun: %v", err)
 		}
 	}()
@@ -277,5 +297,18 @@ func TestFinishRunStillReportsWhenAReaderNeverFinishes(t *testing.T) {
 		}
 	case <-time.After(drainWait + 5*time.Second):
 		t.Fatal("finishRun never returned: the drain is unbounded")
+	}
+}
+
+// TestMediaStdoutKeepsTheReportOffThePipe covers -out -, which exists so
+// the media can be piped into a player. Everything else the run says has to
+// move aside, or the first thing down the pipe is a delivery report and no
+// decoder will make sense of the stream.
+func TestMediaStdoutKeepsTheReportOffThePipe(t *testing.T) {
+	if got := reportWriter(mediaStdout); got != os.Stderr {
+		t.Error("with the media on stdout the report must go to stderr")
+	}
+	if got := reportWriter("/tmp/out.mp4"); got != os.Stdout {
+		t.Error("with the media in a file the report belongs on stdout")
 	}
 }
