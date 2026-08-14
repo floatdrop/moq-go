@@ -86,6 +86,17 @@ func (r *recorder) add(a arrival) {
 	r.arrivals = append(r.arrivals, a)
 }
 
+// idle reports how long it has been since an Object arrived, and whether
+// any has. Used to notice a broadcast that has gone quiet.
+func (r *recorder) idle(now time.Time) (time.Duration, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.seen {
+		return 0, false
+	}
+	return now.Sub(r.last), true
+}
+
 // bySendOrder orders two arrivals by the coordinates the publisher sent
 // them at. The one comparator both the reordering count and the
 // reassembly sort go through, since two spellings of "which came first"

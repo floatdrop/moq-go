@@ -176,6 +176,14 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	}
 	defer park.discard()
 
+	// A broadcast that stops arriving is otherwise indistinguishable from
+	// one that is merely quiet: the run waits, the player at the end of the
+	// pipe starves, and nothing says why. Measured against cdn.moq.pro this
+	// is common — a burst of cached Groups in a few milliseconds and then
+	// silence, with no loss reported because nothing was lost, just never
+	// sent.
+	go watchForSilence(ctx, rec)
+
 	// The run ends on Ctrl+C, on the §11.3 terminator catalog, or when the
 	// session goes away — whichever comes first. The report is written in
 	// every case, since a run cut short still says what arrived before it
@@ -216,6 +224,37 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 		slog.InfoContext(ctx, "wrote received media", "path", opts.Out, "objects", len(sorted))
 	}
 	return nil
+}
+
+// silenceAfter is how long without an Object counts as a broadcast having
+// gone quiet — several Groups at any rate this reads.
+const silenceAfter = 8 * time.Second
+
+// watchForSilence says when the media stops arriving, once, so a run that
+// delivers nothing explains itself instead of just sitting there.
+func watchForSilence(ctx context.Context, rec *recorder) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	var said bool
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tick.C:
+			idle, seen := rec.idle(now)
+			if !seen || idle < silenceAfter {
+				said = false
+				continue
+			}
+			if !said {
+				said = true
+				slog.WarnContext(ctx, "no objects for a while: the publisher or relay has stopped "+
+					"sending on this subscription. Nothing is reported as lost because nothing was — "+
+					"it was never sent. A player reading this stream will starve here",
+					"silent", idle.Round(time.Second))
+			}
+		}
+	}
 }
 
 // finishRun ends a run: it lets the in-flight Group readers finish, then

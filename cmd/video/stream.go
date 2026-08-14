@@ -301,6 +301,12 @@ type legacyEmitter struct {
 	held    legacyFrame
 	holding bool
 	buf     bytes.Buffer
+	// pending holds samples whose duration is settled, waiting to go out
+	// together. See legacyBatch.
+	pending []mp4.FullSample
+	// base is the timestamp of the first frame written, which every later
+	// decode time is measured from.
+	baseSet bool
 	// base is the timestamp of the first frame written, which every later
 	// decode time is measured from. See write.
 	base uint64
@@ -327,12 +333,45 @@ func (e *legacyEmitter) Emit(w io.Writer, a arrival) error {
 		}
 	}
 	if e.holding {
-		if err := e.write(w, e.held, sampleDuration(e.held.Timestamp, frame.Timestamp)); err != nil {
-			return err
-		}
+		e.queue(e.held, sampleDuration(e.held.Timestamp, frame.Timestamp))
 	}
 	e.held, e.holding = frame, true
+
+	// Flushed at a keyframe or once enough has gathered, so a fragment
+	// carries a run of samples rather than one.
+	if len(e.pending) >= legacyBatch || avc.IsIDRSample(frame.Sample) {
+		return e.flush(w)
+	}
 	return nil
+}
+
+// legacyBatch is how many samples a fragment may carry before it goes out
+// — half a second at the frame rates this reads.
+//
+// One sample per fragment is what the Objects are, and what the report
+// measures, but it is a poor thing to put on a pipe: ffmpeg's demuxer
+// sanity-checks every trun against how much input it believes remains, and
+// on a growing non-seekable stream that estimate goes negative from time to
+// time. At twenty-four truns a second the odds catch up within half a
+// minute — "plays about twenty-five seconds and stops" — so this trades a
+// little latency for far fewer chances to hit it.
+const legacyBatch = 12
+
+// queue adds a sample whose duration is now known.
+func (e *legacyEmitter) queue(frame legacyFrame, dur uint32) {
+	if !e.baseSet {
+		e.base, e.baseSet = frame.Timestamp, true
+	}
+	e.pending = append(e.pending, mp4.FullSample{
+		Sample: mp4.Sample{
+			Flags: legacySampleFlags(frame.Sample),
+			Dur:   dur,
+			//nolint:gosec // G115: one Object's payload, bounded by the wire's own limits.
+			Size: uint32(len(frame.Sample)),
+		},
+		DecodeTime: max(frame.Timestamp, e.base) - e.base,
+		Data:       frame.Sample,
+	})
 }
 
 // start writes the header once a frame arrives that can open the stream:
@@ -365,14 +404,17 @@ func (e *legacyEmitter) start(w io.Writer, frame legacyFrame) error {
 	return nil
 }
 
-// Flush writes the frame still in hand, which has no successor to measure
-// against and so takes the nominal duration of one tick.
+// Flush writes whatever is still gathered, plus the frame in hand, which
+// has no successor to measure against and so takes one tick.
 func (e *legacyEmitter) Flush(w io.Writer) error {
-	if !e.holding || !e.started {
+	if !e.started {
 		return nil
 	}
-	e.holding = false
-	return e.write(w, e.held, 1)
+	if e.holding {
+		e.queue(e.held, 1)
+		e.holding = false
+	}
+	return e.flush(w)
 }
 
 // segmentType prefixes each fragment written to a live pipe.
@@ -391,39 +433,22 @@ func segmentType() *mp4.StypBox {
 	return mp4.NewStyp("cmfs", 0, []string{"cmfc", "iso6", "msdh"})
 }
 
-// write emits one frame as its own fragment, headed by a styp so a demuxer
-// reading a pipe can tell where it starts.
-func (e *legacyEmitter) write(w io.Writer, frame legacyFrame, dur uint32) error {
+// flush emits the gathered samples as one fragment, headed by a styp so a
+// demuxer reading a pipe can tell where it starts.
+func (e *legacyEmitter) flush(w io.Writer) error {
+	if len(e.pending) == 0 {
+		return nil
+	}
 	e.seq++
 	frag, err := mp4.CreateFragment(e.seq, legacyTrackID)
 	if err != nil {
 		return fmt.Errorf("video: create fragment %d: %w", e.seq, err)
 	}
-	frag.AddFullSample(mp4.FullSample{
-		Sample: mp4.Sample{
-			Flags: legacySampleFlags(frame.Sample),
-			Dur:   dur,
-			//nolint:gosec // G115: the sample is one Object's payload, bounded by the wire's own limits.
-			Size: uint32(len(frame.Sample)),
-		},
-		// Rebased on the first frame written, as the file writer does.
-		// Guarded, because the subtraction is unsigned: a frame behind the
-		// base would wrap to an enormous decode time rather than a small
-		// negative one. liveWriter.emit is what keeps that from arising;
-		// this is the belt to its braces.
-		//
-		// The publisher's clock is an arbitrary origin — bbb.hang's runs
-		// around 5.8 days — and handing a player a stream that opens
-		// almost six days into its own timeline is asking it to do
-		// something no ordinary file would. ffmpeg reading the pipe made
-		// exactly that complaint: "non monotonically increasing dts to
-		// muxer", on a stream whose timestamps are strictly increasing on
-		// the wire (measured: zero duplicates, zero decreases, deltas
-		// alternating 41667/41666 µs for 24 fps). Only the deltas carry
-		// meaning, so the origin may as well be zero.
-		DecodeTime: max(frame.Timestamp, e.base) - e.base,
-		Data:       frame.Sample,
-	})
+	for _, sample := range e.pending {
+		frag.AddFullSample(sample)
+	}
+	e.pending = e.pending[:0]
+
 	// Assembled whole — styp and fragment together — then written once.
 	e.buf.Reset()
 	if err := segmentType().Encode(&e.buf); err != nil {

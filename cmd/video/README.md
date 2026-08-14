@@ -163,10 +163,26 @@ remains, gets a negative answer, and stops — which mpv reports as end of
 file a few seconds in. The same bytes read from a file always parsed
 perfectly, which is what made it look like a timing fault.
 
-It is better rather than perfect: ffmpeg's mov demuxer still occasionally
-rejects fragmented MP4 that trickles over a non-seekable pipe. If playback
-stops early, `-out` to a file and play that — the file is always intact,
-and the delivery report will tell you whether the transport was at fault.
+Fragments carry half a second of samples rather than one frame. The
+Objects are still one frame each, and that is what the report measures —
+this is only how they are framed on the way out. ffmpeg's demuxer
+sanity-checks every `trun` against how much input it believes remains, and
+on a growing non-seekable stream that estimate goes negative from time to
+time; at twenty-four `trun`s a second the odds catch up within half a
+minute, which is what "plays about twenty-five seconds and stops" was.
+
+It is better rather than perfect. mpv still occasionally complains, though
+it now recovers instead of stopping, and `ffplay` fares better than mpv
+because it does not attempt the backward seek mpv does on a stream that
+cannot seek. If playback still stops early, `-out` to a file and play that
+— the file is always intact, and the report says whether the transport was
+at fault.
+
+A run that receives nothing says so: **`no objects for a while`** in the
+log means the publisher or relay stopped sending on the subscription.
+Nothing is reported as lost, because nothing was — it was never sent. That
+is a broadcast-side problem, not a delivery one, and no player can do
+anything with it.
 
 **In this mode the timing figures are consumer-bound.** A player that pauses
 stops reading the pipe, the writer waits, and the Objects behind it are
