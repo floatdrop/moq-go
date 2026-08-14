@@ -155,6 +155,14 @@ mean carrying an H.264 decoder, and every terminal player already has one.
 `mpv --vo=tct` and `chafa` both render into a terminal — `brew install mpv`
 if neither is present.
 
+**In this mode the timing figures are consumer-bound.** A player that pauses
+stops reading the pipe, the writer waits, and the Objects behind it are
+stamped when they are read rather than when they landed — so `latency` and
+`spacing` describe the player as much as the transport. That is the right
+trade here: the alternative, dropping whatever the player was too slow to
+take, hands it a stream with holes and playback stops. Measure with `-out`
+to a file, or with no `-out` at all.
+
 What the report loses: latency needs the publisher's send stamp and the
 digest comparison needs the source counts, and a foreign broadcast declares
 neither. Ordering, loss, spacing and the playable file all still work — and

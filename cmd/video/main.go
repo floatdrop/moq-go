@@ -71,7 +71,7 @@ func main() {
 	// delivery report on stderr would never print, which is the one thing a
 	// run exists to produce. Notified and ignored, the write returns EPIPE
 	// and the wind-down reports it.
-	signal.Notify(make(chan os.Signal, 1), syscall.SIGPIPE)
+	signal.Ignore(syscall.SIGPIPE)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	go func() {

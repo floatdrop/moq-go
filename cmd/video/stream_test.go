@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Eyevinn/mp4ff/mp4"
 
@@ -173,4 +175,44 @@ func TestFinishRunAcceptsAWriterThatWritesNothing(t *testing.T) {
 	if strings.Contains(buf.String(), "digest") {
 		t.Errorf("a run that wrote no file reported a digest:\n%s", buf.String())
 	}
+}
+
+// TestLiveWriterCloseWhileReadersAreStillAdding is the crash this used to
+// take on the documented workflow.
+//
+// The drain that precedes close is bounded, and a subscriber to a broadcast
+// that never ends is still receiving when that bound expires — so close
+// runs while Group readers are mid-add. Closing the channel they send on
+// panicked with "send on closed channel", inside finishRun and therefore
+// before the delivery report, losing the run's entire output to a crash in
+// its wind-down.
+func TestLiveWriterCloseWhileReadersAreStillAdding(t *testing.T) {
+	live := newLiveWriter(mediaStdout, msf.PackagingCMAF, io.Discard, []byte("INIT"))
+
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for g := range uint64(4) {
+		readers.Go(func() {
+			for i := uint64(0); ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				live.add(arrival{Group: g, Object: i, Payload: []byte("x")})
+			}
+		})
+	}
+	// Long enough that every reader is inside add when close lands.
+	time.Sleep(20 * time.Millisecond)
+
+	if err := live.close(); err != nil {
+		t.Errorf("close: %v", err)
+	}
+	// Adds keep coming afterwards, as they do from a reader the bounded
+	// drain did not wait for. They must be refused, not fatal.
+	live.add(arrival{Group: 99, Object: 0, Payload: []byte("x")})
+
+	close(stop)
+	readers.Wait()
 }

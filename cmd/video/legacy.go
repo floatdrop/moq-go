@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"slices"
+	"sync/atomic"
 
 	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/mp4"
@@ -48,6 +49,11 @@ const legacyTimescale = 1_000_000
 // name the same track the init segment declares.
 const legacyTrackID = 1
 
+// nonMonotonicTimestamps counts timestamps that did not rise between
+// consecutive frames — see [sampleDuration]. A package-level counter
+// because both writers hit the same case and the report reads it once.
+var nonMonotonicTimestamps atomic.Int64
+
 // errShortLegacyObject reports an Object too small to hold its timestamp.
 var errShortLegacyObject = errors.New("video: legacy object is shorter than its timestamp")
 
@@ -55,6 +61,15 @@ var errShortLegacyObject = errors.New("video: legacy object is shorter than its 
 type legacyFrame struct {
 	// Timestamp is the publisher's, in microseconds. Its origin is not
 	// defined by anything readable here — deltas are what matter.
+	//
+	// Taken as a decode time, which assumes decode order equals
+	// presentation order. That holds for every stream measured on
+	// cdn.moq.pro (strictly increasing, deltas alternating 41667/41666 µs
+	// for 24 fps), and it is the only reading available: hang sends one
+	// timestamp and no composition offset, so a source with B-frames
+	// cannot be distinguished from one without. Such a source would send
+	// presentation timestamps that fall in decode order, which
+	// [sampleDuration] reports rather than swallowing.
 	Timestamp uint64
 	// Sample is the access unit with its Annex-B start codes already
 	// replaced by length fields, which is the form an MP4 sample takes and
@@ -298,8 +313,14 @@ const maxSampleDuration = 3600 * legacyTimescale
 // frames spaced an hour apart is nonsense but produces a file; a silent
 // 32-bit truncation produces one whose timeline is wrong in a way that
 // reads as a delivery fault.
+//
+// A timestamp that does not rise is the signature of a source whose
+// presentation order is not its decode order — B-frames, which hang gives
+// no way to signal. Counted rather than merely clamped, so a file with a
+// junk timeline can be told from a transport that mangled one.
 func sampleDuration(from, to uint64) uint32 {
 	if to <= from {
+		nonMonotonicTimestamps.Add(1)
 		return 1
 	}
 	//nolint:gosec // G115: min() has already bounded this by maxSampleDuration, which fits in 32 bits.

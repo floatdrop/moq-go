@@ -174,9 +174,12 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	if err != nil {
 		return err
 	}
-	if legacy && len(sorted) > 0 {
-		// Nothing about a foreign broadcast is declared up front, so what it
-		// turned out to hold is only knowable after the fact.
+	// Nothing about a foreign broadcast is declared up front, so what it
+	// turned out to hold is only knowable after the fact — from the
+	// payloads, which a live run does not retain, having already written
+	// them. Asking anyway printed "no decodable frames" after every
+	// successful -out - run.
+	if legacy && live == nil && len(sorted) > 0 {
 		slog.InfoContext(ctx, "legacy stream", "contents", legacySummary(sorted))
 	}
 	if opts.Out != "" && opts.Out != mediaStdout {
@@ -230,7 +233,13 @@ func finishRun(
 	if late, stalled := live.dropped(); late+int(stalled) > 0 {
 		slog.WarnContext(ctx, "objects were left out of the stream; "+
 			"the report below still counts them as received",
-			"behindWhatWasWritten", late, "writerTooFarBehind", stalled)
+			"behindWhatWasWritten", late, "arrivedAfterTheWriterStopped", stalled)
+	}
+	if n := nonMonotonicTimestamps.Load(); n > 0 {
+		slog.WarnContext(ctx, "the publisher's timestamps did not always rise between "+
+			"consecutive frames, which is what a source with B-frames looks like when it "+
+			"sends no composition offsets; the rebuilt file's timeline is unreliable there",
+			"frames", n)
 	}
 
 	sorted := rec.sorted()
@@ -266,11 +275,25 @@ func mediaWriterFor(packaging string, init []byte) mediaWriter {
 //
 // The window is real and unavoidable: a subscriber learns a track's alias
 // from its SUBSCRIBE_OK, and the relay may push the track's first streams
-// before that reply has been read.
+// before that reply has been read. §11.4.2 says exactly what to do with
+// them — "if an endpoint receives a subgroup with an unknown Track Alias,
+// it MAY abandon the stream, or choose to buffer it for a brief period to
+// handle reordering with the control message that establishes the Track
+// Alias" — and abandoning was measured to cost whole runs.
+//
+// "A brief period" is what parkLimit enforces. Without a bound, a stream
+// for an alias this subscriber never resolves would sit open with its flow
+// control withheld for the life of the run, where resetting it at least
+// freed the peer.
 type parkingLot struct {
 	mu      sync.Mutex
 	streams map[uint64][]*session.IncomingSubgroupStream
 }
+
+// parkLimit is how many streams may wait for their alias at once — a few
+// Groups' worth, since the window this covers is one control-message round
+// trip. Past it the oldest is reset, which is §11.4.2's other option.
+const parkLimit = 8
 
 // hold parks one stream.
 func (p *parkingLot) hold(s *session.IncomingSubgroupStream) {
@@ -279,7 +302,12 @@ func (p *parkingLot) hold(s *session.IncomingSubgroupStream) {
 	if p.streams == nil {
 		p.streams = make(map[uint64][]*session.IncomingSubgroupStream)
 	}
-	p.streams[s.Header.TrackAlias] = append(p.streams[s.Header.TrackAlias], s)
+	alias := s.Header.TrackAlias
+	p.streams[alias] = append(p.streams[alias], s)
+	for len(p.streams[alias]) > parkLimit {
+		p.streams[alias][0].Cancel(moqt.StreamResetCancelled)
+		p.streams[alias] = p.streams[alias][1:]
+	}
 }
 
 // release hands every stream parked under alias to h, and reports how many.
@@ -299,9 +327,12 @@ func (p *parkingLot) release(alias uint64, h func(*session.IncomingSubgroupStrea
 func (p *parkingLot) discard() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// §3.3.4 asks for a relevant code, and a subscriber winding down is not
+	// an implementation fault: reporting one would have a peer's metrics
+	// blame this end for a normal end of run.
 	for _, held := range p.streams {
 		for _, s := range held {
-			s.Cancel(moqt.StreamResetInternalError)
+			s.Cancel(moqt.StreamResetCancelled)
 		}
 	}
 	clear(p.streams)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"sync/atomic"
+	"time"
 
 	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/mp4"
@@ -31,23 +32,33 @@ import (
 // because whether the transport delivered it and whether it was still
 // useful are different questions.
 //
-// The writing happens on a goroutine of its own, behind a bounded queue,
-// and that is not tidiness. Writing inline would put a pipe into the read
-// path: a player that stalls stops reading, the write blocks, and every
-// Group reader piles up behind it — so the latency and spacing figures
-// would describe how fast the player consumed rather than how fast the
-// transport delivered, in a tool whose entire output is that distinction.
-// A full queue drops, counted separately, rather than applying back
-// pressure to the measurement.
+// The writing happens on a goroutine of its own, behind a queue, so a
+// consumer that pauses briefly does not stall the reads. When the queue
+// fills, the reads do wait: this is the mode for watching, and a player
+// handed a stream with holes in it stops, which is not a measurement worth
+// protecting. Dropping instead cost 2.7 seconds of playback — a 64-deep
+// queue is 2.7s at 24fps, so a player that buffers ahead at startup
+// emptied it, and everything after was discarded.
+//
+// The cost is stated rather than hidden: with -out - the timing figures
+// are consumer-bound, because a stalled reader now shows up as arrivals
+// stamped late. Measure with -out to a file, or with no -out at all.
 type liveWriter struct {
 	emitter liveEmitter
 	w       io.Writer
 
 	queue chan arrival
-	done  chan struct{}
+	// quit is closed to stop the writer. The queue itself is never closed:
+	// Group readers are still calling add when the run winds down — the
+	// drain that precedes it is bounded, and a subscriber to a broadcast
+	// that never ends is by definition still receiving — so closing the
+	// channel they send on is a send-on-closed-channel panic waiting to
+	// happen, and it would take the delivery report with it.
+	quit chan struct{}
+	done chan struct{}
 
-	// stalled counts what a full queue dropped, incremented from every
-	// Group reader; the rest is owned by the writer goroutine alone and is
+	// stalled counts what was dropped because the writer had already been
+	// told to stop. The rest is owned by the writer goroutine alone and is
 	// only read once done is closed.
 	stalled atomic.Int64
 
@@ -81,6 +92,7 @@ func newLiveWriter(out, packaging string, w io.Writer, init []byte) *liveWriter 
 	l := &liveWriter{
 		w:     w,
 		queue: make(chan arrival, liveQueue),
+		quit:  make(chan struct{}),
 		done:  make(chan struct{}),
 	}
 	if packaging == legacyPackaging {
@@ -96,33 +108,52 @@ func newLiveWriter(out, packaging string, w io.Writer, init []byte) *liveWriter 
 // the ordering state, so neither needs a lock.
 func (l *liveWriter) run() {
 	defer close(l.done)
-	for a := range l.queue {
-		if l.err != nil {
-			continue // keep draining so add never blocks
+	for {
+		select {
+		case a := <-l.queue:
+			l.emit(a)
+		case <-l.quit:
+			// Whatever is already queued still belongs in the stream: it
+			// arrived before the run ended, and stopping on the signal
+			// alone would throw away up to a queue's worth of media that
+			// the report goes on counting as delivered.
+			for {
+				select {
+				case a := <-l.queue:
+					l.emit(a)
+				default:
+					return
+				}
+			}
 		}
-		if l.haveLast && bySendOrder(a, l.last) <= 0 {
-			l.late++
-			continue
-		}
-		l.haveLast, l.last = true, a
-		if err := l.emitter.Emit(l.w, a); err != nil {
-			l.err = err
-		}
-	}
-	if l.err == nil {
-		l.err = l.emitter.Flush(l.w)
 	}
 }
 
-// add queues one arrival, dropping it if the writer is too far behind.
-// Never blocks, so nothing the consumer does can reach the measurement.
+// emit writes one arrival, in send order. Called only from run, which is
+// why neither the ordering state nor the emitter needs a lock.
+func (l *liveWriter) emit(a arrival) {
+	if l.err != nil {
+		return
+	}
+	if l.haveLast && bySendOrder(a, l.last) <= 0 {
+		l.late++
+		return
+	}
+	l.haveLast, l.last = true, a
+	if err := l.emitter.Emit(l.w, a); err != nil {
+		l.err = err
+	}
+}
+
+// add queues one arrival, waiting if the writer is behind and giving up
+// only once the writer has been told to stop.
 func (l *liveWriter) add(a arrival) {
 	if l == nil {
 		return
 	}
 	select {
 	case l.queue <- a:
-	default:
+	case <-l.quit:
 		l.stalled.Add(1)
 	}
 }
@@ -130,21 +161,32 @@ func (l *liveWriter) add(a arrival) {
 // close stops the writer, flushes what it was holding, and reports the
 // first write error.
 //
-// Must be called after the Group readers have finished: an add arriving
-// afterwards would be queued onto a closed channel. That ordering is
-// [finishRun]'s, which drains first.
+// Safe to call while Group readers are still running: they are told to stop
+// rather than left sending on a closed channel. Bounded, because the writer
+// may be parked in a write to a consumer that has stopped reading without
+// closing the pipe — a paused player is a stall, not an EPIPE — and a
+// report that never prints is the one outcome worse than an incomplete
+// stream.
 func (l *liveWriter) close() error {
 	if l == nil {
 		return nil
 	}
-	close(l.queue)
-	<-l.done
-	return l.err
+	close(l.quit)
+	select {
+	case <-l.done:
+	case <-time.After(drainWait):
+		return fmt.Errorf("video: the media consumer stopped reading; "+
+			"gave up waiting for the writer after %s", drainWait)
+	}
+	if l.err != nil {
+		return l.err
+	}
+	return l.emitter.Flush(l.w)
 }
 
 // dropped reports what never reached the consumer, by reason: Objects that
-// arrived behind media already written, and Objects the writer was too far
-// behind to take. Only valid after close.
+// arrived behind media already written, and Objects that arrived after the
+// writer had been stopped. Only valid after close.
 func (l *liveWriter) dropped() (late int, stalled int64) {
 	if l == nil {
 		return 0, 0
@@ -187,6 +229,9 @@ type legacyEmitter struct {
 	seq     uint32
 	held    legacyFrame
 	holding bool
+	// base is the timestamp of the first frame written, which every later
+	// decode time is measured from. See write.
+	base uint64
 }
 
 func (e *legacyEmitter) Emit(w io.Writer, a arrival) error {
@@ -221,7 +266,7 @@ func (e *legacyEmitter) Emit(w io.Writer, a arrival) error {
 		if err := init.Encode(w); err != nil {
 			return fmt.Errorf("video: write init: %w", err)
 		}
-		e.started = true
+		e.started, e.base = true, frame.Timestamp
 	}
 	if e.holding {
 		if err := e.write(w, e.held, sampleDuration(e.held.Timestamp, frame.Timestamp)); err != nil {
@@ -256,10 +301,18 @@ func (e *legacyEmitter) write(w io.Writer, frame legacyFrame, dur uint32) error 
 			//nolint:gosec // G115: the sample is one Object's payload, bounded by the wire's own limits.
 			Size: uint32(len(frame.Sample)),
 		},
-		// Absolute, from the publisher's own clock: a live pipe has no
-		// first frame to rebase on, since the run may outlive any given
-		// one, and tfdt only has to be consistent across the fragments.
-		DecodeTime: frame.Timestamp,
+		// Rebased on the first frame written, as the file writer does.
+		//
+		// The publisher's clock is an arbitrary origin — bbb.hang's runs
+		// around 5.8 days — and handing a player a stream that opens
+		// almost six days into its own timeline is asking it to do
+		// something no ordinary file would. ffmpeg reading the pipe made
+		// exactly that complaint: "non monotonically increasing dts to
+		// muxer", on a stream whose timestamps are strictly increasing on
+		// the wire (measured: zero duplicates, zero decreases, deltas
+		// alternating 41667/41666 µs for 24 fps). Only the deltas carry
+		// meaning, so the origin may as well be zero.
+		DecodeTime: frame.Timestamp - e.base,
 		Data:       frame.Sample,
 	})
 	if err := frag.Encode(w); err != nil {
