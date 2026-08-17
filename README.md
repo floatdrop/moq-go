@@ -4,7 +4,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/floatdrop/moq-go.svg)](https://pkg.go.dev/github.com/floatdrop/moq-go)
 [![Coverage](https://img.shields.io/endpoint?url=https://floatdrop.github.io/moq-go/coverage.json)](https://floatdrop.github.io/moq-go/)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
-[![Discord](https://img.shields.io/discord/1500989363176210465?logo=Discord&logoColor=%235865F2&label=join&color=%235865F2)](https://discord.moq.dev/)
+[![Discord](https://img.shields.io/discord/1500989363176210465?logo=Discord&logoColor=%235865F2&label=join&color=%235865F2)]([https://discord.moq.dev/](https://discord.gg/neXqzCXsgD))
 
 A Go implementation of the **Media over QUIC** IETF drafts: a
 transport-agnostic session library, a reference relay that runs standalone or as
