@@ -91,6 +91,21 @@ type Config struct {
 	// concurrent use.
 	Metrics Metrics
 
+	// MaxFilterRanges is the MAX_FILTER_RANGES (§10.3.1.6) budget this relay
+	// advertises in SETUP: the largest total number of Range Filter ranges
+	// (§5.1.3) it will accept across every Range Filter parameter on one
+	// SUBSCRIBE or FETCH. Over-budget requests are answered INVALID_FILTER.
+	//
+	// Zero means: use [DefaultMaxFilterRanges]. A negative value advertises 0,
+	// which prohibits Range Filters outright — the session default, and the
+	// reason this field exists. The filters are implemented and enforced
+	// throughout, but [session.WithMaxFilterRanges] defaults to 0, so a relay
+	// that never sets it rejects every Range Filter it is sent. That silently
+	// disables SUBGROUP_FILTER, which is how a subscriber declines a track's
+	// upper temporal layers or fetches only its base layer — a request that
+	// looks supported, and is, until the SETUP budget refuses it.
+	MaxFilterRanges int
+
 	// MaxCacheSize bounds the per-track Object Cache by object count.
 	// Zero means: use [registry.DefaultCacheMaxSize]. The bound is applied
 	// independently to every track the relay observes; a noisy track
@@ -215,6 +230,31 @@ const (
 	defaultMaxFanoutLag  = 2 * time.Second
 )
 
+// DefaultMaxFilterRanges is the MAX_FILTER_RANGES (§10.3.1.6) budget a relay
+// advertises when [Config.MaxFilterRanges] is left at zero.
+//
+// Sixteen ranges across all of a request's Range Filters. The uses this exists
+// for are small — a SUBGROUP_FILTER naming one layer or a contiguous band of
+// them is one range, an OBJECTID_FILTER picking a group's base-layer ID range
+// is another — so sixteen is several such filters at once and still bounds the
+// per-object matching work to something a fanout can afford. It is a budget
+// against a peer asking for arbitrarily many bands, not a working limit.
+const DefaultMaxFilterRanges = 16
+
+// resolveMaxFilterRanges maps [Config.MaxFilterRanges] onto the value
+// advertised in SETUP: zero takes the default, negative prohibits Range
+// Filters, positive is taken as given.
+func resolveMaxFilterRanges(configured int) uint64 {
+	switch {
+	case configured == 0:
+		return DefaultMaxFilterRanges
+	case configured < 0:
+		return 0
+	default:
+		return uint64(configured)
+	}
+}
+
 // Relay is a single MOQT relay instance. It owns one Listener, accepts
 // session.Conn values from it, drives the MOQT SETUP handshake, and dispatches
 // each established Session to a handler goroutine.
@@ -293,6 +333,13 @@ func New(listener Listener, cfg Config) *Relay {
 	if cfg.MaxFanoutLag <= 0 {
 		cfg.MaxFanoutLag = defaultMaxFanoutLag
 	}
+	// Prepended, so it is the SETUP budget unless the caller states one — and
+	// stated twice it is advertised twice, which is why [Config.MaxFilterRanges]
+	// is the way to change it rather than another WithMaxFilterRanges here.
+	cfg.SessionOptions = append(
+		[]session.Option{session.WithMaxFilterRanges(resolveMaxFilterRanges(cfg.MaxFilterRanges))},
+		cfg.SessionOptions...,
+	)
 	// MaxDropsBeforeReset is an opt-in hard cap: 0 means "disabled", so no
 	// default is applied.
 	if cfg.MaxCacheSize <= 0 {

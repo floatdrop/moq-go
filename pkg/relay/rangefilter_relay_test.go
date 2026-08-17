@@ -14,18 +14,20 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// filterRelayConfig advertises a non-zero MAX_FILTER_RANGES so the relay
-// accepts Range Filters (§10.3.1.6 default 0 prohibits them).
+// filterRelayConfig is a relay that accepts Range Filters. It is the zero
+// Config: [relay.DefaultMaxFilterRanges] is what a relay advertises unless it
+// says otherwise, because §10.3.1.6's own default of 0 prohibits them and a
+// relay that inherited it would reject filters it fully implements.
 func filterRelayConfig() relay.Config {
-	return relay.Config{SessionOptions: []session.Option{session.WithMaxFilterRanges(16)}}
+	return relay.Config{}
 }
 
-// TestSubscribe_RangeFilterProhibitedByDefault pins §10.3.1.6: with the default
-// MAX_FILTER_RANGES=0 a SUBSCRIBE carrying a Range Filter is rejected with
-// INVALID_FILTER.
-func TestSubscribe_RangeFilterProhibitedByDefault(t *testing.T) {
+// TestSubscribe_RangeFilterProhibitedWhenConfiguredOff pins the negative
+// [Config.MaxFilterRanges]: the relay advertises MAX_FILTER_RANGES=0, so a
+// SUBSCRIBE carrying a Range Filter is rejected with INVALID_FILTER (§10.3.1.6).
+func TestSubscribe_RangeFilterProhibitedWhenConfiguredOff(t *testing.T) {
 	t.Parallel()
-	pubSess, teardown := connectRelay(t, relay.Config{})
+	pubSess, teardown := connectRelay(t, relay.Config{MaxFilterRanges: -1})
 	defer teardown()
 
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
@@ -261,5 +263,108 @@ func TestFetch_ObjectIDRangeFilter(t *testing.T) {
 	}
 	if want := []uint64{1, 2}; !reflect.DeepEqual(gotIDs, want) {
 		t.Fatalf("FETCH returned object IDs %v, want %v (OBJECTID_FILTER [1,2])", gotIDs, want)
+	}
+}
+
+// TestFetch_SubgroupFilterSelectsOneLayer is the temporal-layer backfill a live
+// media application needs, on a relay configured with nothing.
+//
+// A group carrying L1T2 video is two subgroups: subgroup 0 is the base layer,
+// which every later base frame references back to the keyframe, and subgroup 1
+// is an enhancement layer nothing references. A subscriber joining mid-group
+// needs the base layer replayed from the keyframe and none of the enhancement
+// layer — those frames are already past and nothing depends on them.
+//
+// SUBGROUP_FILTER is what says that, and it is the difference between a
+// streamable backfill and a buffered one: a FETCH answers in ascending Object
+// ID, so filtered to one subgroup the response is already decode order and can
+// go frame by frame to a decoder, where the unfiltered answer interleaves two
+// layers' ID ranges and has to be held whole and sorted first.
+//
+// The relay is [relay.Config]{} — the point of the test. §10.3.1.6's own
+// MAX_FILTER_RANGES default is 0, which prohibits Range Filters, so a relay
+// that inherited it would answer INVALID_FILTER to a filter it implements.
+func TestFetch_SubgroupFilterSelectsOneLayer(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	const publisherAlias = uint64(7)
+	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
+		Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"), TrackAlias: publisherAlias,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer pubReq.Close()
+
+	// An unfiltered subscriber lets the fanout accept + cache the objects.
+	subSess := dialAnotherClient(t, pubSess)
+	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer subReq.Close()
+	go drainAllStreams(t.Context(), subSess)
+
+	// Each layer numbers its objects from its own base, because IDs must be
+	// unique within a group and consecutive within a subgroup at once. Base
+	// layer at 0..2, enhancement at stride..stride+1.
+	const stride = uint64(1) << 16
+	publishLayer(t, pubSess, publisherAlias, 0 /*group*/, 0 /*subgroup*/, 0, 3)
+	publishLayer(t, pubSess, publisherAlias, 0 /*group*/, 1 /*subgroup*/, stride, 2)
+	time.Sleep(50 * time.Millisecond) // let the cache settle
+
+	fetchSess := dialAnotherClient(t, pubSess)
+	_, objs := fetchAndDrain(t, fetchSess,
+		wire.TrackNamespace{[]byte("video")}, []byte("cam1"),
+		message.Location{Group: 0, Object: 0}, message.Location{Group: 0, Object: 0}, // whole group
+		message.GroupOrderAscending,
+		message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamSubgroupFilter, Ranges: []message.Range{{Start: 0, End: 0}},
+		}),
+	)
+
+	var gotIDs []uint64
+	for _, o := range objs {
+		gotIDs = append(gotIDs, o.object)
+	}
+	if want := []uint64{0, 1, 2}; !reflect.DeepEqual(gotIDs, want) {
+		t.Fatalf("FETCH returned object IDs %v, want %v — SUBGROUP_FILTER [0,0] must "+
+			"return the base layer alone, in ascending ID, with no enhancement objects",
+			gotIDs, want)
+	}
+}
+
+// publishLayer writes count objects to one subgroup of one group, numbering
+// them consecutively from firstObjectID. Unlike publishObjects it names the
+// subgroup and the ID base, which is what a temporal-layer layout needs.
+func publishLayer(
+	t *testing.T,
+	pubSess *session.Session,
+	trackAlias, group, subgroup, firstObjectID uint64,
+	count int,
+) {
+	t.Helper()
+	sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDExplicit,
+		TrackAlias:     trackAlias,
+		GroupID:        group,
+		SubgroupID:     subgroup,
+	})
+	if err != nil {
+		t.Fatalf("OpenSubgroup g=%d sg=%d: %v", group, subgroup, err)
+	}
+	for i := range count {
+		if err := sg.WriteObjectAt(firstObjectID+uint64(i), &message.SubgroupObject{
+			Payload: []byte{byte('A' + i)},
+		}); err != nil {
+			t.Fatalf("WriteObjectAt g=%d sg=%d #%d: %v", group, subgroup, i, err)
+		}
+	}
+	if err := sg.Close(); err != nil {
+		t.Fatalf("sg.Close g=%d sg=%d: %v", group, subgroup, err)
 	}
 }
