@@ -565,9 +565,35 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 		Name:       fullName.Name,
 		Parameters: params,
 	}
+	// Create the track entry before Subscribe, because Subscribe registers
+	// the SUBSCRIBE_OK's §11.1 Track Alias inside its own response handler —
+	// from the moment it returns the alias resolves on inbound data streams,
+	// and the publisher may already be writing. Until an entry exists there is
+	// nothing for runFanout to route to, so those streams are reset and their
+	// Objects lost from the cache and from live fanout alike (#85).
+	//
+	// Deliberately before rather than inside the round trip: anything done in
+	// the gap between SUBSCRIBE_OK arriving and the alias being registered
+	// widens a second window in which the same streams are dropped as unknown
+	// aliases instead, and allocating an entry (a 1024-slot cache ring) there
+	// measurably does. Doing it up front costs an entry for a track that may
+	// turn out not to exist; trackKnown in handleFetch is what keeps that from
+	// being visible on the wire.
+	var entryCreated bool
+	_, entryCreated = h.tracks.GetOrCreateNew(fullName)
+
 	upstreamStream, err := sess.Subscribe(ctx, subMsg)
 	if err != nil {
+		if entryCreated {
+			// Nothing vouched for this track after all. Leaving the entry
+			// would grow the registry without bound on a session that
+			// SUBSCRIBEs to names that do not resolve.
+			h.tracks.DeleteIfUnused(fullName)
+		}
 		return nil, false, err
+	}
+	if hook := testHookAfterAliasRegistered.Load(); hook != nil {
+		(*hook)(fullName)
 	}
 
 	// Register the upstream subscription on the upstream session as an
