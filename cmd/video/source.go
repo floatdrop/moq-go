@@ -356,14 +356,12 @@ func progressiveSamples(f *mp4.File, trak *mp4.TrakBox) ([]mp4.FullSample, error
 			cto = stbl.Ctts.GetCompositionTimeOffset(nr)
 		}
 		samples = append(samples, mp4.FullSample{
-			Sample: mp4.Sample{
-				Flags:                 sampleFlags(stbl, nr),
-				Dur:                   dur,
-				Size:                  size,
-				CompositionTimeOffset: cto,
-			},
-			DecodeTime: decTime,
-			Data:       f.Mdat.Data[offset-mdatStart : offset-mdatStart+uint64(size)],
+			Flags:                 sampleFlags(stbl, nr),
+			Dur:                   dur,
+			Size:                  size,
+			CompositionTimeOffset: cto,
+			DecodeTime:            decTime,
+			Data:                  f.Mdat.Data[offset-mdatStart : offset-mdatStart+uint64(size)],
 		})
 	}
 	return samples, nil

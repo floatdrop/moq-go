@@ -205,7 +205,7 @@ func ExampleRequestMux() {
 	// SUBSCRIBE handler keeps the request stream open for the subscription's
 	// lifetime, so it spawns a goroutine — Run dispatches synchronously, exactly
 	// like Demux.
-	session.HandleType(mux, func(r *session.Request, _ *message.Subscribe) {
+	mux.HandleType(func(r *session.Request, _ *message.Subscribe) {
 		go func() {
 			pub, err := r.AcceptSubscribe(nil) // writes SUBSCRIBE_OK, returns a Publication
 			if err != nil {

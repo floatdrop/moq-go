@@ -642,8 +642,10 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 	}
 	sub, _ := r.First.(*message.Subscribe) // checked above
 	return &Publication{
-		requestHandle: requestHandle{Stream: r.Stream, s: r.s, requestID: sub.RequestID},
-		alias:         ok.TrackAlias,
+		Stream:    r.Stream,
+		s:         r.s,
+		requestID: sub.RequestID,
+		alias:     ok.TrackAlias,
 	}, nil
 }
 
@@ -670,7 +672,9 @@ func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 		return nil, fmt.Errorf("moqt/session: write PUBLISH REQUEST_OK: %w", err)
 	}
 	return &IncomingPublication{
-		requestHandle: requestHandle{Stream: r.Stream, s: r.s, requestID: pub.RequestID},
-		alias:         pub.TrackAlias,
+		Stream:    r.Stream,
+		s:         r.s,
+		requestID: pub.RequestID,
+		alias:     pub.TrackAlias,
 	}, nil
 }

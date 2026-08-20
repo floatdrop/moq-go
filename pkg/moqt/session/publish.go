@@ -121,8 +121,10 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, _ *message.RequestOK) (*Publication, error) {
 			return &Publication{
-				requestHandle: requestHandle{Stream: stream, s: s, requestID: m.RequestID},
-				alias:         m.TrackAlias,
+				Stream:    stream,
+				s:         s,
+				requestID: m.RequestID,
+				alias:     m.TrackAlias,
 			}, nil
 		})
 }

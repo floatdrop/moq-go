@@ -363,12 +363,10 @@ func (e *legacyEmitter) queue(frame legacyFrame, dur uint32) {
 		e.base, e.baseSet = frame.Timestamp, true
 	}
 	e.pending = append(e.pending, mp4.FullSample{
-		Sample: mp4.Sample{
-			Flags: legacySampleFlags(frame.Sample),
-			Dur:   dur,
-			//nolint:gosec // G115: one Object's payload, bounded by the wire's own limits.
-			Size: uint32(len(frame.Sample)),
-		},
+		Flags: legacySampleFlags(frame.Sample),
+		Dur:   dur,
+		//nolint:gosec // G115: one Object's payload, bounded by the wire's own limits.
+		Size:       uint32(len(frame.Sample)),
 		DecodeTime: max(frame.Timestamp, e.base) - e.base,
 		Data:       frame.Sample,
 	})

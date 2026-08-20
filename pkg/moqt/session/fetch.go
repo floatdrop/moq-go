@@ -46,8 +46,10 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 				return nil, err
 			}
 			return &FetchRequest{
-				requestHandle: requestHandle{Stream: stream, s: s, requestID: m.RequestID},
-				OK:            ok,
+				Stream:    stream,
+				s:         s,
+				requestID: m.RequestID,
+				OK:        ok,
 			}, nil
 		})
 }

@@ -5,13 +5,17 @@
   # A reproducible Go development environment for moq-go.
 
   # https://devenv.sh/languages/
-  # Provides the Go toolchain (matching go.mod's `go 1.26`) plus go env wiring.
+  # Provides the Go toolchain (matching go.mod's `go 1.27`) plus go env wiring.
   languages.go.enable = true;
 
   # https://devenv.sh/packages/
   # Tooling the repo expects on PATH. The lint config (.golangci.yml) enables the
   # `goimports` and `golines` formatters, so both must be available.
   packages = with pkgs; [
+    # Must be built with go1.27 or newer: an older binary refuses a go1.27
+    # target with "the Go language version ... is lower than the targeted
+    # Go version". If nixpkgs still ships a go1.26 build, install it with
+    # `GOTOOLCHAIN=go1.27.0 go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.0`.
     golangci-lint   # `golangci-lint run` — see .golangci.yml
     golines         # long-line formatter enabled in .golangci.yml
     gotools         # provides goimports
@@ -27,8 +31,9 @@
   scripts.test-race.exec = "go test -race ./...";
   scripts.lint.exec = "golangci-lint run";
   scripts.bench.exec = "go test -run='^$' -bench=. -benchmem ./...";
-  # modernize check (errorsastype) — see CLAUDE.md; run standalone until
-  # golangci-lint bundles the analyzer. Pass -fix to apply.
+  # modernize check (errorsastype) — see CLAUDE.md. golangci-lint v2.13.0
+  # bundles the analyzer, so `lint` covers it; this runs @latest to catch
+  # analyzers newer than the bundled snapshot. Pass -fix to apply.
   scripts.modernize.exec = ''
     go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest \
       -errorsastype "$@" ./...

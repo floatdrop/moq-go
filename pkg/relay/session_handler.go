@@ -389,7 +389,7 @@ func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 func (h *sessionHandler) requestMux(ctx context.Context) *session.RequestMux {
 	mux := session.NewRequestMux()
 
-	session.HandleType(mux, func(req *session.Request, msg *message.Subscribe) {
+	mux.HandleType(func(req *session.Request, msg *message.Subscribe) {
 		if !h.verifyRequest(ctx, req) {
 			return
 		}
@@ -400,31 +400,31 @@ func (h *sessionHandler) requestMux(ctx context.Context) *session.RequestMux {
 		}
 		h.spawn(func() { defer h.limiter.releaseSub(); h.handleSubscribe(ctx, req, msg) })
 	})
-	session.HandleType(mux, func(req *session.Request, msg *message.Publish) {
+	mux.HandleType(func(req *session.Request, msg *message.Publish) {
 		if !h.verifyRequest(ctx, req) {
 			return
 		}
 		h.spawn(func() { h.handlePublish(ctx, req, msg) })
 	})
-	session.HandleType(mux, func(req *session.Request, msg *message.Fetch) {
+	mux.HandleType(func(req *session.Request, msg *message.Fetch) {
 		if !h.verifyRequest(ctx, req) {
 			return
 		}
 		h.spawn(func() { h.handleFetch(ctx, req, msg) })
 	})
-	session.HandleType(mux, func(req *session.Request, msg *message.TrackStatus) {
+	mux.HandleType(func(req *session.Request, msg *message.TrackStatus) {
 		if !h.verifyRequest(ctx, req) {
 			return
 		}
 		h.spawn(func() { h.handleTrackStatus(ctx, req, msg) })
 	})
-	session.HandleType(mux, func(req *session.Request, msg *message.PublishNamespace) {
+	mux.HandleType(func(req *session.Request, msg *message.PublishNamespace) {
 		h.namespaceRequest(ctx, req, func() { h.handlePublishNamespace(ctx, req, msg) })
 	})
-	session.HandleType(mux, func(req *session.Request, msg *message.SubscribeNamespace) {
+	mux.HandleType(func(req *session.Request, msg *message.SubscribeNamespace) {
 		h.namespaceRequest(ctx, req, func() { h.handleSubscribeNamespace(ctx, req, msg) })
 	})
-	session.HandleType(mux, func(req *session.Request, msg *message.SubscribeTracks) {
+	mux.HandleType(func(req *session.Request, msg *message.SubscribeTracks) {
 		h.namespaceRequest(ctx, req, func() { h.handleSubscribeTracks(ctx, req, msg) })
 	})
 

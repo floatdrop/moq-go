@@ -6,7 +6,7 @@ how to get a change building and tested, and what we look for in a pull request.
 
 ## Getting started
 
-You'll need **Go 1.26 or newer**. Clone the repo and confirm the suite is green
+You'll need **Go 1.27 or newer**. Clone the repo and confirm the suite is green
 before you start:
 
 ```sh
@@ -34,9 +34,10 @@ A few specifics:
 
 - **Formatting.** The enabled formatters are `goimports` and `golines` — format
   with those, not plain `gofmt`.
-- **The `modernize` linter** is enabled. golangci-lint bundles a snapshot that
-  predates the `errorsastype` analyzer, so until it catches up, run that check
-  standalone (see `CLAUDE.md` for the exact command).
+- **The `modernize` linter** is enabled, and as of golangci-lint v2.13.0 the
+  bundled snapshot includes `errorsastype`, so `golangci-lint run` covers it.
+  CI still runs the analyzer standalone at `@latest` to catch analyzers newer
+  than the bundled snapshot (see `CLAUDE.md` for the command).
 - **Benchmarks** live alongside the wire codec and session/relay hot paths. Run
   `make bench-quick` (~5s) after a change to any of them and compare `allocs/op`
   against `benchmarks/baseline-go1.26.txt`; that metric multiplies by the

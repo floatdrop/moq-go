@@ -73,9 +73,11 @@ The lint config's enabled formatters are `goimports` and `golines`, so format
 with those (not plain `gofmt`).
 
 The `modernize` linter is enabled, which covers `errorsastype` (rewrite
-`errors.As(err, &t)` → `errors.AsType[*T](err)`). golangci-lint v2.12.2 bundles
-a modernize snapshot that predates that analyzer, so until it catches up, run
-the check standalone (no go.mod changes — pinning gopls as a tool would perturb
+`errors.As(err, &t)` → `errors.AsType[*T](err)`). golangci-lint v2.13.0 bundles
+a modernize snapshot that ships that analyzer, so `golangci-lint run` covers it.
+CI additionally runs the analyzer standalone at `@latest`, which catches
+analyzers newer than the bundled snapshot; run it the same way when you want
+that check locally (no go.mod changes — pinning gopls as a tool would perturb
 the transport deps):
 
 ```sh
@@ -155,7 +157,7 @@ Only retrieve the sections relevant to the task at hand.
   (`GetRequestID`/`SetRequestID`).
 - **Error/reset codes** are centralized in `pkg/moqt/errors.go` (session, request,
   publish-done, and per-stream `StreamReset*` codes) — use the named constant.
-- Targets a recent Go (1.26.3); prefer modern idioms (the `use-modern-go` skill
+- Targets a recent Go (1.27); prefer modern idioms (the `use-modern-go` skill
   encodes the specifics).
 
 ## Definition of done

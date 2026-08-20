@@ -87,7 +87,7 @@ func TestRequestMuxHandleType(t *testing.T) {
 
 	got := make(chan string, 1)
 	mux := session.NewRequestMux()
-	session.HandleType(mux, func(_ *session.Request, msg *message.Subscribe) {
+	mux.HandleType(func(_ *session.Request, msg *message.Subscribe) {
 		got <- string(msg.Name) // typed access without a manual assertion
 	})
 	go func() { _ = mux.Run(t.Context(), server) }()

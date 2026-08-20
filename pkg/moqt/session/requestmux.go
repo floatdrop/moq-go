@@ -58,10 +58,9 @@ func (m *RequestMux) Handle(t message.Type, h RequestHandler) {
 // assertion a Handle callback would otherwise repeat (req.First.(*message.X)) is
 // done once, here.
 //
-// Go methods cannot take type parameters, so this is a free function taking the
-// mux as its first argument. A nil h unregisters T's type; registering a type
-// that already has a handler replaces it.
-func HandleType[T message.WithRequestID](m *RequestMux, h func(*Request, T)) {
+// A nil h unregisters T's type; registering a type that already has a handler
+// replaces it.
+func (m *RequestMux) HandleType[T message.WithRequestID](h func(*Request, T)) {
 	var zero T // nil pointer; message Type() methods are constant returns
 	if h == nil {
 		m.Handle(zero.Type(), nil)
