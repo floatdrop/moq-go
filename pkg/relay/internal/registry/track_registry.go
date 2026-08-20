@@ -170,6 +170,63 @@ func (r *TrackRegistry) Get(key track.Key) (*TrackEntry, bool) {
 	return e, ok
 }
 
+// GetOrCreateNew is [TrackRegistry.GetOrCreate] that also reports whether this
+// call created the entry. Callers that create one speculatively — before the
+// request that will populate it is known to succeed — need to know, because
+// only the creator may take it back again (see [TrackRegistry.DeleteIfUnused]).
+func (r *TrackRegistry) GetOrCreateNew(fullName track.FullTrackName) (entry *TrackEntry, created bool) {
+	key := fullName.Key()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.tracks[key]; ok {
+		return e, false
+	}
+	return r.getOrCreateLocked(fullName), true
+}
+
+// DeleteIfUnused removes fullName's entry if nothing has happened to it since
+// it was created: no upstream, no downstream, no watermark and nothing cached.
+// It is the counterpart to a speculative [TrackRegistry.GetOrCreateNew] — the
+// PUBLISH path creates the entry before the request is known to succeed, so an
+// inbound data stream cannot arrive against a routable Track Alias with no
+// entry to route it to (§11.1, §10.10). When the request then fails, the entry
+// must not linger: [TrackRegistry.Get] answering for it is read as "track
+// known" by the FETCH path, which turns a DOES_NOT_EXIST into an INVALID_RANGE.
+//
+// The watermark and cache are checked as well as the two slices because a
+// DIFFERENT session may have adopted this entry in the meantime and be part
+// way through its own §10.10 window — publishing objects into a track whose
+// AddUpstream has not run yet. Deleting it there would strand exactly the
+// streams this mechanism exists to protect. Callers must additionally only
+// call this when GetOrCreateNew reported created, so an entry another session
+// created is never a candidate.
+//
+// Idempotent, and a no-op once anything has registered against the entry.
+func (r *TrackRegistry) DeleteIfUnused(fullName track.FullTrackName) {
+	key := fullName.Key()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.tracks[key]
+	if !ok {
+		return
+	}
+	// r.mu then entry.mu throughout, matching AddUpstream / RemoveSession.
+	// GetLargest takes entry.mu itself, so it runs before the block below
+	// rather than inside it.
+	if _, hasLargest := entry.GetLargest(); hasLargest {
+		return
+	}
+	if entry.Cache.Len() > 0 {
+		return
+	}
+	entry.mu.Lock()
+	unused := len(entry.Upstream) == 0 && len(entry.Downstream) == 0
+	entry.mu.Unlock()
+	if unused {
+		delete(r.tracks, key)
+	}
+}
+
 // GetOrCreate returns the existing entry for fullName, or creates and inserts
 // a new one if none exists yet. The fullName argument (rather than just a
 // Key) is required so a freshly-created entry can be populated with the

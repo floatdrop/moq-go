@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -28,6 +29,15 @@ import (
 //     fanout path can map it back to the track.
 //  7. Block reading the request stream until the publisher cancels;
 //     unregister on exit.
+//
+// testHookAfterAliasRegistered, when set, runs at the moment a Track Alias
+// becomes routable and before the track entry is registered, so a test can
+// hold open a window that is otherwise a few statements wide. Never set in
+// production. atomic.Pointer because the relay reads it from per-session
+// goroutines while a test writes it; the track argument lets a test scope
+// itself to its own track rather than perturbing the package's parallel tests.
+var testHookAfterAliasRegistered atomic.Pointer[func(track.FullTrackName)]
+
 func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request, msg *message.Publish) {
 	h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH received",
 		slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
@@ -41,14 +51,29 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 
 	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 
+	// Create the entry before the alias below becomes routable. §10.10: if
+	// FORWARD "is omitted or equal to 1, the publisher will start
+	// transmitting objects immediately, possibly before PUBLISH_OK" — i.e.
+	// before AddUpstream runs down in WriteMessageAfterSetup. Without an
+	// entry to route to, runFanout resets those streams and the track's
+	// first Group is lost from the cache and from live fanout alike. Same
+	// window the on-demand SUBSCRIBE path closes; see #85.
+	_, createdEntry := h.tracks.GetOrCreateNew(fullName)
+
 	// §11.1: register the publisher's chosen alias so the fanout path can map
 	// it back to the track and duplicates are detected. A duplicate alias is a
 	// session-level error per spec, but we scope the failure to this request.
 	if err := h.sess.RegisterInboundTrackAlias(msg.TrackAlias, fullName.Key()); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH alias registration failed",
 			slog.String("err", err.Error()))
+		if createdEntry {
+			h.tracks.DeleteIfUnused(fullName)
+		}
 		_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
 		return
+	}
+	if hook := testHookAfterAliasRegistered.Load(); hook != nil {
+		(*hook)(fullName)
 	}
 
 	// A later upstream REQUEST_UPDATE rides this PUBLISH stream (§10.9),
