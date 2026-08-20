@@ -218,7 +218,8 @@ func hrwWeight(nsKey []byte, addr string) uint64 {
 
 // namespaceAffinityKey is the canonical §2.4.1 wire encoding of ns, used as the
 // stable per-namespace seed for hrwWeight. Reusing the wire encoding (the same
-// bytes the etcd backend keys namespaces by) keeps nested tuples unambiguous.
+// bytes a DiscoveryStore backend keys namespaces by) keeps nested tuples
+// unambiguous.
 func namespaceAffinityKey(ns wire.TrackNamespace) []byte {
 	w := wire.NewWriter(nil)
 	w.TrackNamespace(ns)

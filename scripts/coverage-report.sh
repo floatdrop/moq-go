@@ -15,27 +15,17 @@
 # floors were removed; the badge and the published report are the signal now,
 # and they are read by a human rather than by CI.
 #
-# Both modules are measured. `go test ./pkg/...` cannot reach
-# pkg/relay/discovery/etcd — it has its own go.mod — so it runs separately and
-# its profile is concatenated onto the root one. Blocks are keyed by full import
-# path, so the two cannot collide.
-#
 # Percentages are computed from the profile in awk rather than with
-# `go tool cover -func`, deliberately: -func resolves every import path to a
-# source file, and the root module does not require the etcd module, so it would
-# fail on precisely the blocks we went out of our way to fold in. The awk also
-# has to dedupe — one block appears once per test binary that linked it, and
-# summing the raw lines would count its statements repeatedly and report a
-# wildly deflated number.
+# `go tool cover -func`. The awk has to dedupe — one block appears once per test
+# binary that linked it, and summing the raw lines would count its statements
+# repeatedly and report a wildly deflated number.
 #
 # Env:
 #   COVER_PKGS        packages to measure and attribute across (default ./pkg/...)
-#   COVER_SUBMODULES  extra modules to fold in (default pkg/relay/discovery/etcd)
 
 set -euo pipefail
 
 COVER_PKGS=${COVER_PKGS:-./pkg/...}
-COVER_SUBMODULES=${COVER_SUBMODULES:-pkg/relay/discovery/etcd}
 
 site=""
 case "${1:-}" in
@@ -74,17 +64,6 @@ if ! go test -count=1 -coverpkg="$COVER_PKGS" -coverprofile="$tmp/root.out" $COV
 fi
 cp "$tmp/root.out" "$tmp/merged.out"
 
-for m in $COVER_SUBMODULES; do
-	name=$(basename "$m")
-	if ! (cd "$m" && go test -count=1 -coverpkg=./... -coverprofile="$tmp/$name.out" ./...) \
-		>"$tmp/log" 2>&1; then
-		echo "coverage run failed ($m) — fix the tests first:" >&2
-		cat "$tmp/log" >&2
-		exit 1
-	fi
-	tail -n +2 "$tmp/$name.out" >>"$tmp/merged.out"
-done
-
 awk 'NR > 1 {
 	if (!($1 in mx) || $3 + 0 > mx[$1]) mx[$1] = $3 + 0
 	st[$1] = $2
@@ -112,13 +91,7 @@ echo "  whole-suite total: ${total}%"
 mkdir -p "$site"
 site=$(cd "$site" && pwd)
 
-# One HTML report per module: `go tool cover -html` needs to resolve each import
-# path to a file, which only works from inside the module that owns it.
 go tool cover -html="$tmp/root.out" -o "$site/root.html"
-for m in $COVER_SUBMODULES; do
-	name=$(basename "$m")
-	(cd "$m" && go tool cover -html="$tmp/$name.out" -o "$site/$name.html")
-done
 
 color=$(awk -v p="$total" 'BEGIN {
 	if (p >= 90) print "brightgreen"
@@ -150,9 +123,8 @@ printf '{"schemaVersion":1,"label":"coverage","message":"%s%%","color":"%s"}\n' 
 		</style>
 		<h1>moq-go coverage</h1>
 		<p class="total">${total}%</p>
-		<p>Whole-suite statement coverage measured with <code>-coverpkg</code>, across
-		both modules. Line-by-line reports:
-		<a href="root.html">root module</a>, <a href="etcd.html">etcd submodule</a>.</p>
+		<p>Whole-suite statement coverage measured with <code>-coverpkg</code>.
+		<a href="root.html">Line-by-line report</a>.</p>
 		<table>
 		<tr><th>package</th><th class="pct">covered</th></tr>
 	HTML

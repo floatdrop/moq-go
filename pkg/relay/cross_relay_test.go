@@ -634,9 +634,9 @@ func TestCrossRelay_WatchNamespacesForward(t *testing.T) {
 //
 // Until this existed the OpUnpublish arm of forwardNamespaceEvent was taken by
 // no test at all. OpUnpublish itself is asserted on all over the suite, but
-// every one of those stops at the store boundary — memory_test.go,
-// etcd_test.go, and discovery_integration_test.go check the event comes *out*
-// of WatchNamespaces, not that the relay reflects it onward. So the arm could
+// every one of those stops at the store boundary — memory_test.go and
+// discovery_integration_test.go check the event comes *out* of
+// WatchNamespaces, not that the relay reflects it onward. So the arm could
 // be deleted with the suite still green, while a downstream subscriber
 // silently never learned the namespace had gone away.
 func TestCrossRelay_WatchNamespacesForwardsUnpublish(t *testing.T) {

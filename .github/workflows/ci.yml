@@ -55,37 +55,6 @@ jobs:
           go-version-file: go.mod
       - run: go test -race ./...
 
-  # pkg/relay/discovery/etcd is a separate Go module, so `go test ./...` from the
-  # root never sees it — it went unbuilt, untested, unlinted and unscanned here
-  # for its whole existence, while relay-etcd is the binary the multi-instance
-  # deployments run. It `replace`s github.com/floatdrop/moq-go => ../../../..,
-  # so this job is also the guard that a change to the root module's API doesn't
-  # break the discovery backend — precisely the breakage the root suite cannot
-  # see. Its tests are hermetic (an embedded in-process etcd), so no services
-  # are needed.
-  #
-  # Kept as a matrix over one module: a second backend has lived here before and
-  # adding one back should be a one-word change.
-  submodules:
-    name: Submodule ${{ matrix.module }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        module: [etcd]
-    defaults:
-      run:
-        working-directory: pkg/relay/discovery/${{ matrix.module }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: pkg/relay/discovery/${{ matrix.module }}/go.mod
-      - run: go build ./...
-      - run: go test -race ./...
-      - run: go vet ./...
-
   # Measures coverage and builds the report site. Deliberately NOT a gate on
   # coverage: there is no floor left to breach, so no drop can fail it. The
   # signal is the README badge and the published report, both read by hand. See
@@ -103,8 +72,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      # Spans BOTH modules — the root and pkg/relay/discovery/etcd, which has
-      # its own go.mod and which `go test ./pkg/...` cannot reach. Measured with
+      # Measured with
       # -coverpkg, so a package is credited for every line the suite exercises
       # rather than only for what its own tests reach; most of wire is driven by
       # message/session/relay tests.

@@ -3,9 +3,9 @@
 // listener/dialer constructors that bridge quic-go to the transport-agnostic
 // [session.Conn] the relay operates on.
 //
-// It exists so more than one relay binary (the core cmd/relay and the
-// etcd-backed relay in pkg/relay/discovery/etcd/cmd) share one copy of this
-// setup rather than each carrying its own. The helpers here are aimed at local
+// It exists so more than one relay binary shares one copy of this setup rather
+// than each carrying its own: cmd/relay here, and the out-of-tree relay built
+// on a distributed [relay.DiscoveryStore], which imports this package. The helpers here are aimed at local
 // development and single-operator deployments — [SelfSignedCert],
 // [InsecureClientTLSConfig] and [Listen] are explicitly not for production: the
 // first two skip real trust, and the third accepts every browser Origin.
