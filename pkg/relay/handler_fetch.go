@@ -34,6 +34,31 @@ const defaultUpstreamFetchTimeout = 5 * time.Second
 // [sessionHandler.stitchedFetchObjects]. Whatever no source could vouch for
 // is covered by §11.4.4.2 End of Unknown Range markers, so a gap always means
 // authoritative non-existence.
+// trackKnown reports whether entry stands for a track the relay actually knows
+// of. Bare existence does not say so: subscribeUpstreamOnSession creates the
+// entry before the upstream round trip that would confirm the track, because
+// it must be in place before the §11.1 Track Alias in SUBSCRIBE_OK can route
+// (#85). Between those two points the entry describes a track nobody has
+// vouched for yet.
+//
+// The distinction is visible on the wire. Answering a FETCH from such an entry
+// falls through to the §10.12.3 "no Objects have been published" rule and
+// returns INVALID_RANGE — "the range you asked for cannot be satisfied" —
+// where §10.6 DOES_NOT_EXIST, "the track or namespace is not available at the
+// publisher", is the truthful answer. A client deciding whether to retry, and
+// with what, needs them kept apart.
+//
+// A watermark means a publisher has vouched for the track even if the
+// subscription that carried it has since gone; a registered subscription means
+// one is vouching for it now.
+func trackKnown(entry *registry.TrackEntry) bool {
+	if _, ok := entry.GetLargest(); ok {
+		return true
+	}
+	// FETCH is not a hot path (see GetRange), so the copies are fine.
+	return len(entry.CopyUpstream()) > 0 || len(entry.CopyDownstream()) > 0
+}
+
 func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, msg *message.Fetch) {
 	if err := h.auth.AuthorizeFetch(ctx, h.sess, msg); err != nil {
 		h.rejectAuth(ctx, req, "Fetch", err)
@@ -58,7 +83,7 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 
 	fullName := track.FullTrackName{Namespace: sf.Namespace, Name: sf.Name}
 	entry, ok := h.tracks.Get(fullName.Key())
-	if !ok {
+	if !ok || !trackKnown(entry) {
 		_ = req.RejectError(moqt.RequestDoesNotExist, "relay: track not known")
 		return
 	}
