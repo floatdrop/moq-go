@@ -46,7 +46,7 @@ A few specifics:
   `benchmarks/README.md`.
 - **Coverage is measured, not enforced.** Nothing in CI fails on a drop — the
   per-package floors were removed deliberately. `make cover-total` prints the
-  published figure: whole-suite coverage across both modules, measured with
+  published figure: whole-suite coverage, measured with
   `-coverpkg` so a package is credited for every line the suite exercises
   rather than only for what its own tests reach. CI runs the same measurement
   on every push, puts the per-package table on the run's summary page, and

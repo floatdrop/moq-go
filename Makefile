@@ -4,7 +4,7 @@
 # moq-interop-runner registry) against the relay built from this repository,
 # exercising both raw QUIC (moqt://) and WebTransport (https://) transports.
 
-.PHONY: build test test-race test-submodules test-all lint \
+.PHONY: build test test-race lint \
         bench bench-quick bench-smoke bench-baseline \
         cover cover-gaps cover-html cover-total cover-site \
         interop interop-quic interop-webtransport interop-matrix interop-build interop-certs interop-clean \
@@ -22,22 +22,6 @@ test:
 
 test-race:
 	go test -race ./...
-
-# pkg/relay/discovery/etcd is a separate Go module — `go test ./...` from the
-# root does not reach it, so `make test` alone says nothing about the discovery
-# backend or the relay-etcd binary. Its tests are hermetic (an embedded
-# in-process etcd server); no daemons required. The list is plural because a
-# second backend module has lived here before and may again.
-SUBMODULES := pkg/relay/discovery/etcd
-
-test-submodules:
-	@for m in $(SUBMODULES); do \
-		echo ">> $$m"; \
-		(cd $$m && go build ./... && go test -race ./...) || exit 1; \
-	done
-
-# Everything the root suite covers, plus the submodules it cannot see.
-test-all: test test-submodules
 
 lint:
 	golangci-lint run
@@ -119,15 +103,14 @@ cover-html:
 	@go test -coverprofile=$(COVER_PROFILE) $(COVER_PKGS) >/dev/null
 	go tool cover -html=$(COVER_PROFILE)
 
-# Whole-suite coverage (-coverpkg) across BOTH modules — the root and
-# pkg/relay/discovery/etcd. Credits a package for the code any test reaches,
-# which is the figure the README badge and the published report show. Nothing
-# gates on it; see the script header.
+# Whole-suite coverage (-coverpkg). Credits a package for the code any test
+# reaches, which is the figure the README badge and the published report show.
+# Nothing gates on it; see the script header.
 cover-total:
 	@./scripts/coverage-report.sh
 
 # The same measurement, plus the report site CI publishes to GitHub Pages:
-# a per-package index, a line-by-line HTML report per module, and the shields
+# a per-package index, a line-by-line HTML report, and the shields
 # endpoint JSON the badge reads. Open $(COVER_SITE)/index.html to preview
 # exactly what will be published.
 cover-site:

@@ -42,9 +42,10 @@ go run ./cmd/video -out /tmp/recv.mp4 subscribe # reassembles it and reports del
 
 For the simpler raw-MOQT case (no MSF/CMSF), swap `video` for `clock`.
 
-`cmd/relay` is one instance;
-[`relay-etcd`](pkg/relay/discovery/etcd/cmd/relay-etcd) runs several that route
-across each other. Its README covers flags, transports and deployment notes.
+`cmd/relay` is one instance. Several instances routing across each other need a
+distributed [`DiscoveryStore`](pkg/relay/discovery); the interface and an
+in-memory backend are here, and a distributed backend lives out of tree so this
+module never pulls in its dependency weight.
 
 ## Using the library
 

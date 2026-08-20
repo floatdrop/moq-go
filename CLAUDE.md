@@ -60,7 +60,7 @@ golangci-lint run                           # lint/format check (.golangci.yml)
 make bench-quick                            # ~5s  allocs/op guard — run after every hot-path change
 make bench                                  # ~4m30s full suite incl. ns/op — for timing claims only
 make cover-gaps                             # every function the tests never reach, least-covered first
-make cover-total                            # the published figure (-coverpkg, both modules) — nothing gates on it
+make cover-total                            # the published figure (-coverpkg) — nothing gates on it
 make cover-site                             # ...plus the report CI publishes to Pages, to preview locally
 ```
 
@@ -237,7 +237,7 @@ no job fails on a drop — a slice of work can land untested with the build full
 green. That check is yours to make, not CI's:
 
 ```sh
-make cover-total    # the published figure: whole-suite, across both modules
+make cover-total    # the published figure: whole-suite
 make cover-site     # ...plus the report CI publishes, to preview it locally
 make cover          # per-package, each credited only for its OWN tests
 make cover-gaps COVER_PKGS=./pkg/relay/cache/   # least-covered functions first
@@ -260,13 +260,6 @@ as a whole drives ~97%, because most of `wire` runs under `message`, `session`,
 and `relay` tests. `make cover` shows the narrow view and `make cover-total` the
 published one — don't read a low number from the former as a thin package
 without checking the latter.
-
-It spans both modules. `pkg/relay/discovery/etcd` has its own `go.mod`, so
-`go test ./pkg/...` cannot reach it; `scripts/coverage-report.sh` runs it
-separately (`COVER_SUBMODULES`) and concatenates the profile, which stays
-unambiguous because profile blocks are keyed by full import path. Without that
-the one distributed `DiscoveryStore` backend, and the `relay-etcd` binary the
-multi-instance deployments run, would be invisible.
 
 Only `cmd/*` and `internal/dial` are outside, and only because `COVER_PKGS`
 defaults to `./pkg/...`. They're thin wiring over tested packages, covered
