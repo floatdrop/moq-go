@@ -1,8 +1,8 @@
 module github.com/floatdrop/moq-go/pkg/relay/discovery/etcd
 
-go 1.26.3
+go 1.27
 
-toolchain go1.26.6
+toolchain go1.27.0
 
 replace github.com/floatdrop/moq-go => ../../../..
 

@@ -22,6 +22,8 @@ import (
 // (§5.1.6): an ordered sequence of [DeltaOp] objects, each naming an
 // "op" ("add"/"remove"/"clone") and a list of track objects. [Apply]
 // replays the operations in order per §5.3.
+//
+//nolint:recvcheck // MarshalJSON must stay on a value receiver so non-pointer Catalog values marshal; the mutating/validating methods must stay on pointers.
 type Catalog struct {
 	Version     string `json:"version,omitempty"`
 	GeneratedAt int64  `json:"generatedAt,omitempty"`

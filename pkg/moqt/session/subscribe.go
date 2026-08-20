@@ -53,8 +53,10 @@ func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscri
 				return nil, err
 			}
 			return &Subscription{
-				requestHandle: requestHandle{Stream: stream, s: s, requestID: m.RequestID},
-				OK:            ok,
+				Stream:    stream,
+				s:         s,
+				requestID: m.RequestID,
+				OK:        ok,
 			}, nil
 		})
 }

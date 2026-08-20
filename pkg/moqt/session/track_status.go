@@ -64,8 +64,10 @@ func (s *Session) TrackStatus(ctx context.Context, m *message.TrackStatus) (*Tra
 				return nil, err
 			}
 			return &TrackStatusRequest{
-				requestHandle: requestHandle{Stream: stream, s: s, requestID: m.RequestID},
-				OK:            ok,
+				Stream:    stream,
+				s:         s,
+				requestID: m.RequestID,
+				OK:        ok,
 			}, nil
 		})
 }

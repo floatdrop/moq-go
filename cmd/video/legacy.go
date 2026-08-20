@@ -262,16 +262,14 @@ func legacyInit(frames []legacyFrame) (*mp4.InitSegment, error) {
 func writeLegacyFragments(w io.Writer, frames []legacyFrame, trackID uint32) error {
 	for i, frame := range frames {
 		sample := mp4.FullSample{
-			Sample: mp4.Sample{
-				Flags: legacySampleFlags(frame.Sample),
-				Dur:   legacyDuration(frames, i),
-				// Set here because mp4ff records it verbatim: AddFullSample
-				// copies Sample into the trun and never derives the size from
-				// Data, so leaving it zero writes a file whose samples all
-				// claim zero length while the mdat still holds the bytes.
-				//nolint:gosec // G115: one Object's payload, bounded by the wire's own limits.
-				Size: uint32(len(frame.Sample)),
-			},
+			Flags: legacySampleFlags(frame.Sample),
+			Dur:   legacyDuration(frames, i),
+			// Set here because mp4ff records it verbatim: AddFullSample
+			// copies Sample into the trun and never derives the size from
+			// Data, so leaving it zero writes a file whose samples all
+			// claim zero length while the mdat still holds the bytes.
+			//nolint:gosec // G115: one Object's payload, bounded by the wire's own limits.
+			Size:       uint32(len(frame.Sample)),
 			DecodeTime: frame.Timestamp - frames[0].Timestamp,
 			Data:       frame.Sample,
 		}
@@ -323,7 +321,6 @@ func sampleDuration(from, to uint64) uint32 {
 		nonMonotonicTimestamps.Add(1)
 		return 1
 	}
-	//nolint:gosec // G115: min() has already bounded this by maxSampleDuration, which fits in 32 bits.
 	return uint32(min(to-from, maxSampleDuration))
 }
 

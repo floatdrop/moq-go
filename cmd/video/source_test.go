@@ -7,7 +7,6 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Eyevinn/mp4ff/avc"
 	"github.com/Eyevinn/mp4ff/mp4"
 )
 
@@ -43,9 +42,7 @@ func synthSamples(pattern string) []mp4.FullSample {
 			cto = -2 * dur
 		}
 		samples = append(samples, mp4.FullSample{
-			Sample: mp4.Sample{
-				Flags: flags, Dur: dur, Size: 4, CompositionTimeOffset: cto,
-			},
+			Flags: flags, Dur: dur, Size: 4, CompositionTimeOffset: cto,
 			DecodeTime: uint64(i * dur),
 			Data:       []byte{byte(i), 0, 0, 0},
 		})
@@ -370,10 +367,9 @@ func synthInit(t *testing.T) *mp4.InitSegment {
 		t.Fatal("AddEmptyTrack returned nil")
 	}
 	entry := mp4.CreateVisualSampleEntryBox("avc1", 320, 180,
-		&mp4.AvcCBox{DecConfRec: avc.DecConfRec{
+		&mp4.AvcCBox{
 			AVCProfileIndication: 66,
-			AVCLevelIndication:   30,
-		}})
+			AVCLevelIndication:   30})
 	trak.Mdia.Minf.Stbl.Stsd.AddChild(entry)
 	return init
 }

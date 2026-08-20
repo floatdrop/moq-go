@@ -60,7 +60,7 @@ func TestTrackRegistry_RepublishNotErasedByLateUnpublish(t *testing.T) {
 		Name:      []byte("cam"),
 	}
 
-	if _, first := r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}}); !first {
+	if _, first := r.AddUpstream(name, &registry.UpstreamSub{ID: 1}); !first {
 		t.Fatal("first AddUpstream must report becameNonEmpty")
 	}
 	<-store.published // drain the initial advertisement's signal
@@ -89,7 +89,7 @@ func TestTrackRegistry_RepublishNotErasedByLateUnpublish(t *testing.T) {
 	addDone := make(chan struct{})
 	go func() {
 		defer close(addDone)
-		r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 2}})
+		r.AddUpstream(name, &registry.UpstreamSub{ID: 2})
 	}()
 	republished := false
 	select {

@@ -1,8 +1,8 @@
 module github.com/floatdrop/moq-go
 
-go 1.26
+go 1.27
 
-toolchain go1.26.6
+toolchain go1.27.0
 
 require (
 	github.com/Eyevinn/mp4ff v0.55.0

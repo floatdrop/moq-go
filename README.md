@@ -28,7 +28,7 @@ to every layer — applications plug their own codec stack in at the LOC boundar
 go get github.com/floatdrop/moq-go
 ```
 
-Requires Go 1.26 or newer.
+Requires Go 1.27 or newer.
 
 ## Quick start
 

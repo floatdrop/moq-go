@@ -1,5 +1,5 @@
 # devenv inputs — https://devenv.sh/inputs/
-# `rolling` tracks a recent nixpkgs so the Go toolchain matches go.mod (go 1.26).
+# `rolling` tracks a recent nixpkgs so the Go toolchain matches go.mod (go 1.27).
 inputs:
   nixpkgs:
     url: github:cachix/devenv-nixpkgs/rolling

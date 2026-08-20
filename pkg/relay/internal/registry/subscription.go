@@ -288,16 +288,14 @@ func NewUpstreamSub(
 	trackAlias, requestID uint64,
 ) *UpstreamSub {
 	return &UpstreamSub{
-		Subscription: Subscription{
-			state:        SubEstablished,
-			ID:           id,
-			RequestID:    requestID,
-			Session:      sess,
-			Stream:       stream,
-			TrackAlias:   trackAlias,
-			forwardState: 1,
-		},
-		Broker: sess.NewRequestBroker(stream),
+		state:        SubEstablished,
+		ID:           id,
+		RequestID:    requestID,
+		Session:      sess,
+		Stream:       stream,
+		TrackAlias:   trackAlias,
+		forwardState: 1,
+		Broker:       sess.NewRequestBroker(stream),
 	}
 }
 
@@ -400,14 +398,12 @@ type DownstreamSub struct {
 // sends FORWARD=0, and REQUEST_UPDATE can flip it later (§9.2 / §10.9).
 func NewDownstreamSub(id uint64, sess *session.Session, stream session.Stream, trackAlias uint64) *DownstreamSub {
 	return &DownstreamSub{
-		Subscription: Subscription{
-			state:        SubEstablished,
-			ID:           id,
-			Session:      sess,
-			Stream:       stream,
-			TrackAlias:   trackAlias,
-			forwardState: 1,
-		},
+		state:        SubEstablished,
+		ID:           id,
+		Session:      sess,
+		Stream:       stream,
+		TrackAlias:   trackAlias,
+		forwardState: 1,
 		// §10.2.7: SUBSCRIBER_PRIORITY defaults to 128 (mid-range) when
 		// the peer omits the parameter. installSubscribeParams overrides
 		// this only when the SUBSCRIBE / REQUEST_UPDATE carries an explicit

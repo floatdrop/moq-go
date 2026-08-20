@@ -25,8 +25,6 @@ type MediaTimelineRecord struct {
 // track. Independent Objects MUST carry the full history since the
 // start of the track (§7.3); incremental updates MAY carry only the
 // records since the last Object in the same Group.
-//
-//nolint:recvcheck // value receivers for reads, pointer receiver for in-place mutation — intentional.
 type MediaTimeline []MediaTimelineRecord
 
 // MarshalJSON encodes the timeline per §7.1.
@@ -123,8 +121,6 @@ func (m MediaTimeline) Since(afterPTS int64) MediaTimeline {
 //	[ startMediaTime, deltaMediaTime,
 //	  [startGroupID, startObjectID], [deltaGroupID, deltaObjectID],
 //	  startWallclock, deltaWallclock ]
-//
-//nolint:recvcheck // value receivers for reads, pointer receiver for in-place mutation — intentional.
 type MediaTimelineTemplate struct {
 	StartMediaTime int64
 	DeltaMediaTime int64

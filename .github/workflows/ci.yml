@@ -182,7 +182,14 @@ jobs:
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.12.2
+          # v2.13.0 is the first release whose staticcheck can parse a go1.27
+          # field-selector struct key; v2.12.2 panics on one. No release is
+          # built with go1.27 yet, and a go1.26-built binary refuses a go1.27
+          # target outright, so build from source with the job's toolchain.
+          # Revert to the default binary install mode once a release ships
+          # built with go1.27.
+          version: v2.13.0
+          install-mode: goinstall
 
   modernize:
     name: Modernize (errorsastype)
@@ -192,8 +199,9 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      # golangci-lint v2.12.2 bundles a modernize snapshot that predates the
-      # errorsastype analyzer, so run that check standalone. See CLAUDE.md.
+      # v2.13.0's bundled modernize snapshot does ship errorsastype, so the
+      # lint job already covers it. This runs the analyzer at @latest to catch
+      # analyzers newer than whatever golangci-lint bundles. See CLAUDE.md.
       - run: |
           go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest \
             -errorsastype ./...

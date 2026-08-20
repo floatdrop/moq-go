@@ -105,11 +105,11 @@ func TestTrackRegistry_AddUpstreamFirstSignal(t *testing.T) {
 	r := registry.NewTrackRegistry()
 	name := newTestTrackName("multi-pub")
 
-	_, first := r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}})
+	_, first := r.AddUpstream(name, &registry.UpstreamSub{ID: 1})
 	if !first {
 		t.Fatal("first AddUpstream should report becameNonEmpty=true")
 	}
-	_, again := r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 2}})
+	_, again := r.AddUpstream(name, &registry.UpstreamSub{ID: 2})
 	if again {
 		t.Fatal("second AddUpstream must report becameNonEmpty=false")
 	}
@@ -132,8 +132,8 @@ func TestTrackRegistry_RemoveUpstreamEmptyTransitions(t *testing.T) {
 	r := registry.NewTrackRegistry()
 	name := newTestTrackName("lifecycle")
 
-	r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}})
-	r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 2}})
+	r.AddUpstream(name, &registry.UpstreamSub{ID: 1})
+	r.AddUpstream(name, &registry.UpstreamSub{ID: 2})
 
 	removed, empty, deleted := r.RemoveUpstream(name, 1)
 	if !removed || empty || deleted {
@@ -160,8 +160,8 @@ func TestTrackRegistry_EntryRetainedWhileDownstreamRemains(t *testing.T) {
 	r := registry.NewTrackRegistry()
 	name := newTestTrackName("partial")
 
-	r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}})
-	r.AddDownstream(name, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 100}})
+	r.AddUpstream(name, &registry.UpstreamSub{ID: 1})
+	r.AddDownstream(name, &registry.DownstreamSub{ID: 100})
 
 	removed, empty, deleted := r.RemoveUpstream(name, 1)
 	if !removed || !empty {
@@ -198,7 +198,7 @@ func TestTrackRegistry_RemoveUnknownIsNoop(t *testing.T) {
 		t.Fatalf("phantom RemoveUpstream: removed=%v deleted=%v", removed, deleted)
 	}
 
-	r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}})
+	r.AddUpstream(name, &registry.UpstreamSub{ID: 1})
 	removed, _, deleted = r.RemoveUpstream(name, 99)
 	if removed || deleted {
 		t.Fatalf("wrong-ID RemoveUpstream: removed=%v deleted=%v", removed, deleted)
@@ -250,8 +250,8 @@ func TestTrackRegistry_CopySnapshotsAreIndependent(t *testing.T) {
 	t.Parallel()
 	r := registry.NewTrackRegistry()
 	name := newTestTrackName("snapshot")
-	r.AddDownstream(name, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 1}})
-	r.AddDownstream(name, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 2}})
+	r.AddDownstream(name, &registry.DownstreamSub{ID: 1})
+	r.AddDownstream(name, &registry.DownstreamSub{ID: 2})
 
 	entry, _ := r.Get(name.Key())
 	snap := entry.CopyDownstream()
@@ -289,7 +289,7 @@ func TestTrackRegistry_ConcurrentAddRemove(t *testing.T) {
 			}
 			for range opsPerG {
 				id := nextID.Add(1)
-				sub := &registry.UpstreamSub{Subscription: registry.Subscription{ID: id}}
+				sub := &registry.UpstreamSub{ID: id}
 				r.AddUpstream(name, sub)
 				if removed, _, _ := r.RemoveUpstream(name, id); !removed {
 					t.Errorf("expected to remove sub %d, did not", id)
@@ -352,8 +352,8 @@ func TestTrackRegistry_RemoveAfterResurrectionKeepsEntry(t *testing.T) {
 	r := registry.NewTrackRegistry()
 	name := newTestTrackName("resurrect")
 
-	r.AddUpstream(name, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1}})
-	r.AddDownstream(name, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 100}})
+	r.AddUpstream(name, &registry.UpstreamSub{ID: 1})
+	r.AddDownstream(name, &registry.DownstreamSub{ID: 100})
 
 	// Remove the downstream — upstream is still present, entry survives.
 	_, _, deleted := r.RemoveDownstream(name, 100)
@@ -386,11 +386,11 @@ func TestTrackRegistry_RemoveSession_EvictsAllEntriesForSession(t *testing.T) {
 	nameAudio := newTestTrackName("audio")
 
 	// video: A is publisher, B is subscriber.
-	r.AddUpstream(nameVideo, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 1, Session: sessA}})
-	r.AddDownstream(nameVideo, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 100, Session: sessB}})
+	r.AddUpstream(nameVideo, &registry.UpstreamSub{ID: 1, Session: sessA})
+	r.AddDownstream(nameVideo, &registry.DownstreamSub{ID: 100, Session: sessB})
 	// audio: A is the only participant (both pub and sub).
-	r.AddUpstream(nameAudio, &registry.UpstreamSub{Subscription: registry.Subscription{ID: 2, Session: sessA}})
-	r.AddDownstream(nameAudio, &registry.DownstreamSub{Subscription: registry.Subscription{ID: 101, Session: sessA}})
+	r.AddUpstream(nameAudio, &registry.UpstreamSub{ID: 2, Session: sessA})
+	r.AddDownstream(nameAudio, &registry.DownstreamSub{ID: 101, Session: sessA})
 
 	upRemoved, downRemoved := r.RemoveSession(sessA)
 	if upRemoved != 2 || downRemoved != 1 {
@@ -423,7 +423,7 @@ func TestTrackRegistry_RemoveSession_NoOpForUnknownSession(t *testing.T) {
 	r := registry.NewTrackRegistry()
 	r.AddUpstream(
 		newTestTrackName("video"),
-		&registry.UpstreamSub{Subscription: registry.Subscription{ID: 1, Session: &session.Session{}}},
+		&registry.UpstreamSub{ID: 1, Session: &session.Session{}},
 	)
 
 	up, down := r.RemoveSession(&session.Session{}) // different pointer
