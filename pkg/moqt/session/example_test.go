@@ -166,7 +166,9 @@ func ExampleDemux() {
 	d.HandleTrack(video.TrackAlias(), func(s *session.IncomingSubgroupStream) {
 		drain(s, "video")
 	})
-	// Optional: without OnUnknown, an unmatched stream is reset and dropped.
+	// Optional, and FETCH streams only: an unmatched subgroup stream is
+	// parked until its Track Alias is claimed, not reported here. Without
+	// OnUnknown an unclaimed FETCH stream is reset and dropped.
 	d.OnUnknown(func(ds session.DataStream) {
 		ds.Cancel(moqt.StreamResetInternalError)
 	})

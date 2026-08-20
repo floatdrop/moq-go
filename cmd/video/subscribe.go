@@ -56,20 +56,10 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 		ended:   make(chan struct{}),
 	}
 	demux := session.NewDemux()
-	park := &parkingLot{}
+	// Subgroup streams arriving before their Track Alias is known are parked
+	// by Demux and released when HandleTrack registers, so OnUnknown only
+	// sees stream types this tool never asked for.
 	demux.OnUnknown(func(ds session.DataStream) {
-		if s, ok := ds.(*session.IncomingSubgroupStream); ok {
-			// Parked, not reset. A relay starts pushing a track's subgroup
-			// streams as soon as it has accepted the SUBSCRIBE, which can be
-			// before SUBSCRIBE_OK has come back and told us the Track Alias
-			// to register a handler under — so the first Groups of a live
-			// broadcast routinely arrive with nowhere to go. Resetting them
-			// loses that media at best, and measured against cdn.moq.pro it
-			// did worse: two streams reset on arrival and the subscription
-			// then delivered nothing at all for the rest of the run.
-			park.hold(s)
-			return
-		}
 		slog.WarnContext(ctx, "unexpected data stream", "type", fmt.Sprintf("%T", ds))
 		ds.Cancel(moqt.StreamResetInternalError)
 	})
@@ -159,11 +149,8 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	handle := func(s *session.IncomingSubgroupStream) {
 		readers.Go(func() { readGroup(ctx, s, rec, live) })
 	}
-	demux.HandleTrack(sub.TrackAlias(), handle)
-	// Whatever arrived before the alias was known. Released after the
-	// handler is registered, so a stream cannot be parked and replayed at
-	// once and end up read twice.
-	if released := park.release(sub.TrackAlias(), handle); released > 0 {
+	// The count is whatever Demux parked before the alias was known.
+	if released := demux.HandleTrack(sub.TrackAlias(), handle); released > 0 {
 		// Said plainly because it moves the report's own numbers. These
 		// Groups arrived first and were read last, in a burst, and arrival
 		// is stamped at read — so their Objects count as out-of-order and
@@ -174,8 +161,6 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 			"and unusually closely spaced",
 			"streams", released)
 	}
-	defer park.discard()
-
 	// A broadcast that stops arriving is otherwise indistinguishable from
 	// one that is merely quiet: the run waits, the player at the end of the
 	// pipe starves, and nothing says why. Measured against cdn.moq.pro this
@@ -337,96 +322,6 @@ func mediaWriterFor(packaging string, init []byte) mediaWriter {
 	return func(path string, sorted []arrival) (string, error) {
 		return writeMedia(path, init, sorted)
 	}
-}
-
-// parkingLot holds subgroup streams that arrived before anything was
-// registered to read them, keyed by Track Alias.
-//
-// The window is real and unavoidable: a subscriber learns a track's alias
-// from its SUBSCRIBE_OK, and the relay may push the track's first streams
-// before that reply has been read. §11.4.2 says exactly what to do with
-// them — "if an endpoint receives a subgroup with an unknown Track Alias,
-// it MAY abandon the stream, or choose to buffer it for a brief period to
-// handle reordering with the control message that establishes the Track
-// Alias" — and abandoning was measured to cost whole runs.
-//
-// "A brief period" is what parkLimit enforces. Without a bound, a stream
-// for an alias this subscriber never resolves would sit open with its flow
-// control withheld for the life of the run, where resetting it at least
-// freed the peer.
-type parkingLot struct {
-	mu      sync.Mutex
-	streams map[uint64][]*session.IncomingSubgroupStream
-	// handlers is what makes the window close. Demux looks its handler up
-	// and releases its lock before calling OnUnknown, so a stream can be
-	// on its way here at the moment the alias is registered — and parking
-	// it then leaves it held by nobody, since release has already run.
-	// Recorded here, the same alias dispatches straight through instead.
-	//
-	// Left unfixed this stalled whole runs: a subgroup stream parked and
-	// never read holds its flow control open, the relay stops opening new
-	// ones, and the subscription goes quiet with no error anywhere. A run
-	// took two Groups in 185ms and then nothing for 28 seconds, with the
-	// Group IDs showing three more the relay never managed to send.
-	handlers map[uint64]func(*session.IncomingSubgroupStream)
-}
-
-// parkLimit is how many streams may wait for their alias at once — a few
-// Groups' worth, since the window this covers is one control-message round
-// trip. Past it the oldest is reset, which is §11.4.2's other option.
-const parkLimit = 8
-
-// hold parks one stream, or dispatches it if its alias is already known.
-func (p *parkingLot) hold(s *session.IncomingSubgroupStream) {
-	alias := s.Header.TrackAlias
-	p.mu.Lock()
-	if h := p.handlers[alias]; h != nil {
-		p.mu.Unlock()
-		h(s)
-		return
-	}
-	if p.streams == nil {
-		p.streams = make(map[uint64][]*session.IncomingSubgroupStream)
-	}
-	p.streams[alias] = append(p.streams[alias], s)
-	for len(p.streams[alias]) > parkLimit {
-		p.streams[alias][0].Cancel(moqt.StreamResetCancelled)
-		p.streams[alias] = p.streams[alias][1:]
-	}
-	p.mu.Unlock()
-}
-
-// release hands every stream parked under alias to h, and registers h so
-// that nothing else is ever parked under it.
-func (p *parkingLot) release(alias uint64, h func(*session.IncomingSubgroupStream)) int {
-	p.mu.Lock()
-	if p.handlers == nil {
-		p.handlers = make(map[uint64]func(*session.IncomingSubgroupStream))
-	}
-	p.handlers[alias] = h
-	held := p.streams[alias]
-	delete(p.streams, alias)
-	p.mu.Unlock()
-	for _, s := range held {
-		h(s)
-	}
-	return len(held)
-}
-
-// discard resets whatever is still parked, so a stream for a track nobody
-// claimed does not sit open for the life of the session.
-func (p *parkingLot) discard() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	// §3.3.4 asks for a relevant code, and a subscriber winding down is not
-	// an implementation fault: reporting one would have a peer's metrics
-	// blame this end for a normal end of run.
-	for _, held := range p.streams {
-		for _, s := range held {
-			s.Cancel(moqt.StreamResetCancelled)
-		}
-	}
-	clear(p.streams)
 }
 
 // catalogWatch is the subscriber's view of the catalog track: the first
