@@ -545,3 +545,64 @@ func TestTrackRegistry_CacheTTLPolicy_ZeroReturnMeansDefault(t *testing.T) {
 		t.Fatal("Get returned ok=true after default TTL; policy returning 0 must fall through to the default")
 	}
 }
+
+// TestTrackRegistry_DeleteIfUnused covers the guard that lets the PUBLISH path
+// take back an entry it created speculatively without stealing one another
+// session is already using.
+//
+// Emptiness alone is not enough to decide that. A different session can adopt
+// the entry and be part way through its own §10.10 window — objects already
+// arriving and being cached, AddUpstream not yet reached, so both subscription
+// slices still read empty. Deleting it there strands exactly the streams the
+// speculative create exists to protect.
+func TestTrackRegistry_DeleteIfUnused(t *testing.T) {
+	t.Parallel()
+
+	t.Run("reclaims an untouched entry", func(t *testing.T) {
+		t.Parallel()
+		r := registry.NewTrackRegistry()
+		name := newTestTrackName("unused")
+
+		if _, created := r.GetOrCreateNew(name); !created {
+			t.Fatal("GetOrCreateNew on an empty registry reported created=false")
+		}
+		if _, created := r.GetOrCreateNew(name); created {
+			t.Fatal("second GetOrCreateNew reported created=true")
+		}
+		r.DeleteIfUnused(name)
+		if _, ok := r.Get(name.Key()); ok {
+			t.Error("untouched entry survived DeleteIfUnused")
+		}
+	})
+
+	t.Run("keeps an entry that has cached objects", func(t *testing.T) {
+		t.Parallel()
+		r := registry.NewTrackRegistry()
+		name := newTestTrackName("adopted")
+
+		entry, _ := r.GetOrCreateNew(name)
+		// Another session's §10.10 window: objects cached, nothing
+		// registered yet, so both slices are still empty.
+		entry.Cache.Put(&cache.CachedObject{GroupID: 1, ObjectID: 0, Payload: []byte("a")})
+
+		r.DeleteIfUnused(name)
+		if _, ok := r.Get(name.Key()); !ok {
+			t.Error("entry with cached objects was deleted; a concurrent publisher's " +
+				"streams would be reset for want of an entry")
+		}
+	})
+
+	t.Run("keeps an entry that has a watermark", func(t *testing.T) {
+		t.Parallel()
+		r := registry.NewTrackRegistry()
+		name := newTestTrackName("watermarked")
+
+		entry, _ := r.GetOrCreateNew(name)
+		entry.UpdateLargest(message.Location{Group: 4, Object: 2})
+
+		r.DeleteIfUnused(name)
+		if _, ok := r.Get(name.Key()); !ok {
+			t.Error("entry carrying a LARGEST_OBJECT was deleted")
+		}
+	})
+}
