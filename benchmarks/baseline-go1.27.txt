@@ -1,0 +1,220 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/floatdrop/moq-go/pkg/moqt/wire
+cpu: Apple M3 Max
+BenchmarkVarintEncode-14            	319421739	         3.594 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVarintEncode-14            	334360989	         3.581 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVarintEncode-14            	335026496	         3.580 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVarintEncode-14            	335873532	         3.722 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVarintEncode-14            	329689992	         3.648 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVarintEncode-14            	325360347	         3.702 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVarintEncode-14            	331371758	         3.651 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVarintEncode-14            	331083916	         3.650 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVarintEncode-14            	328710124	         3.638 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVarintEncode-14            	332894443	         3.644 ns/op	       0 B/op	       0 allocs/op
+BenchmarkVarintBytesRoundTrip-14    	 7875315	       151.4 ns/op	7924.36 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkVarintBytesRoundTrip-14    	 7881886	       153.0 ns/op	7842.34 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkVarintBytesRoundTrip-14    	 7674357	       155.1 ns/op	7735.99 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkVarintBytesRoundTrip-14    	 7777177	       154.0 ns/op	7791.44 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkVarintBytesRoundTrip-14    	 7803638	       154.2 ns/op	7780.27 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkVarintBytesRoundTrip-14    	 7743250	       153.4 ns/op	7823.12 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkVarintBytesRoundTrip-14    	 7875393	       152.1 ns/op	7888.70 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkVarintBytesRoundTrip-14    	 7913892	       152.6 ns/op	7864.33 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkVarintBytesRoundTrip-14    	 7907449	       152.8 ns/op	7851.91 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkVarintBytesRoundTrip-14    	 7778605	       155.0 ns/op	7739.95 MB/s	    1280 B/op	       1 allocs/op
+BenchmarkKVPairsEncode-14           	24898869	        47.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKVPairsEncode-14           	25256200	        48.65 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKVPairsEncode-14           	24089955	        47.73 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKVPairsEncode-14           	25352535	        47.88 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKVPairsEncode-14           	25270206	        48.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKVPairsEncode-14           	24915994	        48.37 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKVPairsEncode-14           	25087981	        47.81 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKVPairsEncode-14           	24699129	        47.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKVPairsEncode-14           	25005447	        48.07 ns/op	       0 B/op	       0 allocs/op
+BenchmarkKVPairsEncode-14           	25336878	        47.54 ns/op	       0 B/op	       0 allocs/op
+BenchmarkFrameRoundTrip-14          	 7052235	       169.6 ns/op	7076.58 MB/s	    1286 B/op	       3 allocs/op
+BenchmarkFrameRoundTrip-14          	 7060371	       170.4 ns/op	7041.87 MB/s	    1286 B/op	       3 allocs/op
+BenchmarkFrameRoundTrip-14          	 7014260	       171.8 ns/op	6983.26 MB/s	    1286 B/op	       3 allocs/op
+BenchmarkFrameRoundTrip-14          	 6636601	       172.4 ns/op	6961.65 MB/s	    1286 B/op	       3 allocs/op
+BenchmarkFrameRoundTrip-14          	 7025467	       172.2 ns/op	6969.91 MB/s	    1286 B/op	       3 allocs/op
+BenchmarkFrameRoundTrip-14          	 7009191	       168.7 ns/op	7112.16 MB/s	    1286 B/op	       3 allocs/op
+BenchmarkFrameRoundTrip-14          	 7128242	       171.5 ns/op	6995.27 MB/s	    1286 B/op	       3 allocs/op
+BenchmarkFrameRoundTrip-14          	 6967224	       171.8 ns/op	6985.38 MB/s	    1286 B/op	       3 allocs/op
+BenchmarkFrameRoundTrip-14          	 6999654	       171.0 ns/op	7015.63 MB/s	    1286 B/op	       3 allocs/op
+BenchmarkFrameRoundTrip-14          	 7058389	       173.7 ns/op	6908.85 MB/s	    1286 B/op	       3 allocs/op
+PASS
+ok  	github.com/floatdrop/moq-go/pkg/moqt/wire	48.613s
+goos: darwin
+goarch: arm64
+pkg: github.com/floatdrop/moq-go/pkg/moqt/message
+cpu: Apple M3 Max
+BenchmarkSubgroupObjectAppend-14    	53786158	        22.17 ns/op	54123.69 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubgroupObjectAppend-14    	55540878	        21.77 ns/op	55133.42 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubgroupObjectAppend-14    	55384294	        21.85 ns/op	54918.05 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubgroupObjectAppend-14    	55209433	        21.74 ns/op	55188.90 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubgroupObjectAppend-14    	55235902	        21.88 ns/op	54850.79 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubgroupObjectAppend-14    	55137872	        21.80 ns/op	55034.80 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubgroupObjectAppend-14    	55272157	        21.73 ns/op	55233.80 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubgroupObjectAppend-14    	55269930	        21.72 ns/op	55253.12 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubgroupObjectAppend-14    	55328752	        21.70 ns/op	55306.03 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubgroupObjectAppend-14    	55424371	        21.72 ns/op	55255.10 MB/s	       0 B/op	       0 allocs/op
+BenchmarkSubgroupObjectParse-14     	 8306924	       145.3 ns/op	8261.46 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkSubgroupObjectParse-14     	 8279088	       145.0 ns/op	8275.16 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkSubgroupObjectParse-14     	 8206203	       145.2 ns/op	8266.64 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkSubgroupObjectParse-14     	 8285683	       146.3 ns/op	8204.12 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkSubgroupObjectParse-14     	 8134136	       150.2 ns/op	7988.98 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkSubgroupObjectParse-14     	 7931781	       149.6 ns/op	8022.44 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkSubgroupObjectParse-14     	 8158491	       147.7 ns/op	8121.96 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkSubgroupObjectParse-14     	 8286643	       145.5 ns/op	8244.99 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkSubgroupObjectParse-14     	 8237638	       145.2 ns/op	8262.37 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkSubgroupObjectParse-14     	 8270984	       145.7 ns/op	8238.81 MB/s	    1312 B/op	       2 allocs/op
+BenchmarkMarshalRoundTrip/SUBSCRIBE-14         	 3253003	       371.2 ns/op	     712 B/op	      18 allocs/op
+BenchmarkMarshalRoundTrip/SUBSCRIBE-14         	 3238740	       370.8 ns/op	     712 B/op	      18 allocs/op
+BenchmarkMarshalRoundTrip/SUBSCRIBE-14         	 3236949	       372.6 ns/op	     712 B/op	      18 allocs/op
+BenchmarkMarshalRoundTrip/SUBSCRIBE-14         	 3209985	       374.2 ns/op	     712 B/op	      18 allocs/op
+BenchmarkMarshalRoundTrip/SUBSCRIBE-14         	 3204825	       374.4 ns/op	     712 B/op	      18 allocs/op
+BenchmarkMarshalRoundTrip/SUBSCRIBE-14         	 3236607	       371.6 ns/op	     712 B/op	      18 allocs/op
+BenchmarkMarshalRoundTrip/SUBSCRIBE-14         	 3259945	       370.5 ns/op	     712 B/op	      18 allocs/op
+BenchmarkMarshalRoundTrip/SUBSCRIBE-14         	 3256960	       369.0 ns/op	     712 B/op	      18 allocs/op
+BenchmarkMarshalRoundTrip/SUBSCRIBE-14         	 3211160	       372.6 ns/op	     712 B/op	      18 allocs/op
+BenchmarkMarshalRoundTrip/SUBSCRIBE-14         	 3230653	       371.6 ns/op	     712 B/op	      18 allocs/op
+BenchmarkMarshalRoundTrip/REQUEST_OK-14        	10657023	       111.4 ns/op	     144 B/op	       8 allocs/op
+BenchmarkMarshalRoundTrip/REQUEST_OK-14        	10944332	       110.7 ns/op	     144 B/op	       8 allocs/op
+BenchmarkMarshalRoundTrip/REQUEST_OK-14        	10809925	       110.4 ns/op	     144 B/op	       8 allocs/op
+BenchmarkMarshalRoundTrip/REQUEST_OK-14        	10964106	       109.7 ns/op	     144 B/op	       8 allocs/op
+BenchmarkMarshalRoundTrip/REQUEST_OK-14        	10968945	       109.7 ns/op	     144 B/op	       8 allocs/op
+BenchmarkMarshalRoundTrip/REQUEST_OK-14        	10941562	       109.3 ns/op	     144 B/op	       8 allocs/op
+BenchmarkMarshalRoundTrip/REQUEST_OK-14        	11115759	       108.3 ns/op	     144 B/op	       8 allocs/op
+BenchmarkMarshalRoundTrip/REQUEST_OK-14        	11166768	       108.7 ns/op	     144 B/op	       8 allocs/op
+BenchmarkMarshalRoundTrip/REQUEST_OK-14        	11033653	       108.4 ns/op	     144 B/op	       8 allocs/op
+BenchmarkMarshalRoundTrip/REQUEST_OK-14        	11143759	       107.7 ns/op	     144 B/op	       8 allocs/op
+BenchmarkParametersRoundTrip-14                	 7109613	       169.7 ns/op	     449 B/op	       3 allocs/op
+BenchmarkParametersRoundTrip-14                	 7023519	       170.7 ns/op	     449 B/op	       3 allocs/op
+BenchmarkParametersRoundTrip-14                	 7031952	       171.3 ns/op	     449 B/op	       3 allocs/op
+BenchmarkParametersRoundTrip-14                	 7027930	       170.9 ns/op	     449 B/op	       3 allocs/op
+BenchmarkParametersRoundTrip-14                	 7019804	       171.3 ns/op	     449 B/op	       3 allocs/op
+BenchmarkParametersRoundTrip-14                	 7058500	       169.5 ns/op	     449 B/op	       3 allocs/op
+BenchmarkParametersRoundTrip-14                	 7087480	       169.1 ns/op	     449 B/op	       3 allocs/op
+BenchmarkParametersRoundTrip-14                	 7078914	       169.8 ns/op	     449 B/op	       3 allocs/op
+BenchmarkParametersRoundTrip-14                	 6839558	       171.4 ns/op	     449 B/op	       3 allocs/op
+BenchmarkParametersRoundTrip-14                	 7054629	       170.0 ns/op	     449 B/op	       3 allocs/op
+PASS
+ok  	github.com/floatdrop/moq-go/pkg/moqt/message	60.706s
+goos: darwin
+goarch: arm64
+pkg: github.com/floatdrop/moq-go/pkg/moqt/session
+cpu: Apple M3 Max
+BenchmarkSubgroupForwardCodec-14    	 5005584	       229.2 ns/op	5236.19 MB/s	    1345 B/op	       2 allocs/op
+BenchmarkSubgroupForwardCodec-14    	 5237166	       228.3 ns/op	5255.79 MB/s	    1345 B/op	       2 allocs/op
+BenchmarkSubgroupForwardCodec-14    	 5293897	       228.1 ns/op	5261.42 MB/s	    1345 B/op	       2 allocs/op
+BenchmarkSubgroupForwardCodec-14    	 5253015	       230.4 ns/op	5209.13 MB/s	    1345 B/op	       2 allocs/op
+BenchmarkSubgroupForwardCodec-14    	 5123403	       232.0 ns/op	5173.33 MB/s	    1345 B/op	       2 allocs/op
+BenchmarkSubgroupForwardCodec-14    	 5135708	       232.7 ns/op	5157.12 MB/s	    1345 B/op	       2 allocs/op
+BenchmarkSubgroupForwardCodec-14    	 5188078	       231.9 ns/op	5175.52 MB/s	    1345 B/op	       2 allocs/op
+BenchmarkSubgroupForwardCodec-14    	 5146158	       230.2 ns/op	5213.81 MB/s	    1345 B/op	       2 allocs/op
+BenchmarkSubgroupForwardCodec-14    	 5279642	       229.1 ns/op	5238.78 MB/s	    1345 B/op	       2 allocs/op
+BenchmarkSubgroupForwardCodec-14    	 5180688	       230.1 ns/op	5216.18 MB/s	    1345 B/op	       2 allocs/op
+BenchmarkControlRoundTrip-14        	  253490	      4730 ns/op	    2283 B/op	      46 allocs/op
+BenchmarkControlRoundTrip-14        	  261075	      4699 ns/op	    2277 B/op	      46 allocs/op
+BenchmarkControlRoundTrip-14        	  255878	      4806 ns/op	    2281 B/op	      46 allocs/op
+BenchmarkControlRoundTrip-14        	  248326	      4814 ns/op	    2286 B/op	      46 allocs/op
+BenchmarkControlRoundTrip-14        	  246774	      4864 ns/op	    2287 B/op	      46 allocs/op
+BenchmarkControlRoundTrip-14        	  247974	      4812 ns/op	    2286 B/op	      46 allocs/op
+BenchmarkControlRoundTrip-14        	  252654	      4789 ns/op	    2283 B/op	      46 allocs/op
+BenchmarkControlRoundTrip-14        	  261289	      4792 ns/op	    2277 B/op	      46 allocs/op
+BenchmarkControlRoundTrip-14        	  258972	      4813 ns/op	    2279 B/op	      46 allocs/op
+BenchmarkControlRoundTrip-14        	  249926	      4848 ns/op	    2285 B/op	      46 allocs/op
+BenchmarkSubgroupThroughput-14      	 1511732	       788.1 ns/op	1522.63 MB/s	    1344 B/op	       2 allocs/op
+BenchmarkSubgroupThroughput-14      	 1521703	       791.6 ns/op	1515.87 MB/s	    1344 B/op	       2 allocs/op
+BenchmarkSubgroupThroughput-14      	 1515933	       792.3 ns/op	1514.57 MB/s	    1344 B/op	       2 allocs/op
+BenchmarkSubgroupThroughput-14      	 1518331	       788.1 ns/op	1522.59 MB/s	    1344 B/op	       2 allocs/op
+BenchmarkSubgroupThroughput-14      	 1514860	       790.6 ns/op	1517.90 MB/s	    1344 B/op	       2 allocs/op
+BenchmarkSubgroupThroughput-14      	 1524918	       787.3 ns/op	1524.14 MB/s	    1344 B/op	       2 allocs/op
+BenchmarkSubgroupThroughput-14      	 1519147	       790.3 ns/op	1518.32 MB/s	    1344 B/op	       2 allocs/op
+BenchmarkSubgroupThroughput-14      	 1521760	       792.6 ns/op	1513.92 MB/s	    1344 B/op	       2 allocs/op
+BenchmarkSubgroupThroughput-14      	 1517074	       790.1 ns/op	1518.81 MB/s	    1344 B/op	       2 allocs/op
+BenchmarkSubgroupThroughput-14      	 1525974	       784.6 ns/op	1529.43 MB/s	    1344 B/op	       2 allocs/op
+PASS
+ok  	github.com/floatdrop/moq-go/pkg/moqt/session	45.205s
+goos: darwin
+goarch: arm64
+pkg: github.com/floatdrop/moq-go/pkg/relay
+cpu: Apple M3 Max
+BenchmarkFanout1to1-14        	  943218	      1287 ns/op	 932.64 MB/s	    2890 B/op	       5 allocs/op
+BenchmarkFanout1to1-14        	  964682	      1256 ns/op	 955.24 MB/s	    2894 B/op	       5 allocs/op
+BenchmarkFanout1to1-14        	  974542	      1274 ns/op	 941.65 MB/s	    2894 B/op	       5 allocs/op
+BenchmarkFanout1to1-14        	  961987	      1232 ns/op	 974.04 MB/s	    2893 B/op	       5 allocs/op
+BenchmarkFanout1to1-14        	  976975	      1299 ns/op	 923.69 MB/s	    2894 B/op	       5 allocs/op
+BenchmarkFanout1to1-14        	  981355	      1240 ns/op	 968.06 MB/s	    2894 B/op	       5 allocs/op
+BenchmarkFanout1to1-14        	  967465	      1283 ns/op	 935.67 MB/s	    2894 B/op	       5 allocs/op
+BenchmarkFanout1to1-14        	  963492	      1237 ns/op	 970.05 MB/s	    2894 B/op	       5 allocs/op
+BenchmarkFanout1to1-14        	  972854	      1277 ns/op	 939.66 MB/s	    2894 B/op	       5 allocs/op
+BenchmarkFanout1to1-14        	  972494	      1253 ns/op	 957.74 MB/s	    2894 B/op	       5 allocs/op
+BenchmarkFanout1toN-14        	   49617	     23532 ns/op	  51.00 MB/s	   87541 B/op	     131 allocs/op
+BenchmarkFanout1toN-14        	   49390	     23006 ns/op	  52.16 MB/s	   87541 B/op	     131 allocs/op
+BenchmarkFanout1toN-14        	   53863	     23104 ns/op	  51.94 MB/s	   87539 B/op	     131 allocs/op
+BenchmarkFanout1toN-14        	   51414	     23414 ns/op	  51.25 MB/s	   87538 B/op	     131 allocs/op
+BenchmarkFanout1toN-14        	   50059	     22836 ns/op	  52.55 MB/s	   87541 B/op	     131 allocs/op
+BenchmarkFanout1toN-14        	   51430	     22984 ns/op	  52.21 MB/s	   87501 B/op	     130 allocs/op
+BenchmarkFanout1toN-14        	   49923	     22829 ns/op	  52.57 MB/s	   87542 B/op	     131 allocs/op
+BenchmarkFanout1toN-14        	   50985	     24176 ns/op	  49.64 MB/s	   87540 B/op	     131 allocs/op
+BenchmarkFanout1toN-14        	   52882	     23717 ns/op	  50.60 MB/s	   87537 B/op	     131 allocs/op
+BenchmarkFanout1toN-14        	   57496	     23087 ns/op	  51.98 MB/s	   87575 B/op	     131 allocs/op
+BenchmarkFetchFromCache-14    	   41899	     27352 ns/op	   13798 B/op	     111 allocs/op
+BenchmarkFetchFromCache-14    	   42537	     26099 ns/op	   13793 B/op	     111 allocs/op
+BenchmarkFetchFromCache-14    	   49276	     24872 ns/op	   13823 B/op	     111 allocs/op
+BenchmarkFetchFromCache-14    	   49009	     25040 ns/op	   13825 B/op	     111 allocs/op
+BenchmarkFetchFromCache-14    	   49086	     25010 ns/op	   13825 B/op	     111 allocs/op
+BenchmarkFetchFromCache-14    	   44020	     27163 ns/op	   13782 B/op	     111 allocs/op
+BenchmarkFetchFromCache-14    	   41845	     27355 ns/op	   13798 B/op	     111 allocs/op
+BenchmarkFetchFromCache-14    	   41982	     27528 ns/op	   13798 B/op	     111 allocs/op
+BenchmarkFetchFromCache-14    	   41824	     26233 ns/op	   13799 B/op	     111 allocs/op
+BenchmarkFetchFromCache-14    	   49333	     24763 ns/op	   13822 B/op	     111 allocs/op
+PASS
+ok  	github.com/floatdrop/moq-go/pkg/relay	52.712s
+goos: darwin
+goarch: arm64
+pkg: github.com/floatdrop/moq-go/pkg/relay/cache
+cpu: Apple M3 Max
+BenchmarkCachePut-14         	11771755	        92.52 ns/op	12970.42 MB/s	     128 B/op	       1 allocs/op
+BenchmarkCachePut-14         	13802000	        93.53 ns/op	12830.51 MB/s	     128 B/op	       1 allocs/op
+BenchmarkCachePut-14         	13680598	        94.61 ns/op	12683.60 MB/s	     128 B/op	       1 allocs/op
+BenchmarkCachePut-14         	13644775	        94.59 ns/op	12686.23 MB/s	     128 B/op	       1 allocs/op
+BenchmarkCachePut-14         	13568596	        94.45 ns/op	12704.55 MB/s	     128 B/op	       1 allocs/op
+BenchmarkCachePut-14         	13521920	        95.71 ns/op	12537.53 MB/s	     128 B/op	       1 allocs/op
+BenchmarkCachePut-14         	13634535	        95.04 ns/op	12625.90 MB/s	     128 B/op	       1 allocs/op
+BenchmarkCachePut-14         	13465833	        92.85 ns/op	12923.49 MB/s	     128 B/op	       1 allocs/op
+BenchmarkCachePut-14         	13669897	        93.56 ns/op	12825.52 MB/s	     128 B/op	       1 allocs/op
+BenchmarkCachePut-14         	13508467	        93.48 ns/op	12837.54 MB/s	     128 B/op	       1 allocs/op
+BenchmarkCacheGet/hit-14     	100000000	        10.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/hit-14     	100000000	        10.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/hit-14     	100000000	        10.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/hit-14     	100000000	        10.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/hit-14     	100000000	        10.45 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/hit-14     	100000000	        10.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/hit-14     	100000000	        10.49 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/hit-14     	100000000	        10.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/hit-14     	100000000	        10.47 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/hit-14     	100000000	        10.46 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/miss-14    	136699954	         8.778 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/miss-14    	136721072	         8.767 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/miss-14    	136668474	         8.760 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/miss-14    	136756363	         8.769 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/miss-14    	136962717	         8.774 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/miss-14    	136854178	         8.775 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/miss-14    	136837851	         8.765 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/miss-14    	136611859	         8.765 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/miss-14    	136868923	         8.768 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGet/miss-14    	136766806	         8.783 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCacheGetRange-14    	  191630	      6268 ns/op	     248 B/op	       5 allocs/op
+BenchmarkCacheGetRange-14    	  192974	      6261 ns/op	     248 B/op	       5 allocs/op
+BenchmarkCacheGetRange-14    	  184750	      6342 ns/op	     248 B/op	       5 allocs/op
+BenchmarkCacheGetRange-14    	  193425	      6219 ns/op	     248 B/op	       5 allocs/op
+BenchmarkCacheGetRange-14    	  192411	      6246 ns/op	     248 B/op	       5 allocs/op
+BenchmarkCacheGetRange-14    	  190117	      6241 ns/op	     248 B/op	       5 allocs/op
+BenchmarkCacheGetRange-14    	  192764	      6276 ns/op	     248 B/op	       5 allocs/op
+BenchmarkCacheGetRange-14    	  166410	      6306 ns/op	     248 B/op	       5 allocs/op
+BenchmarkCacheGetRange-14    	  184952	      6322 ns/op	     248 B/op	       5 allocs/op
+BenchmarkCacheGetRange-14    	  193585	      6221 ns/op	     248 B/op	       5 allocs/op
+PASS
+ok  	github.com/floatdrop/moq-go/pkg/relay/cache	57.346s

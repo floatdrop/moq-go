@@ -87,7 +87,7 @@ bench-smoke:
 bench-baseline:
 	go test -run='^$$' -bench=. -skip='$(BENCH_SKIP)' -benchmem -count=10 \
 		./pkg/moqt/wire/ ./pkg/moqt/message/ ./pkg/moqt/session/ ./pkg/relay/ ./pkg/relay/cache/ \
-		> benchmarks/baseline-go1.26.txt 2>/dev/null
+		> benchmarks/baseline-go1.27.txt 2>/dev/null
 
 # ---------------------------------------------------------------------------
 # Coverage

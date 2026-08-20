@@ -130,7 +130,7 @@ blocker — those allocations multiply by the per-object call rate.
 
 ## Baseline
 
-[`baseline-go1.26.txt`](baseline-go1.26.txt) is a committed reference run of the
+[`baseline-go1.27.txt`](baseline-go1.27.txt) is a committed reference run of the
 regression suite on one machine (the `goos`/`goarch`/`cpu` header records which).
 Use it as a sanity check and as the `old.txt` for a quick local diff. Refresh it
 deliberately — never silently — when an intentional performance change lands, and

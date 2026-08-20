@@ -40,7 +40,7 @@ A few specifics:
   than the bundled snapshot (see `CLAUDE.md` for the command).
 - **Benchmarks** live alongside the wire codec and session/relay hot paths. Run
   `make bench-quick` (~5s) after a change to any of them and compare `allocs/op`
-  against `benchmarks/baseline-go1.26.txt`; that metric multiplies by the
+  against `benchmarks/baseline-go1.27.txt`; that metric multiplies by the
   live-stream object rate, so an unexplained increase is a blocker. `make bench`
   (~4m30s) is the full suite and the only one whose `ns/op` means anything. See
   `benchmarks/README.md`.

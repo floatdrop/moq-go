@@ -210,7 +210,7 @@ Hot paths are the wire codec, per-object session and relay paths, and the cache
 — anything whose cost multiplies by the live-stream object rate.
 
 ```sh
-make bench-quick        # ~5s; compare allocs/op against benchmarks/baseline-go1.26.txt
+make bench-quick        # ~5s; compare allocs/op against benchmarks/baseline-go1.27.txt
 ```
 
 `allocs/op` is the regression metric: one allocation added to a per-object path
