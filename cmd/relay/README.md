@@ -17,6 +17,7 @@ No authentication — suitable for local development and testing.
 
 ```
 relay [-addr host:port] [-cert file] [-key file] [-webtransport-path /moq]
+      [-health-addr host:port] [-health-path /healthz]
 ```
 
 | Flag | Default | Description |
@@ -29,6 +30,27 @@ relay [-addr host:port] [-cert file] [-key file] [-webtransport-path /moq]
 | `-catalog-ttl` | `0` | Per-object TTL for tracks matching `-catalog-track-name`; `0` means infinite retention (FIFO size cap still applies). |
 | `-max-subscriptions` | `0` | Per-session cap on concurrent subscriptions (§13.1); `0` = unlimited. |
 | `-max-namespace-requests` | `0` | Per-session cap on concurrent namespace requests (§13.7.1); `0` = unlimited. |
+| `-health-addr` | — | TCP address for the HTTP health endpoint. Empty (the default) disables it. |
+| `-health-path` | `/healthz` | Path on `-health-addr` that answers `200 OK`. |
+
+## Health endpoint
+
+The MOQT port is UDP, so a TCP-only load-balancer probe or a Kubernetes
+`httpGet` cannot reach it. `-health-addr` opts into a plain HTTP endpoint over
+TCP that they can:
+
+```sh
+relay -health-addr 0.0.0.0:8080
+curl -i http://localhost:8080/healthz   # 200 OK, body "ok"
+```
+
+It is off by default because the port is unauthenticated, and only a deployment
+with a probe to satisfy needs it. Anything other than `-health-path` answers
+404.
+
+It reports **process liveness only** — that this handler is answering. It says
+nothing about whether media is actually moving, and a relay looks healthy right
+up until it stops forwarding. Use it as a liveness probe, not a readiness one.
 
 ## Quick start
 
@@ -57,6 +79,11 @@ The relay handles `SIGINT` and `SIGTERM`. On receipt it sends `GOAWAY` (§10.4) 
 all active sessions with a 5-second grace period, then force-closes any that have
 not drained — and it does not exit until that drain finishes, so peers actually
 receive the GOAWAY rather than losing the connection under them.
+
+The health endpoint, if enabled, comes down at the *start* of that sequence
+rather than the end. Otherwise the relay would keep reporting itself healthy for
+the whole drain, and a load balancer would keep sending it connections it is
+about to refuse.
 
 ## Interop testing
 

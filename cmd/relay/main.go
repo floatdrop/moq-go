@@ -8,6 +8,7 @@ import (
 	"flag"
 	"log"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -48,6 +49,19 @@ func main() {
 		0,
 		"per-object TTL for tracks matching --catalog-track-name; 0 means infinite retention (FIFO size cap still applies)",
 	)
+	// The MOQT port is UDP, so a TCP-only load-balancer probe or a Kubernetes
+	// httpGet cannot reach it. Setting -health-addr opts into a plain TCP HTTP
+	// endpoint answering 200 OK at -health-path. Off by default: the port is
+	// unauthenticated, and only a deployment with a probe to satisfy needs it.
+	//
+	// It reports process liveness only — it goes up once the listener is bound
+	// and, on SIGINT/SIGTERM, comes down BEFORE the GOAWAY drain rather than
+	// after it, so a load balancer stops sending new connections while the
+	// relay is still finishing with the ones it has.
+	healthAddr := flag.String("health-addr", "",
+		"TCP address for the HTTP health endpoint; empty (the default) disables it")
+	healthPath := flag.String("health-path", "/healthz",
+		"path on -health-addr that answers 200 OK")
 	maxSubs := flag.Int("max-subscriptions", 0,
 		"per-session cap on concurrent subscriptions (§13.1); 0 = unlimited")
 	maxNamespaceReqs := flag.Int(
@@ -56,6 +70,16 @@ func main() {
 		"per-session cap on concurrent PUBLISH_NAMESPACE/SUBSCRIBE_NAMESPACE/SUBSCRIBE_TRACKS requests (§13.7.1); 0 = unlimited",
 	)
 	flag.Parse()
+
+	// r.URL.Path always begins with "/" on a server request, so a health path
+	// without one matches nothing: the relay would bind the port, log a line
+	// that reads like success, and 404 every probe. That failure is invisible
+	// from this end — the operator sees a restart loop and a relay logging
+	// nothing wrong — so refuse it here, before anything is opened and while
+	// they are still looking at the command they just typed.
+	if *healthAddr != "" && !strings.HasPrefix(*healthPath, "/") {
+		log.Fatalf("-health-path %q must begin with \"/\"", *healthPath)
+	}
 
 	logger := slog.New(tint.NewTextHandler(os.Stderr, &tint.Options{
 		Level:      slog.LevelDebug,
@@ -100,6 +124,26 @@ func main() {
 		" [{algorithm: \"sha-256\", value: new Uint8Array([%s])}]})",
 		*addr, *wtPath, strings.Join(jsBytes, ","))
 
+	// Bound before the signal context below, alongside the other startup
+	// failures: an operator who asked for a health port and did not get one
+	// should find out now, and log.Fatalf here has no deferred stop() to skip.
+	var healthLn net.Listener
+	if *healthAddr != "" {
+		var lerr error
+		healthLn, lerr = (&net.ListenConfig{}).Listen(context.Background(), "tcp", *healthAddr)
+		if lerr != nil {
+			log.Fatalf("listen health on %s: %v", *healthAddr, lerr)
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if healthLn != nil {
+		serveHealth(ctx, healthLn, healthHandler(*healthPath), logger)
+		log.Printf("health endpoint on http://%s%s", healthLn.Addr(), *healthPath)
+	}
+
 	r := relay.New(listener, relay.Config{
 		GoawayTimeout: 5 * time.Second,
 		SessionOptions: []session.Option{
@@ -110,9 +154,6 @@ func main() {
 		MaxSubscriptionsPerSession:     *maxSubs,
 		MaxNamespaceRequestsPerSession: *maxNamespaceReqs,
 	})
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	// Run — not Start — because it returns only after the GOAWAY drain has
 	// finished and it keeps live sessions out of ctx's cancellation scope. Both
