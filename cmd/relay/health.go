@@ -1,6 +1,7 @@
 // The plain-HTTP side of the relay: the liveness endpoint an orchestrator
-// probes. The MOQT port is UDP, so a TCP-only load-balancer probe or a
-// Kubernetes httpGet cannot reach it — this is the TCP surface those speak to.
+// probes, and the routing that lets the metrics exposition share its port. The
+// MOQT port is UDP, so a TCP-only load-balancer probe or a Kubernetes httpGet
+// cannot reach it — this is the TCP surface those speak to.
 
 package main
 
@@ -11,11 +12,16 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 )
 
-// healthHandler answers 200 with a short body at exactly healthPath, and 404
-// for everything else.
+// healthHandler answers 200 with a short body at exactly healthPath, serves
+// metrics at metricsPath, and 404s everything else.
+//
+// A nil metrics disables that route entirely — metricsPath is then just another
+// 404 rather than a hole in it, so -metrics=false cannot leave the path
+// answering something an operator did not intend.
 //
 // Deliberately not an [http.ServeMux]. healthPath is operator-supplied, and
 // since Go 1.22 a ServeMux pattern containing "{" is parsed as a wildcard, so a
@@ -26,8 +32,12 @@ import (
 // It reports process liveness only: whether this handler is answering, not
 // whether the relay is delivering media. A relay looks healthy right up until
 // it is not forwarding anything, which liveness cannot see.
-func healthHandler(healthPath string) http.Handler {
+func healthHandler(healthPath, metricsPath string, metrics http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if metrics != nil && r.URL.Path == metricsPath {
+			metrics.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path != healthPath {
 			http.NotFound(w, r)
 			return
@@ -38,6 +48,15 @@ func healthHandler(healthPath string) http.Handler {
 		// which is its problem rather than a relay fault worth logging.
 		_, _ = io.WriteString(w, "ok\n")
 	})
+}
+
+// metricsPath returns the path the metrics exposition is served on for a given
+// health path: one level below it, so a single ingress rule covers both.
+//
+// The trim is what stops a healthPath of "/" yielding "//metrics", which no
+// client would request.
+func metricsPath(healthPath string) string {
+	return strings.TrimSuffix(healthPath, "/") + "/metrics"
 }
 
 // serveHealth runs h on ln until ctx is done, then shuts it down with a grace

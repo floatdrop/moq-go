@@ -9,6 +9,7 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -22,6 +23,18 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/relaynet"
 )
+
+// isFlagDefault reports whether name was left at its default, distinguishing
+// "the operator set this" from "this happens to be on".
+func isFlagDefault(name string) bool {
+	set := true
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = false
+		}
+	})
+	return set
+}
 
 func main() {
 	log.SetOutput(os.Stderr)
@@ -62,6 +75,18 @@ func main() {
 		"TCP address for the HTTP health endpoint; empty (the default) disables it")
 	healthPath := flag.String("health-path", "/healthz",
 		"path on -health-addr that answers 200 OK")
+	// Metrics ride the health port rather than getting one of their own: both
+	// are plain unauthenticated HTTP over TCP, an operator who exposed one has
+	// made the same decision for the other, and a sub-path means a single
+	// ingress rule covers both. Liveness says nothing about whether media is
+	// moving; these counters are where that becomes visible.
+	metricsEnabled := flag.Bool("metrics", true,
+		"serve Prometheus metrics at <health-path>/metrics; requires -health-addr")
+	// Track names come off the wire and are chosen by publishers, so an
+	// unbounded label would let a client mint time series at will. Only these
+	// keep their own label value; everything else folds into track="other".
+	metricsTracks := flag.String("metrics-tracks", "catalog",
+		"comma-separated track names that keep their own `track` label; all others report as \"other\"")
 	maxSubs := flag.Int("max-subscriptions", 0,
 		"per-session cap on concurrent subscriptions (§13.1); 0 = unlimited")
 	maxNamespaceReqs := flag.Int(
@@ -79,6 +104,13 @@ func main() {
 	// they are still looking at the command they just typed.
 	if *healthAddr != "" && !strings.HasPrefix(*healthPath, "/") {
 		log.Fatalf("-health-path %q must begin with \"/\"", *healthPath)
+	}
+	// Not fatal — the default is -metrics=true, so failing here would refuse
+	// every relay that never asked for a health port. But an operator who set
+	// it explicitly asked for something they are not getting, and silence is
+	// how that becomes a scrape misconfigured for weeks.
+	if *healthAddr == "" && !isFlagDefault("metrics") {
+		log.Print("-metrics has no effect without -health-addr: metrics ride the health port")
 	}
 
 	logger := slog.New(tint.NewTextHandler(os.Stderr, &tint.Options{
@@ -127,6 +159,11 @@ func main() {
 	// Bound before the signal context below, alongside the other startup
 	// failures: an operator who asked for a health port and did not get one
 	// should find out now, and log.Fatalf here has no deferred stop() to skip.
+	// nil leaves relay.Config.Metrics at its NopMetrics default, which is what
+	// a relay with no metrics endpoint wants: the fanout should not pay for
+	// counters nobody can read.
+	var metrics relay.Metrics
+
 	var healthLn net.Listener
 	if *healthAddr != "" {
 		var lerr error
@@ -140,11 +177,19 @@ func main() {
 	defer stop()
 
 	if healthLn != nil {
-		serveHealth(ctx, healthLn, healthHandler(*healthPath), logger)
+		var metricsHandler http.Handler
+		if *metricsEnabled {
+			exporter := newPromExporter(strings.Split(*metricsTracks, ","))
+			metrics = exporter
+			metricsHandler = exporter
+		}
+		serveHealth(ctx, healthLn,
+			healthHandler(*healthPath, metricsPath(*healthPath), metricsHandler), logger)
 		log.Printf("health endpoint on http://%s%s", healthLn.Addr(), *healthPath)
 	}
 
 	r := relay.New(listener, relay.Config{
+		Metrics:       metrics,
 		GoawayTimeout: 5 * time.Second,
 		SessionOptions: []session.Option{
 			session.WithImplementation("mediamesh-relay/0.1"),
