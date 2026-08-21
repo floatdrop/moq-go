@@ -16,7 +16,7 @@ import (
 func TestHealthHandlerRouting(t *testing.T) {
 	t.Parallel()
 
-	h := healthHandler("/healthz")
+	h := healthHandler("/healthz", metricsPath("/healthz"), nil)
 
 	for _, tc := range []struct {
 		path string
@@ -49,7 +49,7 @@ func TestHealthHandlerCustomPathIsNotAServeMuxPattern(t *testing.T) {
 	t.Parallel()
 
 	const odd = "/health{z}"
-	h := healthHandler(odd)
+	h := healthHandler(odd, metricsPath(odd), nil)
 
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, odd, nil))
@@ -80,7 +80,7 @@ func TestServeHealthShutsDownOnContextCancel(t *testing.T) {
 	addr := ln.Addr().String()
 
 	ctx, cancel := context.WithCancel(t.Context())
-	serveHealth(ctx, ln, healthHandler("/healthz"), nil)
+	serveHealth(ctx, ln, healthHandler("/healthz", metricsPath("/healthz"), nil), nil)
 
 	// Up first, so the assertion below is about the shutdown and not about
 	// having never started.

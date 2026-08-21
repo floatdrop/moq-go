@@ -140,6 +140,18 @@ say in the commit message why the numbers moved:
 make bench-baseline
 ```
 
+`BENCH_PKGS` defaults to `./pkg/...`, so neither tier reaches `cmd/`. The
+relay's metrics exporter has a per-object path with its own benchmarks, and they
+only run when asked for by name:
+
+```sh
+make bench-quick BENCH_PKGS=./cmd/relay/
+```
+
+Worth remembering when changing that exporter: an allocation added there
+multiplies by the object rate per subscriber, and the default guard will not see
+it.
+
 Absolute numbers are not portable across machines, so don't gate CI on them. The
 value is the *shape* (allocation counts) and the per-commit `benchstat` delta on
 the same machine.

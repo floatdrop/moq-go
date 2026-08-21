@@ -163,7 +163,7 @@ type Metrics interface {
 
 	// ObjectReceived is called once for each object read off an inbound
 	// subgroup stream and won by this contributor — objects discarded as
-	// §2.1 duplicates of a redundant upstream are not counted. Compared
+	// §9.3 duplicates of a redundant upstream are not counted. Compared
 	// against ObjectForwarded it separates "the relay never got it" from
 	// "the relay got it and shed it".
 	ObjectReceived(t TrackRef, subgroup uint64)
