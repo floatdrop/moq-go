@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1
+#
+# Standalone relay image for the Yandex Cloud COI deployment. Unlike
+# cmd/relay/Dockerfile (interop runner: requires a mounted /certs pair), this
+# image runs `/app/relay` directly with no TLS material mounted — the relay
+# generates an ephemeral self-signed cert on startup when -cert/-key are
+# left empty.
+#
+# Build from the repository root, targeting the deploy host's platform
+# (COI runs amd64; a local arm64 dev machine cross-compiles instead of
+# emulating under QEMU):
+#   docker build -f cmd/relay/Dockerfile.yc --platform=linux/amd64 \
+#     -t cr.yandex/<registry-id>/moq-relay:<tag> .
+
+FROM --platform=$BUILDPLATFORM golang:1.27-bookworm AS builder
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w" -o /out/relay ./cmd/relay
+
+FROM scratch AS runtime
+
+# TLS roots for outbound connections the relay itself might make. Copied
+# rather than apt-installed: the runtime stage targets amd64 and this build
+# often runs on an arm64 dev machine, where a RUN here would need emulation.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=builder /out/relay /app/relay
+
+EXPOSE 4433/udp
+EXPOSE 8080/tcp
+
+ENTRYPOINT ["/app/relay"]
