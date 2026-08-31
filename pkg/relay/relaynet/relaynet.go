@@ -45,6 +45,9 @@ var MOQTQUICALPNs = []string{"moqt-19"}
 // defaultQUICConfig returns the QUIC tuning the relay listens and dials with:
 // a 30s idle timeout with 5s keep-alives, datagrams enabled (MOQT may deliver
 // objects as QUIC datagrams), and RESET_STREAM_AT partial delivery (§11.4.3).
+//
+// It is the base every entry point starts from; [WithQUICConfig] is how a caller
+// adjusts it per leg.
 func defaultQUICConfig() *quic.Config {
 	return &quic.Config{
 		MaxIdleTimeout:                   30 * time.Second,
@@ -97,8 +100,11 @@ func InsecureClientTLSConfig(alpns []string) *tls.Config {
 // [quicconn.Dial] owns the address handling, including the multi-address,
 // RFC 6724-ordered resolution that keeps a dual-stack peer named by hostname
 // from being dialed over the wrong family — see its doc comment.
-func DialQUIC(ctx context.Context, addr string, tlsCfg *tls.Config) (session.Conn, error) {
-	return quicconn.Dial(ctx, addr, tlsCfg, defaultQUICConfig())
+//
+// opts tune the QUIC config this leg dials with, leaving the listener and any
+// other dial untouched — see [WithQUICConfig].
+func DialQUIC(ctx context.Context, addr string, tlsCfg *tls.Config, opts ...Option) (session.Conn, error) {
+	return quicconn.Dial(ctx, addr, tlsCfg, quicConfig(opts))
 }
 
 // SelfSignedCert generates an ephemeral ECDSA-P256 self-signed certificate for

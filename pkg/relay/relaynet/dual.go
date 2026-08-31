@@ -50,7 +50,10 @@ const dualBacklog = 16
 // package doc. Serving both mappings means a relay is reachable from a browser by
 // default, so a deployment that cares about which pages may open sessions needs
 // its own policy here.
-func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger) (*DualListener, error) {
+//
+// opts tune the QUIC config this listener serves on, independently of whatever a
+// cross-relay [DialQUIC] uses — see [WithQUICConfig].
+func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger, opts ...Option) (*DualListener, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -59,12 +62,21 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger) (*Dual
 		// instead of taking the process down inside NewListener.
 		return nil, fmt.Errorf("relaynet: empty WebTransport path (use %q for the default)", "/moq")
 	}
+	qcfg := quicConfig(opts)
+	// Neither of these is the caller's to switch off here, whatever WithQUICConfig
+	// asked for: webtransport.Server.ServeQUICConn checks them one at a time and
+	// refuses the connection on the first one missing, so a listener lacking
+	// either would silently serve only half of what it advertises. MOQT can use
+	// both (§11.3, §11.4.3), but neither is what forces the hand here.
+	qcfg.EnableDatagrams = true
+	qcfg.EnableStreamResetPartialDelivery = true
+
 	// Not ListenEarly: an early listener yields connections before the handshake
 	// completes, which would break this listener's contract that ALPN is already
 	// negotiated (the dispatch below reads it) and would have the relay write
 	// SETUP as 0.5-RTT data to a peer whose certificate is unverified. 0-RTT would
 	// need Config.Allow0RTT, which defaultQUICConfig deliberately leaves unset.
-	ql, err := quic.ListenAddr(addr, tlsCfg, defaultQUICConfig())
+	ql, err := quic.ListenAddr(addr, tlsCfg, qcfg)
 	if err != nil {
 		return nil, fmt.Errorf("relaynet: listen %s: %w", addr, err)
 	}
@@ -78,10 +90,7 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger) (*Dual
 			http.NotFound(w, r)
 		})
 	}
-	// webtransport.Server.ServeQUICConn refuses a connection unless DATAGRAM and
-	// stream-reset partial delivery were both negotiated, so this depends on
-	// defaultQUICConfig enabling them — it does, for MOQT's own reasons (§11.3,
-	// §11.4.3), and the WebTransport half breaks if that ever changes.
+	// This half is what the two re-asserted fields above are for; see there.
 	h3 := &http3.Server{TLSConfig: tlsCfg, Handler: mux}
 	webtransport.ConfigureHTTP3Server(h3)
 	wts := &webtransport.Server{
