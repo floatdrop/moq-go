@@ -725,7 +725,7 @@ func TestCrossRelay_WatchNamespacesForwardsUnpublish(t *testing.T) {
 // TestCrossRelay_WatchNamespacesSkipsTrackSubscribers pins the WantsTracks skip
 // in forwardNamespaceEvent: a SUBSCRIBE_TRACKS holder must NOT be sent the
 // NAMESPACE reflected from a remote relay's advertisement. Those holders
-// receive forwarded PUBLISH messages (§6.1 / §10.19), and a relay cannot
+// receive forwarded PUBLISH messages (§6.1 / §10.20), and a relay cannot
 // synthesize a remote PUBLISH from a namespace advertisement alone.
 //
 // The SUBSCRIBE_NAMESPACE holder here is load-bearing, not decoration. A bare
@@ -1252,7 +1252,7 @@ func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 // arrived is the §10.12.2 Joining FETCH — and that is refused with INVALID_RANGE
 // when the relay has no Joining Location to compute a range from. Before the
 // fix, relay A learned no watermark from B's SUBSCRIBE_OK, omitted
-// LARGEST_OBJECT from its own SUBSCRIBE_OK (violating §10.2.16), and rejected
+// LARGEST_OBJECT from its own SUBSCRIBE_OK (violating §10.2.17), and rejected
 // the backfill; the subscriber never saw the track's contents at all.
 //
 // An MSF catalog is exactly this shape — published on join, republished only
@@ -1332,7 +1332,7 @@ func TestCrossRelay_JoiningFetchBackfillsPublishOnceTrack(t *testing.T) {
 		t.Fatalf("cross-relay Subscribe: %v", err)
 	}
 
-	// §10.2.16: "If Objects have been published on this Track the Publisher MUST
+	// §10.2.17: "If Objects have been published on this Track the Publisher MUST
 	// include this parameter." A is the publisher for this subscriber, and B has
 	// told it objects exist, so its SUBSCRIBE_OK has to carry the watermark.
 	// This is the assertion the fix turns green on the wire.

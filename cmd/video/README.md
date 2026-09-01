@@ -3,7 +3,7 @@
 Streams a local video file to a relay as a CMSF broadcast
 ([draft-ietf-moq-cmsf-01](https://datatracker.ietf.org/doc/draft-ietf-moq-cmsf/):
 CMAF packaging on top of MSF `draft-ietf-moq-msf-01` and MoQ Transport
-`draft-ietf-moq-transport-19`), and measures what comes back out.
+`draft-ietf-moq-transport-20`), and measures what comes back out.
 
 It exists to answer one question about a suspected delivery fault: **is
 the transport at fault, or the encoder feeding it?** Every byte the
@@ -209,7 +209,7 @@ Both tracks live under `-ns`:
 
 The catalog is published once at start (§5: a catalog Object SHOULD be
 published only when track availability changes), so a subscriber that
-connects later backfills it with a Joining FETCH (§5.1.3). The publisher
+connects later backfills it with a fill fetch stream (§5.1.3). The publisher
 closes with the §11.3 terminator catalog, which is what ends the
 subscriber's run and triggers its report.
 

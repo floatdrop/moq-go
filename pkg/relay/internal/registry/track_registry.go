@@ -189,13 +189,13 @@ func (r *TrackRegistry) GetOrCreateNew(fullName track.FullTrackName) (entry *Tra
 // It is the counterpart to a speculative [TrackRegistry.GetOrCreateNew] — the
 // PUBLISH path creates the entry before the request is known to succeed, so an
 // inbound data stream cannot arrive against a routable Track Alias with no
-// entry to route it to (§11.1, §10.10). When the request then fails, the entry
+// entry to route it to (§11.1, §10.11). When the request then fails, the entry
 // must not linger: [TrackRegistry.Get] answering for it is read as "track
 // known" by the FETCH path, which turns a DOES_NOT_EXIST into an INVALID_RANGE.
 //
 // The watermark and cache are checked as well as the two slices because a
 // DIFFERENT session may have adopted this entry in the meantime and be part
-// way through its own §10.10 window — publishing objects into a track whose
+// way through its own §10.11 window — publishing objects into a track whose
 // AddUpstream has not run yet. Deleting it there would strand exactly the
 // streams this mechanism exists to protect. Callers must additionally only
 // call this when GetOrCreateNew reported created, so an entry another session

@@ -2,7 +2,7 @@ package message
 
 import "github.com/floatdrop/moq-go/pkg/moqt/wire"
 
-// PublishNamespace is the PUBLISH_NAMESPACE message (§10.15). It announces
+// PublishNamespace is the PUBLISH_NAMESPACE message (§10.16). It announces
 // that the publisher will publish tracks within a namespace.
 type PublishNamespace struct {
 	RequestID  uint64
@@ -33,7 +33,7 @@ func (m *PublishNamespace) Parse(r *wire.Reader) error {
 	return m.Parameters.parse(r)
 }
 
-// Namespace is the NAMESPACE message (§10.16). It announces a track
+// Namespace is the NAMESPACE message (§10.17). It announces a track
 // namespace suffix on a PUBLISH_NAMESPACE or SUBSCRIBE_NAMESPACE request stream.
 type Namespace struct {
 	TrackNamespaceSuffix wire.TrackNamespace
@@ -56,7 +56,7 @@ func (m *Namespace) Parse(r *wire.Reader) error {
 	return s.Err()
 }
 
-// NamespaceDone is the NAMESPACE_DONE message (§10.17). It signals that
+// NamespaceDone is the NAMESPACE_DONE message (§10.18). It signals that
 // no more tracks will be published within a namespace.
 type NamespaceDone struct {
 	TrackNamespaceSuffix wire.TrackNamespace
@@ -79,7 +79,7 @@ func (m *NamespaceDone) Parse(r *wire.Reader) error {
 	return s.Err()
 }
 
-// SubscribeNamespace is the SUBSCRIBE_NAMESPACE message (§10.18). It
+// SubscribeNamespace is the SUBSCRIBE_NAMESPACE message (§10.19). It
 // subscribes to all tracks within a namespace prefix.
 type SubscribeNamespace struct {
 	RequestID            uint64
@@ -110,7 +110,7 @@ func (m *SubscribeNamespace) Parse(r *wire.Reader) error {
 	return m.Parameters.parse(r)
 }
 
-// SubscribeTracks is the SUBSCRIBE_TRACKS message (§10.19). It subscribes
+// SubscribeTracks is the SUBSCRIBE_TRACKS message (§10.20). It subscribes
 // to all tracks within a namespace prefix.
 type SubscribeTracks struct {
 	RequestID            uint64
@@ -141,7 +141,7 @@ func (m *SubscribeTracks) Parse(r *wire.Reader) error {
 	return m.Parameters.parse(r)
 }
 
-// PublishSkipped is the PUBLISH_SKIPPED message (§10.20). It signals that a
+// PublishSkipped is the PUBLISH_SKIPPED message (§10.21). It signals that a
 // specific track's Subscription was not created for this SUBSCRIBE_TRACKS.
 type PublishSkipped struct {
 	TrackNamespaceSuffix wire.TrackNamespace

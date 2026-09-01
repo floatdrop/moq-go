@@ -346,7 +346,7 @@ type DownstreamSub struct {
 	// as unfiltered (delivers every object on the track).
 	Filter *message.LocationFilter
 
-	// rangeFilters holds the §5.1.3 Range Filters the subscriber declared
+	// rangeFilters holds the §5.1.4 Range Filters the subscriber declared
 	// (Subgroup ID / Object ID / Publisher Priority / Object Property). The
 	// fanout ANDs them with Filter per object. nil = no range restriction.
 	// Guarded by mu; access via SetRangeFilters / GetRangeFilters.
@@ -361,15 +361,15 @@ type DownstreamSub struct {
 	// LargestAtSubscribe is the largest object the relay had observed on
 	// this track at the moment the SUBSCRIBE was accepted, per §5.1.2 /
 	// §9.4 ("a relay handling a SUBSCRIBE acts as the publisher").
-	// FilterLargestObject and FilterNextGroupStart resolve their start
+	// The Next Object and relative-start filters resolve their start
 	// location against this snapshot — not against the live, ever-advancing
 	// TrackEntry watermark — so the subscription's start is fixed at
 	// subscribe time and doesn't drift as new objects arrive.
 	LargestAtSubscribe message.Location
 
 	// HasLargestAtSubscribe is false when no objects had been delivered
-	// on the track at SUBSCRIBE time. Per §5.1.2, the LargestObject /
-	// NextGroupStart filters fall back to {0,0} in that case.
+	// on the track at SUBSCRIBE time. Per §5.1.2, the Next Object and
+	// relative-start filters fall back to {0,0} in that case.
 	HasLargestAtSubscribe bool
 
 	// Priority is the §7 Subscriber Priority the peer asked for. Lower
@@ -444,7 +444,7 @@ func (d *DownstreamSub) GetDeliveryTimeouts() message.DeliveryTimeouts {
 	return d.deliveryTimeouts
 }
 
-// SetRangeFilters installs the subscription's Range Filters (§5.1.3), which the
+// SetRangeFilters installs the subscription's Range Filters (§5.1.4), which the
 // fanout ANDs with the Location filter and Forward gate per object (read
 // directly under mu by ForwardDecision). nil clears them (no range restriction).
 func (d *DownstreamSub) SetRangeFilters(f *message.RangeFilterSet) {
@@ -540,8 +540,8 @@ func (d *DownstreamSub) EffectiveStreamPriority(
 // subscriber asked to receive.
 //
 // forward is true when the object should be enqueued. It ANDs the §9.2 Forward
-// State, the §5.1.2 Location filter, and the §5.1.3 Range Filters
-// (subgroupID/object/priority/objProps) — §5.1.4 "Pass = Forward AND Location
+// State, the §5.1.2 Location filter, and the §5.1.4 Range Filters
+// (subgroupID/object/priority/objProps) — §5.1.5 "Pass = Forward AND Location
 // AND Range". When forward is false, groupExhausted reports whether the
 // Location filter has narrowed so this whole group is permanently out of range
 // (§11.4.3), so the caller can reset the stream promptly. A Range-filter miss
@@ -562,10 +562,10 @@ func (d *DownstreamSub) ForwardDecision(
 		return false, false
 	}
 	// Location filter first, so its group-exhaustion signal (§11.4.3) governs.
-	if f != nil && !f.Matches(group, object, largest.Group, largest.Object, has) {
+	if f != nil && !f.Matches(message.Location{Group: group, Object: object}, largest, has) {
 		return false, GroupOutOfRange(group, f)
 	}
-	// Range Filters (§5.1.3): per-object AND; a miss drops the object only.
+	// Range Filters (§5.1.4): per-object AND; a miss drops the object only.
 	if rf != nil && !rf.MatchesObject(subgroupID, object, priority, objProps) {
 		return false, false
 	}
@@ -577,7 +577,7 @@ func (d *DownstreamSub) ForwardDecision(
 // ever pass — which makes its in-flight stream eligible for a §11.4.3 reset
 // (e.g. after a REQUEST_UPDATE narrowed the End Group or raised the Start
 // Location to a higher group). Only the absolute filters carry a fixed range;
-// the dynamic (LargestObject / NextGroupStart) and unset filters never put a
+// the dynamic (Next Object / relative-start) and unset filters never put a
 // whole group permanently out of range, so they return false.
 //
 // A group equal to the Start Location's group is NOT out of range even when
@@ -587,22 +587,20 @@ func GroupOutOfRange(group uint64, f *message.LocationFilter) bool {
 	if f == nil {
 		return false
 	}
-	switch f.Type {
-	case message.FilterAbsoluteStart:
-		return group < f.StartLocation.Group
-	case message.FilterAbsoluteRange:
-		return group < f.StartLocation.Group || group > f.EndGroup()
-	case message.FilterNextGroupStart, message.FilterLargestObject:
-		// Dynamic start derived from the largest object; no fixed range that
-		// puts a whole group permanently out of range.
-		return false
-	default:
+	if f.Unfiltered() || f.RelativeStart() || f.NextObject() {
+		// Start derived from the largest object (or absent entirely); no fixed
+		// range that puts a whole group permanently out of range.
 		return false
 	}
+	if group < f.StartGroup {
+		return true
+	}
+	end, ok := f.End()
+	return ok && group > end.Group
 }
 
 // TerminateWithPublishDone gracefully ends this downstream subscription
-// per §10.11: the relay writes a PUBLISH_DONE message on the
+// per §10.12: the relay writes a PUBLISH_DONE message on the
 // subscriber's request stream and FINs the send side. The subscriber
 // eventually FINs its side too, the handler's readSubscribeUpdates
 // loop sees EOF and exits, and its defer evicts the [DownstreamSub]
@@ -621,7 +619,7 @@ func GroupOutOfRange(group uint64, f *message.LocationFilter) bool {
 // flips the state and writes the message; subsequent calls return
 // without I/O. Safe to call concurrently from any goroutine.
 //
-// streamCount is the §10.11 "Stream Count" field — the number of
+// streamCount is the §10.12 "Stream Count" field — the number of
 // subgroup streams the relay opened for this subscription. Pass 0
 // when the exact count isn't tracked; subscribers treat 0 as
 // approximate per the spec.
@@ -659,7 +657,7 @@ func (d *DownstreamSub) TerminateWithPublishDone(code moqt.PublishDoneCode, reas
 
 // WriteSubscribeOK writes the §10.7 SUBSCRIBE_OK response under the write
 // lock and records that the request now has its response, so a later
-// termination emits PUBLISH_DONE (§10.11) rather than a second response.
+// termination emits PUBLISH_DONE (§10.12) rather than a second response.
 // If a termination won the race first, it returns
 // [ErrSubscriptionTerminated] without writing — the terminator already
 // answered the request with REQUEST_ERROR.

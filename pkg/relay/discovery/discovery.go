@@ -81,7 +81,7 @@ type TrackInfo struct {
 // names start with the same Prefix.
 type NamespaceInfo struct {
 	// Prefix is the namespace tuple advertised by PUBLISH_NAMESPACE
-	// (§6.2 / §10.15). A zero-length tuple matches every track — used
+	// (§6.2 / §10.16). A zero-length tuple matches every track — used
 	// by SUBSCRIBE_NAMESPACE with no filter.
 	Prefix wire.TrackNamespace
 

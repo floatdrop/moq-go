@@ -42,7 +42,7 @@ func TestRequestMuxRoutesByType(t *testing.T) {
 		RequestID:  0,
 		Namespace:  wire.Namespace("ns"),
 		Name:       []byte("a"),
-		Parameters: message.Parameters{message.LargestObjectFilter()},
+		Parameters: message.Parameters{message.NextObjectFilter()},
 	})
 	<-firstSeen // ensure Run is live before late registration
 
@@ -96,7 +96,7 @@ func TestRequestMuxHandleType(t *testing.T) {
 		RequestID:  0,
 		Namespace:  wire.Namespace("ns"),
 		Name:       []byte("typed-track"),
-		Parameters: message.Parameters{message.LargestObjectFilter()},
+		Parameters: message.Parameters{message.NextObjectFilter()},
 	})
 
 	select {

@@ -124,7 +124,7 @@ func TestDownstreamSub_TerminateBeforeOKAnswersWithRequestError(t *testing.T) {
 	}
 }
 
-// TestDownstreamSub_TerminateAfterOKSendsPublishDone pins the normal §10.11
+// TestDownstreamSub_TerminateAfterOKSendsPublishDone pins the normal §10.12
 // order: once SUBSCRIBE_OK is out, a termination follows up with
 // PUBLISH_DONE on the same stream.
 func TestDownstreamSub_TerminateAfterOKSendsPublishDone(t *testing.T) {

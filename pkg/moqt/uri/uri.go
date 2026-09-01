@@ -1,5 +1,5 @@
 // Package uri parses and validates "moqt" URIs and their fragment identifiers
-// as defined by draft-ietf-moq-transport-19 §3.1.1 and §3.1.2.
+// as defined by draft-ietf-moq-transport-20 §3.1.1 and §3.1.2.
 //
 //	moqt-URI = "moqt" "://" authority path-abempty [ "?" query ]
 //

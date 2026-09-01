@@ -70,7 +70,7 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		return
 	}
 
-	// §10.2.16: a forwarded datagram counts towards the track's
+	// §10.2.17: a forwarded datagram counts towards the track's
 	// LARGEST_OBJECT watermark just like a subgroup object does.
 	entry.UpdateLargest(message.Location{Group: d.GroupID, Object: d.ObjectID})
 
@@ -90,7 +90,7 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		// subscription (Forward State 0) receives no datagrams. There is
 		// no per-datagram stream to reset, so the groupExhausted signal
 		// is irrelevant here.
-		// Datagrams have no subgroup; §5.1.3 SUBGROUP_FILTER treats them as
+		// Datagrams have no subgroup; §5.1.4 SUBGROUP_FILTER treats them as
 		// subgroup 0. Object ID / Priority / Properties feed the other filters.
 		forward, _ := sub.ForwardDecision(d.GroupID, d.ObjectID, 0, d.PublisherPriority, d.Properties)
 		if !forward {

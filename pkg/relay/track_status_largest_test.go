@@ -11,7 +11,7 @@ import (
 
 // TestTrackStatus_ReturnsLargestObject is the canonical assertion: after
 // the publisher emits objects, a TRACK_STATUS for the same track carries
-// the §10.2.16 LARGEST_OBJECT parameter in TRACK_STATUS_OK, sourced from
+// the §10.2.17 LARGEST_OBJECT parameter in TRACK_STATUS_OK, sourced from
 // the entry's watermark (which the fanout maintains on every forwarded
 // object).
 func TestTrackStatus_ReturnsLargestObject(t *testing.T) {
@@ -49,7 +49,7 @@ func TestTrackStatus_ReturnsLargestObject(t *testing.T) {
 // hasn't opened a subgroup). The entry's watermark is the zero
 // Location and the reply MUST NOT carry a LARGEST_OBJECT parameter —
 // emitting one would claim the publisher delivered Location {0, 0},
-// which §10.2.16 explicitly reserves for "no objects observed":
+// which §10.2.17 explicitly reserves for "no objects observed":
 //
 //	"If omitted from a message, the sending endpoint has not published
 //	or received any Objects in the Track."

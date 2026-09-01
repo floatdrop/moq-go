@@ -59,30 +59,6 @@ type sessionHandler struct {
 	// serves every downstream subscriber of the track, not just the one on
 	// this session (§9.4 aggregation).
 	relayGo func(func())
-
-	// joinLocs maps a downstream SUBSCRIBE's Request ID to the track
-	// name and §10.2.16 LARGEST_OBJECT snapshot captured when the relay
-	// sent SUBSCRIBE_OK. A subsequent Joining FETCH (§10.12.2) references
-	// the same Request ID to recover the snapshot and compute its end
-	// location contiguous with the live subscription.
-	//
-	// joinLocNotify is closed (and replaced) on every registration so a
-	// Joining FETCH that arrived before its SUBSCRIBE finished establishing
-	// can wait for the record instead of failing — §10.12.2: the publisher
-	// "buffers the pending Joining Fetch until either the Subscription is
-	// established or the request times out".
-	joinLocMu     sync.RWMutex
-	joinLocs      map[uint64]joiningLocation
-	joinLocNotify chan struct{}
-}
-
-// joiningLocation is the per-subscription record stored in
-// [sessionHandler.joinLocs]. It is captured at SUBSCRIBE_OK time, read by
-// the Joining FETCH handler, and removed when the subscription terminates.
-type joiningLocation struct {
-	fullName   track.FullTrackName
-	largest    message.Location
-	hasLargest bool
 }
 
 // newSessionHandler constructs a handler. Callers provide the shared
@@ -123,8 +99,6 @@ func newSessionHandler(
 		maxDropsBeforeReset: maxDropsBeforeReset,
 		maxFanoutLag:        maxFanoutLag,
 		limiter:             sessionLimiter{maxSubs: maxSubsPerSession, maxNS: maxNamespaceReqsPerSession},
-		joinLocs:            make(map[uint64]joiningLocation),
-		joinLocNotify:       make(chan struct{}),
 		relayGo:             relayGo,
 	}
 }
@@ -143,7 +117,7 @@ func (h *sessionHandler) trackRef(name track.FullTrackName) TrackRef {
 // saveLargestLocation folds a LARGEST_OBJECT parameter the upstream sent into
 // the track's watermark.
 //
-// §10.2.16 is the operative rule and it is addressed to relays specifically: a
+// §10.2.17 is the operative rule and it is addressed to relays specifically: a
 // relay MUST set LARGEST_OBJECT to the largest of (1) any value received from
 // the upstream publisher in SUBSCRIBE_OK, PUBLISH or REQUEST_UPDATE_OK, and
 // (2) the largest Location of an Object received on an upstream subscription.
@@ -153,13 +127,13 @@ func (h *sessionHandler) trackRef(name track.FullTrackName) TrackRef {
 //
 // Call this on every path carrying the parameter, unconditionally.
 // [registry.TrackEntry.UpdateLargest] keeps the maximum, which is exactly what
-// §10.2.16 asks for, so a value already overtaken changes nothing.
+// §10.2.17 asks for, so a value already overtaken changes nothing.
 //
 // Do NOT narrow this to the Forward-State transition. §5.1 says "A publisher
 // MUST save the Largest Location communicated in SUBSCRIBE_OK, PUBLISH or
 // REQUEST_UPDATE_OK that changes the Forward State from 0 to 1", and that
 // qualifier is about what an endpoint may use as *its own* Joining Location —
-// §10.2.16's relay rule carries no such condition. The distinction is
+// §10.2.17's relay rule carries no such condition. The distinction is
 // load-bearing: subscribeUpstreamOnSession sends FORWARD=0 whenever no
 // downstream wants forwarding, so on that path §5.1's sentence does not apply
 // at all, and reading it as the authority here reintroduces the bug below.
@@ -643,18 +617,52 @@ func (h *sessionHandler) serveFetchObjects(
 	fillTimeout time.Duration,
 	rangeFilters *message.RangeFilterSet,
 ) {
+	out, ok := h.streamFetchRange(ctx, kind, requestID, entry, fullName,
+		start, end, order, fillTimeout, rangeFilters)
+	if !ok {
+		return
+	}
+
+	// Read follow-ups (§10.9 REQUEST_UPDATE, peer FIN/reset) on the bidi
+	// request stream until the peer tears it down or ctx is cancelled, so a
+	// malformed FETCH update is answered with REQUEST_ERROR and the data
+	// stream reset per §10.9.
+	h.readFetchUpdates(ctx, req, out)
+}
+
+// streamFetchRange opens a unidirectional fetch stream, writes the stitched
+// range to it, and FINs. It is the shared body of a FETCH response (§10.13)
+// and of a fill fetch stream (§5.1.3), which differ only in what opens them
+// and in what happens afterwards — a FETCH parks in the §10.9 follow-up loop,
+// a fill is simply done.
+//
+// ok is false when the stream could not be opened or the write failed; the
+// stream is already reset in the latter case. The returned stream is otherwise
+// closed (FIN) and returned only so a FETCH can reset it from its follow-up
+// loop.
+func (h *sessionHandler) streamFetchRange(
+	ctx context.Context,
+	kind string,
+	requestID uint64,
+	entry *registry.TrackEntry,
+	fullName track.FullTrackName,
+	start, end message.Location,
+	order message.GroupOrder,
+	fillTimeout time.Duration,
+	rangeFilters *message.RangeFilterSet,
+) (*session.OutgoingFetchStream, bool) {
 	out, err := h.sess.OpenFetchStream(message.FetchHeader{RequestID: requestID})
 	if err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH OpenFetchStream failed",
+		h.log.LogAttrs(ctx, slog.LevelDebug, "OpenFetchStream failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))
-		return
+		return nil, false
 	}
 
 	// Gather cached objects, stitching the below-floor portion from upstream
 	// when the cache doesn't cover the whole range (§9.4).
 	objs := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
 
-	// §5.1.3: drop objects that fail the FETCH's Range Filters. §11.4.4.2
+	// §5.1.4: drop objects that fail the request's Range Filters. §11.4.4.2
 	// unknown-range markers are not objects and are always kept.
 	if rangeFilters != nil {
 		objs = slices.DeleteFunc(objs, func(o *cache.CachedObject) bool {
@@ -666,16 +674,11 @@ func (h *sessionHandler) serveFetchObjects(
 	written, err := streamFetchObjects(out, objs)
 	h.metrics.FetchServed(h.trackRef(fullName), written)
 	if err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH stream write failed",
+		h.log.LogAttrs(ctx, slog.LevelDebug, "fetch stream write failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))
 		out.Cancel(moqt.StreamResetInternalError)
-		return
+		return nil, false
 	}
 	_ = out.Close()
-
-	// Read follow-ups (§10.9 REQUEST_UPDATE, peer FIN/reset) on the bidi
-	// request stream until the peer tears it down or ctx is cancelled, so a
-	// malformed FETCH update is answered with REQUEST_ERROR and the data
-	// stream reset per §10.9.
-	h.readFetchUpdates(ctx, req, out)
+	return out, true
 }

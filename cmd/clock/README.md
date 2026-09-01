@@ -1,19 +1,19 @@
 # clock
 
-A minimal MOQT (draft-ietf-moq-transport-19) publish/subscribe demo.
+A minimal MOQT (draft-ietf-moq-transport-20) publish/subscribe demo.
 
 One binary, two modes:
 
 - `clock publish` — emits the current wall-clock time once per second on the
   `moq-example/clock` track.
-- `clock subscribe` — connects, retrieves the latest cached time via a Joining
-  FETCH, and prints every live tick that follows.
+- `clock subscribe` — connects, retrieves the latest cached time on a fill
+  fetch stream, and prints every live tick that follows.
 
 The publisher and subscriber both speak native QUIC against a relay (see
-[`cmd/relay`](../relay/)). Together they exercise the §5.1.3 "join an ongoing
-track" pattern end-to-end: the live SUBSCRIBE delivers future objects while the
-Joining FETCH backfills cached state, so the subscriber sees the current time
-immediately on connect rather than waiting for the next publisher tick.
+[`cmd/relay`](../relay/)). Together they exercise the §5.1.6 "join an ongoing
+track" pattern end-to-end: the live SUBSCRIBE delivers future objects while a
+fill fetch stream (§5.1.3) backfills cached state, so the subscriber sees the
+current time immediately on connect rather than waiting for the next tick.
 
 ## Usage
 
@@ -72,13 +72,17 @@ clock publish              relay                       (subscribers via relay)
 
 ## Subscriber
 
-The subscriber issues two requests on the same session:
+The subscriber issues a single request carrying both halves of the pattern:
 
-1. **SUBSCRIBE** with `FilterLargestObject` — delivers every object *after*
-   the relay's current LARGEST_OBJECT (i.e. all future ticks).
-2. **Relative Joining FETCH** with `JoiningStart=0` — backfills the current
-   group's cached objects, contiguous with where the SUBSCRIBE starts
-   (§10.12.2.1).
+1. A **Next Object** Location Filter — delivers every object *after* the
+   relay's current LARGEST_OBJECT (i.e. all future ticks).
+2. **FILL_PARAMETERS** whose Location filter is `StartGroup=1` — fills the
+   current group from its start on a fill fetch stream (§5.1.3), contiguous
+   with where the subscription itself begins.
+
+draft-20 replaced draft-19's Relative Joining FETCH with this; the fill arrives
+on a unidirectional stream whose FETCH_HEADER carries the SUBSCRIBE's Request
+ID.
 
 ```
 clock subscribe              relay
@@ -86,18 +90,14 @@ clock subscribe              relay
      │  SETUP                       │
      │ ───────────────────────────► │
      │                              │
-     │  SUBSCRIBE (filter=LargestObject)
+     │  SUBSCRIBE (LOCATION_FILTER=NextObject,
+     │             FILL_PARAMETERS{LOCATION_FILTER StartGroup=1})
      │ ───────────────────────────► │
      │  SUBSCRIBE_OK {alias, LARGEST_OBJECT={G,0}}
      │ ◄─────────────────────────── │   (G is the latest tick the relay cached)
      │                              │
-     │  FETCH (RelativeJoining, JoiningStart=0,
-     │         JoiningRequestID = SUBSCRIBE.RequestID)
-     │ ───────────────────────────► │
-     │  FETCH_OK {EndLocation={G,1}}│
-     │ ◄─────────────────────────── │
-     │                              │
-     │  FETCH_HEADER stream         │
+     │  fill fetch stream           │
+     │  FETCH_HEADER{RequestID = SUBSCRIBE.RequestID}
      │ ◄─────────────────────────── │   1 cached object at {G, 0} — current time
      │  FIN                         │
      │ ◄─────────────────────────── │
@@ -113,9 +113,9 @@ clock subscribe              relay
 ```
 
 The subscriber tracks the highest `(group, object)` it has printed and ignores
-any earlier object — this filters the harmless overlap between the Joining
-FETCH (which may include an object the live stream is about to deliver) and
-the live SUBSCRIBE (which may race ahead of the FETCH response).
+any earlier object — this filters the harmless overlap between the fill
+(which may include an object the live stream is about to deliver) and the
+subscription itself (which may race ahead of the fill).
 
 ## Quick start
 
@@ -133,5 +133,5 @@ go run ./cmd/clock subscribe
 ```
 
 A subscriber that joins mid-stream sees the most recent cached tick
-immediately (via the Joining FETCH) followed by every subsequent tick on the
-live subscription.
+immediately (via the fill fetch stream) followed by every subsequent tick on
+the live subscription.

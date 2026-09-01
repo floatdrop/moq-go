@@ -81,7 +81,7 @@ func nilIfEmpty(r []Range) []Range {
 	return r
 }
 
-// TestRangeFilterDeltaEncoding pins the §5.1.3 worked example: ranges 3-5 and
+// TestRangeFilterDeltaEncoding pins the §5.1.4 worked example: ranges 3-5 and
 // 10-15 encode as start deltas/end deltas {3,2,5,5}.
 func TestRangeFilterDeltaEncoding(t *testing.T) {
 	f := RangeFilter{Type: ParamObjectIDFilter, SetID: 0, Ranges: []Range{{Start: 3, End: 5}, {Start: 10, End: 15}}}
@@ -89,7 +89,7 @@ func TestRangeFilterDeltaEncoding(t *testing.T) {
 	// SetID(0x00), then varints 3,2,5,5.
 	want := []byte{0x00, 0x03, 0x02, 0x05, 0x05}
 	if !reflect.DeepEqual(blob, want) {
-		t.Fatalf("encoded blob = % x, want % x (§5.1.3 example)", blob, want)
+		t.Fatalf("encoded blob = % x, want % x (§5.1.4 example)", blob, want)
 	}
 }
 

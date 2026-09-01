@@ -24,10 +24,23 @@ func subscribe(ctx context.Context, addr string) error {
 	defer sess.Close(moqt.SessionNoError, "bye")
 	slog.InfoContext(ctx, "connected, sending SUBSCRIBE")
 
+	// §5.1.6 "join a Track at the current Group": the Next Object filter
+	// delivers only objects strictly after the current Largest Object, so the
+	// live edge alone stays invisible until the next group lands. Pairing it
+	// with FILL_PARAMETERS whose Location filter has StartGroup=1 fills the
+	// current group from its start on a fill fetch stream (§5.1.3) — for the
+	// clock that's exactly the latest timestamp the relay has cached.
+	//
+	// draft-20 replaced draft-19's Relative Joining FETCH with this.
 	subMsg := &message.Subscribe{
-		Namespace:  wire.Namespace("moq-example"),
-		Name:       []byte("clock"),
-		Parameters: message.Parameters{message.LargestObjectFilter()},
+		Namespace: wire.Namespace("moq-example"),
+		Name:      []byte("clock"),
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			message.FillParametersParam(message.Parameters{
+				message.RelativeStartFilter(1),
+			}),
+		},
 	}
 	sub, err := sess.Subscribe(ctx, subMsg)
 	if err != nil {
@@ -35,39 +48,13 @@ func subscribe(ctx context.Context, addr string) error {
 	}
 	defer sub.Close()
 
-	// §10.2.11: the relay echoes LARGEST_OBJECT here when it has cached
-	// state — log it so the demo shows what the Joining FETCH below will
-	// resolve against.
+	// §10.2.17: the relay echoes LARGEST_OBJECT here when it has cached
+	// state — log it so the demo shows what the fill resolved against.
 	if p, found := sub.OK.Parameters.Find(message.ParamLargestObject); found {
 		slog.InfoContext(ctx, "SUBSCRIBE_OK", "alias", sub.TrackAlias(),
 			"largest_group", p.Group, "largest_object", p.Object)
 	} else {
 		slog.InfoContext(ctx, "SUBSCRIBE_OK", "alias", sub.TrackAlias(), "largest", "none")
-	}
-
-	// §5.1.3: SUBSCRIBE with FilterLargestObject delivers objects strictly
-	// after the current Largest Object, so the live edge alone is invisible
-	// to the subscriber until the next group lands. A Relative Joining
-	// FETCH (§10.12.2) with JoiningStart=0 backfills the current group up
-	// to and including the Joining Location — for the clock that's exactly
-	// the latest timestamp the relay has cached.
-	fetchMsg := &message.Fetch{
-		FetchType: message.FetchTypeRelativeJoining,
-		Joining: &message.JoiningFetch{
-			JoiningRequestID: subMsg.RequestID,
-			JoiningStart:     0,
-		},
-	}
-	fetch, err := sess.Fetch(ctx, fetchMsg)
-	if err != nil {
-		// A failed backfill isn't fatal — the live subscription is
-		// still in place. Log and continue.
-		slog.WarnContext(ctx, "Joining FETCH failed", tint.Err(err))
-	} else {
-		defer fetch.Close()
-		slog.InfoContext(ctx, "FETCH_OK",
-			"end_group", fetch.OK.EndLocation.Group,
-			"end_object", fetch.OK.EndLocation.Object)
 	}
 
 	// Watch the subscribe request stream for PUBLISH_DONE.

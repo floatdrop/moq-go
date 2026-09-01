@@ -1,6 +1,6 @@
 # moq-go
 
-[![CI](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml/badge.svg?branch=draft-19)](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml?query=branch%3Adraft-19)
+[![CI](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml/badge.svg?branch=draft-20)](https://github.com/floatdrop/moq-go/actions/workflows/ci.yml?query=branch%3Adraft-20)
 [![Go Reference](https://pkg.go.dev/badge/github.com/floatdrop/moq-go.svg)](https://pkg.go.dev/github.com/floatdrop/moq-go)
 [![Coverage](https://img.shields.io/endpoint?url=https://floatdrop.github.io/moq-go/coverage.json)](https://floatdrop.github.io/moq-go/)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](#license)
@@ -11,7 +11,7 @@ transport-agnostic session library, a reference relay that runs standalone or as
 several instances routing across each other, media packaging libraries, and demo
 publisher/subscriber CLIs.
 
-- [Media over QUIC Transport (MoQT)](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) — `draft-ietf-moq-transport-19`
+- [Media over QUIC Transport (MoQT)](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) — `draft-ietf-moq-transport-20`
 - [Low Overhead Media Container (LOC)](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) — `draft-ietf-moq-loc-04`
 - [MoQ Streaming Format (MSF)](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) — `draft-ietf-moq-msf-01`
 - [CMAF-compliant MSF (CMSF)](https://datatracker.ietf.org/doc/draft-ietf-moq-cmsf/) — `draft-ietf-moq-cmsf-01`
@@ -176,7 +176,7 @@ end to end; each has its own README. `cmd/video` streams a real media file as a
 CMSF broadcast and reports what the transport did to it, which is also the tool
 to reach for when a player is showing artefacts and the cause is unclear.
 
-A per-feature breakdown of draft-19 completeness, the full list of what's
+A per-feature breakdown of draft-20 completeness, the full list of what's
 implemented per package, and known limitations live in
 [`STATUS.md`](STATUS.md).
 

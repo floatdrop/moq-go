@@ -5,7 +5,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// Publish is the PUBLISH message (§10.10).
+// Publish is the PUBLISH message (§10.11).
 type Publish struct {
 	RequestID       uint64
 	Namespace       wire.TrackNamespace
@@ -44,7 +44,7 @@ func (m *Publish) Parse(r *wire.Reader) error {
 	return nil
 }
 
-// PublishDone is the PUBLISH_DONE message (§10.11).
+// PublishDone is the PUBLISH_DONE message (§10.12).
 type PublishDone struct {
 	StatusCode  moqt.PublishDoneCode
 	StreamCount uint64

@@ -104,7 +104,7 @@ jobs:
   publish-coverage:
     name: Publish coverage report
     needs: coverage
-    if: github.event_name == 'push' && github.ref == 'refs/heads/draft-19'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/draft-20'
     runs-on: ubuntu-latest
     # Job-level permissions replace the workflow's `contents: read` outright, so
     # it has to be restated alongside the two Pages needs.
@@ -191,10 +191,10 @@ jobs:
   # advisory `make interop-matrix` is intentionally not gated — it has known
   # cross-implementation divergences (see STATUS.md).
   # Manual-only: every published third-party client still speaks draft-18, while
-  # this relay advertises only the "moqt-19" ALPN, so the TLS handshake cannot
+  # this relay advertises only the "moqt-20" ALPN, so the TLS handshake cannot
   # complete and every case fails with "failed to connect to server". Gating on
   # it would mean a permanently red required check. Re-enable by deleting the
-  # `if:` once the interop images move to draft-19 — nothing else about the job
+  # `if:` once the interop images move to draft-20 — nothing else about the job
   # needs to change. Run it meanwhile from the Actions tab (workflow_dispatch).
   interop:
     name: Interop (relay ← third-party client)

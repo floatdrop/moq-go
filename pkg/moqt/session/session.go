@@ -1,6 +1,6 @@
 // Package session implements the MoQT session layer: SETUP handshake, control
 // stream multiplexing, request-ID allocation, and graceful termination via
-// GOAWAY (§3.3, §3.5, §10.3, §10.4 of draft-ietf-moq-transport-19).
+// GOAWAY (§3.3, §3.5, §10.3, §10.4 of draft-ietf-moq-transport-20).
 //
 // The package does not depend on a specific transport. It operates against the
 // Conn interface, which any QUIC-like transport can satisfy.

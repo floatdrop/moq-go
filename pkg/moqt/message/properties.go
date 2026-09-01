@@ -12,7 +12,7 @@ import (
 type PropertyType = uint64
 
 // Property type constants from §12 and the IANA registry (Table 14).
-// All types listed here are from draft-ietf-moq-transport-19.
+// All types listed here are from draft-ietf-moq-transport-20.
 const (
 	// PropertySubgroupDeliveryTimeout (0x06) is a Track or Object Property
 	// (§12.1). Value: varint (milliseconds). Semantics defined in §8. As an

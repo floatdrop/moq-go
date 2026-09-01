@@ -15,7 +15,7 @@
 //     only consumers of stored data are the FETCH handlers, which
 //     can't see anything Get / GetRange filters out.
 //
-// The §10.2.16 LARGEST_OBJECT watermark is maintained outside the ring,
+// The §10.2.17 LARGEST_OBJECT watermark is maintained outside the ring,
 // under the same mutex, and is monotonic — evictions and TTL expiry
 // don't roll it back.
 package cache
@@ -72,6 +72,19 @@ type CachedObject struct {
 	// sub-ranges no source could vouch for — and are never stored in the
 	// cache ring.
 	EndOfUnknownRange bool
+
+	// EndOfTimedOutRange marks this element as a §11.4.4.2 End of Timed-Out
+	// Range (0x20C) FETCH marker: same shape as EndOfUnknownRange, but the
+	// Objects it covers were abandoned because FILL_TIMEOUT (§10.2.5) expired
+	// rather than because no source could vouch for them. draft-20 split the
+	// two so a subscriber can tell "retry might help" from "status unknown".
+	EndOfTimedOutRange bool
+}
+
+// IsRangeMarker reports whether the element is any §11.4.4.2 end-of-range
+// marker rather than a stored object.
+func (o *CachedObject) IsRangeMarker() bool {
+	return o.EndOfUnknownRange || o.EndOfTimedOutRange
 }
 
 // IsStatusMarker reports whether the object is a §11.2.1.1 status marker

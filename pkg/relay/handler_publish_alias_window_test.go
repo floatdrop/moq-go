@@ -22,7 +22,7 @@ import (
 // Objects from the cache and from live fanout alike, permanently, with nothing
 // above DEBUG to say so.
 //
-// §10.10 makes this the expected sequence rather than a race a publisher has to
+// §10.11 makes this the expected sequence rather than a race a publisher has to
 // lose: with FORWARD "omitted or equal to 1, the publisher will start
 // transmitting objects immediately, possibly before PUBLISH_OK" — that is,
 // before AddUpstream has run at all.

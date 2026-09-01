@@ -24,7 +24,7 @@ import (
 // handler: the stitch degrades to cache-only once it elapses.
 const defaultUpstreamFetchTimeout = 5 * time.Second
 
-// handleFetch implements FETCH (§9.4, §10.12): validate the requested range,
+// handleFetch implements FETCH (§9.4, §10.13): validate the requested range,
 // reply FETCH_OK, open a FETCH_HEADER uni-stream, and serialise the cached
 // objects in the requested group order. Gaps in the response stream are how
 // the spec signals "objects do not exist" (§11.4.4).
@@ -42,7 +42,7 @@ const defaultUpstreamFetchTimeout = 5 * time.Second
 // vouched for yet.
 //
 // The distinction is visible on the wire. Answering a FETCH from such an entry
-// falls through to the §10.12.3 "no Objects have been published" rule and
+// falls through to the §10.13 "no Objects have been published" rule and
 // returns INVALID_RANGE — "the range you asked for cannot be satisfied" —
 // where §10.6 DOES_NOT_EXIST, "the track or namespace is not available at the
 // publisher", is the truthful answer. A client deciding whether to retry, and
@@ -65,23 +65,7 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 		return
 	}
 
-	switch msg.FetchType {
-	case message.FetchTypeStandalone:
-		// fall through to standalone handling below
-	case message.FetchTypeRelativeJoining, message.FetchTypeAbsoluteJoining:
-		h.handleJoiningFetch(ctx, req, msg)
-		return
-	default:
-		_ = req.RejectError(moqt.RequestNotSupported, "relay: unknown FETCH type")
-		return
-	}
-	sf := msg.Standalone
-	if sf == nil {
-		_ = req.RejectError(moqt.RequestMalformedTrack, "relay: standalone FETCH missing payload")
-		return
-	}
-
-	fullName := track.FullTrackName{Namespace: sf.Namespace, Name: sf.Name}
+	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 	entry, ok := h.tracks.Get(fullName.Key())
 	if !ok || !trackKnown(entry) {
 		_ = req.RejectError(moqt.RequestDoesNotExist, "relay: track not known")
@@ -90,41 +74,54 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 
 	largest, hasLargest := entry.GetLargest()
 	if !hasLargest {
-		// §10.12.3: "If no Objects have been published for the
-		// track or Start Location is greater than the Largest Object
-		// the publisher MUST return REQUEST_ERROR with error code
-		// INVALID_RANGE."
+		// §10.13: "If no Objects have been published for the track or Start
+		// Location is greater than the Largest Object the publisher MUST
+		// return REQUEST_ERROR with error code INVALID_RANGE."
 		_ = req.RejectError(moqt.RequestInvalidRange, "relay: no objects published")
 		return
 	}
 
-	// §10.12.3: "End Location MUST specify the same or a larger Location
-	// than Start Location for Standalone and Absolute Joining Fetches."
-	// For wire input message.Fetch.Validate already enforced this at parse
-	// time (a violation is a session PROTOCOL_VIOLATION there); this check
-	// answers locally-constructed requests with the gentler INVALID_RANGE.
-	if message.FetchEndBeforeStart(sf.StartLocation, sf.EndLocation) {
-		_ = req.RejectError(moqt.RequestInvalidRange, "relay: end < start")
+	// draft-20 moved the FETCH range out of the message and into the
+	// LOCATION_FILTER parameter (§5.1.2), inclusive at both ends. An absent
+	// filter fetches the whole track up to Largest Object.
+	filter, err := message.LocationFilterFromParam(msg.Parameters)
+	if err != nil {
+		_ = req.RejectError(moqt.RequestInvalidFilter, "relay: malformed LOCATION_FILTER")
 		return
 	}
+	if filter == nil {
+		filter = &message.LocationFilter{}
+	}
+	start := filter.Start(largest, hasLargest)
 
-	// §10.12.3: Start > Largest is INVALID_RANGE.
-	if largest.Less(sf.StartLocation) {
+	// §10.13: Start > Largest is INVALID_RANGE.
+	if largest.Less(start) {
 		_ = req.RejectError(moqt.RequestInvalidRange, "relay: start beyond largest object")
 		return
 	}
 
+	// A 4-field filter can name an end below its own start (EndGroupDelta 0 with
+	// EndObject < StartObject), which §5.1.2 does not itself forbid. Answering it
+	// would put us in violation of §10.14 — "If End Location is smaller than the
+	// Start Location in the corresponding FETCH the receiver MUST close the
+	// session with a PROTOCOL_VIOLATION" — so one malformed FETCH would tear down
+	// every other subscription on the session. Reject the request instead.
+	if end, ok := filter.End(); ok && end.Less(start) {
+		_ = req.RejectError(moqt.RequestInvalidRange, "relay: end before start")
+		return
+	}
+
 	order := fetchGroupOrder(msg.Parameters)
-	fillTimeout := message.FillTimeoutFromParam(msg.Parameters)
+	fillTimeout := resolveFillBudget(msg.Parameters)
 	rangeFilters, ok := h.fetchRangeFilters(ctx, req, msg.Parameters)
 	if !ok {
 		return
 	}
 
-	// The response EndLocation is fixed by the watermark (§10.13) and is
+	// The response EndLocation is fixed by the watermark (§10.14) and is
 	// independent of which objects we end up streaming, so reply FETCH_OK
 	// before doing any (possibly slow) upstream stitching.
-	endLocation := capFetchEndLocation(sf.EndLocation, largest)
+	endLocation := capFetchEndLocation(filter, largest)
 	if err := req.Reply(&message.FetchOK{
 		EndLocation:     endLocation,
 		TrackProperties: entry.GetProperties(),
@@ -137,11 +134,21 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 	// Serve (and account for) only the range FETCH_OK announced: everything
 	// past the capped EndLocation is outside the response by definition, so
 	// neither objects nor §11.4.4.2 unknown markers may reference it.
-	h.serveFetchObjects(ctx, req, "standalone", msg.RequestID, entry, fullName,
-		sf.StartLocation, endLocation, order, fillTimeout, rangeFilters)
+	h.serveFetchObjects(ctx, req, "fetch", msg.RequestID, entry, fullName,
+		start, endLocation, order, fillTimeout, rangeFilters)
 }
 
-// fetchRangeFilters parses and validates the §5.1.3 Range Filters on a FETCH's
+// resolveFillBudget reads FILL_TIMEOUT (§10.2.5) and resolves the "absent"
+// case to the local default, so downstream a zero means only what §10.2.5 says
+// it means: do not wait for upstream at all.
+func resolveFillBudget(ps message.Parameters) time.Duration {
+	if d, ok := message.FillTimeoutFromParamOK(ps); ok {
+		return d
+	}
+	return defaultUpstreamFetchTimeout
+}
+
+// fetchRangeFilters parses and validates the §5.1.4 Range Filters on a FETCH's
 // parameters against the negotiated MAX_FILTER_RANGES. On an invalid or
 // over-limit filter it answers REQUEST_ERROR INVALID_FILTER (§10.6) and returns
 // ok=false, so the caller aborts before replying FETCH_OK.
@@ -239,142 +246,6 @@ func validateFetchUpdateParams(ps message.Parameters) error {
 	return nil
 }
 
-// joiningFetchWaitTimeout bounds how long a Joining FETCH waits for its
-// referenced SUBSCRIBE to finish establishing (§10.12.2 buffering). A
-// pipelined SUBSCRIBE + Joining FETCH can put the FETCH first, or the
-// SUBSCRIBE may still be waiting on an upstream round trip.
-const joiningFetchWaitTimeout = 5 * time.Second
-
-// waitJoiningLocation returns the joining location registered for the given
-// SUBSCRIBE Request ID, waiting up to [joiningFetchWaitTimeout] for it to
-// appear — §10.12.2: a Joining Fetch referencing a subscription "that has
-// not yet been established" is buffered "until either the Subscription is
-// established or the request times out". Handlers run on their own
-// goroutines, so blocking here holds up only this FETCH.
-func (h *sessionHandler) waitJoiningLocation(
-	ctx context.Context,
-	joiningRequestID uint64,
-) (joiningLocation, bool) {
-	deadline := time.NewTimer(joiningFetchWaitTimeout)
-	defer deadline.Stop()
-	for {
-		h.joinLocMu.RLock()
-		jloc, ok := h.joinLocs[joiningRequestID]
-		notify := h.joinLocNotify
-		h.joinLocMu.RUnlock()
-		if ok {
-			return jloc, true
-		}
-		select {
-		case <-notify:
-			// A SUBSCRIBE registered; re-check whether it was ours.
-		case <-deadline.C:
-			return joiningLocation{}, false
-		case <-ctx.Done():
-			return joiningLocation{}, false
-		}
-	}
-}
-
-// handleJoiningFetch implements the Relative / Absolute Joining FETCH
-// flows (§10.12.2). A Joining FETCH references an active SUBSCRIBE by
-// Request ID; the relay recovers the associated Joining Location from
-// [sessionHandler.joinLocs] (populated in handleSubscribe at SUBSCRIBE_OK
-// time) and uses §10.12.2.1's rules to compute the response range:
-//
-//   - End Location = {Joining Location.Group, Joining Location.Object + 1}
-//   - Absolute:  Start = {jf.JoiningStart, 0}
-//   - Relative:  Start = {Joining Location.Group - jf.JoiningStart, 0}
-//
-// The relay then serves the range from the per-track Object Cache,
-// reusing the standalone-FETCH stream writer ([streamFetchObjects]).
-// Gaps in the cache surface as gaps in the response stream — same
-// "evicted vs. never existed" caveat as standalone FETCH.
-func (h *sessionHandler) handleJoiningFetch(ctx context.Context, req *session.Request, msg *message.Fetch) {
-	jf := msg.Joining
-	if jf == nil {
-		_ = req.RejectError(moqt.RequestMalformedTrack, "relay: joining FETCH missing payload")
-		return
-	}
-
-	jloc, ok := h.waitJoiningLocation(ctx, jf.JoiningRequestID)
-	if !ok {
-		// §10.12.2: "If a publisher receives a Joining Fetch with a
-		// Request ID that does not correspond to a subscription in
-		// the same session [...] it MUST return a REQUEST_ERROR
-		// with error code INVALID_JOINING_REQUEST_ID."
-		_ = req.RejectError(moqt.RequestInvalidJoiningID, "relay: no subscription for joining request ID")
-		return
-	}
-	if !jloc.hasLargest {
-		// §10.12.2: "If no Objects have been published for the
-		// track the publisher MUST respond with a REQUEST_ERROR
-		// with error code INVALID_RANGE."
-		_ = req.RejectError(moqt.RequestInvalidRange, "relay: no objects published at subscribe time")
-		return
-	}
-
-	// §10.12.2.1: compute Start/End from the snapshot.
-	var startLoc message.Location
-	switch msg.FetchType {
-	case message.FetchTypeAbsoluteJoining:
-		startLoc = message.Location{Group: jf.JoiningStart, Object: 0}
-	case message.FetchTypeRelativeJoining:
-		if jf.JoiningStart > jloc.largest.Group {
-			_ = req.RejectError(moqt.RequestInvalidRange, "relay: relative joining start exceeds largest group")
-			return
-		}
-		startLoc = message.Location{Group: jloc.largest.Group - jf.JoiningStart, Object: 0}
-	case message.FetchTypeStandalone:
-		// Unreachable: standalone fetches do not use the joining-snapshot
-		// path — this switch only runs for the two joining FetchTypes.
-	}
-
-	// End = {Joining Location.Group, Joining Location.Object + 1}. The
-	// +1 might overflow when Object == MaxUint64; in practice this is
-	// astronomically unlikely, but guard by falling back to the §10.12.1
-	// "entire group" form {Group, 0}, whose inclusive end {Group, Max} is
-	// exactly the joining location.
-	endLoc := message.Location{Group: jloc.largest.Group, Object: jloc.largest.Object + 1}
-	if jloc.largest.Object == math.MaxUint64 {
-		endLoc = message.Location{Group: jloc.largest.Group, Object: 0}
-	}
-
-	if endLoc.Less(startLoc) {
-		_ = req.RejectError(moqt.RequestInvalidRange, "relay: joining start beyond largest object")
-		return
-	}
-
-	entry, ok := h.tracks.Get(jloc.fullName.Key())
-	if !ok {
-		// The subscription's track entry was evicted between
-		// SUBSCRIBE_OK and this FETCH — race with the last
-		// upstream publisher disconnecting. The downstream
-		// subscriber will see PUBLISH_DONE shortly; for this
-		// FETCH we have nothing to serve.
-		_ = req.RejectError(moqt.RequestDoesNotExist, "relay: track entry gone")
-		return
-	}
-
-	order := fetchGroupOrder(msg.Parameters)
-	rangeFilters, ok := h.fetchRangeFilters(ctx, req, msg.Parameters)
-	if !ok {
-		return
-	}
-
-	if err := req.Reply(&message.FetchOK{
-		EndLocation:     endLoc,
-		TrackProperties: entry.GetProperties(),
-	}); err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "joining FETCH_OK reply failed",
-			slog.String("err", err.Error()))
-		return
-	}
-
-	h.serveFetchObjects(ctx, req, "joining", msg.RequestID, entry, jloc.fullName,
-		startLoc, endLoc, order, 0, rangeFilters)
-}
-
 // fetchGroupOrder pulls the GROUP_ORDER parameter (§10.2.8) out of a
 // FETCH's Parameters list. Defaults to ascending when omitted; the
 // FETCH responder uses this to choose between ascending and descending
@@ -391,41 +262,22 @@ func fetchGroupOrder(ps message.Parameters) message.GroupOrder {
 	return message.GroupOrderAscending
 }
 
-// inclusiveFetchEnd converts the protocol's exclusive-style EndLocation
-// (§10.12.1: "the last Object, plus 1; or 0 to indicate the entire
-// Group") into the cache's inclusive-end convention.
+// capFetchEndLocation resolves a FETCH's end from its Location filter and
+// caps it at Largest Object per §10.14: "This is the End Location from the
+// FETCH request Location Filter parameter unless the requested range extends
+// beyond Largest Object at the time the request was processed."
 //
-//   - EndLocation = {G, 0}        → inclusive end {G, MaxUint64}
-//     (the entire group G).
-//   - EndLocation = {G, N} (N>0)  → inclusive end {G, N-1}.
-func inclusiveFetchEnd(end message.Location) message.Location {
-	if end.Object == 0 {
-		return message.Location{Group: end.Group, Object: math.MaxUint64}
+// draft-20 made both the request range and FETCH_OK's End Location inclusive
+// (§5.1.2), so — unlike draft-19's "last Object plus 1, or 0 for the whole
+// group" encoding — no exclusive/inclusive conversion is involved.
+func capFetchEndLocation(filter *message.LocationFilter, largest message.Location) message.Location {
+	end, ok := filter.End()
+	if !ok || largest.Less(end) {
+		// §5.1.2: "When they are omitted from a Fetch, the EndGroup and
+		// EndObject are Largest Object."
+		return largest
 	}
-	return message.Location{Group: end.Group, Object: end.Object - 1}
-}
-
-// capFetchEndLocation implements §10.13: if the requested end is
-// beyond {Largest.Group, Largest.Object + 1} we cap the response's
-// EndLocation to that watermark+1. Otherwise echo the request's value.
-//
-// The comparison runs in inclusive space via [inclusiveFetchEnd]: the wire
-// form "End Object 0 = the entire group" (§10.12.1) is numerically tiny but
-// semantically huge, so comparing the raw exclusive form would fail to cap
-// a whole-group request that extends past the watermark.
-func capFetchEndLocation(requested, largest message.Location) message.Location {
-	capped := message.Location{Group: largest.Group, Object: largest.Object + 1}
-	// largest+1 might overflow when largest.Object == MaxUint64; in
-	// practice that's astronomically unlikely, but the correct wire form
-	// for "through the end of largest.Group" is precisely the §10.12.1
-	// whole-group encoding {largest.Group, 0}.
-	if largest.Object == math.MaxUint64 {
-		capped = message.Location{Group: largest.Group, Object: 0}
-	}
-	if largest.Less(inclusiveFetchEnd(requested)) {
-		return capped
-	}
-	return requested
+	return end
 }
 
 // stitchedFetchObjects answers a FETCH range from the relay's cache, filling
@@ -449,11 +301,10 @@ func (h *sessionHandler) stitchedFetchObjects(
 	entry *registry.TrackEntry,
 	fullName track.FullTrackName,
 	requestStart message.Location,
-	requestWireEnd message.Location,
+	requestEndIncl message.Location,
 	order message.GroupOrder,
 	fillTimeout time.Duration,
 ) []*cache.CachedObject {
-	requestEndIncl := inclusiveFetchEnd(requestWireEnd)
 	cacheObjs := entry.Cache.GetRange(requestStart, requestEndIncl, order)
 
 	// Determine the inclusive upper bound of the below-floor sub-range the
@@ -487,8 +338,9 @@ func (h *sessionHandler) stitchedFetchObjects(
 		// No reachable upstream: the below-floor sub-range has unknown
 		// status, not ground-truth non-existence. A plain gap in a
 		// FIN-terminated response asserts the latter (§11.4.4), so cover
-		// the sub-range with an End of Unknown Range marker instead
-		// (§10.2.5: report unavailable Objects "as Unknown gaps").
+		// the sub-range with an End of Unknown Range marker instead. This
+		// is the unknown-status case, not the §10.2.5 budget case — nothing
+		// timed out, we simply have no source to ask.
 		return mergeFetchObjects(order,
 			unknownWholeRange(requestStart, upEndIncl, order), cacheObjs)
 	}
@@ -555,19 +407,27 @@ func (h *sessionHandler) fetchUpstreamRange(
 	fillTimeout time.Duration,
 ) []*cache.CachedObject {
 	unknownWhole := unknownWholeRange(start, endIncl, order)
+	timedOutWhole := timedOutWholeRange(start, endIncl, order)
+
+	// §10.2.5: "A value of 0 indicates the relay MUST NOT wait for upstream
+	// delivery and MUST report any unavailable Objects as Timed-Out gaps."
+	// fillTimeout arrives already resolved (see [resolveFillBudget]), so a zero
+	// here is the subscriber's explicit 0, not an absent parameter.
+	if fillTimeout == 0 {
+		return timedOutWhole
+	}
 
 	params := message.Parameters{}
 	if order == message.GroupOrderDescending {
 		params = append(params, message.GroupOrderParam(message.GroupOrderDescending))
 	}
+	// §5.1.2: the range rides in LOCATION_FILTER. EndGroupDelta is delta-encoded
+	// from the start group, and EndObject makes the end Object-precise.
+	params = append(params, message.AbsoluteRangeObjectFilter(
+		start, endIncl.Group-start.Group, endIncl.Object))
 	fmsg := &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     fullName.Namespace,
-			Name:          fullName.Name,
-			StartLocation: start,
-			EndLocation:   exclusiveFetchEnd(endIncl),
-		},
+		Namespace:  fullName.Namespace,
+		Name:       fullName.Name,
 		Parameters: params,
 	}
 
@@ -575,17 +435,16 @@ func (h *sessionHandler) fetchUpstreamRange(
 	// upstream degrades to cache-plus-unknown-gap instead of wedging the
 	// downstream handler. FILL_TIMEOUT, when present, is the subscriber's
 	// explicit budget; otherwise fall back to a default.
-	budget := fillTimeout
-	if budget <= 0 {
-		budget = defaultUpstreamFetchTimeout
-	}
-	fctx, cancel := context.WithTimeout(ctx, budget)
+	fctx, cancel := context.WithTimeout(ctx, fillTimeout)
 	defer cancel()
 
 	fr, err := up.Session.Fetch(fctx, fmsg)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH failed",
 			slog.String("err", err.Error()))
+		if fctx.Err() != nil {
+			return timedOutWhole
+		}
 		return unknownWhole
 	}
 	defer fr.Close()
@@ -602,7 +461,7 @@ func (h *sessionHandler) fetchUpstreamRange(
 	case fs = <-ch:
 	case <-fctx.Done():
 		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH response timed out")
-		return unknownWhole
+		return timedOutWhole
 	}
 	if fs == nil {
 		return unknownWhole
@@ -638,7 +497,7 @@ func (h *sessionHandler) fetchUpstreamRange(
 		}
 		loc := message.Location{Group: obj.GroupID, Object: obj.ObjectID}
 		if !upstreamFetchElemOK(loc, prevLoc, havePrev, start, endIncl, order,
-			obj.EndOfUnknownRange) {
+			obj.EndOfUnknownRange || obj.EndOfTimedOutRange) {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH element out of range or order",
 				slog.Uint64("group", loc.Group), slog.Uint64("object", loc.Object))
 			return unknownWhole
@@ -646,6 +505,10 @@ func (h *sessionHandler) fetchUpstreamRange(
 		prevLoc, havePrev = loc, true
 		if obj.EndOfUnknownRange {
 			out = append(out, unknownRangeMarker(loc))
+			continue
+		}
+		if obj.EndOfTimedOutRange {
+			out = append(out, timedOutRangeMarker(loc))
 			continue
 		}
 		// The §11.4.4.1 Datagram bit carries the original wire shape
@@ -669,9 +532,9 @@ func (h *sessionHandler) fetchUpstreamRange(
 	}
 
 	// A clean FIN asserts gaps only up to the FETCH_OK EndLocation (§11.4.4).
-	// If the upstream capped it below our sub-range end (§10.12: End beyond
+	// If the upstream capped it below our sub-range end (§10.13: End beyond
 	// its Largest), the remainder has unknown status.
-	if authEnd := inclusiveFetchEnd(fr.OK.EndLocation); authEnd.Less(endIncl) {
+	if authEnd := fr.OK.EndLocation; authEnd.Less(endIncl) {
 		if order == message.GroupOrderDescending {
 			// The unknown remainder precedes every object in descending
 			// stream order, and a leading marker cannot in general be
@@ -727,6 +590,17 @@ func unknownRangeMarker(loc message.Location) *cache.CachedObject {
 	}
 }
 
+// timedOutRangeMarker is [unknownRangeMarker] for the §10.2.5 case: the
+// FILL_TIMEOUT budget ran out, so the Objects are reported as Timed-Out rather
+// than unknown-status gaps.
+func timedOutRangeMarker(loc message.Location) *cache.CachedObject {
+	return &cache.CachedObject{
+		GroupID:            loc.Group,
+		ObjectID:           loc.Object,
+		EndOfTimedOutRange: true,
+	}
+}
+
 // unknownWholeRange declares the whole inclusive sub-range [start, endIncl]
 // unknown with a single marker, positioned for the response's stream order.
 // The marker Location is the range's far end in stream direction (endIncl
@@ -734,10 +608,28 @@ func unknownRangeMarker(loc message.Location) *cache.CachedObject {
 // serialized Object, if any, and this Location, inclusive" coverage spans
 // the sub-range.
 func unknownWholeRange(start, endIncl message.Location, order message.GroupOrder) []*cache.CachedObject {
+	return wholeRange(unknownRangeMarker, start, endIncl, order)
+}
+
+// timedOutWholeRange is [unknownWholeRange] with the §11.4.4.2 End of
+// Timed-Out Range marker, for when the FILL_TIMEOUT budget is what stopped us
+// (§10.2.5) rather than an unreachable or unhelpful upstream.
+func timedOutWholeRange(start, endIncl message.Location, order message.GroupOrder) []*cache.CachedObject {
+	return wholeRange(timedOutRangeMarker, start, endIncl, order)
+}
+
+// wholeRange covers [start, endIncl] with a single marker built by mark. The
+// marker names the far end of the range in delivery order, since §11.4.4.2
+// markers cover everything from the previous element up to their own Location.
+func wholeRange(
+	mark func(message.Location) *cache.CachedObject,
+	start, endIncl message.Location,
+	order message.GroupOrder,
+) []*cache.CachedObject {
 	if order == message.GroupOrderDescending {
-		return []*cache.CachedObject{unknownRangeMarker(start)}
+		return []*cache.CachedObject{mark(start)}
 	}
-	return []*cache.CachedObject{unknownRangeMarker(endIncl)}
+	return []*cache.CachedObject{mark(endIncl)}
 }
 
 // mergeFetchObjects merges the below-floor (upstream) and at/above-floor
@@ -782,7 +674,7 @@ func mergeFetchObjects(order message.GroupOrder, lower, upper []*cache.CachedObj
 	seamG := upper[len(upper)-1].GroupID
 	splice, seamHasObject := 0, false
 	for splice < len(lower) && lower[splice].GroupID == seamG {
-		seamHasObject = seamHasObject || !lower[splice].EndOfUnknownRange
+		seamHasObject = seamHasObject || !lower[splice].IsRangeMarker()
 		splice++
 	}
 	if !seamHasObject {
@@ -813,16 +705,6 @@ func fetchPredecessor(loc message.Location) (message.Location, bool) {
 	default:
 		return message.Location{}, false
 	}
-}
-
-// exclusiveFetchEnd is the inverse of [inclusiveFetchEnd]: it maps an inclusive
-// end Location back to the protocol's exclusive wire EndLocation, so a relay
-// can request an inclusive [start, incl] range from an upstream FETCH.
-func exclusiveFetchEnd(incl message.Location) message.Location {
-	if incl.Object == math.MaxUint64 {
-		return message.Location{Group: incl.Group, Object: 0} // "entire group" form
-	}
-	return message.Location{Group: incl.Group, Object: incl.Object + 1}
 }
 
 // streamFetchObjects writes the cached objects to the FETCH response
@@ -863,14 +745,18 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 	)
 
 	for _, o := range objs {
-		if o.EndOfUnknownRange {
-			// §11.4.4.2 End of Unknown Range: the Group/Object ID fields
+		if o.IsRangeMarker() {
+			// §11.4.4.2 End of Unknown / Timed-Out Range: the Group/Object ID fields
 			// carry the absolute range boundary, and the marker becomes
 			// the prior Location for subsequent delta encoding — but not
 			// a prior *actual* object, so the next object still spells
 			// out its Priority (and never references the prior Subgroup).
+			flags := uint64(message.FetchEndOfRangeGroup)
+			if o.EndOfTimedOutRange {
+				flags = message.FetchEndOfTimedOutRange
+			}
 			if err := out.WriteObject(&message.FetchObject{
-				SerializationFlags: message.FetchEndOfRangeGroup,
+				SerializationFlags: flags,
 				GroupIDDelta:       o.GroupID,
 				ObjectIDDelta:      o.ObjectID,
 			}); err != nil {

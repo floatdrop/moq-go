@@ -91,7 +91,7 @@ func testSubscribeError(ctx context.Context, h *harness) error {
 	stream, err := sess.Subscribe(ctx, &message.Subscribe{
 		Namespace:  ns("nonexistent-namespace"),
 		Name:       []byte("nonexistent-track"),
-		Parameters: message.Parameters{message.LargestObjectFilter()},
+		Parameters: message.Parameters{message.NextObjectFilter()},
 	})
 	if err == nil {
 		_ = stream.Close()
@@ -143,7 +143,7 @@ func testAnnounceSubscribe(ctx context.Context, h *harness) error {
 	subStream, err := sub.Subscribe(ctx, &message.Subscribe{
 		Namespace:  ns(testNamespace),
 		Name:       []byte(testTrack),
-		Parameters: message.Parameters{message.LargestObjectFilter()},
+		Parameters: message.Parameters{message.NextObjectFilter()},
 	})
 	if err != nil {
 		return fmt.Errorf("subscriber SUBSCRIBE: %w", err)

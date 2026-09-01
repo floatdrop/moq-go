@@ -2,7 +2,7 @@ package message
 
 import "cmp"
 
-// Location represents a track location per §10.12.1.
+// Location represents a track location per §1.4.2.
 type Location struct {
 	Group  uint64
 	Object uint64
@@ -10,9 +10,9 @@ type Location struct {
 
 // Compare returns -1, 0, or +1 according to whether l sorts before, equal
 // to, or after other in the (Group, Object) lexicographic order. This is
-// the total order MoQT uses for §10.2.16 (LARGEST_OBJECT monotonicity),
+// the total order MoQT uses for §10.2.17 (LARGEST_OBJECT monotonicity),
 // §11.2 (intra-track Object ordering), and Fetch/Cache range scans
-// (§10.12.1).
+// (§5.1.2).
 //
 // The signature matches [cmp.Compare] so callers can pass
 // Location.Compare directly to [slices.SortFunc] and

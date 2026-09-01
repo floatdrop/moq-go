@@ -94,7 +94,7 @@ func unknownGapTopology(
 	// lagging one (§3.3.4), so under load "the subscriber saw every group" can
 	// stay false forever while the cache is perfectly well populated. An
 	// earlier version of this barrier asserted exactly that and timed out under
-	// -race. TRACK_STATUS_OK carries LARGEST_OBJECT (§10.2.16), so the relay
+	// -race. TRACK_STATUS_OK carries LARGEST_OBJECT (§10.2.17), so the relay
 	// answers the question directly.
 	go drainAll(t.Context(), live)
 

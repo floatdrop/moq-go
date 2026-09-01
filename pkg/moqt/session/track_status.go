@@ -7,7 +7,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 )
 
-// TrackStatusRequest is an established TRACK_STATUS request (§10.14). It owns
+// TrackStatusRequest is an established TRACK_STATUS request (§10.15). It owns
 // the request stream (embedded, so Close / writes / message.Marshal work
 // directly on it) plus the Request ID follow-up traffic needs, so the caller can
 // send REQUEST_UPDATE via [TrackStatusRequest.Update] without holding it
@@ -23,7 +23,7 @@ type TrackStatusRequest struct {
 	OK *message.TrackStatusOK
 }
 
-// AcceptTrackStatus accepts an inbound TRACK_STATUS (§10.14) and replies
+// AcceptTrackStatus accepts an inbound TRACK_STATUS (§10.15) and replies
 // TRACK_STATUS_OK with the given status fields — the accept-side counterpart of
 // [Session.TrackStatus]. r.First MUST be a *message.TrackStatus.
 //
@@ -46,7 +46,7 @@ func (r *Request) AcceptTrackStatus(ok *message.TrackStatusOK) error {
 	return nil
 }
 
-// TrackStatus opens a TRACK_STATUS request stream (§10.14) and awaits
+// TrackStatus opens a TRACK_STATUS request stream (§10.15) and awaits
 // REQUEST_OK (TRACK_STATUS_OK) or REQUEST_ERROR. The session assigns
 // m.RequestID; the caller supplies Namespace, Name, and optional Parameters.
 //

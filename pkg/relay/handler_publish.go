@@ -15,7 +15,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
-// handlePublish implements PUBLISH (§9.5, §10.10):
+// handlePublish implements PUBLISH (§9.5, §10.11):
 //
 //  1. Authorize.
 //  2. Register an [registry.UpstreamSub] in the registry.TrackRegistry (born
@@ -51,7 +51,7 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 
 	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 
-	// Create the entry before the alias below becomes routable. §10.10: if
+	// Create the entry before the alias below becomes routable. §10.11: if
 	// FORWARD "is omitted or equal to 1, the publisher will start
 	// transmitting objects immediately, possibly before PUBLISH_OK" — i.e.
 	// before AddUpstream runs down in WriteMessageAfterSetup. Without an
@@ -90,14 +90,14 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	//     pre-broker code replied first, leaving a visibility window that
 	//     rejected prompt subscribers with DOES_NOT_EXIST).
 	//   - The OK must still be the stream's next message: registration
-	//     makes the sub reachable by §9.2 / §10.2.13 propagation, whose
+	//     makes the sub reachable by §9.2 / §10.2.19 propagation, whose
 	//     REQUEST_UPDATE writes serialize behind the OK on the same lock.
 	// entry is hoisted out of the closure because the PUBLISH forwarded to each
 	// subscriber below has to read the track's own watermark back off it.
 	var entry *registry.TrackEntry
 	if err := sub.Broker.WriteMessageAfterSetup(func() error {
 		entry, _ = h.tracks.AddUpstream(fullName, sub, registry.WithProperties(msg.TrackProperties))
-		// §10.2.16 item 1 names PUBLISH alongside SUBSCRIBE_OK: a publisher
+		// §10.2.17 item 1 names PUBLISH alongside SUBSCRIBE_OK: a publisher
 		// offering a track that already has content reports its largest
 		// Location here, before any object arrives to establish one.
 		saveLargestLocation(entry, msg.Parameters)
@@ -131,7 +131,7 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 			// SUBSCRIBE_TRACKS holders.
 			continue
 		}
-		// §5.1.3: a TRACK_PROPERTY_FILTER on the SUBSCRIBE_TRACKS gates which
+		// §5.1.4: a TRACK_PROPERTY_FILTER on the SUBSCRIBE_TRACKS gates which
 		// PUBLISH messages are forwarded — "PUBLISH messages which pass the
 		// filter will be forwarded while those which do not pass it will not be
 		// forwarded nor will any Objects." MatchesTrack is vacuously true when
@@ -158,7 +158,7 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		pubStream, err := sub.Session.OpenPublish(fwd)
 		if err != nil {
 			if errors.Is(err, session.ErrNoStreamCredit) {
-				// §6.1 / §10.20: no bidi-stream credit to open the PUBLISH
+				// §6.1 / §10.21: no bidi-stream credit to open the PUBLISH
 				// stream — tell the subscriber with PUBLISH_SKIPPED on its
 				// SUBSCRIBE_TRACKS stream. The prohibition is scoped to this
 				// PUBLISH (draft-19); a later re-PUBLISH is retried above.
@@ -185,21 +185,21 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 }
 
 // publishParamsForSubscriber builds the Parameters for a PUBLISH the relay
-// sends to sub as a result of its SUBSCRIBE_TRACKS. Per §10.19.1, FORWARD
-// (§10.2.17) and GROUP_ORDER (§10.2.8) on that PUBLISH derive from the
+// sends to sub as a result of its SUBSCRIBE_TRACKS. Per §10.20.1, FORWARD
+// (§10.2.18) and GROUP_ORDER (§10.2.8) on that PUBLISH derive from the
 // SUBSCRIBE_TRACKS, not the upstream PUBLISH: any inherited from upstream are
 // dropped, FORWARD=0 is set only when the subscriber asked not to forward
 // (otherwise omitted → the default 1), and GROUP_ORDER is copied from the
 // subscriber's request when it specified one (otherwise omitted, so the
 // publisher's default applies).
 //
-// LARGEST_OBJECT is likewise not copied through. §10.2.16 requires a relay to
+// LARGEST_OBJECT is likewise not copied through. §10.2.17 requires a relay to
 // send the largest of every value it has observed, and the upstream's own figure
 // is only one of those: with a second upstream on the track, or with objects
 // already received, forwarding it verbatim would advertise a watermark below the
 // relay's own — so it is re-derived from the entry, which
 // [saveLargestLocation] has already folded this PUBLISH's value into.
-// §10.2.16 reserves omission for "no objects observed", which is what an entry
+// §10.2.17 reserves omission for "no objects observed", which is what an entry
 // with no watermark means.
 func publishParamsForSubscriber(
 	upstream message.Parameters,
@@ -226,14 +226,14 @@ func publishParamsForSubscriber(
 	return out
 }
 
-// emitPublishSkipped sends a PUBLISH_SKIPPED (§10.20) to sub for the track
+// emitPublishSkipped sends a PUBLISH_SKIPPED (§10.21) to sub for the track
 // fullName. It is the §6.1 response to an exhausted bidi-stream limit: the
 // relay cannot open the PUBLISH stream for this PUBLISH, so it tells the
 // subscriber on its SUBSCRIBE_TRACKS response stream. Per draft-19 §6.1 the
 // prohibition is scoped to this single PUBLISH — a later re-PUBLISH for the
 // track is a fresh forwarding attempt — so nothing is recorded here.
 //
-// Per §10.20 the message carries only the namespace suffix beyond the
+// Per §10.21 the message carries only the namespace suffix beyond the
 // subscriber's SUBSCRIBE_TRACKS prefix; we strip the prefix the same way
 // [namespaceMessageFor] does.
 func (h *sessionHandler) emitPublishSkipped(

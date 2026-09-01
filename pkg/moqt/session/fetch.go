@@ -26,9 +26,9 @@ type FetchRequest struct {
 	OK *message.FetchOK
 }
 
-// Fetch opens a FETCH request stream (§10.12) and awaits FETCH_OK or
-// REQUEST_ERROR. The session assigns m.RequestID; the caller supplies
-// FetchType and the corresponding Standalone or Joining sub-struct.
+// Fetch opens a FETCH request stream (§10.13) and awaits FETCH_OK or
+// REQUEST_ERROR. The session assigns m.RequestID; the caller supplies the
+// track name and, in a LOCATION_FILTER parameter, the range (§5.1.2).
 //
 // On success a [FetchRequest] is returned whose embedded stream stays open (the
 // caller may send REQUEST_UPDATE via [FetchRequest.Update]) and whose OK holds
@@ -54,7 +54,7 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 		})
 }
 
-// FetchResponder is the publisher side of a FETCH (§10.12) this endpoint
+// FetchResponder is the publisher side of a FETCH (§10.13) this endpoint
 // accepted via [Request.AcceptFetch] — the accept-side counterpart of
 // [Session.Fetch]. FETCH_OK has already been written on the embedded request
 // stream; the response objects are streamed on a separate FETCH_HEADER
@@ -78,7 +78,7 @@ func (f *FetchResponder) OpenFetchStream() (*OutgoingFetchStream, error) {
 	return f.s.OpenFetchStream(message.FetchHeader{RequestID: f.requestID})
 }
 
-// AcceptFetch accepts an inbound FETCH (§10.12) and returns a [FetchResponder]
+// AcceptFetch accepts an inbound FETCH (§10.13) and returns a [FetchResponder]
 // for streaming the response objects — the accept-side counterpart of
 // [Session.Fetch]. r.First MUST be a *message.Fetch.
 //

@@ -1,5 +1,5 @@
 // Package wire implements MoQT wire-format primitives per
-// draft-ietf-moq-transport-19: variable-length integers (§1.4.1, RFC 9000 §16),
+// draft-ietf-moq-transport-20: variable-length integers (§1.4.1, RFC 9000 §16),
 // reason phrases (§1.4.4), track namespaces (§2.4.1), key-value pairs used in
 // SETUP options (§1.4.3, §10.3.1), and control-message framing (§10).
 //

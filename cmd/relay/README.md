@@ -1,6 +1,6 @@
 # relay
 
-A single-instance MOQT relay (draft-ietf-moq-transport-19).
+A single-instance MOQT relay (draft-ietf-moq-transport-20).
 
 One UDP port serves both transport mappings: raw QUIC for clients dialing
 `moqt://host:port`, and WebTransport (HTTP/3) at `-webtransport-path` for
@@ -176,11 +176,11 @@ Docker Desktop for macOS). `interop-matrix` is driven by
 the `CLIENTS` env var) to add or mark clients.
 
 `make interop` is **not** run by CI: every published third-party client still
-speaks draft-18, while this relay advertises only the `moqt-19` ALPN, so the
+speaks draft-18, while this relay advertises only the `moqt-20` ALPN, so the
 handshake cannot complete and every case fails with "failed to connect to
 server". The CI job is kept but gated to manual `workflow_dispatch`; drop the
 `if:` in [`ci.yml`](../../.github/workflows/ci.yml) once those images move to
-draft-19. `make interop-loopback` is what gates PRs meanwhile — same six cases
+draft-20. `make interop-loopback` is what gates PRs meanwhile — same six cases
 against our own relay image over both `moqt://` and `https://`, so the container's
 WebTransport path stays covered.
 

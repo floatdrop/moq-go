@@ -263,8 +263,8 @@ func (s *IncomingFetchStream) ReadObject() (*message.FetchObject, error) {
 // PublisherPriority from the wire deltas + previous objects so the caller
 // doesn't have to maintain state itself.
 //
-// End-of-range markers (§11.4.4.2) surface via EndOfNonExistentRange or
-// EndOfUnknownRange; for those, GroupID / ObjectID hold the absolute range
+// End-of-range markers (§11.4.4.2) surface via EndOfNonExistentRange,
+// EndOfUnknownRange or EndOfTimedOutRange; for those, GroupID / ObjectID hold the absolute range
 // boundary the marker carries and the payload / properties fields are zero.
 type DecodedFetchObject struct {
 	GroupID           uint64
@@ -281,6 +281,7 @@ type DecodedFetchObject struct {
 
 	EndOfNonExistentRange bool // §11.4.4.2 flag 0x8C
 	EndOfUnknownRange     bool // §11.4.4.2 flag 0x10C
+	EndOfTimedOutRange    bool // §11.4.4.2 flag 0x20C (draft-20)
 }
 
 // ReadDecoded reads the next FetchObject and resolves §11.4.4 deltas
@@ -316,6 +317,7 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 			ObjectID:              raw.ObjectIDDelta,
 			EndOfNonExistentRange: raw.IsEndOfRangeObject(),
 			EndOfUnknownRange:     raw.IsEndOfRangeGroup(),
+			EndOfTimedOutRange:    raw.IsEndOfTimedOutRange(),
 		}, nil
 	}
 

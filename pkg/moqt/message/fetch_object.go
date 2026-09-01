@@ -66,11 +66,24 @@ const (
 	FetchSubgroupIDExplicit     FetchSubgroupIDMode = 0x03 // Subgroup ID field is present
 )
 
-// End of range markers per §11.4.4.2.
+// End of range markers per §11.4.4.2. Each stands for every Object between
+// the previously serialized one and the Location this marker carries.
 const (
-	FetchEndOfRangeObject = 0x8C  // End of Non-Existent Range
-	FetchEndOfRangeGroup  = 0x10C // End of Unknown Range
+	FetchEndOfRangeObject   = 0x8C  // End of Non-Existent Range
+	FetchEndOfRangeGroup    = 0x10C // End of Unknown Range
+	FetchEndOfTimedOutRange = 0x20C // End of Timed-Out Range (draft-20)
 )
+
+// isEndOfRange reports whether flags is any of the three §11.4.4.2 end-of-range
+// markers, which share a wire shape: Group ID and Object ID follow the flags
+// varint, and Subgroup ID, Priority and Properties are all absent.
+func isEndOfRange(flags uint64) bool {
+	switch flags {
+	case FetchEndOfRangeObject, FetchEndOfRangeGroup, FetchEndOfTimedOutRange:
+		return true
+	}
+	return false
+}
 
 // Append serializes a FetchObject to w.
 //
@@ -88,7 +101,7 @@ func (o *FetchObject) Append(w *wire.Writer) {
 	w.Varint(flags)
 
 	// End-of-range markers: Group ID and Object ID are always present (§11.4.4.2).
-	if o.SerializationFlags == FetchEndOfRangeObject || o.SerializationFlags == FetchEndOfRangeGroup {
+	if isEndOfRange(o.SerializationFlags) {
 		w.Varint(o.GroupIDDelta)  // used as absolute Group ID for end-of-range
 		w.Varint(o.ObjectIDDelta) // used as absolute Object ID for end-of-range
 		return
@@ -141,7 +154,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 	o.SerializationFlags = flags
 
 	// End-of-range markers: Group ID and Object ID follow (§11.4.4.2).
-	if flags == FetchEndOfRangeObject || flags == FetchEndOfRangeGroup {
+	if isEndOfRange(flags) {
 		groupID, err := r.Varint()
 		if err != nil {
 			return fmt.Errorf("moqt/message: end-of-range group ID: %w", truncated(err))
@@ -216,6 +229,18 @@ func (o *FetchObject) IsEndOfRangeGroup() bool {
 	return o.SerializationFlags == FetchEndOfRangeGroup
 }
 
+// IsEndOfTimedOutRange reports whether this is an end-of-timed-out-range marker
+// (0x20C): the Objects it covers were abandoned when FILL_TIMEOUT expired
+// (§10.2.5), as opposed to being known absent (0x8C) or of unknown status
+// (0x10C).
+func (o *FetchObject) IsEndOfTimedOutRange() bool {
+	return o.SerializationFlags == FetchEndOfTimedOutRange
+}
+
+// IsEndOfRange reports whether this is any §11.4.4.2 end-of-range marker rather
+// than a serialized Object.
+func (o *FetchObject) IsEndOfRange() bool { return isEndOfRange(o.SerializationFlags) }
+
 // IsDatagram reports whether the Datagram bit (0x40) is set: the object was
 // published with Forwarding Preference "Datagram" and carries no Subgroup ID.
 func (o *FetchObject) IsDatagram() bool {
@@ -241,7 +266,7 @@ func (o *FetchObject) Validate() error {
 	flags := o.SerializationFlags
 
 	// End-of-range markers are always valid structurally.
-	if flags == FetchEndOfRangeObject || flags == FetchEndOfRangeGroup {
+	if isEndOfRange(flags) {
 		return nil
 	}
 

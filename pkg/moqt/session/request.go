@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -60,6 +61,13 @@ func (e *ErrDuplicateRequestID) Error() string {
 type ErrUnexpectedRequestUpdate struct {
 	RequestID uint64
 }
+
+// ErrUnexpectedPublishStateNotify is returned by AcceptRequest when a peer
+// opens a request stream with PUBLISH_STATE_NOTIFY. §10.10 admits it only as a
+// publisher's unilateral notification on a subscription's existing stream, so
+// this is a PROTOCOL_VIOLATION and the caller MUST close the session.
+var ErrUnexpectedPublishStateNotify = errors.New(
+	"moqt/session: PUBLISH_STATE_NOTIFY as the first message of a request stream — PROTOCOL_VIOLATION")
 
 func (e *ErrUnexpectedRequestUpdate) Error() string {
 	return fmt.Sprintf(
@@ -215,6 +223,17 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 		if upd, ok := msg.(*message.RequestUpdate); ok {
 			resetStream(stream)
 			return nil, &ErrUnexpectedRequestUpdate{RequestID: upd.RequestID}
+		}
+
+		// §10.10: PUBLISH_STATE_NOTIFY is a unilateral publisher-to-subscriber
+		// notification on an existing subscription's stream. "An endpoint that
+		// receives a PUBLISH_STATE_NOTIFY for any other request type, or from the
+		// subscriber, MUST close the session with a PROTOCOL_VIOLATION" — opening
+		// a stream with one is both. It carries no Request ID, so the §10.1
+		// accounting below would not catch it either.
+		if _, ok := msg.(*message.PublishStateNotify); ok {
+			resetStream(stream)
+			return nil, ErrUnexpectedPublishStateNotify
 		}
 
 		// §10.1 parity + duplicate enforcement, shared with the follow-up
@@ -649,7 +668,7 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 	}, nil
 }
 
-// AcceptPublish accepts an inbound PUBLISH (§10.10): it registers the
+// AcceptPublish accepts an inbound PUBLISH (§10.11): it registers the
 // publisher-assigned Track Alias (§11.1, so inbound subgroup/datagram streams
 // resolve to this track and a reused alias is caught as DUPLICATE_TRACK_ALIAS),
 // replies REQUEST_OK, and returns an [IncomingPublication] for the receiving

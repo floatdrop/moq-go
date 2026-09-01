@@ -103,7 +103,7 @@ func WithMaxRequestUpdates(maxUpdates uint64) Option {
 
 // WithMaxFilterRanges sets MAX_FILTER_RANGES (§10.3.1.6) — the maximum total
 // number of Range Filter ranges this endpoint will accept across all Range
-// Filter parameters on a single subscription or fetch (§5.1.3). The value is
+// Filter parameters on a single subscription or fetch (§5.1.4). The value is
 // advertised to the peer in SETUP and used to reject over-limit or (when 0)
 // any Range Filters with INVALID_FILTER. The default (option absent, or 0)
 // prohibits Range Filters entirely.

@@ -125,7 +125,7 @@ func TestPublishRejected(t *testing.T) {
 }
 
 // TestPublicationDone verifies Publication.Done writes a PUBLISH_DONE whose
-// §10.11 Stream Count reflects the subgroups opened via the handle, with the
+// §10.12 Stream Count reflects the subgroups opened via the handle, with the
 // given code and reason, and then FINs the request stream.
 func TestPublicationDone(t *testing.T) {
 	cli, srv := openPair(t)

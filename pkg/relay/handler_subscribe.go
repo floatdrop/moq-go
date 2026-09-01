@@ -43,7 +43,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 
 	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 
-	// §10.2.13: a NEW_GROUP_REQUEST on the SUBSCRIBE either rides the upstream
+	// §10.2.19: a NEW_GROUP_REQUEST on the SUBSCRIBE either rides the upstream
 	// SUBSCRIBE we are about to open (rule 1, no Established upstream) or, when
 	// an upstream already exists, is evaluated against it as an Established
 	// subscription below.
@@ -57,14 +57,14 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, req.Stream, alias)
 	if err := installSubscribeParams(sub, msg.Parameters); err != nil {
 		if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
-			// §10.2.8 / §10.2.17: an out-of-range GROUP_ORDER/FORWARD is a
+			// §10.2.8 / §10.2.18: an out-of-range GROUP_ORDER/FORWARD is a
 			// session-level PROTOCOL_VIOLATION.
 			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE parameter protocol violation",
 				slog.String("err", err.Error()))
 			_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
 			return
 		}
-		// §5.1.3 / §10.6: a malformed or over-limit Range Filter is INVALID_FILTER.
+		// §5.1.4 / §10.6: a malformed or over-limit Range Filter is INVALID_FILTER.
 		if errors.Is(err, message.ErrInvalidFilter) {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE range filter rejected",
 				slog.String("err", err.Error()))
@@ -165,32 +165,12 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	h.metrics.SubscriptionOpened(subRef)
 	defer h.metrics.SubscriptionClosed(subRef)
 
-	// Register the Joining Location for this subscription so a later
-	// Joining FETCH (§10.12.2) referencing msg.RequestID can recover the
-	// snapshot and compute its end contiguous with the live subscription.
-	h.joinLocMu.Lock()
-	h.joinLocs[msg.RequestID] = joiningLocation{
-		fullName:   fullName,
-		largest:    snapshotLargest,
-		hasLargest: snapshotHas,
-	}
-	// Wake any Joining FETCH that arrived before this SUBSCRIBE finished
-	// establishing (§10.12.2 buffering — see handleJoiningFetch).
-	close(h.joinLocNotify)
-	h.joinLocNotify = make(chan struct{})
-	h.joinLocMu.Unlock()
+	defer h.tracks.RemoveDownstream(fullName, sub.ID)
 
-	defer func() {
-		h.joinLocMu.Lock()
-		delete(h.joinLocs, msg.RequestID)
-		h.joinLocMu.Unlock()
-		h.tracks.RemoveDownstream(fullName, sub.ID)
-	}()
-
-	// §10.2.16: "If Objects have been published on this Track the
+	// §10.2.17: "If Objects have been published on this Track the
 	// Publisher MUST include this parameter." LARGEST_OBJECT in
-	// SUBSCRIBE_OK tells the subscriber its Joining Location, which it
-	// uses to issue a Joining FETCH (§5.1.3) for cached backfill.
+	// SUBSCRIBE_OK tells the subscriber where the live edge was when the
+	// subscription was accepted, which §5.1.6 has it use to size a fill.
 	var okParams message.Parameters
 	if sub.HasLargestAtSubscribe {
 		okParams = message.Parameters{
@@ -220,7 +200,16 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		slog.String("name", string(msg.Name)),
 		slog.Uint64("alias", alias))
 
-	// §10.2.13: when the SUBSCRIBE carried a NEW_GROUP_REQUEST and we are
+	// §5.1.3: FILL_PARAMETERS on the SUBSCRIBE asks for a fill fetch stream,
+	// draft-20's replacement for the Joining FETCH. installSubscribeParams
+	// already rejected a malformed one, so an error here cannot be a protocol
+	// violation the peer has not been told about.
+	if err := h.maybeServeFill(ctx, sub, entry, fullName, msg.RequestID, msg.Parameters); err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
+			slog.String("err", err.Error()))
+	}
+
+	// §10.2.19: when the SUBSCRIBE carried a NEW_GROUP_REQUEST and we are
 	// serving from an already-Established upstream (so the request did not ride
 	// a fresh upstream SUBSCRIBE), evaluate it against the upstream as an
 	// Established subscription and forward it if the rules call for it.
@@ -301,7 +290,7 @@ func (h *sessionHandler) handleSubscribeUpdate(
 	prevForward := sub.ForwardState()
 	if err := installSubscribeParams(sub, upd.Parameters); err != nil {
 		if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
-			// §10.2.8 / §10.2.17: an out-of-range GROUP_ORDER/FORWARD is a
+			// §10.2.8 / §10.2.18: an out-of-range GROUP_ORDER/FORWARD is a
 			// session-level PROTOCOL_VIOLATION even in a REQUEST_UPDATE — the
 			// wire-level value is invalid, so it supersedes §10.9's
 			// request-scoped update-failure path.
@@ -342,14 +331,24 @@ func (h *sessionHandler) handleSubscribeUpdate(
 		h.propagateForwardUpstream(ctx, fullName)
 	}
 
-	// §10.2.13: a NEW_GROUP_REQUEST on a REQUEST_UPDATE for an Established
+	// §10.2.19: a NEW_GROUP_REQUEST on a REQUEST_UPDATE for an Established
 	// subscription is forwarded upstream when the relay rules call for it.
 	if p, ok := upd.Parameters.Find(message.ParamNewGroupRequest); ok {
 		h.propagateNewGroupUpstream(ctx, fullName, p.Varint)
 	}
+
+	// §5.1.3: FILL_PARAMETERS on a REQUEST_UPDATE opens a further fill fetch
+	// stream, named by the REQUEST_UPDATE's own Request ID. It does not cancel
+	// any fill already in flight — a subscription can have several open at once.
+	if entry, ok := h.tracks.Get(fullName.Key()); ok {
+		if err := h.maybeServeFill(ctx, sub, entry, fullName, upd.RequestID, upd.Parameters); err != nil {
+			h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
+				slog.String("err", err.Error()))
+		}
+	}
 }
 
-// propagateNewGroupUpstream implements the §10.2.13 relay handling for a
+// propagateNewGroupUpstream implements the §10.2.19 relay handling for a
 // NEW_GROUP_REQUEST received on an Established downstream subscription: when the
 // track supports dynamic Groups and the request is not already covered, the
 // relay sends a REQUEST_UPDATE carrying NEW_GROUP_REQUEST on each upstream
@@ -388,7 +387,7 @@ func (h *sessionHandler) propagateNewGroupUpstream(
 				slog.String("err", err.Error()))
 			continue
 		}
-		// §10.2.16 item 1 names REQUEST_UPDATE_OK too, and this is one: the
+		// §10.2.17 item 1 names REQUEST_UPDATE_OK too, and this is one: the
 		// response was previously discarded, so a watermark the upstream
 		// reported here never reached the entry.
 		saveLargestLocation(entry, resp.Parameters)
@@ -435,7 +434,7 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 //
 // extra carries parameters folded into each upstream SUBSCRIBE alongside the
 // §9.4 Largest Object filter — currently the NEW_GROUP_REQUEST a downstream
-// SUBSCRIBE arrived with (§10.2.13 rule 1).
+// SUBSCRIBE arrived with (§10.2.19 rule 1).
 func (h *sessionHandler) subscribeUpstream(
 	ctx context.Context,
 	fullName track.FullTrackName,
@@ -544,7 +543,7 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 ) (*registry.TrackEntry, bool, error) {
 	// §9.4 Largest Object filter — keeps the upstream subscription stable
 	// as downstream subscribers come and go with varying filters.
-	filter := &message.LocationFilter{Type: message.FilterLargestObject}
+	filter := &message.LocationFilter{Fields: 2}
 
 	// Bind the SUBSCRIBE message so we can read back the Request ID the
 	// session assigned (Subscribe mutates m.RequestID via AllocRequestID).
@@ -555,7 +554,7 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// Objects forwarded. When none does, the relay exercises its discretion by
 	// pausing the upstream with Forward=0 so it doesn't pull Objects nobody is
 	// consuming; propagateForwardUpstream resumes it when a downstream later
-	// sets Forward=1. Forward=1 stays implicit (omitted) per §10.2.17.
+	// sets Forward=1. Forward=1 stays implicit (omitted) per §10.2.18.
 	if !wantForward {
 		params = append(params, message.ForwardParam(false))
 	}
@@ -619,7 +618,7 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// downstream leaves (see [registry.TrackRegistry.RemoveDownstream]).
 	upstreamSub.OnDemand = true
 	entry, _ := h.tracks.AddUpstream(fullName, upstreamSub, registry.WithProperties(upstreamStream.OK.TrackProperties))
-	// §10.2.16 item 1: a LARGEST_OBJECT in this SUBSCRIBE_OK is one of the
+	// §10.2.17 item 1: a LARGEST_OBJECT in this SUBSCRIBE_OK is one of the
 	// values the relay's own watermark MUST be the largest of. Unconditional on
 	// purpose — see [saveLargestLocation] for why the §5.1 Forward-State
 	// qualifier must not be applied here.
@@ -723,6 +722,18 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 		sub.SetFilter(filter)
 	}
 
+	// §10.2.15: a parameter inside FILL_PARAMETERS that is not in Table 6 is a
+	// session-level PROTOCOL_VIOLATION. Parse it here so a malformed fill is
+	// rejected before the subscription is answered; the stream itself is opened
+	// after SUBSCRIBE_OK.
+	if _, _, err := message.FillParametersFromParam(ps); err != nil {
+		return &paramProtocolViolation{err.Error()}
+	}
+	// §10.2.21: INCLUDE_PROPERTIES outside {0,1} is likewise a violation.
+	if _, err := message.IncludePropertiesFromParam(ps); err != nil {
+		return &paramProtocolViolation{err.Error()}
+	}
+
 	if err := checkForwardParam(ps); err != nil {
 		return err
 	}
@@ -756,12 +767,12 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	}
 	sub.SetDeliveryTimeouts(timeouts)
 
-	// §5.1.3 Range Filters. They are installed only when present, so an update
+	// §5.1.4 Range Filters. They are installed only when present, so an update
 	// carrying none leaves the existing set unchanged. A malformed/over-limit
 	// set is a §10.6 INVALID_FILTER (request-scoped) — the caller maps
 	// message.ErrInvalidFilter to REQUEST_ERROR INVALID_FILTER.
 	//
-	// LIMITATION (draft-19 §5.1.3 REQUEST_UPDATE semantics not fully done): an
+	// LIMITATION (draft-19 §5.1.4 REQUEST_UPDATE semantics not fully done): an
 	// update carrying any range-filter param replaces the WHOLE set, rather than
 	// the spec's per-parameter-type replace (non-zero Length) / remove (Length 0)
 	// with untouched types preserved. So a partial update wipes other filter
@@ -783,18 +794,18 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 
 // paramProtocolViolation marks a parameter value that draft-19 requires the
 // receiver answer with a session-level PROTOCOL_VIOLATION — an out-of-range
-// GROUP_ORDER (§10.2.8) or FORWARD (§10.2.17) — as opposed to a request-scoped
+// GROUP_ORDER (§10.2.8) or FORWARD (§10.2.18) — as opposed to a request-scoped
 // REQUEST_ERROR. Callers detect it with errors.AsType and close the session
 // with [moqt.SessionProtocolViolation].
 type paramProtocolViolation struct{ reason string }
 
 func (e *paramProtocolViolation) Error() string { return e.reason }
 
-// checkForwardParam enforces the §10.2.17 FORWARD value range (0 or 1). An
+// checkForwardParam enforces the §10.2.18 FORWARD value range (0 or 1). An
 // out-of-range value is a *paramProtocolViolation; absent or valid → nil.
 func checkForwardParam(ps message.Parameters) error {
 	if p, ok := ps.Find(message.ParamForward); ok && p.Byte > 1 {
-		return &paramProtocolViolation{fmt.Sprintf("invalid FORWARD value 0x%X (§10.2.17)", p.Byte)}
+		return &paramProtocolViolation{fmt.Sprintf("invalid FORWARD value 0x%X (§10.2.18)", p.Byte)}
 	}
 	return nil
 }

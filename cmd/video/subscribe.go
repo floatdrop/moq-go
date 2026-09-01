@@ -99,7 +99,7 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	sub, err := sess.Subscribe(ctx, &message.Subscribe{
 		Namespace:  wire.Namespace(src.Namespace),
 		Name:       []byte(src.Track.Name),
-		Parameters: message.Parameters{message.LargestObjectFilter()},
+		Parameters: message.Parameters{message.NextObjectFilter()},
 	})
 	if err != nil {
 		return fmt.Errorf("video: SUBSCRIBE %s: %w", src.Track.Name, err)
@@ -395,10 +395,18 @@ func subscribeCatalog(
 	wait time.Duration,
 	watch *catalogWatch,
 ) (cleanup func(), err error) {
+	// The Next Object filter alone cannot surface a catalog already behind the
+	// live edge, so pair it with a fill (§5.1.3) covering the current group.
+	// draft-20 replaced draft-19's Relative Joining FETCH with this.
 	sub := &message.Subscribe{
-		Namespace:  wire.Namespace(namespace),
-		Name:       []byte(msf.CatalogTrackName),
-		Parameters: message.Parameters{message.LargestObjectFilter()},
+		Namespace: wire.Namespace(namespace),
+		Name:      []byte(msf.CatalogTrackName),
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			message.FillParametersParam(message.Parameters{
+				message.RelativeStartFilter(1),
+			}),
+		},
 	}
 	subscription, err := subscribeWhenPublished(ctx, sess, sub, wait)
 	if err != nil {
@@ -414,37 +422,22 @@ func subscribeCatalog(
 		go readCatalogStream(ctx, s, watch)
 	})
 
-	fetch := &message.Fetch{
-		FetchType: message.FetchTypeRelativeJoining,
-		Joining:   &message.JoiningFetch{JoiningRequestID: sub.RequestID, JoiningStart: 0},
-	}
-	req, err := sess.Fetch(ctx, fetch)
-	if err != nil {
-		// A deliberate deviation from §5's MUST, and the warning says so
-		// rather than hiding it. The pairing exists to find a catalog
-		// already behind the live edge; a relay that refuses the FETCH
-		// leaves the live subscription, which still delivers the catalog
-		// when the publisher republishes or was slower to start. Failing
-		// the run instead would turn a degraded diagnostic into no
-		// diagnostic.
-		slog.WarnContext(ctx, "catalog Joining FETCH refused; "+
-			"proceeding on the live subscription alone, which cannot backfill an older catalog",
-			tint.Err(err))
-		return func() {}, nil
-	}
-	// Spawned like the others, and for a sharper reason than symmetry: this
-	// stream is opened before the media SUBSCRIBE, and it stays open until
-	// the relay has finished serving the backfill range. An inline handler
-	// would park the accept loop inside it, so no media subgroup stream would
-	// ever be accepted and the run would report every Object missing — with
-	// the media handler's own goroutine never reached to prevent it.
-	demux.HandleFetch(fetch.RequestID, func(s *session.IncomingFetchStream) {
+	// The fill arrives on a unidirectional fetch stream whose FETCH_HEADER
+	// carries the SUBSCRIBE's Request ID, not a FETCH's (§5.1.3).
+	//
+	// Spawned like the others, and for a sharper reason than symmetry: the fill
+	// stream stays open until the relay has finished serving the fill range. An
+	// inline handler would park the accept loop inside it, so no media subgroup
+	// stream would ever be accepted and the run would report every Object
+	// missing — with the media handler's own goroutine never reached to prevent
+	// it.
+	demux.HandleFetch(sub.RequestID, func(s *session.IncomingFetchStream) {
 		go readCatalogFetch(ctx, s, watch)
 	})
-	return func() { _ = req.Close() }, nil
+	return func() {}, nil
 }
 
-// readCatalogFetch drains the catalog backfill FETCH stream.
+// readCatalogFetch drains the catalog fill fetch stream (§5.1.3).
 func readCatalogFetch(ctx context.Context, s *session.IncomingFetchStream, watch *catalogWatch) {
 	for {
 		obj, err := s.ReadDecoded()

@@ -106,7 +106,7 @@ func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 // relay forwards the PUBLISH to the subscriber on its OWN new bidirectional
 // stream (accepted via AcceptRequest), NOT multiplexed onto the
 // SUBSCRIBE_TRACKS request stream. This is the precondition for PUBLISH_SKIPPED
-// (§10.20): the forward consumes the subscriber's bidi-stream credit.
+// (§10.21): the forward consumes the subscriber's bidi-stream credit.
 func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -150,7 +150,7 @@ func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 		// Pin the current behaviour so we notice when remapping arrives.
 		t.Fatalf("forwarded TrackAlias = %d, want 99 (preserves the publisher's alias)", pub.TrackAlias)
 	}
-	// §10.19.1: the SUBSCRIBE_TRACKS omitted FORWARD and GROUP_ORDER, so the
+	// §10.20.1: the SUBSCRIBE_TRACKS omitted FORWARD and GROUP_ORDER, so the
 	// forwarded PUBLISH carries neither (FORWARD defaults to 1, GROUP_ORDER to
 	// the publisher's preference).
 	if p, ok := pub.Parameters.Find(message.ParamForward); ok {
@@ -161,8 +161,8 @@ func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	}
 }
 
-// TestPublish_ForwardsSubscribeTracksParams pins §10.19.1: the FORWARD
-// (§10.2.17) and GROUP_ORDER (§10.2.8) parameters on a SUBSCRIBE_TRACKS are
+// TestPublish_ForwardsSubscribeTracksParams pins §10.20.1: the FORWARD
+// (§10.2.18) and GROUP_ORDER (§10.2.8) parameters on a SUBSCRIBE_TRACKS are
 // copied onto the PUBLISH the relay generates for that subscriber.
 func TestPublish_ForwardsSubscribeTracksParams(t *testing.T) {
 	t.Parallel()
@@ -328,7 +328,7 @@ func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 
 // upstreamForwardValue runs the publisher side of one on-demand upstream
 // SUBSCRIBE and reports the FORWARD parameter the relay sent: (0/1, present)
-// when FORWARD is on the SUBSCRIBE, or (0, false) when it is omitted (§10.2.17
+// when FORWARD is on the SUBSCRIBE, or (0, false) when it is omitted (§10.2.18
 // default 1). It replies SUBSCRIBE_OK and drains follow-ups. The result arrives
 // on the returned channel once the relay's upstream SUBSCRIBE is accepted.
 func upstreamForwardValue(t *testing.T, pubSess *session.Session) <-chan [2]int {
@@ -776,7 +776,7 @@ func TestSubscribe_AuthDenialUsesPolicyCode(t *testing.T) {
 	}
 }
 
-// TestSubscribe_PublisherDisappears_EmitsPublishDone pins §10.11
+// TestSubscribe_PublisherDisappears_EmitsPublishDone pins §10.12
 // publisher-side termination. When the upstream publisher's session
 // dies (here: we explicitly close the publisher session), the relay
 // must notify every dependent downstream subscriber by writing a
@@ -934,12 +934,12 @@ func TestSubscribe_NoAliasCollisionWhenAlsoPublishing(t *testing.T) {
 	defer subStream.Close()
 }
 
-// TestPublish_SavesLargestObjectFromPublish pins §10.2.16 item 1 on the PUBLISH
+// TestPublish_SavesLargestObjectFromPublish pins §10.2.17 item 1 on the PUBLISH
 // path: a LARGEST_OBJECT on an inbound PUBLISH is one of the values the relay's
 // own watermark MUST be the largest of, so it has to reach the track entry even
 // though no object has arrived yet.
 //
-// Observable through the next SUBSCRIBE: §10.2.16 requires the relay to include
+// Observable through the next SUBSCRIBE: §10.2.17 requires the relay to include
 // LARGEST_OBJECT once objects exist on the track, and that value is the
 // subscriber's Joining Location for a §10.12.2 Joining FETCH. Before the fix the
 // parameter was dropped, so the relay claimed to know nothing and the backfill
@@ -979,7 +979,7 @@ func TestPublish_SavesLargestObjectFromPublish(t *testing.T) {
 }
 
 // TestPublish_ForwardedPublishCarriesEntryLargestObject pins the other half of
-// §10.2.16 for the PUBLISH-forwarding path: the relay MUST send the largest of
+// §10.2.17 for the PUBLISH-forwarding path: the relay MUST send the largest of
 // everything it has observed, so the LARGEST_OBJECT on a PUBLISH it generates for
 // a SUBSCRIBE_TRACKS holder is re-derived from the track entry rather than copied
 // through from the upstream's own PUBLISH.
@@ -987,7 +987,7 @@ func TestPublish_SavesLargestObjectFromPublish(t *testing.T) {
 // Two publishers on one track (§9.5) is what separates the two behaviours. The
 // second announces a *lower* watermark than the first, so copying it through
 // would advertise {3,4} when the relay has already observed {9,9} — a value below
-// its own maximum, which is exactly what §10.2.16 forbids. With one publisher the
+// its own maximum, which is exactly what §10.2.17 forbids. With one publisher the
 // two readings coincide and the bug is invisible, which is why this test needs
 // the second one.
 func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {

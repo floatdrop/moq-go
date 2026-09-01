@@ -9,7 +9,7 @@ import (
 // decodedProperties holds the Track Properties the relay acts on, as opposed
 // to the raw Properties block it forwards opaquely downstream per §9.6. The
 // values are decoded once when an entry's Properties are set (see
-// [TrackEntry.setPropertiesLocked]) so the §10.2.13 / §12 hot paths read a
+// [TrackEntry.setPropertiesLocked]) so the §10.2.19 / §12 hot paths read a
 // cached field instead of re-walking the block.
 //
 // To cache another property: add a field here, a branch in
@@ -79,7 +79,7 @@ func decodeDynamicGroups(v uint64) (bool, error) {
 // DynamicGroups reports whether the track advertised DYNAMIC_GROUPS=1 (§12.6),
 // using the value decoded once when Properties was set. The error is a §12.6
 // PROTOCOL_VIOLATION (a DYNAMIC_GROUPS value > 1), or a structural failure
-// parsing the Properties block; either way the §10.2.13 caller declines the
+// parsing the Properties block; either way the §10.2.19 caller declines the
 // NEW_GROUP_REQUEST rather than acting on it.
 func (e *TrackEntry) DynamicGroups() (bool, error) {
 	e.mu.RLock()

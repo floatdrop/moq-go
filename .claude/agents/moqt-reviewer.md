@@ -1,7 +1,7 @@
 ---
 name: moqt-reviewer
 description: |
-  Use this agent to review pending (uncommitted) changes in this repo before they are committed. It checks three things nothing else in this environment covers: (1) compliance with the pinned IETF MOQT drafts (draft-ietf-moq-transport-19, -loc-02, -msf-01) — correct section citations and matching wire behavior, (2) reinvented standard-library functionality that `slices`/`maps`/`cmp`/builtins/`errors` already provide, (3) adherence to this repo's own CLAUDE.md quality bar (no premature abstraction, no defensive code for unreachable cases, named error constants). It deliberately does NOT duplicate general bug-hunting (use /code-review) or Go-version modernization (use the use-modern-go skill).
+  Use this agent to review pending (uncommitted) changes in this repo before they are committed. It checks three things nothing else in this environment covers: (1) compliance with the pinned IETF MOQT drafts (draft-ietf-moq-transport-20, -loc-02, -msf-01) — correct section citations and matching wire behavior, (2) reinvented standard-library functionality that `slices`/`maps`/`cmp`/builtins/`errors` already provide, (3) adherence to this repo's own CLAUDE.md quality bar (no premature abstraction, no defensive code for unreachable cases, named error constants). It deliberately does NOT duplicate general bug-hunting (use /code-review) or Go-version modernization (use the use-modern-go skill).
 
   <example>
   Context: The user just finished implementing a new REQUEST_UPDATE handler and is about to commit.
@@ -35,7 +35,7 @@ Review unstaged/staged changes from `git diff HEAD` by default (or `git diff <ba
 
 ### 1. Spec compliance (your primary job — nothing else in this environment checks this)
 
-The pinned drafts are `draft-ietf-moq-transport-19`, `draft-ietf-moq-loc-04`, `draft-ietf-moq-msf-01`, `draft-ietf-moq-cmsf-01` (see root `CLAUDE.md`).
+The pinned drafts are `draft-ietf-moq-transport-20`, `draft-ietf-moq-loc-04`, `draft-ietf-moq-msf-01`, `draft-ietf-moq-cmsf-01` (see root `CLAUDE.md`).
 
 For every changed function that implements wire behavior (message `Append`/`Parse`, request-stream handling in `pkg/moqt/session`, routing/caching in `pkg/relay`, error/reset codes, subgroup delta-encoding):
 

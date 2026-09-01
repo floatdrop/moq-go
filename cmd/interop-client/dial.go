@@ -81,7 +81,7 @@ func (h *harness) dialQUIC(ctx context.Context, u *url.URL) (*session.Session, e
 		// Offer the one MOQT-over-QUIC ALPN we speak. Per §3.1 the selected
 		// "moqt-NN" ALPN fixes the draft version — draft-19 SETUP carries no
 		// version field.
-		ALPN: []string{"moqt-19"},
+		ALPN: []string{"moqt-20"},
 	})
 }
 

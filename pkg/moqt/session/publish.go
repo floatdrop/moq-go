@@ -34,7 +34,7 @@ type Publication struct {
 	alias uint64
 
 	// subgroupCount counts subgroup streams opened via OpenSubgroup, used as
-	// the §10.11 Stream Count when Done sends PUBLISH_DONE.
+	// the §10.12 Stream Count when Done sends PUBLISH_DONE.
 	subgroupCount atomic.Uint64
 }
 
@@ -60,8 +60,8 @@ func (p *Publication) OpenSubgroup(h message.SubgroupHeader) (*OutgoingSubgroupS
 	return sg, nil
 }
 
-// Done ends the publication (§10.11): it writes a PUBLISH_DONE with the given
-// status code and reason, then FINs the request stream. The §10.11 Stream Count
+// Done ends the publication (§10.12): it writes a PUBLISH_DONE with the given
+// status code and reason, then FINs the request stream. The §10.12 Stream Count
 // is set to the number of subgroup streams opened via [Publication.OpenSubgroup]
 // so a subscriber knows how many data streams to expect; this is exact only when
 // every subgroup was opened through this handle (subgroups opened via
@@ -79,7 +79,7 @@ func (p *Publication) Done(code moqt.PublishDoneCode, reason string) error {
 }
 
 // IncomingPublication is the receiving side of a publisher-initiated PUBLISH
-// (§10.10) this endpoint accepted via [Request.AcceptPublish] — the accept-side
+// (§10.11) this endpoint accepted via [Request.AcceptPublish] — the accept-side
 // counterpart of [Session.Subscribe]'s [Subscription]. The objects arrive on
 // subgroup uni-streams (or datagrams) keyed by [IncomingPublication.TrackAlias]
 // and are consumed via [Session.AcceptDataStream]; the embedded request stream
@@ -100,7 +100,7 @@ type IncomingPublication struct {
 // via [Session.LookupInboundTrackAlias]).
 func (p *IncomingPublication) TrackAlias() uint64 { return p.alias }
 
-// Publish opens a PUBLISH request stream (§10.10) and awaits the peer's
+// Publish opens a PUBLISH request stream (§10.11) and awaits the peer's
 // initial response. It is [Session.OpenPublish] plus the response wait: the
 // session assigns m.RequestID (after the stream opens, so a blocked open
 // consumes no ID) and, when m.TrackAlias is the zero value, a Track Alias via
@@ -129,7 +129,7 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 		})
 }
 
-// OpenPublish opens a PUBLISH request stream (§10.10) without blocking on
+// OpenPublish opens a PUBLISH request stream (§10.11) without blocking on
 // stream-flow-control credit and without awaiting the peer's response. It is
 // the relay-side counterpart of [Publish]: relay fan-out is fire-and-continue,
 // so the caller owns the stream's read side.
@@ -139,7 +139,7 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 // after the stream is successfully opened (see [Session.openAllocRequest]), so
 // a blocked attempt leaves the session's Request ID sequence untouched. This
 // lets the caller react to an exhausted limit by sending PUBLISH_SKIPPED (§6.1,
-// §10.20) instead. On success it assigns m.RequestID, writes the PUBLISH as the
+// §10.21) instead. On success it assigns m.RequestID, writes the PUBLISH as the
 // stream's first message, and returns the still-open bidi stream so the caller
 // can read the peer's REQUEST_OK / REQUEST_ERROR and send follow-ups (subgroup
 // streams, PUBLISH_DONE, REQUEST_UPDATE).

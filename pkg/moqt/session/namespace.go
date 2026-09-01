@@ -7,7 +7,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 )
 
-// NamespacePublication is an established PUBLISH_NAMESPACE request (§10.15). It
+// NamespacePublication is an established PUBLISH_NAMESPACE request (§10.16). It
 // embeds the still-open request stream (so Close / writes / message.Marshal work
 // directly on it) and carries the peer's REQUEST_OK. The caller announces tracks
 // by writing NAMESPACE / NAMESPACE_DONE follow-ups to the embedded stream.
@@ -20,7 +20,7 @@ type NamespacePublication struct {
 	OK *message.RequestOK
 }
 
-// NamespaceSubscription is an established SUBSCRIBE_NAMESPACE request (§10.18).
+// NamespaceSubscription is an established SUBSCRIBE_NAMESPACE request (§10.19).
 // It embeds the still-open request stream and carries the peer's REQUEST_OK;
 // NAMESPACE / NAMESPACE_DONE notifications arrive by reading the embedded stream
 // (e.g. via message.Parse).
@@ -33,7 +33,7 @@ type NamespaceSubscription struct {
 	OK *message.RequestOK
 }
 
-// TrackSubscription is an established SUBSCRIBE_TRACKS request (§10.19). It
+// TrackSubscription is an established SUBSCRIBE_TRACKS request (§10.20). It
 // embeds the still-open request stream and carries the peer's REQUEST_OK.
 // Follow-up PUBLISH_SKIPPED notifications are read via
 // [TrackSubscription.ReadPublishSkipped].
@@ -46,7 +46,7 @@ type TrackSubscription struct {
 	OK *message.RequestOK
 }
 
-// PublishNamespace opens a PUBLISH_NAMESPACE request stream (§10.15) and
+// PublishNamespace opens a PUBLISH_NAMESPACE request stream (§10.16) and
 // awaits REQUEST_OK or REQUEST_ERROR. The session assigns m.RequestID; the
 // caller supplies Namespace and optional Parameters.
 //
@@ -63,7 +63,7 @@ func (s *Session) PublishNamespace(
 		})
 }
 
-// SubscribeNamespace opens a SUBSCRIBE_NAMESPACE request stream (§10.18) and
+// SubscribeNamespace opens a SUBSCRIBE_NAMESPACE request stream (§10.19) and
 // awaits REQUEST_OK or REQUEST_ERROR. The session assigns m.RequestID; the
 // caller supplies TrackNamespacePrefix and optional Parameters.
 //
@@ -80,7 +80,7 @@ func (s *Session) SubscribeNamespace(
 		})
 }
 
-// SubscribeTracks opens a SUBSCRIBE_TRACKS request stream (§10.19) and awaits
+// SubscribeTracks opens a SUBSCRIBE_TRACKS request stream (§10.20) and awaits
 // REQUEST_OK or REQUEST_ERROR. The session assigns m.RequestID; the caller
 // supplies TrackNamespacePrefix and optional Parameters.
 //
@@ -94,7 +94,7 @@ func (s *Session) SubscribeTracks(ctx context.Context, m *message.SubscribeTrack
 		})
 }
 
-// IncomingNamespacePublication is an accepted inbound PUBLISH_NAMESPACE (§10.15)
+// IncomingNamespacePublication is an accepted inbound PUBLISH_NAMESPACE (§10.16)
 // — the receiving side of [Session.PublishNamespace]'s [NamespacePublication],
 // returned by [Request.AcceptPublishNamespace]. REQUEST_OK has been sent; the
 // announcer's NAMESPACE / NAMESPACE_DONE follow-ups arrive by reading the
@@ -106,7 +106,7 @@ type IncomingNamespacePublication struct {
 }
 
 // IncomingNamespaceSubscription is an accepted inbound SUBSCRIBE_NAMESPACE
-// (§10.18) — the announcing side of [Session.SubscribeNamespace]'s
+// (§10.19) — the announcing side of [Session.SubscribeNamespace]'s
 // [NamespaceSubscription], returned by [Request.AcceptSubscribeNamespace].
 // REQUEST_OK has been sent; the caller announces matching namespaces by writing
 // NAMESPACE / NAMESPACE_DONE to the embedded stream (e.g. via message.Marshal).
@@ -117,12 +117,12 @@ type IncomingNamespaceSubscription struct {
 	Stream
 }
 
-// IncomingTrackSubscription is an accepted inbound SUBSCRIBE_TRACKS (§10.19) —
+// IncomingTrackSubscription is an accepted inbound SUBSCRIBE_TRACKS (§10.20) —
 // the publishing side of [Session.SubscribeTracks]'s [TrackSubscription],
 // returned by [Request.AcceptSubscribeTracks]. REQUEST_OK has been sent; the
 // publisher forwards matching tracks as PUBLISH requests on new streams (see
 // [Session.OpenPublish]) and signals stream exhaustion with
-// [IncomingTrackSubscription.WritePublishSkipped] (§6.1 / §10.20). Close it to
+// [IncomingTrackSubscription.WritePublishSkipped] (§6.1 / §10.21). Close it to
 // end the subscription.
 type IncomingTrackSubscription struct {
 	// Stream is the SUBSCRIBE_TRACKS request stream, still open for
@@ -130,7 +130,7 @@ type IncomingTrackSubscription struct {
 	Stream
 }
 
-// WritePublishSkipped sends a PUBLISH_SKIPPED (§6.1 / §10.20) on the
+// WritePublishSkipped sends a PUBLISH_SKIPPED (§6.1 / §10.21) on the
 // SUBSCRIBE_TRACKS stream, telling the subscriber the publisher could not open a
 // PUBLISH stream for the named track because it has no available bidirectional
 // streams. It is the publisher-side counterpart of
@@ -140,7 +140,7 @@ func (t *IncomingTrackSubscription) WritePublishSkipped(pb *message.PublishSkipp
 }
 
 // acceptNamespaceRequest is the shared accept path of the three namespace
-// requests (§10.15 / §10.18 / §10.19): assert the request's first message is
+// requests (§10.16 / §10.19 / §10.20): assert the request's first message is
 // of type M, reply the all-default REQUEST_OK, and hand the still-open
 // stream to wrap. op names the caller for error messages.
 func acceptNamespaceRequest[M message.Message, T any](r *Request, op string, wrap func(Stream) T) (T, error) {
@@ -154,7 +154,7 @@ func acceptNamespaceRequest[M message.Message, T any](r *Request, op string, wra
 	return wrap(r.Stream), nil
 }
 
-// AcceptPublishNamespace accepts an inbound PUBLISH_NAMESPACE (§10.15), replies
+// AcceptPublishNamespace accepts an inbound PUBLISH_NAMESPACE (§10.16), replies
 // REQUEST_OK, and returns an [IncomingNamespacePublication] for receiving the
 // announcer's NAMESPACE / NAMESPACE_DONE follow-ups — the accept-side
 // counterpart of [Session.PublishNamespace]. r.First MUST be a
@@ -164,7 +164,7 @@ func (r *Request) AcceptPublishNamespace() (*IncomingNamespacePublication, error
 		func(s Stream) *IncomingNamespacePublication { return &IncomingNamespacePublication{Stream: s} })
 }
 
-// AcceptSubscribeNamespace accepts an inbound SUBSCRIBE_NAMESPACE (§10.18),
+// AcceptSubscribeNamespace accepts an inbound SUBSCRIBE_NAMESPACE (§10.19),
 // replies REQUEST_OK, and returns an [IncomingNamespaceSubscription] for
 // announcing matching namespaces via NAMESPACE / NAMESPACE_DONE — the
 // accept-side counterpart of [Session.SubscribeNamespace]. r.First MUST be a
@@ -174,7 +174,7 @@ func (r *Request) AcceptSubscribeNamespace() (*IncomingNamespaceSubscription, er
 		func(s Stream) *IncomingNamespaceSubscription { return &IncomingNamespaceSubscription{Stream: s} })
 }
 
-// AcceptSubscribeTracks accepts an inbound SUBSCRIBE_TRACKS (§10.19), replies
+// AcceptSubscribeTracks accepts an inbound SUBSCRIBE_TRACKS (§10.20), replies
 // REQUEST_OK, and returns an [IncomingTrackSubscription] for forwarding matching
 // PUBLISHes and sending PUBLISH_SKIPPED follow-ups — the accept-side counterpart
 // of [Session.SubscribeTracks]. r.First MUST be a *message.SubscribeTracks.
@@ -186,7 +186,7 @@ func (r *Request) AcceptSubscribeTracks() (*IncomingTrackSubscription, error) {
 // ReadPublishSkipped reads the next follow-up message on this SUBSCRIBE_TRACKS
 // response stream and returns it as a PUBLISH_SKIPPED.
 //
-// This is the subscriber side of §6.1 / §10.20. After the initial REQUEST_OK,
+// This is the subscriber side of §6.1 / §10.21. After the initial REQUEST_OK,
 // the publisher sends PUBLISH_SKIPPED on this stream when it cannot open a
 // PUBLISH stream for a matching track because it has no available
 // bidirectional streams. (Forwarded PUBLISHes themselves arrive on their own

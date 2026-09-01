@@ -11,7 +11,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
-// handlePublishNamespace implements the PUBLISH_NAMESPACE flow (§6.2, §10.15):
+// handlePublishNamespace implements the PUBLISH_NAMESPACE flow (§6.2, §10.16):
 //
 //  1. Authorize.
 //  2. Register the namespace in [registry.NamespaceRegistry].
@@ -97,7 +97,7 @@ func (h *sessionHandler) handlePublishNamespace(
 	}
 }
 
-// handleSubscribeNamespace implements SUBSCRIBE_NAMESPACE (§6.1, §10.18):
+// handleSubscribeNamespace implements SUBSCRIBE_NAMESPACE (§6.1, §10.19):
 //
 //  1. Authorize.
 //  2. Register in [registry.NamespaceRegistry] with WantsTracks=false.
@@ -197,7 +197,7 @@ func (h *sessionHandler) handleSubscribeNamespace(
 	h.serveNamespaceFollowups(ctx, req.Stream, entry.WriteMessage)
 }
 
-// handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.19):
+// handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.20):
 //
 //  1. Authorize.
 //  2. Register in [registry.NamespaceRegistry] with WantsTracks=true.
@@ -218,10 +218,10 @@ func (h *sessionHandler) handleSubscribeTracks(
 		return
 	}
 
-	// §10.19.1: FORWARD/GROUP_ORDER on the SUBSCRIBE_TRACKS become the
+	// §10.20.1: FORWARD/GROUP_ORDER on the SUBSCRIBE_TRACKS become the
 	// defaults copied onto every PUBLISH this subscription triggers. Resolve
 	// (and validate) before acking. An out-of-range value is a §10.2.8 /
-	// §10.2.17 session-level PROTOCOL_VIOLATION.
+	// §10.2.18 session-level PROTOCOL_VIOLATION.
 	forward, groupOrder, err := subscribeTracksForwarding(msg.Parameters)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "SubscribeTracks parameter protocol violation",
@@ -230,7 +230,7 @@ func (h *sessionHandler) handleSubscribeTracks(
 		return
 	}
 
-	// §5.1.3: TRACK_PROPERTY_FILTER (and any other Range Filters) on the
+	// §5.1.4: TRACK_PROPERTY_FILTER (and any other Range Filters) on the
 	// SUBSCRIBE_TRACKS gate which PUBLISH messages are forwarded. Parse and
 	// validate against MAX_FILTER_RANGES; a bad/over-limit set is a §10.6
 	// INVALID_FILTER (request-scoped).
@@ -271,12 +271,12 @@ func (h *sessionHandler) handleSubscribeTracks(
 	h.serveNamespaceFollowups(ctx, req.Stream, entry.WriteMessage)
 }
 
-// subscribeTracksForwarding resolves the FORWARD (§10.2.17) and GROUP_ORDER
-// (§10.2.8) parameters a SUBSCRIBE_TRACKS carries. §10.19.1 copies both onto
+// subscribeTracksForwarding resolves the FORWARD (§10.2.18) and GROUP_ORDER
+// (§10.2.8) parameters a SUBSCRIBE_TRACKS carries. §10.20.1 copies both onto
 // the PUBLISH messages the subscription triggers: forward defaults to true
 // (FORWARD omitted or 1; only 0 means "don't forward"); groupOrder is 0 when
 // omitted (the publisher's default applies) or the Ascending/Descending value.
-// An out-of-range value is a *paramProtocolViolation (§10.2.8 / §10.2.17: the
+// An out-of-range value is a *paramProtocolViolation (§10.2.8 / §10.2.18: the
 // caller MUST close the session), shared with installSubscribeParams.
 func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder byte, err error) {
 	if err := checkForwardParam(ps); err != nil {
@@ -352,7 +352,7 @@ func namespaceKey(ns wire.TrackNamespace) string {
 }
 
 // namespaceMessageFor constructs a NAMESPACE wire message announcing the
-// publisher's namespace under the subscriber's prefix. §10.16 carries only
+// publisher's namespace under the subscriber's prefix. §10.17 carries only
 // the suffix (the bytes beyond the prefix), so the relay strips the prefix
 // portion before emitting.
 //

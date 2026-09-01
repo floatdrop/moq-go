@@ -591,7 +591,7 @@ func TestFetch_JoiningFetchUnknownRequestID(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestInvalidJoiningID)
 }
 
-// TestFetch_JoiningFetchRelativeCurrentGroup pins the §5.1.3 / §10.12.2
+// TestFetch_JoiningFetchRelativeCurrentGroup pins the §5.1.4 / §10.12.2
 // happy path: a subscriber issues SUBSCRIBE with FilterLargestObject and
 // then a Relative Joining FETCH with JoiningStart=0. The relay computes
 // the response range against the Joining Location it captured at
@@ -623,7 +623,7 @@ func TestFetch_JoiningFetchRelativeCurrentGroup(t *testing.T) {
 	}
 	t.Cleanup(func() { subStream.Close() })
 
-	// §10.2.16: relay MUST include LARGEST_OBJECT now that objects
+	// §10.2.17: relay MUST include LARGEST_OBJECT now that objects
 	// have been cached.
 	lp, hasLargest := subStream.OK.Parameters.Find(message.ParamLargestObject)
 	if !hasLargest {
@@ -753,7 +753,7 @@ func TestFetch_PartialRangeCarriesPriority(t *testing.T) {
 	}
 }
 
-// TestFetch_OKEndLocationCappedToWatermark pins §10.13: a FETCH
+// TestFetch_OKEndLocationCappedToWatermark pins §10.14: a FETCH
 // whose requested EndLocation extends beyond the relay's Largest
 // Object should have FETCH_OK.EndLocation capped at {Largest.Group,
 // Largest.Object + 1}.
@@ -782,7 +782,7 @@ func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 // waitRelayLargest polls TRACK_STATUS until the relay reports the given Largest
 // Location, so a test can depend on the fanout having observed objects without
 // sleeping for a duration that is either flaky or slow. TRACK_STATUS_OK carries
-// LARGEST_OBJECT (§10.2.16), which makes the relay's watermark observable over
+// LARGEST_OBJECT (§10.2.17), which makes the relay's watermark observable over
 // the protocol itself.
 func waitRelayLargest(
 	t *testing.T,
@@ -845,7 +845,7 @@ func TestFetch_JoiningRejectedWhenNoObjectsPublished(t *testing.T) {
 	}
 	t.Cleanup(func() { subStream.Close() })
 
-	// Precondition, and the reason the FETCH below must fail: §10.2.16 only
+	// Precondition, and the reason the FETCH below must fail: §10.2.17 only
 	// obliges the publisher to send LARGEST_OBJECT once objects exist.
 	if _, ok := subStream.OK.Parameters.Find(message.ParamLargestObject); ok {
 		t.Fatal("SUBSCRIBE_OK carried LARGEST_OBJECT for a track with no objects")

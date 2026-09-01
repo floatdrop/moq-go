@@ -24,7 +24,7 @@ type SendStream interface {
 	io.Closer
 
 	// CancelWrite resets the stream with the given application error code
-	// (§3.3.4 of draft-ietf-moq-transport-19) and unblocks any in-flight
+	// (§3.3.4 of draft-ietf-moq-transport-20) and unblocks any in-flight
 	// Write with an error. The session layer relies on this to unwedge its
 	// control-send loop on shutdown.
 	CancelWrite(code uint64)
@@ -73,7 +73,7 @@ type StreamPriority struct {
 
 // PrioritizedSendStream is optionally implemented by [SendStream]
 // implementations that expose a per-stream scheduling priority knob to the
-// underlying transport (§7 / §7.2 of draft-ietf-moq-transport-19).
+// underlying transport (§7 / §7.2 of draft-ietf-moq-transport-20).
 //
 // Implementations translate the [StreamPriority] into whatever shape their
 // transport accepts (e.g. an HTTP/3 PRIORITY_UPDATE urgency field, a QUIC

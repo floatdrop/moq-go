@@ -15,7 +15,7 @@ import (
 
 // PublisherEntry records a single PUBLISH_NAMESPACE advertisement received
 // from a publisher (or upstream relay). The relay holds onto the bidi
-// Stream because §6.2 / §10.15 require the same stream to stay open for the
+// Stream because §6.2 / §10.16 require the same stream to stay open for the
 // lifetime of the advertisement — that's also where REQUEST_OK / REQUEST_ERROR
 // and the eventual cancellation FIN flow.
 type PublisherEntry struct {
@@ -69,8 +69,8 @@ type SubscriberEntry struct {
 	// dispatches on this flag.
 	WantsTracks bool
 
-	// Forward and GroupOrder carry the FORWARD (§10.2.17) and GROUP_ORDER
-	// (§10.2.8) parameters from the SUBSCRIBE_TRACKS, which §10.19.1 copies
+	// Forward and GroupOrder carry the FORWARD (§10.2.18) and GROUP_ORDER
+	// (§10.2.8) parameters from the SUBSCRIBE_TRACKS, which §10.20.1 copies
 	// onto every PUBLISH the subscription triggers. Set once at registration
 	// (never mutated), so reads in the PUBLISH fanout need no lock. They are
 	// meaningful only when WantsTracks: Forward defaults to true (FORWARD
@@ -79,10 +79,10 @@ type SubscriberEntry struct {
 	Forward    bool
 	GroupOrder byte
 
-	// RangeFilters holds the §5.1.3 Range Filters on the SUBSCRIBE_TRACKS. The
+	// RangeFilters holds the §5.1.4 Range Filters on the SUBSCRIBE_TRACKS. The
 	// PUBLISH forwarding loop evaluates TRACK_PROPERTY_FILTER (§10.2.14) against
 	// each PUBLISH's Track Properties via MatchesTrack; a PUBLISH that fails is
-	// not forwarded (§5.1.3). Set once at registration. nil = no restriction.
+	// not forwarded (§5.1.4). Set once at registration. nil = no restriction.
 	RangeFilters *message.RangeFilterSet
 }
 
@@ -228,7 +228,7 @@ func (r *NamespaceRegistry) UnregisterPublisher(entry *PublisherEntry) bool {
 // RegisterSubscriber records a subscriber's SUBSCRIBE_NAMESPACE (when
 // wantsTracks is false) or SUBSCRIBE_TRACKS (when true). forward, groupOrder,
 // and rangeFilters carry the SUBSCRIBE_TRACKS FORWARD/GROUP_ORDER passthrough
-// (§10.19.1) and §5.1.3 Range Filters, and are ignored unless wantsTracks.
+// (§10.20.1) and §5.1.4 Range Filters, and are ignored unless wantsTracks.
 // Returns the canonical pointer for use with
 // [NamespaceRegistry.UnregisterSubscriber].
 func (r *NamespaceRegistry) RegisterSubscriber(

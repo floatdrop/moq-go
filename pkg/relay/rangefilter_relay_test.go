@@ -51,7 +51,7 @@ func TestSubscribe_RangeFilterProhibitedWhenConfiguredOff(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestInvalidFilter)
 }
 
-// TestFanout_ObjectIDRangeFilter pins §5.1.3 object filtering on live fanout: an
+// TestFanout_ObjectIDRangeFilter pins §5.1.4 object filtering on live fanout: an
 // OBJECTID_FILTER selecting [1,2] drops object 0 and 3, so the subscriber sees
 // only IDs 1 and 2 (with deltas re-encoded against the forwarded IDs).
 func TestFanout_ObjectIDRangeFilter(t *testing.T) {
@@ -153,7 +153,7 @@ func TestFanout_ObjectIDRangeFilter(t *testing.T) {
 	}
 }
 
-// TestSubscribeTracks_TrackPropertyFilter pins §5.1.3: a TRACK_PROPERTY_FILTER
+// TestSubscribeTracks_TrackPropertyFilter pins §5.1.4: a TRACK_PROPERTY_FILTER
 // on a SUBSCRIBE_TRACKS forwards only PUBLISH messages whose Track Properties
 // pass — a matching track is forwarded, a non-matching one is suppressed.
 func TestSubscribeTracks_TrackPropertyFilter(t *testing.T) {
@@ -217,7 +217,7 @@ func TestSubscribeTracks_TrackPropertyFilter(t *testing.T) {
 	}
 }
 
-// TestFetch_ObjectIDRangeFilter pins §5.1.3 filtering on the FETCH serve path:
+// TestFetch_ObjectIDRangeFilter pins §5.1.4 filtering on the FETCH serve path:
 // an OBJECTID_FILTER selecting [1,2] returns only the matching cached objects.
 func TestFetch_ObjectIDRangeFilter(t *testing.T) {
 	t.Parallel()

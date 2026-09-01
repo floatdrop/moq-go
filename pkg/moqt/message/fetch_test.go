@@ -23,7 +23,7 @@ func TestFetchValidate(t *testing.T) {
 		}
 	}
 
-	// End strictly before Start is rejected (§10.12).
+	// End strictly before Start is rejected (§10.13).
 	if err := mk(Location{Group: 10}, Location{Group: 5}).Validate(); err == nil {
 		t.Fatal("expected error when End < Start")
 	}

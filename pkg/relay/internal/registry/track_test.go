@@ -208,7 +208,7 @@ func TestTrackRegistry_RemoveUnknownIsNoop(t *testing.T) {
 	}
 }
 
-// TestTrackRegistry_UpdateLargestMonotonic verifies the §10.2.16 rule: the
+// TestTrackRegistry_UpdateLargestMonotonic verifies the §10.2.17 rule: the
 // watermark only ever advances, and the bool return reports whether an
 // advance happened.
 func TestTrackRegistry_UpdateLargestMonotonic(t *testing.T) {
@@ -551,7 +551,7 @@ func TestTrackRegistry_CacheTTLPolicy_ZeroReturnMeansDefault(t *testing.T) {
 // session is already using.
 //
 // Emptiness alone is not enough to decide that. A different session can adopt
-// the entry and be part way through its own §10.10 window — objects already
+// the entry and be part way through its own §10.11 window — objects already
 // arriving and being cached, AddUpstream not yet reached, so both subscription
 // slices still read empty. Deleting it there strands exactly the streams the
 // speculative create exists to protect.
@@ -581,7 +581,7 @@ func TestTrackRegistry_DeleteIfUnused(t *testing.T) {
 		name := newTestTrackName("adopted")
 
 		entry, _ := r.GetOrCreateNew(name)
-		// Another session's §10.10 window: objects cached, nothing
+		// Another session's §10.11 window: objects cached, nothing
 		// registered yet, so both slices are still empty.
 		entry.Cache.Put(&cache.CachedObject{GroupID: 1, ObjectID: 0, Payload: []byte("a")})
 

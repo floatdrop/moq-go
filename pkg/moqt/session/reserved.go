@@ -33,12 +33,7 @@ func requestNamespace(msg message.Message) (ns wire.TrackNamespace, ok bool) {
 	case *message.SubscribeTracks:
 		return m.TrackNamespacePrefix, true
 	case *message.Fetch:
-		// A Standalone FETCH carries a namespace; a Joining FETCH does not
-		// (it references the joined subscription's Request ID).
-		if m.Standalone != nil {
-			return m.Standalone.Namespace, true
-		}
-		return nil, false
+		return m.Namespace, true
 	default:
 		return nil, false
 	}

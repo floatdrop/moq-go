@@ -11,7 +11,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
-// TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit pins §6.1 / §10.20:
+// TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit pins §6.1 / §10.21:
 // when a SUBSCRIBE_TRACKS subscriber has no bidirectional-stream credit left,
 // the relay cannot open a PUBLISH stream for a newly-published matching track,
 // so it sends PUBLISH_SKIPPED on the SUBSCRIBE_TRACKS response stream instead.

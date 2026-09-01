@@ -1,5 +1,5 @@
 // Package message implements MoQT control- and request-stream message types
-// per draft-ietf-moq-transport-19. Each Message exposes a wire Type and
+// per draft-ietf-moq-transport-20. Each Message exposes a wire Type and
 // Append/Parse methods over wire.Writer/Reader.
 //
 // Marshal writes a complete control-message frame (Type + Length + Payload).
@@ -23,6 +23,7 @@ const (
 	TypeSubscribe          Type = 0x03
 	TypeSubscribeOK        Type = 0x04
 	TypePublish            Type = 0x1D
+	TypePublishStateNotify Type = 0x22
 	TypePublishDone        Type = 0x0B
 	TypeRequestUpdate      Type = 0x02
 	TypeRequestOK          Type = 0x07
@@ -105,8 +106,8 @@ func ParsePayload(t Type, payload []byte) (Message, error) {
 }
 
 // validator is implemented by messages that enforce field-level invariants the
-// wire decoder cannot catch on its own (e.g. a FETCH whose End Location
-// precedes its Start Location, §10.12). ParsePayload invokes Validate after a
+// wire decoder cannot catch on its own (e.g. a FETCH whose full track name
+// exceeds §2.4.1's 4,096-byte cap). ParsePayload invokes Validate after a
 // successful decode so a malformed-but-decodable control message is rejected at
 // the message boundary — the session layer treats the resulting error as a
 // PROTOCOL_VIOLATION — rather than propagating bad state inward.
@@ -135,6 +136,8 @@ func newMessage(t Type) (Message, error) {
 		return &SubscribeOK{}, nil
 	case TypePublish:
 		return &Publish{}, nil
+	case TypePublishStateNotify:
+		return &PublishStateNotify{}, nil
 	case TypePublishDone:
 		return &PublishDone{}, nil
 	case TypeRequestUpdate:
@@ -178,6 +181,8 @@ func (t Type) String() string {
 		return "SUBSCRIBE_OK"
 	case TypePublish:
 		return "PUBLISH"
+	case TypePublishStateNotify:
+		return "PUBLISH_STATE_NOTIFY"
 	case TypePublishDone:
 		return "PUBLISH_DONE"
 	case TypeRequestUpdate:

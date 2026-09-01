@@ -880,7 +880,7 @@ func TestFanout_InboundResetCancelsDownstream(t *testing.T) {
 	}
 }
 
-// TestFanout_UpdatesTrackEntryLargestObject pins §10.2.16: every forwarded
+// TestFanout_UpdatesTrackEntryLargestObject pins §10.2.17: every forwarded
 // object advances the entry's LargestObject watermark. The watermark isn't
 // directly observable on the wire (TRACK_STATUS_OK doesn't yet carry
 // LARGEST_OBJECT in this stage), so the test exercises the indirect signal:

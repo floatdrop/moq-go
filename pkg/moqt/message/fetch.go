@@ -1,95 +1,55 @@
 package message
 
 import (
-	"errors"
 	"fmt"
 	"io"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// FetchType identifies the type of FETCH request per §10.12.
-type FetchType uint64
-
-const (
-	FetchTypeStandalone      FetchType = 0x1
-	FetchTypeRelativeJoining FetchType = 0x2
-	FetchTypeAbsoluteJoining FetchType = 0x3
-)
-
-// Fetch is a FETCH message per §10.12.
+// Fetch is a FETCH message per §10.13.
+//
+// draft-20 removed the Fetch Type discriminant and with it the Joining
+// variant: a FETCH now just names a track, and its range travels in the
+// LOCATION_FILTER parameter (§5.1.2) like every other filter. The backfill
+// that a Joining FETCH used to provide is now a fill fetch stream, requested
+// with FILL_PARAMETERS on the SUBSCRIBE itself (§5.1.3).
+//
+//	FETCH Message {
+//	  Type (vi64) = 0x16,
+//	  Length (16),
+//	  Request ID (vi64),
+//	  Track Namespace (..),
+//	  Track Name Length (vi64),
+//	  Track Name (..),
+//	  Number of Parameters (vi64),
+//	  Parameters (..) ...
+//	}
 type Fetch struct {
 	RequestID  uint64
-	FetchType  FetchType
-	Standalone *StandaloneFetch // Present when FetchType == FetchTypeStandalone
-	Joining    *JoiningFetch    // Present when FetchType == FetchTypeRelativeJoining or FetchTypeAbsoluteJoining
+	Namespace  wire.TrackNamespace
+	Name       []byte
 	Parameters Parameters
-}
-
-// StandaloneFetch contains fields for a standalone FETCH request per §10.12.1.
-type StandaloneFetch struct {
-	Namespace     wire.TrackNamespace
-	Name          []byte
-	StartLocation Location
-	EndLocation   Location
-}
-
-// JoiningFetch contains fields for a joining FETCH request per §10.12.2.
-type JoiningFetch struct {
-	JoiningRequestID uint64
-	JoiningStart     uint64 // Relative or absolute start
 }
 
 // Append serializes the FETCH message to w.
 func (m *Fetch) Append(w *wire.Writer) {
 	w.Varint(m.RequestID)
-	w.Varint(uint64(m.FetchType))
-
-	switch m.FetchType {
-	case FetchTypeStandalone:
-		if m.Standalone != nil {
-			m.Standalone.append(w)
-		}
-	case FetchTypeRelativeJoining, FetchTypeAbsoluteJoining:
-		if m.Joining != nil {
-			m.Joining.append(w)
-		}
-	}
-
+	w.TrackNamespace(m.Namespace)
+	w.VarintBytes(m.Name)
 	m.Parameters.append(w)
 }
 
 // Parse deserializes the FETCH message from r.
 func (m *Fetch) Parse(r *wire.Reader) error {
 	s := r.Scanner()
-	var ft uint64
 	s.Varint(&m.RequestID)
-	s.Varint(&ft)
+	s.TrackNamespace(&m.Namespace)
+	s.VarintBytes(&m.Name)
 	if err := s.Err(); err != nil {
 		return err
 	}
-	m.FetchType = FetchType(ft)
-
-	switch m.FetchType {
-	case FetchTypeStandalone:
-		m.Standalone = &StandaloneFetch{}
-		if err := m.Standalone.parse(r); err != nil {
-			return err
-		}
-	case FetchTypeRelativeJoining, FetchTypeAbsoluteJoining:
-		m.Joining = &JoiningFetch{}
-		if err := m.Joining.parse(r); err != nil {
-			return err
-		}
-	default:
-		return ErrUnknownFetchType
-	}
-
-	if err := m.Parameters.parse(r); err != nil {
-		return err
-	}
-
-	return nil
+	return m.Parameters.parse(r)
 }
 
 // Type returns the wire type ID for FETCH.
@@ -110,83 +70,17 @@ func validateFullTrackName(ns wire.TrackNamespace, name []byte) error {
 	return nil
 }
 
-// FetchEndBeforeStart reports whether a standalone-FETCH range violates the
-// §10.12 rule "End Location MUST specify the same or a larger Location than
-// Start Location", interpreting the wire encoding: End is the last Object
-// plus 1, and an End Object of 0 means "the entire group" (§10.12.1) — it
-// only constrains the Group, so Start={G,5}, End={G,0} (the rest of group
-// G) is valid. Equal Start/End denotes an EMPTY range (last = Start-1) and
-// is also valid.
-func FetchEndBeforeStart(start, end Location) bool {
-	return end.Group < start.Group || (end.Object != 0 && end.Less(start))
-}
-
-// Validate enforces the FETCH invariants the wire decoder cannot: the
-// sub-message selected by FetchType must be present, and a Standalone
-// FETCH's range must satisfy [FetchEndBeforeStart]'s §10.12 rule.
+// Validate enforces the FETCH invariant the wire decoder cannot: §2.4.1's
+// 4,096-byte cap applies to the full track name, not just the namespace.
 // ParsePayload invokes this automatically after decoding a FETCH frame.
+//
+// The range is no longer a FETCH field in draft-20, so its validation lives
+// on the LOCATION_FILTER parameter ([LocationFilter.Validate]).
 func (m *Fetch) Validate() error {
-	switch m.FetchType {
-	case FetchTypeStandalone:
-		if m.Standalone == nil {
-			return errors.New("moqt/message: standalone FETCH missing range")
-		}
-		if err := validateFullTrackName(m.Standalone.Namespace, m.Standalone.Name); err != nil {
-			return err
-		}
-		if FetchEndBeforeStart(m.Standalone.StartLocation, m.Standalone.EndLocation) {
-			return fmt.Errorf(
-				"moqt/message: FETCH End Location %+v precedes Start Location %+v (§10.12)",
-				m.Standalone.EndLocation, m.Standalone.StartLocation,
-			)
-		}
-	case FetchTypeRelativeJoining, FetchTypeAbsoluteJoining:
-		if m.Joining == nil {
-			return errors.New("moqt/message: joining FETCH missing joining fields")
-		}
-	default:
-		return ErrUnknownFetchType
-	}
-	return nil
+	return validateFullTrackName(m.Namespace, m.Name)
 }
 
-// append serializes a StandaloneFetch to w.
-func (sf *StandaloneFetch) append(w *wire.Writer) {
-	w.TrackNamespace(sf.Namespace)
-	w.VarintBytes(sf.Name)
-	w.Varint(sf.StartLocation.Group)
-	w.Varint(sf.StartLocation.Object)
-	w.Varint(sf.EndLocation.Group)
-	w.Varint(sf.EndLocation.Object)
-}
-
-// parse deserializes a StandaloneFetch from r.
-func (sf *StandaloneFetch) parse(r *wire.Reader) error {
-	s := r.Scanner()
-	s.TrackNamespace(&sf.Namespace)
-	s.VarintBytes(&sf.Name)
-	s.Varint(&sf.StartLocation.Group)
-	s.Varint(&sf.StartLocation.Object)
-	s.Varint(&sf.EndLocation.Group)
-	s.Varint(&sf.EndLocation.Object)
-	return s.Err()
-}
-
-// append serializes a JoiningFetch to w.
-func (jf *JoiningFetch) append(w *wire.Writer) {
-	w.Varint(jf.JoiningRequestID)
-	w.Varint(jf.JoiningStart)
-}
-
-// parse deserializes a JoiningFetch from r.
-func (jf *JoiningFetch) parse(r *wire.Reader) error {
-	s := r.Scanner()
-	s.Varint(&jf.JoiningRequestID)
-	s.Varint(&jf.JoiningStart)
-	return s.Err()
-}
-
-// FetchOK is a FETCH_OK message per §10.13.
+// FetchOK is a FETCH_OK message per §10.14.
 type FetchOK struct {
 	EndOfTrack      bool
 	EndLocation     Location
@@ -263,6 +157,3 @@ func ReadFetchHeader(r io.Reader) (FetchHeader, error) {
 func IsFetchHeaderType(typ uint64) bool {
 	return typ == 0x05
 }
-
-// ErrUnknownFetchType is returned for an unknown FETCH type.
-var ErrUnknownFetchType = errors.New("moqt/message: unknown FETCH type")

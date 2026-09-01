@@ -121,7 +121,7 @@ func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 // order-specific fallback in fetchUpstreamRange.
 //
 // When the upstream caps its FETCH_OK EndLocation below the sub-range the
-// relay asked for (§10.12 lets it: End beyond its own Largest), the remainder
+// relay asked for (§10.13 lets it: End beyond its own Largest), the remainder
 // is undetermined. Ascending order can say so precisely by appending one
 // marker after the objects. Descending cannot: the unknown remainder precedes
 // every object in descending stream order, and a leading marker cannot in

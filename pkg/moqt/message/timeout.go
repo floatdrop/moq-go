@@ -18,11 +18,21 @@ type DeliveryTimeouts struct {
 // maximum total duration a relay should spend waiting for upstream sources to
 // provide objects that are not immediately available.
 func FillTimeoutFromParam(ps Parameters) time.Duration {
+	d, _ := FillTimeoutFromParamOK(ps)
+	return d
+}
+
+// FillTimeoutFromParamOK is [FillTimeoutFromParam] with presence reported
+// separately. §10.2.5 gives an explicit value of 0 a meaning of its own — "the
+// relay MUST NOT wait for upstream delivery and MUST report any unavailable
+// Objects as Timed-Out gaps" — which a bare zero return cannot distinguish
+// from the parameter being absent.
+func FillTimeoutFromParamOK(ps Parameters) (d time.Duration, ok bool) {
 	p, ok := ps.Find(ParamFillTimeout)
 	if !ok {
-		return 0
+		return 0, false
 	}
-	return MillisecondTimeout(p.Varint)
+	return MillisecondTimeout(p.Varint), true
 }
 
 // MillisecondTimeout converts a varint millisecond count — the form every §8

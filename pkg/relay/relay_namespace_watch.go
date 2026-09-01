@@ -70,7 +70,7 @@ func (r *Relay) forwardNamespaceEvent(ctx context.Context, ev discovery.Namespac
 		}
 		// Reuse the same suffix-stripping helpers handlePublishNamespace uses
 		// so the wire form is identical whether the namespace is local or
-		// remote (§10.16 NAMESPACE and §10.17 NAMESPACE_DONE both carry only the
+		// remote (§10.17 NAMESPACE and §10.18 NAMESPACE_DONE both carry only the
 		// bytes beyond the subscriber prefix).
 		var err error
 		switch ev.Op {

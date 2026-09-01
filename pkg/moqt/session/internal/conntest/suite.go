@@ -56,7 +56,7 @@ type Suite struct {
 //     timer and one that fires early would reset healthy streams.
 //   - CancelWrite unblocks the peer's Read rather than leaving it parked.
 //   - OpenStream reports an exhausted peer limit as ErrNoStreamCredit. This
-//     one is a documented MUST on the interface, and PUBLISH_SKIPPED (§10.20)
+//     one is a documented MUST on the interface, and PUBLISH_SKIPPED (§10.21)
 //     is built on it: the relay reacts to the sentinel instead of blocking.
 //     An adapter returning the raw transport error would make the relay hang
 //     where the spec says to send PUBLISH_SKIPPED.
@@ -200,7 +200,7 @@ func RunSuite(t *testing.T, s Suite) {
 		if !errors.Is(err, session.ErrNoStreamCredit) {
 			t.Errorf("OpenStream past the peer's limit = %v, want session.ErrNoStreamCredit — "+
 				"the adapter must map its transport's stream-limit error onto the sentinel, "+
-				"or PUBLISH_SKIPPED (§10.20) cannot detect the condition", err)
+				"or PUBLISH_SKIPPED (§10.21) cannot detect the condition", err)
 		}
 	})
 }

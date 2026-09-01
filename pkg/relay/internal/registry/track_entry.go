@@ -9,7 +9,7 @@ import (
 )
 
 // TrackEntry is the central per-track control block (§9 of
-// draft-ietf-moq-transport-19). One entry exists for every track the relay
+// draft-ietf-moq-transport-20). One entry exists for every track the relay
 // currently knows about — created on the first SUBSCRIBE or
 // PUBLISH/PUBLISH_NAMESPACE for that track, destroyed when the last upstream
 // and the last downstream subscription have both gone.
@@ -63,13 +63,13 @@ type TrackEntry struct {
 
 	// LargestObject is the (Group, Object) high-water mark observed for
 	// this track, updated by the fanout path on every incoming object and
-	// by upstream control messages that carry a LARGEST_OBJECT value. §10.2.16
+	// by upstream control messages that carry a LARGEST_OBJECT value. §10.2.17
 	// requires the relay to advertise the *maximum* of these in any
 	// outbound message that includes LARGEST_OBJECT.
 	//
 	// The companion HasLargestObject flag distinguishes "no objects
 	// observed yet" from "the first object was published at Location
-	// {0, 0}" — §10.2.16 reserves wire-level omission for the former
+	// {0, 0}" — §10.2.17 reserves wire-level omission for the former
 	// and the in-memory mirror needs the same distinction. Callers
 	// SHOULD read via [TrackEntry.GetLargest] rather than touching
 	// these fields directly so the lock is honoured.
@@ -98,7 +98,7 @@ type TrackEntry struct {
 	Cache *cache.ObjectCache
 
 	// newGroupOutstanding records whether the relay has a NEW_GROUP_REQUEST
-	// (§10.2.13) in flight upstream for this track. It stays outstanding until
+	// (§10.2.19) in flight upstream for this track. It stays outstanding until
 	// the Largest Group advances past newGroupReqGroup, at which point the
 	// publisher is deemed to have honoured the request. Guarded by mu; see
 	// [TrackEntry.ConsiderNewGroupRequest].
@@ -272,7 +272,7 @@ func (e *TrackEntry) ReleaseSubgroup(key SubgroupKey) (last bool) {
 // UpdateLargest moves the entry's LargestObject forward. The very first
 // call flips the "has any object been observed" bit regardless of value,
 // so that a publisher whose first Object is at Location {0, 0} is still
-// distinguishable from "no objects observed yet" — §10.2.16 reserves the
+// distinguishable from "no objects observed yet" — §10.2.17 reserves the
 // wire-level omission of LARGEST_OBJECT for the latter, and the
 // in-memory mirror needs the same distinction. Subsequent calls advance
 // the watermark only when loc is strictly greater than the current
@@ -295,7 +295,7 @@ func (e *TrackEntry) UpdateLargest(loc message.Location) bool {
 // GetLargest returns the current largest-object watermark and a bool that is
 // true iff at least one object has been observed on this track. The bool
 // distinguishes "no objects observed yet" from "first object was published at
-// Location {0, 0}" — §10.2.16 reserves wire-level omission of LARGEST_OBJECT
+// Location {0, 0}" — §10.2.17 reserves wire-level omission of LARGEST_OBJECT
 // for the former, so the in-memory mirror needs the same distinction.
 func (e *TrackEntry) GetLargest() (message.Location, bool) {
 	e.mu.RLock()
@@ -303,7 +303,7 @@ func (e *TrackEntry) GetLargest() (message.Location, bool) {
 	return e.LargestObject, e.HasLargestObject
 }
 
-// ConsiderNewGroupRequest applies the §10.2.13 relay rules for a
+// ConsiderNewGroupRequest applies the §10.2.19 relay rules for a
 // NEW_GROUP_REQUEST received on an Established subscription and reports whether
 // the relay must forward it upstream (via an upstream REQUEST_UPDATE). When it
 // returns true the request is recorded as outstanding.

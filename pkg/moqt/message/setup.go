@@ -70,7 +70,7 @@ func MaxRequestUpdatesOption(maxUpdates uint64) wire.KVPair {
 
 // MaxFilterRangesOption builds a MAX_FILTER_RANGES option (§10.3.1.6).
 // maxRanges is the maximum total number of Ranges (Start/End pairs) the peer
-// may send across all Range Filter parameters (§5.1.3) for a single
+// may send across all Range Filter parameters (§5.1.4) for a single
 // subscription or fetch. The default if omitted is 0, which prohibits the peer
 // from sending any Range Filter parameters.
 func MaxFilterRangesOption(maxRanges uint64) wire.KVPair {

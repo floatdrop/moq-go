@@ -24,7 +24,7 @@ func ExampleClient() {
 
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: true,                // dev only
-		NextProtos:         []string{"moqt-19"}, // §3.1: the ALPN fixes the draft version
+		NextProtos:         []string{"moqt-20"}, // §3.1: the ALPN fixes the draft version
 	}
 	qconn, err := quic.DialAddr(ctx, "relay.example:4433", tlsCfg, &quic.Config{
 		MaxIdleTimeout:  30 * time.Second,
@@ -96,7 +96,7 @@ func ExampleSession_Subscribe() {
 	sub, err := sess.Subscribe(ctx, &message.Subscribe{
 		Namespace:  wire.Namespace("moq-example"),
 		Name:       []byte("clock"),
-		Parameters: message.Parameters{message.LargestObjectFilter()},
+		Parameters: message.Parameters{message.NextObjectFilter()},
 	})
 	if err != nil {
 		return
@@ -140,7 +140,7 @@ func ExampleDemux() {
 	audio, err := sess.Subscribe(ctx, &message.Subscribe{
 		Namespace:  wire.Namespace("moq-example"),
 		Name:       []byte("audio"),
-		Parameters: message.Parameters{message.LargestObjectFilter()},
+		Parameters: message.Parameters{message.NextObjectFilter()},
 	})
 	if err != nil {
 		return
@@ -150,7 +150,7 @@ func ExampleDemux() {
 	video, err := sess.Subscribe(ctx, &message.Subscribe{
 		Namespace:  wire.Namespace("moq-example"),
 		Name:       []byte("video"),
-		Parameters: message.Parameters{message.LargestObjectFilter()},
+		Parameters: message.Parameters{message.NextObjectFilter()},
 	})
 	if err != nil {
 		return
@@ -346,7 +346,7 @@ func ExampleRequestBroker() {
 	_ = pub.Done(moqt.PublishDoneTrackEnded, "")
 }
 
-// Ending a publication (§10.11): Publication.Done writes PUBLISH_DONE on the
+// Ending a publication (§10.12): Publication.Done writes PUBLISH_DONE on the
 // request stream and FINs it. (message.Marshal + Close is the lower-level form.)
 func Example_endingAPublication() {
 	var sess *session.Session
@@ -359,7 +359,7 @@ func Example_endingAPublication() {
 	if err != nil {
 		return
 	}
-	// Done writes PUBLISH_DONE (with the §10.11 Stream Count of subgroups opened
+	// Done writes PUBLISH_DONE (with the §10.12 Stream Count of subgroups opened
 	// via the handle) and FINs the stream in one call.
 	_ = pub.Done(moqt.PublishDoneTrackEnded, "")
 }
@@ -367,7 +367,7 @@ func Example_endingAPublication() {
 // Reacting to stream exhaustion. A relay forwarding many tracks can't block,
 // so it uses the non-blocking OpenPublish. When the peer's stream limit is
 // exhausted it returns ErrNoStreamCredit WITHOUT consuming a Request ID, so
-// the caller can send PUBLISH_SKIPPED (§6.1, §10.20) and let the subscriber
+// the caller can send PUBLISH_SKIPPED (§6.1, §10.21) and let the subscriber
 // recover with an explicit SUBSCRIBE.
 func ExampleSession_OpenPublish() {
 	var sess *session.Session
@@ -406,7 +406,7 @@ func ExampleTrackSubscription_ReadPublishSkipped() {
 	// Recover: sess.Subscribe for (pb.TrackNamespaceSuffix, pb.TrackName).
 }
 
-// Announcing a whole namespace once (§10.15) rather than a PUBLISH per track.
+// Announcing a whole namespace once (§10.16) rather than a PUBLISH per track.
 func ExampleSession_PublishNamespace() {
 	var sess *session.Session
 	ctx := context.Background()
@@ -420,7 +420,7 @@ func ExampleSession_PublishNamespace() {
 	defer nsStream.Close()
 }
 
-// Discovering tracks under a prefix (§10.18): NAMESPACE / NAMESPACE_DONE
+// Discovering tracks under a prefix (§10.19): NAMESPACE / NAMESPACE_DONE
 // arrive on the returned stream as tracks come and go.
 func ExampleSession_SubscribeNamespace() {
 	var sess *session.Session
