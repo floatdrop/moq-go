@@ -69,9 +69,9 @@ const (
 // End of range markers per §11.4.4.2. Each stands for every Object between
 // the previously serialized one and the Location this marker carries.
 const (
-	FetchEndOfRangeObject   = 0x8C  // End of Non-Existent Range
-	FetchEndOfRangeGroup    = 0x10C // End of Unknown Range
-	FetchEndOfTimedOutRange = 0x20C // End of Timed-Out Range (draft-20)
+	FetchEndOfNonExistentRange = 0x8C  // End of Non-Existent Range
+	FetchEndOfUnknownRange     = 0x10C // End of Unknown Range
+	FetchEndOfTimedOutRange    = 0x20C // End of Timed-Out Range (draft-20)
 )
 
 // isEndOfRange reports whether flags is any of the three §11.4.4.2 end-of-range
@@ -79,7 +79,7 @@ const (
 // varint, and Subgroup ID, Priority and Properties are all absent.
 func isEndOfRange(flags uint64) bool {
 	switch flags {
-	case FetchEndOfRangeObject, FetchEndOfRangeGroup, FetchEndOfTimedOutRange:
+	case FetchEndOfNonExistentRange, FetchEndOfUnknownRange, FetchEndOfTimedOutRange:
 		return true
 	}
 	return false
@@ -87,7 +87,7 @@ func isEndOfRange(flags uint64) bool {
 
 // Append serializes a FetchObject to w.
 //
-// For end-of-range markers (SerializationFlags == 0x8C or 0x10C), the spec
+// For end-of-range markers (SerializationFlags == 0x8C, 0x10C or 0x20C), the spec
 // requires Group ID and Object ID fields to follow the flags varint.
 // For normal objects, the payload is length-prefixed (varint + bytes).
 func (o *FetchObject) Append(w *wire.Writer) {
@@ -219,17 +219,19 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 	return nil
 }
 
-// IsEndOfRangeObject reports whether this is an end-of-range non-existent marker (0x8C).
-func (o *FetchObject) IsEndOfRangeObject() bool {
-	return o.SerializationFlags == FetchEndOfRangeObject
+// IsEndOfNonExistentRange reports whether this is an End of Non-Existent Range
+// marker (0x8C): the Objects it covers are known not to exist.
+func (o *FetchObject) IsEndOfNonExistentRange() bool {
+	return o.SerializationFlags == FetchEndOfNonExistentRange
 }
 
-// IsEndOfRangeGroup reports whether this is an end-of-range unknown marker (0x10C).
-func (o *FetchObject) IsEndOfRangeGroup() bool {
-	return o.SerializationFlags == FetchEndOfRangeGroup
+// IsEndOfUnknownRange reports whether this is an End of Unknown Range marker
+// (0x10C): no source could vouch for the Objects it covers either way.
+func (o *FetchObject) IsEndOfUnknownRange() bool {
+	return o.SerializationFlags == FetchEndOfUnknownRange
 }
 
-// IsEndOfTimedOutRange reports whether this is an end-of-timed-out-range marker
+// IsEndOfTimedOutRange reports whether this is an End of Timed-Out Range marker
 // (0x20C): the Objects it covers were abandoned when FILL_TIMEOUT expired
 // (§10.2.5), as opposed to being known absent (0x8C) or of unknown status
 // (0x10C).

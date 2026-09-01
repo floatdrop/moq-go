@@ -326,8 +326,8 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		return &DecodedFetchObject{
 			GroupID:               raw.GroupIDDelta,
 			ObjectID:              raw.ObjectIDDelta,
-			EndOfNonExistentRange: raw.IsEndOfRangeObject(),
-			EndOfUnknownRange:     raw.IsEndOfRangeGroup(),
+			EndOfNonExistentRange: raw.IsEndOfNonExistentRange(),
+			EndOfUnknownRange:     raw.IsEndOfUnknownRange(),
 			EndOfTimedOutRange:    raw.IsEndOfTimedOutRange(),
 		}, nil
 	}

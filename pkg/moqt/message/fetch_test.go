@@ -248,7 +248,7 @@ func TestFetchObjectDatagramBit(t *testing.T) {
 func TestFetchObjectEndOfRangeObject(t *testing.T) {
 	// Per §11.4.4.2: end-of-range markers carry Group ID and Object ID.
 	obj := &FetchObject{
-		SerializationFlags: FetchEndOfRangeObject,
+		SerializationFlags: FetchEndOfNonExistentRange,
 		GroupIDDelta:       42,  // absolute Group ID for end-of-range
 		ObjectIDDelta:      100, // absolute Object ID for end-of-range
 	}
@@ -260,8 +260,8 @@ func TestFetchObjectEndOfRangeObject(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if !got.IsEndOfRangeObject() {
-		t.Error("IsEndOfRangeObject: got false, want true")
+	if !got.IsEndOfNonExistentRange() {
+		t.Error("IsEndOfNonExistentRange: got false, want true")
 	}
 	if got.GroupIDDelta != 42 {
 		t.Errorf("GroupIDDelta (end-of-range Group ID): got %d, want 42", got.GroupIDDelta)
@@ -274,7 +274,7 @@ func TestFetchObjectEndOfRangeObject(t *testing.T) {
 func TestFetchObjectEndOfRangeGroup(t *testing.T) {
 	// Per §11.4.4.2: end-of-range markers carry Group ID and Object ID.
 	obj := &FetchObject{
-		SerializationFlags: FetchEndOfRangeGroup,
+		SerializationFlags: FetchEndOfUnknownRange,
 		GroupIDDelta:       7,
 		ObjectIDDelta:      3,
 	}
@@ -286,8 +286,8 @@ func TestFetchObjectEndOfRangeGroup(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 
-	if !got.IsEndOfRangeGroup() {
-		t.Error("IsEndOfRangeGroup: got false, want true")
+	if !got.IsEndOfUnknownRange() {
+		t.Error("IsEndOfUnknownRange: got false, want true")
 	}
 	if got.GroupIDDelta != 7 {
 		t.Errorf("GroupIDDelta (end-of-range Group ID): got %d, want 7", got.GroupIDDelta)
@@ -321,7 +321,7 @@ func TestFetchObjectEndOfTimedOutRange(t *testing.T) {
 	if !got.IsEndOfTimedOutRange() {
 		t.Error("IsEndOfTimedOutRange: got false, want true")
 	}
-	if got.IsEndOfRangeObject() || got.IsEndOfRangeGroup() {
+	if got.IsEndOfNonExistentRange() || got.IsEndOfUnknownRange() {
 		t.Error("0x20C must not be mistaken for the 0x8C or 0x10C markers")
 	}
 	if !got.IsEndOfRange() {
@@ -340,7 +340,7 @@ func TestFetchObjectEndOfTimedOutRange(t *testing.T) {
 // The other two markers must keep answering IsEndOfRange too — the relay's
 // serve path uses it to decide what is a marker rather than an object.
 func TestFetchObjectIsEndOfRangeCoversAllThree(t *testing.T) {
-	for _, flags := range []uint64{FetchEndOfRangeObject, FetchEndOfRangeGroup, FetchEndOfTimedOutRange} {
+	for _, flags := range []uint64{FetchEndOfNonExistentRange, FetchEndOfUnknownRange, FetchEndOfTimedOutRange} {
 		if !(&FetchObject{SerializationFlags: flags}).IsEndOfRange() {
 			t.Errorf("flags %#x: IsEndOfRange = false, want true", flags)
 		}
@@ -539,7 +539,7 @@ func TestFetchObjectParseTruncated(t *testing.T) {
 
 	// Same for an End of Unknown Range marker (§11.4.4.2).
 	marker := &FetchObject{
-		SerializationFlags: FetchEndOfRangeGroup,
+		SerializationFlags: FetchEndOfUnknownRange,
 		GroupIDDelta:       2,
 		ObjectIDDelta:      9,
 	}

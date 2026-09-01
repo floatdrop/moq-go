@@ -317,7 +317,7 @@ func TestFetch_PreservesUpstreamUnknownMarker(t *testing.T) {
 			}
 			// Leading §11.4.4.2 marker: groups 0..unknownHi unknown.
 			_ = out.WriteObject(&message.FetchObject{
-				SerializationFlags: message.FetchEndOfRangeGroup,
+				SerializationFlags: message.FetchEndOfUnknownRange,
 				GroupIDDelta:       unknownHi,
 				ObjectIDDelta:      math.MaxUint64,
 			})
@@ -445,7 +445,7 @@ func TestFetch_DiscardsOutOfRangeUpstreamElements(t *testing.T) {
 			// Rogue marker beyond the requested range (the relay asked for
 			// the below-floor part only, ending before group liveLo).
 			_ = out.WriteObject(&message.FetchObject{
-				SerializationFlags: message.FetchEndOfRangeGroup,
+				SerializationFlags: message.FetchEndOfUnknownRange,
 				GroupIDDelta:       liveHi - 2,
 				ObjectIDDelta:      0,
 			})

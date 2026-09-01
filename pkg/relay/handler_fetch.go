@@ -751,7 +751,7 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 			// the prior Location for subsequent delta encoding — but not
 			// a prior *actual* object, so the next object still spells
 			// out its Priority (and never references the prior Subgroup).
-			flags := uint64(message.FetchEndOfRangeGroup)
+			flags := uint64(message.FetchEndOfUnknownRange)
 			if o.EndOfTimedOutRange {
 				flags = message.FetchEndOfTimedOutRange
 			}

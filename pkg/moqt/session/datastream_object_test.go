@@ -746,7 +746,7 @@ func TestIncomingFetchStream_ReadDecoded_EndOfRange(t *testing.T) {
 		},
 		// End-of-non-existent-range marker carrying abs {7, 3}.
 		{
-			SerializationFlags: message.FetchEndOfRangeObject,
+			SerializationFlags: message.FetchEndOfNonExistentRange,
 			GroupIDDelta:       7,
 			ObjectIDDelta:      3,
 		},
@@ -932,7 +932,7 @@ func TestIncomingFetchStream_ReadDecoded_MarkerFirst(t *testing.T) {
 	}
 
 	marker := &message.FetchObject{
-		SerializationFlags: message.FetchEndOfRangeObject,
+		SerializationFlags: message.FetchEndOfNonExistentRange,
 		GroupIDDelta:       3, // absolute Group ID
 		ObjectIDDelta:      6, // absolute Object ID
 	}
