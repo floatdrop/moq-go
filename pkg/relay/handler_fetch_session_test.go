@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -18,12 +19,10 @@ func TestFetch_RejectsUnknownTrack(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     wire.TrackNamespace{[]byte("video")},
-			Name:          []byte("cam1"),
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: 1, Object: 0},
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			fetchRangeFilter(message.Location{}, message.Location{Group: 1, Object: math.MaxUint64}),
 		},
 	})
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
@@ -38,11 +37,8 @@ func TestFetch_AuthDenialUsesPolicyCode(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace: wire.TrackNamespace{[]byte("video")},
-			Name:      []byte("cam1"),
-		},
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
 	if got := auth.fetchCalls.Load(); got != 1 {

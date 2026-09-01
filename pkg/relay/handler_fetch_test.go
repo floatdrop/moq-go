@@ -2,11 +2,12 @@ package relay_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -30,23 +31,18 @@ func fetchAndDrain(
 	sess *session.Session,
 	ns wire.TrackNamespace,
 	name []byte,
-	start, end message.Location,
+	start, endIncl message.Location,
 	order message.GroupOrder,
 	extra ...message.Parameter,
 ) (*message.FetchOK, []decodedFetchObject) {
 	t.Helper()
 
-	params := message.Parameters{message.GroupOrderParam(order)}
+	params := message.Parameters{message.GroupOrderParam(order), fetchRangeFilter(start, endIncl)}
 	params = append(params, extra...)
 
 	reqStream, err := sess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     ns,
-			Name:          name,
-			StartLocation: start,
-			EndLocation:   end,
-		},
+		Namespace:  ns,
+		Name:       name,
 		Parameters: params,
 	})
 	if err != nil {
@@ -229,12 +225,10 @@ func TestFetch_DatagramObjectRoundTrips(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	reqStream, err := fetchSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     wire.TrackNamespace{[]byte("video")},
-			Name:          []byte("cam1"),
-			StartLocation: message.Location{Group: 3, Object: 5},
-			EndLocation:   message.Location{Group: 3, Object: 6}, // exclusive
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			fetchRangeFilter(message.Location{Group: 3, Object: 5}, message.Location{Group: 3, Object: 5}),
 		},
 	})
 	if err != nil {
@@ -314,7 +308,7 @@ func TestFetch_StatusMarkersNotServed(t *testing.T) {
 		wire.TrackNamespace{[]byte("video")},
 		[]byte("cam1"),
 		message.Location{Group: 0, Object: 0},
-		message.Location{Group: 0, Object: 4}, // exclusive: covers 0..3 incl. the marker
+		message.Location{Group: 0, Object: 3}, // inclusive: covers 0..3 incl. the marker
 		message.GroupOrderAscending,
 	)
 
@@ -333,89 +327,7 @@ func TestFetch_StatusMarkersNotServed(t *testing.T) {
 	}
 }
 
-// TestFetch_JoiningBuffersUntilSubscribeEstablished pins the §10.12.2
-// buffering rule: a Joining FETCH referencing a subscription "that has not
-// yet been established" is buffered until the subscription lands, not
-// rejected with INVALID_JOINING_REQUEST_ID. The test pipelines the FETCH
-// BEFORE the SUBSCRIBE it references: on a fresh client session request IDs
-// are even from 0, so the FETCH takes ID 0 and the SUBSCRIBE takes ID 2 —
-// the FETCH's JoiningRequestID is 2, deterministically.
-func TestFetch_JoiningBuffersUntilSubscribeEstablished(t *testing.T) {
-	t.Parallel()
-	pubSess, _, publisherAlias := publishAndCache(t)
-
-	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, 3 /*count*/)
-	time.Sleep(50 * time.Millisecond)
-
-	fetchSess := dialAnotherClient(t, pubSess)
-
-	type fetchResult struct {
-		objs []decodedFetchObject
-		err  error
-	}
-	done := make(chan fetchResult, 1)
-	go func() {
-		reqStream, err := fetchSess.Fetch(t.Context(), &message.Fetch{
-			FetchType: message.FetchTypeRelativeJoining,
-			Joining: &message.JoiningFetch{
-				JoiningRequestID: 2, // the SUBSCRIBE below
-				JoiningStart:     0, // largest group itself
-			},
-			Parameters: message.Parameters{message.GroupOrderParam(message.GroupOrderAscending)},
-		})
-		if err != nil {
-			done <- fetchResult{err: err}
-			return
-		}
-		defer reqStream.Close()
-		ds, err := fetchSess.AcceptDataStream(t.Context())
-		if err != nil {
-			done <- fetchResult{err: err}
-			return
-		}
-		fs, isFetch := ds.(*session.IncomingFetchStream)
-		if !isFetch {
-			done <- fetchResult{err: errors.New("not a fetch stream")}
-			return
-		}
-		done <- fetchResult{objs: decodeFetchStream(t, fs, message.GroupOrderAscending)}
-	}()
-
-	// Let the FETCH reach the relay (and take request ID 0) first.
-	time.Sleep(100 * time.Millisecond)
-
-	subStream, err := fetchSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
-		Name:      []byte("cam1"),
-	})
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	defer subStream.Close()
-	// NOTE: no drainAllStreams here — the fetch goroutine's AcceptDataStream
-	// must be the session's only data-stream consumer, or a drain goroutine
-	// can steal the FETCH response. No live objects flow (everything was
-	// published before the SUBSCRIBE), so nothing else needs draining.
-
-	select {
-	case res := <-done:
-		if res.err != nil {
-			t.Fatalf("pipelined joining FETCH failed: %v (buffering per §10.12.2 broken?)", res.err)
-		}
-		want := []decodedFetchObject{
-			{group: 0, object: 0, payload: []byte("A")},
-			{group: 0, object: 1, payload: []byte("B")},
-			{group: 0, object: 2, payload: []byte("C")},
-		}
-		if !reflect.DeepEqual(res.objs, want) {
-			t.Fatalf("objects = %+v, want %+v", res.objs, want)
-		}
-	case <-time.After(4 * time.Second):
-		t.Fatal("pipelined joining FETCH neither served nor rejected")
-	}
-}
-
-// TestFetch_WholeGroupEndForm pins the §10.12.1 "End Object 0 means the
+// TestFetch_WholeGroupEndForm pins the §5.1.2 "EndObject omitted means the
 // entire group" wire form end to end: a mid-group start with End={G,0} is a
 // valid range (validation used to reject it as end < start), the FETCH_OK
 // EndLocation is capped to the watermark+1 (capping used to echo {G,0}
@@ -434,17 +346,18 @@ func TestFetch_WholeGroupEndForm(t *testing.T) {
 		wire.TrackNamespace{[]byte("video")},
 		[]byte("cam1"),
 		message.Location{Group: 0, Object: 1},
-		message.Location{Group: 0, Object: 0}, // "rest of group 0"
+		message.Location{Group: 0, Object: math.MaxUint64}, // the rest of group 0
 		message.GroupOrderAscending,
 	)
 
 	if ok == nil {
 		t.Fatal("FetchOK is nil")
 	}
-	// Largest is {0,2}; the whole-group request extends past it, so the
-	// response end is capped to watermark+1 = {0,3}.
-	if ok.EndLocation.Group != 0 || ok.EndLocation.Object != 3 {
-		t.Fatalf("FETCH_OK EndLocation = {%d,%d}, want {0,3} (capped watermark+1)",
+	// Largest is {0,2}; the whole-group request extends past it, so the response
+	// end is capped to Largest Object itself. draft-20 made FETCH_OK's End
+	// Location inclusive, so this is {0,2} — draft-19 encoded it as watermark+1.
+	if ok.EndLocation.Group != 0 || ok.EndLocation.Object != 2 {
+		t.Fatalf("FETCH_OK EndLocation = {%d,%d}, want {0,2} (capped to Largest Object)",
 			ok.EndLocation.Group, ok.EndLocation.Object)
 	}
 	want := []decodedFetchObject{
@@ -476,7 +389,7 @@ func TestFetch_FromCacheAscending(t *testing.T) {
 		wire.TrackNamespace{[]byte("video")},
 		[]byte("cam1"),
 		message.Location{Group: 0, Object: 0},
-		message.Location{Group: 1, Object: 2}, // exclusive: covers {1,0} and {1,1}
+		message.Location{Group: 1, Object: 1}, // inclusive: covers {1,0} and {1,1}
 		message.GroupOrderAscending,
 	)
 
@@ -514,7 +427,7 @@ func TestFetch_FromCacheDescending(t *testing.T) {
 		wire.TrackNamespace{[]byte("video")},
 		[]byte("cam1"),
 		message.Location{Group: 0, Object: 0},
-		message.Location{Group: 2, Object: 2}, // exclusive: covers groups 0..2
+		message.Location{Group: 2, Object: 1}, // inclusive: covers groups 0..2
 		message.GroupOrderDescending,
 	)
 
@@ -531,7 +444,7 @@ func TestFetch_FromCacheDescending(t *testing.T) {
 	}
 }
 
-// TestFetch_RejectsStartBeyondLargest pins §10.12.3: FETCH whose
+// TestFetch_RejectsStartBeyondLargest pins §10.13: FETCH whose
 // StartLocation is strictly greater than the relay's LargestObject is
 // REQUEST_ERROR / InvalidRange.
 func TestFetch_RejectsStartBeyondLargest(t *testing.T) {
@@ -543,19 +456,20 @@ func TestFetch_RejectsStartBeyondLargest(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, err := fetchSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     wire.TrackNamespace{[]byte("video")},
-			Name:          []byte("cam1"),
-			StartLocation: message.Location{Group: 99, Object: 99},
-			EndLocation:   message.Location{Group: 100, Object: 0},
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			fetchRangeFilter(
+				message.Location{Group: 99, Object: 99},
+				message.Location{Group: 100, Object: math.MaxUint64},
+			),
 		},
 	})
 	requireRejectedWithCode(t, err, moqt.RequestInvalidRange)
 }
 
 // TestFetch_RejectsEmptyTrack pins the "no objects published yet" case
-// (§10.12.3): the relay knows the track but the watermark is
+// (§10.13): the relay knows the track but the watermark is
 // {0, 0}, so any FETCH (other than a request that ends at {0, 0})
 // has nothing to serve. REQUEST_ERROR / InvalidRange.
 func TestFetch_RejectsEmptyTrack(t *testing.T) {
@@ -564,48 +478,28 @@ func TestFetch_RejectsEmptyTrack(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, err := fetchSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     wire.TrackNamespace{[]byte("video")},
-			Name:          []byte("cam1"),
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: 1, Object: 0},
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			fetchRangeFilter(message.Location{}, message.Location{Group: 1, Object: math.MaxUint64}),
 		},
 	})
 	requireRejectedWithCode(t, err, moqt.RequestInvalidRange)
 }
 
-// TestFetch_JoiningFetchUnknownRequestID pins §10.12.2: a Joining
-// FETCH whose JoiningRequestID does not correspond to an active
-// subscription on the same session is rejected with
-// INVALID_JOINING_REQUEST_ID.
-func TestFetch_JoiningFetchUnknownRequestID(t *testing.T) {
-	t.Parallel()
-	clientSess, teardown := connectRelay(t, relay.Config{})
-	defer teardown()
-
-	_, err := clientSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeRelativeJoining,
-		Joining:   &message.JoiningFetch{JoiningRequestID: 999, JoiningStart: 0},
-	})
-	requireRejectedWithCode(t, err, moqt.RequestInvalidJoiningID)
-}
-
-// TestFetch_JoiningFetchRelativeCurrentGroup pins the §5.1.4 / §10.12.2
-// happy path: a subscriber issues SUBSCRIBE with FilterLargestObject and
-// then a Relative Joining FETCH with JoiningStart=0. The relay computes
-// the response range against the Joining Location it captured at
-// SUBSCRIBE_OK time and replays the cached current-group objects.
-func TestFetch_JoiningFetchRelativeCurrentGroup(t *testing.T) {
+// TestSubscribe_FillCurrentGroup pins the §5.1.6 "join a Track at the current
+// Group" happy path, which draft-20 rebuilt on fill fetch streams: SUBSCRIBE
+// with a Next Object Location Filter plus FILL_PARAMETERS whose filter is
+// StartGroup=1. The relay must open a fill fetch stream carrying the current
+// group's cached objects — and key it to the SUBSCRIBE's own Request ID
+// (§5.1.3), since there is no FETCH to name it.
+func TestSubscribe_FillCurrentGroup(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
 
-	// Two groups; the joining FETCH (relative, start=0) should
-	// return only the current group's objects up to and including
-	// the Largest Object.
+	// Two groups; the fill should return only the current group's objects.
 	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, 3 /*count*/)
 	publishObjects(t, pubSess, publisherAlias, 1, 2)
-
 	time.Sleep(50 * time.Millisecond)
 
 	subSess := dialAnotherClient(t, pubSess)
@@ -613,9 +507,12 @@ func TestFetch_JoiningFetchRelativeCurrentGroup(t *testing.T) {
 	subMsg := &message.Subscribe{
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
-		Parameters: message.Parameters{message.LocationFilterParam(
-			&message.LocationFilter{Type: message.FilterLargestObject},
-		)},
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			message.FillParametersParam(message.Parameters{
+				message.RelativeStartFilter(1), // the current group, from its start
+			}),
+		},
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
 	if err != nil {
@@ -623,32 +520,14 @@ func TestFetch_JoiningFetchRelativeCurrentGroup(t *testing.T) {
 	}
 	t.Cleanup(func() { subStream.Close() })
 
-	// §10.2.17: relay MUST include LARGEST_OBJECT now that objects
-	// have been cached.
+	// §10.2.17: the relay MUST include LARGEST_OBJECT now that objects are
+	// cached — it is what the subscriber sizes the fill against.
 	lp, hasLargest := subStream.OK.Parameters.Find(message.ParamLargestObject)
 	if !hasLargest {
 		t.Fatal("SUBSCRIBE_OK missing LARGEST_OBJECT parameter")
 	}
-	// largest = {1, 1} (group 1, second of two objects)
 	if lp.Group != 1 || lp.Object != 1 {
 		t.Fatalf("LARGEST_OBJECT = {%d,%d}, want {1,1}", lp.Group, lp.Object)
-	}
-
-	// Relative Joining FETCH, JoiningStart=0 → start at the largest
-	// group itself.
-	fetchStream, err := subSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeRelativeJoining,
-		Joining:   &message.JoiningFetch{JoiningRequestID: subMsg.RequestID, JoiningStart: 0},
-	})
-	if err != nil {
-		t.Fatalf("Joining FETCH: %v", err)
-	}
-	t.Cleanup(func() { fetchStream.Close() })
-
-	// §10.12.2.1: End = {Joining Location.Group, Joining Location.Object + 1}.
-	wantEnd := message.Location{Group: 1, Object: 2}
-	if fetchStream.OK.EndLocation != wantEnd {
-		t.Fatalf("FETCH_OK.EndLocation = %+v, want %+v", fetchStream.OK.EndLocation, wantEnd)
 	}
 
 	ds, err := subSess.AcceptDataStream(t.Context())
@@ -657,26 +536,40 @@ func TestFetch_JoiningFetchRelativeCurrentGroup(t *testing.T) {
 	}
 	fs, isFetch := ds.(*session.IncomingFetchStream)
 	if !isFetch {
-		t.Fatalf("got %T, want *IncomingFetchStream", ds)
+		t.Fatalf("got %T, want *IncomingFetchStream — the fill must arrive on a fetch stream", ds)
 	}
-	objs := decodeFetchStream(t, fs, message.GroupOrderAscending)
+	// §5.1.3: "The FETCH_HEADER on the fill fetch stream carries the Request ID
+	// of the message that initiated it: the SUBSCRIBE Request ID for the initial
+	// fill." Getting this wrong strands the subscriber's demux handler.
+	if fs.Header.RequestID != subMsg.RequestID {
+		t.Errorf("fill FETCH_HEADER Request ID = %d, want the SUBSCRIBE's %d",
+			fs.Header.RequestID, subMsg.RequestID)
+	}
 
-	// Expect group 1 objects 0 and 1 (the largest group's contents),
-	// not group 0's objects.
+	objs := decodeFetchStream(t, fs, message.GroupOrderAscending)
 	if len(objs) != 2 {
-		t.Fatalf("got %d cached objects, want 2", len(objs))
+		t.Fatalf("got %d filled objects, want 2 (the current group only): %+v", len(objs), objs)
 	}
 	for _, o := range objs {
 		if o.group != 1 {
-			t.Errorf("unexpected group %d (want only group 1) in joining FETCH response", o.group)
+			t.Errorf("unexpected group %d in the fill (want only the current group 1)", o.group)
 		}
 	}
 }
 
-// TestFetch_JoiningFetchAbsoluteFullHistory pins the Absolute Joining
-// FETCH variant: with JoiningStart=0 the relay returns the full cached
-// history from {0,0} up to and including the Largest Object.
-func TestFetch_JoiningFetchAbsoluteFullHistory(t *testing.T) {
+// TestSubscribe_FillWholeTrack pins the other §5.1.6 shape — fill everything up
+// to Largest Object, which draft-19 spelled as an Absolute Joining FETCH with
+// JoiningStart=0.
+//
+// The spelling matters, and it is easy to get wrong: §5.1.3 says the fill range
+// comes from "the Location filter inside FILL_PARAMETERS, or the subscription's
+// Location filter if it is omitted", and only "when the subscription has no
+// Location filter, or the LOCATION_FILTER inside FILL_PARAMETERS is
+// zero-length, the fill range is the entire track". So an *omitted* inner
+// filter here would inherit the subscription's Next Object filter and select an
+// empty range — no fill stream at all. The whole track needs the explicit
+// zero-length filter.
+func TestSubscribe_FillWholeTrack(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
 
@@ -689,9 +582,14 @@ func TestFetch_JoiningFetchAbsoluteFullHistory(t *testing.T) {
 	subMsg := &message.Subscribe{
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
-		Parameters: message.Parameters{message.LocationFilterParam(
-			&message.LocationFilter{Type: message.FilterLargestObject},
-		)},
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			message.FillParametersParam(message.Parameters{
+				// Zero-length: "the fill range is the entire track up to
+				// Largest Object" (§5.1.3).
+				message.UnfilteredFilter(),
+			}),
+		},
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
 	if err != nil {
@@ -699,25 +597,222 @@ func TestFetch_JoiningFetchAbsoluteFullHistory(t *testing.T) {
 	}
 	t.Cleanup(func() { subStream.Close() })
 
-	fetchStream, err := subSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeAbsoluteJoining,
-		Joining:   &message.JoiningFetch{JoiningRequestID: subMsg.RequestID, JoiningStart: 0},
-	})
-	if err != nil {
-		t.Fatalf("Absolute Joining FETCH: %v", err)
-	}
-	t.Cleanup(func() { fetchStream.Close() })
-
 	ds, err := subSess.AcceptDataStream(t.Context())
 	if err != nil {
 		t.Fatalf("AcceptDataStream: %v", err)
 	}
-	fs := ds.(*session.IncomingFetchStream)
+	fs, isFetch := ds.(*session.IncomingFetchStream)
+	if !isFetch {
+		t.Fatalf("got %T, want *IncomingFetchStream", ds)
+	}
 	objs := decodeFetchStream(t, fs, message.GroupOrderAscending)
 
 	// 2 objects in group 0 + 1 object in group 1 = 3.
 	if len(objs) != 3 {
-		t.Fatalf("got %d cached objects, want 3", len(objs))
+		t.Fatalf("got %d filled objects, want the whole track's 3: %+v", len(objs), objs)
+	}
+}
+
+// TestSubscribe_FillInheritsSubscriptionFilter pins the fallback in §5.1.3: with
+// no LOCATION_FILTER inside FILL_PARAMETERS the fill range is the subscription's
+// own filter. Paired with a Next Object subscription that range is empty, so no
+// fill stream opens — which is the correct reading of "or the subscription's
+// Location filter if it is omitted", and NOT the same as the zero-length filter
+// that means the whole track.
+func TestSubscribe_FillInheritsSubscriptionFilter(t *testing.T) {
+	t.Parallel()
+	pubSess, _, publisherAlias := publishAndCache(t)
+
+	publishObjects(t, pubSess, publisherAlias, 0, 3)
+	time.Sleep(50 * time.Millisecond)
+
+	subSess := dialAnotherClient(t, pubSess)
+	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			message.FillParametersParam(message.Parameters{
+				// Deliberately no LOCATION_FILTER — inherit the subscription's.
+				message.ByteParam(message.ParamSubscriberPriority, 200),
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(func() { subStream.Close() })
+
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	if ds, err := subSess.AcceptDataStream(ctx); err == nil {
+		t.Fatalf("got a %T; inheriting the Next Object filter makes the fill "+
+			"range empty, so §5.1.3 says open no stream", ds)
+	}
+}
+
+// TestSubscribe_RequestUpdateOpensSecondFill pins the REQUEST_UPDATE half of
+// §5.1.3, which nothing else reaches: "As a result of REQUEST_UPDATE, a
+// subscription can have multiple fill fetch streams open at once, each
+// identified by its Request ID; opening a new fill fetch stream does not
+// implicitly cancel any previously opened fill fetch streams."
+//
+// The initial fill is keyed to the SUBSCRIBE's Request ID and the second to the
+// REQUEST_UPDATE's own. Keying both to the subscription would strand the
+// subscriber's demux handler for the second fill, and no other test would
+// notice.
+func TestSubscribe_RequestUpdateOpensSecondFill(t *testing.T) {
+	t.Parallel()
+	pubSess, _, publisherAlias := publishAndCache(t)
+
+	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, 2 /*count*/)
+	publishObjects(t, pubSess, publisherAlias, 1, 2)
+	time.Sleep(50 * time.Millisecond)
+
+	subSess := dialAnotherClient(t, pubSess)
+	subMsg := &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			message.FillParametersParam(message.Parameters{message.RelativeStartFilter(1)}),
+		},
+	}
+	subStream, err := subSess.Subscribe(t.Context(), subMsg)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(func() { subStream.Close() })
+
+	first := acceptFillStream(t, subSess)
+	if first != subMsg.RequestID {
+		t.Fatalf("initial fill Request ID = %d, want the SUBSCRIBE's %d", first, subMsg.RequestID)
+	}
+
+	// A second fill over a wider range. §10.2.15: FILL_PARAMETERS is not
+	// retained as subscription state, so it has to be re-sent to ask again.
+	if _, err := subStream.Update(t.Context(), message.Parameters{
+		message.FillParametersParam(message.Parameters{message.RelativeStartFilter(2)}),
+	}); err != nil {
+		t.Fatalf("REQUEST_UPDATE: %v", err)
+	}
+
+	second := acceptFillStream(t, subSess)
+	if second == subMsg.RequestID {
+		t.Errorf("the REQUEST_UPDATE's fill reused the SUBSCRIBE's Request ID %d; "+
+			"§5.1.3 keys it to the REQUEST_UPDATE that opened it", second)
+	}
+}
+
+// TestSubscribe_FillNotOpenedWhileForwardPaused pins §5.1.3.1's two negatives:
+// "FILL_PARAMETERS carried while Forward State is 0 opens no fill fetch stream.
+// Transitioning to Forward State 1 without re-sending FILL_PARAMETERS does not
+// open one either."
+//
+// Both are invisible without this test — a relay that ignored Forward State, or
+// that retained FILL_PARAMETERS as subscription state and replayed it on
+// resume, would pass every other fill test in the suite.
+func TestSubscribe_FillNotOpenedWhileForwardPaused(t *testing.T) {
+	t.Parallel()
+	pubSess, _, publisherAlias := publishAndCache(t)
+
+	publishObjects(t, pubSess, publisherAlias, 0, 3)
+	time.Sleep(50 * time.Millisecond)
+
+	subSess := dialAnotherClient(t, pubSess)
+	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			message.ForwardParam(false),
+			message.NextObjectFilter(),
+			message.FillParametersParam(message.Parameters{message.RelativeStartFilter(1)}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(func() { subStream.Close() })
+
+	if ds, ok := tryAcceptDataStream(t, subSess, 500*time.Millisecond); ok {
+		t.Fatalf("got a %T while Forward State is 0; §5.1.3.1 opens no fill there", ds)
+	}
+
+	// Resume forwarding without re-sending FILL_PARAMETERS: still no fill.
+	if _, err := subStream.Update(t.Context(), message.Parameters{
+		message.ForwardParam(true),
+	}); err != nil {
+		t.Fatalf("REQUEST_UPDATE: %v", err)
+	}
+	if ds, ok := tryAcceptDataStream(t, subSess, 500*time.Millisecond); ok {
+		t.Fatalf("got a %T on resume; §5.1.3.1 requires FILL_PARAMETERS to be "+
+			"re-sent, and §10.2.15 says it is not retained as subscription state", ds)
+	}
+}
+
+// acceptFillStream accepts one data stream and returns the Request ID its
+// FETCH_HEADER carries, failing if what arrives is not a fetch stream.
+func acceptFillStream(t *testing.T, sess *session.Session) uint64 {
+	t.Helper()
+	ds, err := sess.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	fs, ok := ds.(*session.IncomingFetchStream)
+	if !ok {
+		t.Fatalf("got %T, want *session.IncomingFetchStream", ds)
+	}
+	go func() {
+		for {
+			if _, err := fs.ReadDecoded(); err != nil {
+				return
+			}
+		}
+	}()
+	return fs.Header.RequestID
+}
+
+// tryAcceptDataStream waits up to d for a data stream, reporting whether one
+// arrived. Used by tests whose expected outcome is that none does.
+func tryAcceptDataStream(t *testing.T, sess *session.Session, d time.Duration) (session.DataStream, bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), d)
+	defer cancel()
+	ds, err := sess.AcceptDataStream(ctx)
+	if err != nil {
+		return nil, false
+	}
+	return ds, true
+}
+
+// TestSubscribe_NoFillParametersOpensNoStream pins the other half of §10.2.15:
+// "a subscription with no FILL_PARAMETERS opens none". Presence of the
+// parameter is the whole request signal, so a plain SUBSCRIBE must not produce
+// a fetch stream — a subscriber that gets one would mistake filled Objects for
+// live ones.
+func TestSubscribe_NoFillParametersOpensNoStream(t *testing.T) {
+	t.Parallel()
+	pubSess, _, publisherAlias := publishAndCache(t)
+
+	publishObjects(t, pubSess, publisherAlias, 0, 3)
+	time.Sleep(50 * time.Millisecond)
+
+	subSess := dialAnotherClient(t, pubSess)
+	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Name:       []byte("cam1"),
+		Parameters: message.Parameters{message.NextObjectFilter()},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	t.Cleanup(func() { subStream.Close() })
+
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	ds, err := subSess.AcceptDataStream(ctx)
+	if err == nil {
+		t.Fatalf("got a %T with no FILL_PARAMETERS; want no data stream at all", ds)
 	}
 }
 
@@ -745,7 +840,7 @@ func TestFetch_PartialRangeCarriesPriority(t *testing.T) {
 		wire.TrackNamespace{[]byte("video")},
 		[]byte("cam1"),
 		message.Location{Group: 7, Object: 0},
-		message.Location{Group: 7, Object: 2},
+		message.Location{Group: 7, Object: 1},
 		message.GroupOrderAscending,
 	)
 	if len(objs) != 2 {
@@ -753,10 +848,10 @@ func TestFetch_PartialRangeCarriesPriority(t *testing.T) {
 	}
 }
 
-// TestFetch_OKEndLocationCappedToWatermark pins §10.14: a FETCH
-// whose requested EndLocation extends beyond the relay's Largest
-// Object should have FETCH_OK.EndLocation capped at {Largest.Group,
-// Largest.Object + 1}.
+// TestFetch_OKEndLocationCappedToWatermark pins §10.14: a FETCH whose requested
+// range extends beyond the relay's Largest Object has FETCH_OK.EndLocation
+// capped at Largest Object. draft-20 made both the request range and this field
+// inclusive, so the cap is Largest itself rather than draft-19's Largest + 1.
 func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -770,10 +865,10 @@ func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 		wire.TrackNamespace{[]byte("video")},
 		[]byte("cam1"),
 		message.Location{Group: 0, Object: 0},
-		message.Location{Group: 999, Object: 0}, // far past the watermark
+		message.Location{Group: 999, Object: math.MaxUint64}, // far past the watermark
 		message.GroupOrderAscending,
 	)
-	want := message.Location{Group: 0, Object: 3} // largest + 1
+	want := message.Location{Group: 0, Object: 2} // Largest Object, inclusive
 	if ok.EndLocation != want {
 		t.Fatalf("FETCH_OK.EndLocation = %+v, want %+v", ok.EndLocation, want)
 	}
@@ -816,71 +911,61 @@ func waitRelayLargest(
 	}
 }
 
-// TestFetch_JoiningRejectedWhenNoObjectsPublished pins the first of §10.12.2's
-// two INVALID_RANGE rules: "If no Objects have been published for the track the
-// publisher MUST respond with a REQUEST_ERROR with error code INVALID_RANGE."
+// TestSubscribe_FillOpensNoStreamOnEmptyTrack pins §5.1.3's "If the fill range
+// is empty, or starts after Largest Object, the publisher does not open a fill
+// fetch stream."
 //
 // The track exists — a publisher has claimed it — so SUBSCRIBE succeeds and
-// simply carries no LARGEST_OBJECT, leaving the subscription's Joining Location
-// unset. A joining FETCH against it has no range to compute, and the code the
-// relay picks here is what tells a client "not yet" rather than "never": this
-// is the exact rejection a subscriber saw in the fea80fc outage, where the
-// cause was an upstream watermark being dropped rather than a genuinely empty
-// track.
-func TestFetch_JoiningRejectedWhenNoObjectsPublished(t *testing.T) {
+// simply carries no LARGEST_OBJECT. draft-19 answered the equivalent Joining
+// FETCH with INVALID_RANGE; a fill has no REQUEST_ERROR of its own, so the
+// correct signal is the absence of a stream. This is the case the fea80fc
+// outage surfaced, where an upstream watermark was dropped rather than the
+// track being genuinely empty.
+func TestSubscribe_FillOpensNoStreamOnEmptyTrack(t *testing.T) {
 	t.Parallel()
 	pubSess, _, _ := publishAndCache(t) // track published, no objects written
 
 	subSess := dialAnotherClient(t, pubSess)
-	subMsg := &message.Subscribe{
+	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
-		Parameters: message.Parameters{message.LocationFilterParam(
-			&message.LocationFilter{Type: message.FilterLargestObject},
-		)},
-	}
-	subStream, err := subSess.Subscribe(t.Context(), subMsg)
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			message.FillParametersParam(message.Parameters{message.RelativeStartFilter(1)}),
+		},
+	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	t.Cleanup(func() { subStream.Close() })
 
-	// Precondition, and the reason the FETCH below must fail: §10.2.17 only
-	// obliges the publisher to send LARGEST_OBJECT once objects exist.
+	// Precondition, and the reason no fill can be served: §10.2.17 only obliges
+	// the publisher to send LARGEST_OBJECT once objects exist.
 	if _, ok := subStream.OK.Parameters.Find(message.ParamLargestObject); ok {
 		t.Fatal("SUBSCRIBE_OK carried LARGEST_OBJECT for a track with no objects")
 	}
 
-	_, err = subSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeRelativeJoining,
-		Joining:   &message.JoiningFetch{JoiningRequestID: subMsg.RequestID, JoiningStart: 0},
-	})
-	requireRejectedWithCode(t, err, moqt.RequestInvalidRange)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	if ds, err := subSess.AcceptDataStream(ctx); err == nil {
+		t.Fatalf("got a %T for an empty track; §5.1.3 says open no fill stream", ds)
+	}
 }
 
-// TestFetch_JoiningRejectedWhenStartExceedsLargestGroup pins §10.12.2's other
-// INVALID_RANGE case, for Relative Joining: the start is expressed as a count
-// of groups *back* from the Joining Location, so a count larger than the
-// largest group has no group to name.
+// TestSubscribe_FillRelativeStartClampsAtOrigin pins the clamp draft-20 chose
+// where draft-19 rejected. §5.1.2: "If a relative start group results in a
+// computed absolute group less than 0, the computed value is set to 0."
 //
-// The check is belt-and-braces, and this test says so because mutation
-// testing proved it: deleting the guard does NOT change the code the peer
-// receives. The arithmetic is unsigned, so `jloc.largest.Group -
-// jf.JoiningStart` wraps to an enormous group, and the downstream
-// `endLoc.Less(startLoc)` guard then rejects with the same INVALID_RANGE.
-// Asserting the code alone therefore passes with the guard removed.
-//
-// So the reason phrase is asserted too — not as a style preference, but
-// because it is the only part of the response that distinguishes which rule
-// fired, and it travels to the peer in REQUEST_ERROR (§1.4.4) rather than
-// staying in our logs. Rewording it should be a deliberate act that updates
-// this test, and dropping the specific guard for the generic one should be
-// visible rather than silent.
-func TestFetch_JoiningRejectedWhenStartExceedsLargestGroup(t *testing.T) {
+// draft-19's Relative Joining FETCH answered INVALID_RANGE when the count of
+// groups back exceeded the largest group; draft-20 clamps to the origin
+// instead, so a subscriber asking for more history than exists gets all of it
+// rather than an error. Reaching for group 5 back from group 0 must therefore
+// fill from {0,0}, not fail.
+func TestSubscribe_FillRelativeStartClampsAtOrigin(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
 
-	// One group only, so any JoiningStart above 0 is out of range.
+	// One group only, so any relative start above 1 reaches below the origin.
 	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, 3 /*count*/)
 	waitRelayLargest(t, pubSess, wire.TrackNamespace{[]byte("video")}, []byte("cam1"), 0, 2)
 
@@ -888,9 +973,12 @@ func TestFetch_JoiningRejectedWhenStartExceedsLargestGroup(t *testing.T) {
 	subMsg := &message.Subscribe{
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
-		Parameters: message.Parameters{message.LocationFilterParam(
-			&message.LocationFilter{Type: message.FilterLargestObject},
-		)},
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			message.FillParametersParam(message.Parameters{
+				message.RelativeStartFilter(5), // far more history than exists
+			}),
+		},
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
 	if err != nil {
@@ -900,19 +988,56 @@ func TestFetch_JoiningRejectedWhenStartExceedsLargestGroup(t *testing.T) {
 
 	lp, ok := subStream.OK.Parameters.Find(message.ParamLargestObject)
 	if !ok || lp.Group != 0 {
-		t.Fatalf("want a Joining Location in group 0, got %+v (present=%t)", lp, ok)
+		t.Fatalf("want a largest object in group 0, got %+v (present=%t)", lp, ok)
 	}
 
-	_, err = subSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeRelativeJoining,
-		Joining:   &message.JoiningFetch{JoiningRequestID: subMsg.RequestID, JoiningStart: 5},
-	})
-	requireRejectedWithCode(t, err, moqt.RequestInvalidRange)
-
-	var rejected *session.RequestRejectedError
-	if errors.As(err, &rejected) && !strings.Contains(rejected.Reason, "relative joining start") {
-		t.Errorf("reason = %q, want the relative-start rule; the generic "+
-			"beyond-largest-object guard answered instead, so the specific "+
-			"check is not doing the work", rejected.Reason)
+	ds, err := subSess.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v — the clamp must still open a fill stream", err)
 	}
+	fs, isFetch := ds.(*session.IncomingFetchStream)
+	if !isFetch {
+		t.Fatalf("got %T, want *IncomingFetchStream", ds)
+	}
+	objs := decodeFetchStream(t, fs, message.GroupOrderAscending)
+	if len(objs) != 3 {
+		t.Fatalf("got %d filled objects, want all 3 — an over-long relative start "+
+			"clamps to {0,0} rather than erroring: %+v", len(objs), objs)
+	}
+}
+
+// fetchRangeFilter builds the §5.1.2 LOCATION_FILTER carrying a FETCH's range.
+// draft-20 moved the range out of the FETCH message and made both ends
+// inclusive, so these tests name the last Object they expect rather than one
+// past it; an Object of MaxUint64 means "the whole end group", which is the
+// three-field form with EndObject omitted.
+func fetchRangeFilter(start, endIncl message.Location) message.Parameter {
+	if endIncl.Object == math.MaxUint64 {
+		return message.AbsoluteRangeFilter(start, endIncl.Group-start.Group)
+	}
+	return message.AbsoluteRangeObjectFilter(start, endIncl.Group-start.Group, endIncl.Object)
+}
+
+// fetchRequestRange returns the inclusive [start, end] range a FETCH asks for.
+// draft-20 carries it in the LOCATION_FILTER parameter (§5.1.2) rather than in
+// message fields, so the fake upstreams in these tests read it back the same
+// way a real publisher would. ok is false when the filter is absent or
+// open-ended; the relay always sends the absolute four-field form upstream.
+func fetchRequestRange(m *message.Fetch) (start, end message.Location, ok bool) {
+	f, err := message.LocationFilterFromParam(m.Parameters)
+	if err != nil || f == nil {
+		return start, end, false
+	}
+	end, hasEnd := f.End()
+	if !hasEnd {
+		return start, end, false
+	}
+	return message.Location{Group: f.StartGroup, Object: f.StartObject}, end, true
+}
+
+// fetchOKEnd is [fetchRequestRange]'s end alone, for fake upstreams that just
+// echo the requested end back in FETCH_OK.
+func fetchOKEnd(m *message.Fetch) message.Location {
+	_, end, _ := fetchRequestRange(m)
+	return end
 }

@@ -1,486 +1,398 @@
 package message
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// ---------------------------------------------------------------------------
-// FilterType.String
-// ---------------------------------------------------------------------------
-
-func TestFilterTypeString(t *testing.T) {
-	tests := []struct {
-		typ  FilterType
-		want string
+// The field count is the whole discriminant in draft-20, and it is carried by
+// the enclosing parameter's Length rather than by anything inside the value.
+// These are hand-computed wire bytes: a round-trip alone would happily agree
+// with itself about a wrong encoding, and there is no Filter Type byte left to
+// catch a mistake.
+func TestLocationFilterWireBytes(t *testing.T) {
+	cases := []struct {
+		name   string
+		filter LocationFilter
+		want   []byte
 	}{
-		{FilterNextGroupStart, "NextGroupStart"},
-		{FilterLargestObject, "LargestObject"},
-		{FilterAbsoluteStart, "AbsoluteStart"},
-		{FilterAbsoluteRange, "AbsoluteRange"},
-		{FilterType(0xFF), "FilterType(0xFF)"},
+		{"unfiltered", LocationFilter{}, nil},
+		{"relative next group", LocationFilter{Fields: 1}, []byte{0x00}},
+		{"relative 3 groups back", LocationFilter{Fields: 1, StartGroup: 3}, []byte{0x03}},
+		{"next object", LocationFilter{Fields: 2}, []byte{0x00, 0x00}},
+		{
+			"absolute start",
+			LocationFilter{Fields: 2, StartGroup: 7, StartObject: 9},
+			[]byte{0x07, 0x09},
+		},
+		{
+			"absolute range",
+			LocationFilter{Fields: 3, StartGroup: 7, StartObject: 9, EndGroupDelta: 2},
+			[]byte{0x07, 0x09, 0x02},
+		},
+		{
+			"absolute range with end object",
+			LocationFilter{Fields: 4, StartGroup: 7, StartObject: 9, EndGroupDelta: 2, EndObject: 5},
+			[]byte{0x07, 0x09, 0x02, 0x05},
+		},
 	}
-	for _, tt := range tests {
-		if got := tt.typ.String(); got != tt.want {
-			t.Errorf("FilterType(%d).String() = %q, want %q", tt.typ, got, tt.want)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.filter.Bytes()
+			if !bytes.Equal(got, c.want) {
+				t.Fatalf("Bytes() = % x, want % x", got, c.want)
+			}
+			back, err := ParseLocationFilter(got)
+			if err != nil {
+				t.Fatalf("ParseLocationFilter(% x): %v", got, err)
+			}
+			if *back != c.filter {
+				t.Errorf("round trip = %+v, want %+v", *back, c.filter)
+			}
+		})
+	}
+}
+
+// §5.1.2's start resolution, which is the part draft-20 reshaped most: one
+// field counts back from the Next Group, two zero fields mean the Next Object,
+// and anything else is absolute.
+func TestLocationFilterStart(t *testing.T) {
+	largest := Location{Group: 10, Object: 4}
+	cases := []struct {
+		name       string
+		filter     LocationFilter
+		hasLargest bool
+		want       Location
+	}{
+		{"unfiltered starts at origin", LocationFilter{}, true, Location{}},
+
+		// StartGroup=0 is the Next Group; N starts N-1 groups before the
+		// current one.
+		{"relative 0 = next group", LocationFilter{Fields: 1}, true, Location{Group: 11}},
+		{"relative 1 = current group", LocationFilter{Fields: 1, StartGroup: 1}, true, Location{Group: 10}},
+		{"relative 2 = one before current", LocationFilter{Fields: 1, StartGroup: 2}, true, Location{Group: 9}},
+
+		// "If a relative start group results in a computed absolute group less
+		// than 0, the computed value is set to 0" — clamped, not rejected.
+		{"relative past the origin clamps", LocationFilter{Fields: 1, StartGroup: 99}, true, Location{}},
+		{"relative exactly to the origin", LocationFilter{Fields: 1, StartGroup: 11}, true, Location{}},
+
+		{"next object", LocationFilter{Fields: 2}, true, Location{Group: 10, Object: 5}},
+		{
+			"absolute start",
+			LocationFilter{Fields: 2, StartGroup: 3, StartObject: 1},
+			true,
+			Location{Group: 3, Object: 1},
+		},
+		{
+			"absolute range start",
+			LocationFilter{Fields: 4, StartGroup: 3, StartObject: 1, EndGroupDelta: 2, EndObject: 8},
+			true,
+			Location{Group: 3, Object: 1},
+		},
+
+		// "...or {0, 0} if no content has been delivered yet."
+		{"next object with no content", LocationFilter{Fields: 2}, false, Location{}},
+		{"relative with no content", LocationFilter{Fields: 1, StartGroup: 2}, false, Location{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.filter.Start(largest, c.hasLargest); got != c.want {
+				t.Errorf("Start = %+v, want %+v", got, c.want)
+			}
+		})
+	}
+}
+
+// The two saturation points §5.1.2 calls out, at the top of the Group and
+// Object spaces.
+func TestLocationFilterStartSaturates(t *testing.T) {
+	maxGroup := Location{Group: math.MaxUint64, Object: 0}
+	f := LocationFilter{Fields: 1} // Next Group, which would be MaxUint64+1
+	if got := f.Start(maxGroup, true); got != (Location{Group: math.MaxUint64}) {
+		t.Errorf("Start at max group = %+v, want {MaxUint64 0}", got)
+	}
+
+	maxObject := Location{Group: 4, Object: math.MaxUint64}
+	f = LocationFilter{Fields: 2} // Next Object, which would be MaxUint64+1
+	if got := f.Start(maxObject, true); got != maxObject {
+		t.Errorf("Start at max object = %+v, want %+v", got, maxObject)
+	}
+}
+
+func TestLocationFilterEnd(t *testing.T) {
+	// Open-ended: no end at all.
+	for _, f := range []LocationFilter{{}, {Fields: 1}, {Fields: 2, StartGroup: 3}} {
+		if _, ok := f.End(); ok {
+			t.Errorf("%+v: End reported a bound on an open-ended filter", f)
+		}
+	}
+
+	// Three fields: the end group is delta-encoded from the start group, and
+	// every Object in it passes.
+	f := LocationFilter{Fields: 3, StartGroup: 7, StartObject: 2, EndGroupDelta: 3}
+	end, ok := f.End()
+	if !ok || end != (Location{Group: 10, Object: math.MaxUint64}) {
+		t.Errorf("End = %+v, %v; want {10 MaxUint64}, true", end, ok)
+	}
+
+	// Four fields: an explicit last Object.
+	f = LocationFilter{Fields: 4, StartGroup: 7, StartObject: 2, EndGroupDelta: 3, EndObject: 6}
+	end, ok = f.End()
+	if !ok || end != (Location{Group: 10, Object: 6}) {
+		t.Errorf("End = %+v, %v; want {10 6}, true", end, ok)
+	}
+}
+
+func TestLocationFilterValidate(t *testing.T) {
+	// "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close
+	// the session with a PROTOCOL_VIOLATION."
+	overflow := LocationFilter{Fields: 3, StartGroup: math.MaxUint64, EndGroupDelta: 1}
+	if err := overflow.Validate(); err == nil {
+		t.Fatal("expected error for end group overflow")
+	}
+	// Landing exactly on 2^64-1 is fine.
+	edge := LocationFilter{Fields: 3, StartGroup: math.MaxUint64 - 1, EndGroupDelta: 1}
+	if err := edge.Validate(); err != nil {
+		t.Fatalf("end group of exactly MaxUint64 must be valid: %v", err)
+	}
+	// An overflowing delta on an open-ended filter is not an overflow at all —
+	// EndGroupDelta is not on the wire, so there is nothing to reject.
+	openEnded := LocationFilter{Fields: 2, StartGroup: math.MaxUint64, EndGroupDelta: 1}
+	if err := openEnded.Validate(); err != nil {
+		t.Fatalf("open-ended filter must ignore EndGroupDelta: %v", err)
+	}
+	// Same overflow arriving off the wire: StartGroup=2^64-1, StartObject=0,
+	// EndGroupDelta=1.
+	var raw []byte
+	raw = wire.AppendVarint(raw, math.MaxUint64)
+	raw = wire.AppendVarint(raw, 0)
+	raw = wire.AppendVarint(raw, 1)
+	if _, err := ParseLocationFilter(raw); err == nil {
+		t.Fatal("Parse must reject an overflowing end group")
+	}
+
+	for _, n := range []int{-1, 5} {
+		if err := (&LocationFilter{Fields: n}).Validate(); err == nil {
+			t.Errorf("Fields = %d must be rejected", n)
 		}
 	}
 }
 
-// ---------------------------------------------------------------------------
-// LocationFilter round-trip (Append / Parse)
-// ---------------------------------------------------------------------------
-
-func TestLocationFilterRoundTrip(t *testing.T) {
-	tests := []struct {
-		name   string
-		filter LocationFilter
-	}{
-		{
-			name:   "NextGroupStart",
-			filter: LocationFilter{Type: FilterNextGroupStart},
-		},
-		{
-			name:   "LargestObject",
-			filter: LocationFilter{Type: FilterLargestObject},
-		},
-		{
-			name: "AbsoluteStart zero",
-			filter: LocationFilter{
-				Type:          FilterAbsoluteStart,
-				StartLocation: Location{Group: 0, Object: 0},
-			},
-		},
-		{
-			name: "AbsoluteStart non-zero",
-			filter: LocationFilter{
-				Type:          FilterAbsoluteStart,
-				StartLocation: Location{Group: 42, Object: 7},
-			},
-		},
-		{
-			name: "AbsoluteRange delta zero",
-			filter: LocationFilter{
-				Type:          FilterAbsoluteRange,
-				StartLocation: Location{Group: 10, Object: 3},
-				EndGroupDelta: 0,
-			},
-		},
-		{
-			name: "AbsoluteRange delta non-zero",
-			filter: LocationFilter{
-				Type:          FilterAbsoluteRange,
-				StartLocation: Location{Group: 5, Object: 0},
-				EndGroupDelta: 10,
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Serialize
-			var w wire.Writer
-			tt.filter.Append(&w)
-
-			// Deserialize
-			r := wire.NewReader(w.Bytes())
-			var got LocationFilter
-			if err := got.Parse(r); err != nil {
-				t.Fatalf("Parse() error: %v", err)
-			}
-
-			// Compare
-			if got.Type != tt.filter.Type {
-				t.Errorf("Type: got %v, want %v", got.Type, tt.filter.Type)
-			}
-			if got.StartLocation != tt.filter.StartLocation {
-				t.Errorf("StartLocation: got %+v, want %+v", got.StartLocation, tt.filter.StartLocation)
-			}
-			if got.EndGroupDelta != tt.filter.EndGroupDelta {
-				t.Errorf("EndGroupDelta: got %d, want %d", got.EndGroupDelta, tt.filter.EndGroupDelta)
-			}
-		})
+// A fifth field has no meaning in §5.1.2, so it is a decode error rather than
+// something silently ignored.
+func TestLocationFilterParseTooManyFields(t *testing.T) {
+	if _, err := ParseLocationFilter([]byte{1, 2, 3, 4, 5}); err == nil {
+		t.Fatal("expected error for a 5-field LOCATION_FILTER")
 	}
 }
 
-func TestLocationFilterBytesRoundTrip(t *testing.T) {
-	f := &LocationFilter{
-		Type:          FilterAbsoluteRange,
-		StartLocation: Location{Group: 3, Object: 1},
-		EndGroupDelta: 5,
+// Parse consumes to the end of the value, so a truncated varint is an error
+// rather than a short read that silently drops a field.
+func TestLocationFilterParseTruncatedVarint(t *testing.T) {
+	// 0x40 opens a 2-byte leading-ones varint with no second byte.
+	if _, err := ParseLocationFilter([]byte{0x01, 0x80}); err == nil {
+		t.Fatal("expected error for a truncated varint")
 	}
-	raw := f.Bytes()
-	got, err := ParseLocationFilter(raw)
+}
+
+// §1.4.1 lets a peer use a non-minimal encoding, so the field *count* — not
+// the byte count — has to drive the interpretation.
+func TestLocationFilterParseNonMinimalVarints(t *testing.T) {
+	// Two fields, each encoded in 2 bytes rather than 1: still the Next
+	// Object filter, not a 4-field one.
+	f, err := ParseLocationFilter([]byte{0x80, 0x00, 0x80, 0x00})
 	if err != nil {
-		t.Fatalf("ParseLocationFilter() error: %v", err)
+		t.Fatalf("ParseLocationFilter: %v", err)
 	}
-	if got.Type != f.Type || got.StartLocation != f.StartLocation || got.EndGroupDelta != f.EndGroupDelta {
-		t.Errorf("round-trip mismatch: got %+v, want %+v", got, f)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Parse error cases
-// ---------------------------------------------------------------------------
-
-func TestLocationFilterParseUnknownType(t *testing.T) {
-	var w wire.Writer
-	w.Varint(0xFF) // unknown filter type
-	r := wire.NewReader(w.Bytes())
-	var f LocationFilter
-	if err := f.Parse(r); err == nil {
-		t.Fatal("Parse() expected error for unknown filter type, got nil")
+	if f.Fields != 2 || !f.NextObject() {
+		t.Fatalf("got %+v, want the 2-field Next Object filter", *f)
 	}
 }
 
-func TestLocationFilterParseShortBuffer(t *testing.T) {
-	// AbsoluteStart type but no location bytes
-	var w wire.Writer
-	w.Varint(uint64(FilterAbsoluteStart))
-	r := wire.NewReader(w.Bytes())
-	var f LocationFilter
-	if err := f.Parse(r); err == nil {
-		t.Fatal("Parse() expected error for short buffer, got nil")
-	}
-}
+func TestLocationFilterMatches(t *testing.T) {
+	largest := Location{Group: 10, Object: 4}
 
-func TestLocationFilterParseAbsoluteRangeOverflow(t *testing.T) {
-	// Overflow via Parse() is impossible: QUIC varints max at 2^62-1, so
-	// StartGroup + EndGroupDelta ≤ 2*(2^62-1) = 2^63-2, which never exceeds
-	// 2^64-1. Test Validate() directly with in-memory values that do overflow.
-	f := &LocationFilter{
-		Type:          FilterAbsoluteRange,
-		StartLocation: Location{Group: math.MaxUint64},
-		EndGroupDelta: 1,
-	}
-	if err := f.Validate(); err == nil {
-		t.Fatal("Validate() expected overflow error for MaxUint64+1, got nil")
-	}
-}
+	t.Run("next object excludes largest itself", func(t *testing.T) {
+		f := LocationFilter{Fields: 2}
+		if f.Matches(largest, largest, true) {
+			t.Error("Largest Object itself must not pass the Next Object filter")
+		}
+		if !f.Matches(Location{Group: 10, Object: 5}, largest, true) {
+			t.Error("the Object after Largest must pass")
+		}
+		if !f.Matches(Location{Group: 999}, largest, true) {
+			t.Error("a later group must pass an open-ended filter")
+		}
+	})
 
-// ---------------------------------------------------------------------------
-// Validate
-// ---------------------------------------------------------------------------
+	t.Run("relative start includes the current group", func(t *testing.T) {
+		f := LocationFilter{Fields: 1, StartGroup: 1}
+		if !f.Matches(Location{Group: 10}, largest, true) {
+			t.Error("the current group's first object must pass")
+		}
+		if f.Matches(Location{Group: 9, Object: math.MaxUint64}, largest, true) {
+			t.Error("the group before the start must not pass")
+		}
+	})
 
-func TestLocationFilterValidate(t *testing.T) {
-	tests := []struct {
-		name        string
-		filter      LocationFilter
-		expectError bool
-	}{
-		{
-			name:        "NextGroupStart valid",
-			filter:      LocationFilter{Type: FilterNextGroupStart},
-			expectError: false,
-		},
-		{
-			name:        "LargestObject valid",
-			filter:      LocationFilter{Type: FilterLargestObject},
-			expectError: false,
-		},
-		{
-			name:        "AbsoluteStart valid",
-			filter:      LocationFilter{Type: FilterAbsoluteStart, StartLocation: Location{Group: 5, Object: 3}},
-			expectError: false,
-		},
-		{
-			name: "AbsoluteRange valid delta zero",
-			filter: LocationFilter{
-				Type:          FilterAbsoluteRange,
-				StartLocation: Location{Group: 10},
-				EndGroupDelta: 0,
-			},
-			expectError: false,
-		},
-		{
-			name: "AbsoluteRange valid delta non-zero",
-			filter: LocationFilter{
-				Type:          FilterAbsoluteRange,
-				StartLocation: Location{Group: 10},
-				EndGroupDelta: 5,
-			},
-			expectError: false,
-		},
-		{
-			// StartGroup = MaxUint64, EndGroupDelta = 1 → addition overflows uint64.
-			name: "AbsoluteRange overflow",
-			filter: LocationFilter{
-				Type:          FilterAbsoluteRange,
-				StartLocation: Location{Group: math.MaxUint64},
-				EndGroupDelta: 1,
-			},
-			expectError: true,
-		},
-		{
-			name:        "unknown type",
-			filter:      LocationFilter{Type: FilterType(0x99)},
-			expectError: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.filter.Validate()
-			if tt.expectError && err == nil {
-				t.Error("Validate() expected error, got nil")
+	t.Run("range is inclusive at both ends", func(t *testing.T) {
+		// {5,2} through the end of group 7.
+		f := LocationFilter{Fields: 3, StartGroup: 5, StartObject: 2, EndGroupDelta: 2}
+		for _, in := range []Location{{5, 2}, {5, 3}, {6, 0}, {7, math.MaxUint64}} {
+			if !f.Matches(in, largest, true) {
+				t.Errorf("%+v must pass", in)
 			}
-			if !tt.expectError && err != nil {
-				t.Errorf("Validate() unexpected error: %v", err)
+		}
+		for _, out := range []Location{{5, 1}, {4, math.MaxUint64}, {8, 0}} {
+			if f.Matches(out, largest, true) {
+				t.Errorf("%+v must not pass", out)
 			}
-		})
-	}
+		}
+	})
+
+	t.Run("explicit end object bounds the last group", func(t *testing.T) {
+		f := LocationFilter{Fields: 4, StartGroup: 5, EndGroupDelta: 1, EndObject: 3}
+		if !f.Matches(Location{Group: 6, Object: 3}, largest, true) {
+			t.Error("the end object itself must pass — the range is inclusive")
+		}
+		if f.Matches(Location{Group: 6, Object: 4}, largest, true) {
+			t.Error("past the end object must not pass")
+		}
+	})
+
+	t.Run("unfiltered passes everything", func(t *testing.T) {
+		f := LocationFilter{}
+		for _, in := range []Location{{}, {0, 1}, {math.MaxUint64, math.MaxUint64}} {
+			if !f.Matches(in, largest, true) {
+				t.Errorf("%+v must pass an unfiltered subscription", in)
+			}
+		}
+	})
 }
-
-// ---------------------------------------------------------------------------
-// EndGroup
-// ---------------------------------------------------------------------------
-
-func TestLocationFilterEndGroup(t *testing.T) {
-	f := LocationFilter{
-		Type:          FilterAbsoluteRange,
-		StartLocation: Location{Group: 10},
-		EndGroupDelta: 5,
-	}
-	if got := f.EndGroup(); got != 15 {
-		t.Errorf("EndGroup() = %d, want 15", got)
-	}
-
-	f2 := LocationFilter{
-		Type:          FilterAbsoluteRange,
-		StartLocation: Location{Group: 7},
-		EndGroupDelta: 0,
-	}
-	if got := f2.EndGroup(); got != 7 {
-		t.Errorf("EndGroup() = %d, want 7 (delta=0 means same group)", got)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Matches
-// ---------------------------------------------------------------------------
-
-func TestLocationFilterMatchesLargestObject(t *testing.T) {
-	f := &LocationFilter{Type: FilterLargestObject}
-
-	// No content yet → start at {0, 0}
-	if !f.Matches(0, 0, 0, 0, false) {
-		t.Error("LargestObject with no content: {0,0} should match")
-	}
-	if !f.Matches(1, 0, 0, 0, false) {
-		t.Error("LargestObject with no content: {1,0} should match")
-	}
-
-	// Largest = {3, 5} → start at {3, 6}
-	if f.Matches(3, 5, 3, 5, true) {
-		t.Error("LargestObject: {3,5} should NOT match (< start {3,6})")
-	}
-	if !f.Matches(3, 6, 3, 5, true) {
-		t.Error("LargestObject: {3,6} should match (= start)")
-	}
-	if !f.Matches(3, 7, 3, 5, true) {
-		t.Error("LargestObject: {3,7} should match (> start)")
-	}
-	if !f.Matches(4, 0, 3, 5, true) {
-		t.Error("LargestObject: {4,0} should match (group > start group)")
-	}
-
-	// Largest object at MaxUint64 → nothing can match
-	if f.Matches(0, 0, 0, math.MaxUint64, true) {
-		t.Error("LargestObject: object overflow → nothing should match")
-	}
-}
-
-func TestLocationFilterMatchesNextGroupStart(t *testing.T) {
-	f := &LocationFilter{Type: FilterNextGroupStart}
-
-	// No content yet → start at {0, 0}
-	if !f.Matches(0, 0, 0, 0, false) {
-		t.Error("NextGroupStart with no content: {0,0} should match")
-	}
-
-	// Largest = {3, 5} → start at {4, 0}
-	if f.Matches(3, 99, 3, 5, true) {
-		t.Error("NextGroupStart: {3,99} should NOT match (group < 4)")
-	}
-	if !f.Matches(4, 0, 3, 5, true) {
-		t.Error("NextGroupStart: {4,0} should match")
-	}
-	if !f.Matches(5, 0, 3, 5, true) {
-		t.Error("NextGroupStart: {5,0} should match")
-	}
-
-	// Largest group at MaxUint64 → nothing can match
-	if f.Matches(0, 0, math.MaxUint64, 0, true) {
-		t.Error("NextGroupStart: group overflow → nothing should match")
-	}
-}
-
-func TestLocationFilterMatchesAbsoluteStart(t *testing.T) {
-	f := &LocationFilter{
-		Type:          FilterAbsoluteStart,
-		StartLocation: Location{Group: 5, Object: 3},
-	}
-
-	// Below start
-	if f.Matches(4, 99, 0, 0, false) {
-		t.Error("AbsoluteStart: {4,99} should NOT match")
-	}
-	if f.Matches(5, 2, 0, 0, false) {
-		t.Error("AbsoluteStart: {5,2} should NOT match (object < 3)")
-	}
-
-	// At start
-	if !f.Matches(5, 3, 0, 0, false) {
-		t.Error("AbsoluteStart: {5,3} should match (= start)")
-	}
-
-	// Above start
-	if !f.Matches(5, 4, 0, 0, false) {
-		t.Error("AbsoluteStart: {5,4} should match")
-	}
-	if !f.Matches(6, 0, 0, 0, false) {
-		t.Error("AbsoluteStart: {6,0} should match")
-	}
-
-	// {0,0} start is equivalent to unfiltered
-	fAll := &LocationFilter{Type: FilterAbsoluteStart, StartLocation: Location{}}
-	if !fAll.Matches(0, 0, 0, 0, false) {
-		t.Error("AbsoluteStart {0,0}: everything should match")
-	}
-}
-
-func TestLocationFilterMatchesAbsoluteRange(t *testing.T) {
-	f := &LocationFilter{
-		Type:          FilterAbsoluteRange,
-		StartLocation: Location{Group: 5, Object: 3},
-		EndGroupDelta: 3, // end group = 8
-	}
-
-	// Below start
-	if f.Matches(4, 99, 0, 0, false) {
-		t.Error("AbsoluteRange: {4,99} should NOT match")
-	}
-	if f.Matches(5, 2, 0, 0, false) {
-		t.Error("AbsoluteRange: {5,2} should NOT match (object < 3)")
-	}
-
-	// Within range
-	if !f.Matches(5, 3, 0, 0, false) {
-		t.Error("AbsoluteRange: {5,3} should match (= start)")
-	}
-	if !f.Matches(7, 0, 0, 0, false) {
-		t.Error("AbsoluteRange: {7,0} should match")
-	}
-	if !f.Matches(8, 999, 0, 0, false) {
-		t.Error("AbsoluteRange: {8,999} should match (group = end group)")
-	}
-
-	// Beyond end group
-	if f.Matches(9, 0, 0, 0, false) {
-		t.Error("AbsoluteRange: {9,0} should NOT match (group > end group)")
-	}
-
-	// Delta = 0: only start group passes
-	fSameGroup := &LocationFilter{
-		Type:          FilterAbsoluteRange,
-		StartLocation: Location{Group: 5, Object: 0},
-		EndGroupDelta: 0,
-	}
-	if !fSameGroup.Matches(5, 100, 0, 0, false) {
-		t.Error("AbsoluteRange delta=0: {5,100} should match")
-	}
-	if fSameGroup.Matches(6, 0, 0, 0, false) {
-		t.Error("AbsoluteRange delta=0: {6,0} should NOT match")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// LocationFilterParam / LocationFilterFromParam integration
-// ---------------------------------------------------------------------------
 
 func TestLocationFilterParamRoundTrip(t *testing.T) {
-	f := &LocationFilter{
-		Type:          FilterAbsoluteStart,
-		StartLocation: Location{Group: 10, Object: 2},
+	f := &LocationFilter{Fields: 3, StartGroup: 12, StartObject: 5, EndGroupDelta: 4}
+	ps := Parameters{LocationFilterParam(f)}
+	if ps[0].Type != ParamLocationFilter {
+		t.Fatalf("param type = %v, want LOCATION_FILTER", ps[0].Type)
 	}
-
-	param := LocationFilterParam(f)
-	if param.Type != ParamLocationFilter {
-		t.Errorf("param.Type = %v, want ParamLocationFilter", param.Type)
-	}
-
-	ps := Parameters{param}
 	got, err := LocationFilterFromParam(ps)
 	if err != nil {
-		t.Fatalf("LocationFilterFromParam() error: %v", err)
+		t.Fatalf("LocationFilterFromParam: %v", err)
 	}
-	if got == nil {
-		t.Fatal("LocationFilterFromParam() returned nil, want filter")
-	}
-	if got.Type != f.Type || got.StartLocation != f.StartLocation {
-		t.Errorf("round-trip mismatch: got %+v, want %+v", got, f)
+	if *got != *f {
+		t.Errorf("round trip = %+v, want %+v", *got, *f)
 	}
 }
 
 func TestLocationFilterFromParamAbsent(t *testing.T) {
-	ps := Parameters{}
-	got, err := LocationFilterFromParam(ps)
+	got, err := LocationFilterFromParam(Parameters{ByteParam(ParamForward, 1)})
 	if err != nil {
-		t.Fatalf("LocationFilterFromParam() unexpected error: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if got != nil {
-		t.Errorf("expected nil for absent parameter, got %+v", got)
+		t.Errorf("got %+v, want nil for an absent LOCATION_FILTER", got)
 	}
 }
 
 func TestLocationFilterFromParamMalformed(t *testing.T) {
-	// Bytes that don't parse as a valid filter (unknown type 0xFF)
-	ps := Parameters{BytesParam(ParamLocationFilter, []byte{0xFF})}
-	_, err := LocationFilterFromParam(ps)
-	if err == nil {
-		t.Fatal("LocationFilterFromParam() expected error for malformed bytes, got nil")
+	ps := Parameters{BytesParam(ParamLocationFilter, []byte{1, 2, 3, 4, 5})}
+	if _, err := LocationFilterFromParam(ps); err == nil {
+		t.Fatal("expected error for a malformed LOCATION_FILTER value")
 	}
 }
 
-// TestFilterConstructors verifies each convenience constructor produces a
-// LOCATION_FILTER parameter that round-trips back to the expected filter.
+// The constructors are the API most callers reach for, so pin the form each
+// one produces rather than trusting the names.
 func TestFilterConstructors(t *testing.T) {
 	cases := []struct {
 		name string
-		got  Parameter
+		p    Parameter
 		want LocationFilter
 	}{
-		{"LargestObjectFilter", LargestObjectFilter(), LocationFilter{Type: FilterLargestObject}},
-		{"NextGroupStartFilter", NextGroupStartFilter(), LocationFilter{Type: FilterNextGroupStart}},
+		{"unfiltered", UnfilteredFilter(), LocationFilter{}},
+		{"next object", NextObjectFilter(), LocationFilter{Fields: 2}},
+		{"relative next group", RelativeStartFilter(0), LocationFilter{Fields: 1}},
+		{"relative current group", RelativeStartFilter(1), LocationFilter{Fields: 1, StartGroup: 1}},
 		{
-			"AbsoluteStartFilter",
+			"absolute start",
 			AbsoluteStartFilter(Location{Group: 4, Object: 2}),
-			LocationFilter{Type: FilterAbsoluteStart, StartLocation: Location{Group: 4, Object: 2}},
+			LocationFilter{Fields: 2, StartGroup: 4, StartObject: 2},
 		},
 		{
-			"AbsoluteRangeFilter",
+			"absolute range",
 			AbsoluteRangeFilter(Location{Group: 4, Object: 2}, 3),
-			LocationFilter{
-				Type:          FilterAbsoluteRange,
-				StartLocation: Location{Group: 4, Object: 2},
-				EndGroupDelta: 3,
-			},
+			LocationFilter{Fields: 3, StartGroup: 4, StartObject: 2, EndGroupDelta: 3},
+		},
+		{
+			"absolute range with end object",
+			AbsoluteRangeObjectFilter(Location{Group: 4, Object: 2}, 3, 9),
+			LocationFilter{Fields: 4, StartGroup: 4, StartObject: 2, EndGroupDelta: 3, EndObject: 9},
 		},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f, err := LocationFilterFromParam(Parameters{tc.got})
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := ParseLocationFilter(c.p.Bytes)
 			if err != nil {
-				t.Fatalf("LocationFilterFromParam: %v", err)
+				t.Fatalf("ParseLocationFilter: %v", err)
 			}
-			if f == nil {
-				t.Fatal("LocationFilterFromParam returned nil")
-			}
-			if *f != tc.want {
-				t.Errorf("filter = %+v, want %+v", *f, tc.want)
+			if *got != c.want {
+				t.Errorf("got %+v, want %+v", *got, c.want)
 			}
 		})
+	}
+}
+
+// An absolute start of {0,0} is "equivalent to unfiltered" (§5.1.2), and it
+// cannot be encoded as two zero fields — that spelling is already taken by the
+// Next Object filter. Encoding it as unfiltered is what keeps the two apart.
+func TestAbsoluteStartFilterAtOriginIsUnfiltered(t *testing.T) {
+	got, err := ParseLocationFilter(AbsoluteStartFilter(Location{}).Bytes)
+	if err != nil {
+		t.Fatalf("ParseLocationFilter: %v", err)
+	}
+	if !got.Unfiltered() {
+		t.Fatalf("got %+v, want the unfiltered (0-field) form", *got)
+	}
+	if got.NextObject() {
+		t.Fatal("an absolute {0,0} start must not encode as the Next Object filter")
+	}
+}
+
+// draft-19's LargestObject and NextGroupStart filters both survive draft-20,
+// but as positional forms rather than enum values. Pin the mapping: these two
+// are what every existing "subscribe to live" caller was asking for.
+func TestDraft19FilterEquivalents(t *testing.T) {
+	largest := Location{Group: 10, Object: 4}
+
+	// LargestObject: start at {Largest.Group, Largest.Object + 1}.
+	nextObj, err := ParseLocationFilter(NextObjectFilter().Bytes)
+	if err != nil {
+		t.Fatalf("ParseLocationFilter: %v", err)
+	}
+	if got := nextObj.Start(largest, true); got != (Location{Group: 10, Object: 5}) {
+		t.Errorf("Next Object start = %+v, want {10 5}", got)
+	}
+
+	// NextGroupStart: start at {Largest.Group + 1, 0}.
+	nextGroup, err := ParseLocationFilter(RelativeStartFilter(0).Bytes)
+	if err != nil {
+		t.Fatalf("ParseLocationFilter: %v", err)
+	}
+	if got := nextGroup.Start(largest, true); got != (Location{Group: 11}) {
+		t.Errorf("Next Group start = %+v, want {11 0}", got)
+	}
+}
+
+func TestLocationFilterAppendUsesWriter(t *testing.T) {
+	f := LocationFilter{Fields: 2, StartGroup: 300, StartObject: 1}
+	w := wire.NewWriter(nil)
+	f.Append(w)
+	if !bytes.Equal(w.Bytes(), f.Bytes()) {
+		t.Errorf("Append = % x, Bytes = % x", w.Bytes(), f.Bytes())
 	}
 }

@@ -73,19 +73,28 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 			case *message.Fetch:
 				// Serve exactly the group range the relay asks for. The relay
 				// requests precisely the below-floor part, and the floor isn't
-				// fixed (the upstream subscription uses FilterLargestObject, so
+				// fixed (the upstream subscription uses the Next Object filter, so
 				// the relay may not cache the upstream's first pushed group) —
 				// honouring the requested range keeps the split gapless whatever
 				// the floor turns out to be.
-				sf := m.Standalone
-				if err := req.Reply(&message.FetchOK{EndLocation: sf.EndLocation}); err != nil {
+				// draft-20 carries the range in LOCATION_FILTER (§5.1.2), and the
+				// relay always sends the absolute four-field form.
+				f, ferr := message.LocationFilterFromParam(m.Parameters)
+				if ferr != nil || f == nil {
+					return
+				}
+				end, hasEnd := f.End()
+				if !hasEnd {
+					return
+				}
+				if err := req.Reply(&message.FetchOK{EndLocation: end}); err != nil {
 					return
 				}
 				out, err := upSess.OpenFetchStream(message.FetchHeader{RequestID: m.RequestID})
 				if err != nil {
 					return
 				}
-				writeFetchGroupRange(out, sf.StartLocation.Group, sf.EndLocation.Group)
+				writeFetchGroupRange(out, f.StartGroup, end.Group)
 				_ = out.Close()
 			}
 		}
@@ -131,12 +140,10 @@ func tryStitchFetch(
 ) []uint64 {
 	t.Helper()
 	fetchReq, err := sess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     ns,
-			Name:          name,
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: lastGroup, Object: 1},
+		Namespace: ns,
+		Name:      name,
+		Parameters: message.Parameters{
+			fetchRangeFilter(message.Location{}, message.Location{Group: lastGroup, Object: 0}),
 		},
 	})
 	if err != nil {
@@ -234,7 +241,7 @@ func collectFetchGroups(t *testing.T, sess *session.Session, timeout time.Durati
 				ch <- result{groups: groups}
 				return
 			}
-			if obj.EndOfNonExistentRange || obj.EndOfUnknownRange {
+			if obj.IsEndOfRange() {
 				continue
 			}
 			groups = append(groups, obj.GroupID)

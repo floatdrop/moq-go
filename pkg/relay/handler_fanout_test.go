@@ -393,10 +393,7 @@ func TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart(t *testing.T) {
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
-			message.LocationFilterParam(&message.LocationFilter{
-				Type:          message.FilterAbsoluteStart,
-				StartLocation: message.Location{Group: 0, Object: 2},
-			}),
+			message.LocationFilterParam(&message.LocationFilter{Fields: 2, StartGroup: 0, StartObject: 2}),
 		},
 	})
 	if err != nil {
@@ -513,11 +510,9 @@ func TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange(t *testing.T) {
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
-			message.LocationFilterParam(&message.LocationFilter{
-				Type:          message.FilterAbsoluteRange,
-				StartLocation: message.Location{Group: 0, Object: 1},
-				EndGroupDelta: 0,
-			}),
+			message.LocationFilterParam(
+				&message.LocationFilter{Fields: 3, StartGroup: 0, StartObject: 1, EndGroupDelta: 0},
+			),
 		},
 	})
 	if err != nil {
@@ -964,9 +959,7 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 		Namespace: wire.TrackNamespace{[]byte("video")},
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
-			message.LocationFilterParam(&message.LocationFilter{
-				Type: message.FilterLargestObject,
-			}),
+			message.LocationFilterParam(&message.LocationFilter{Fields: 2}),
 		},
 	})
 	if err != nil {

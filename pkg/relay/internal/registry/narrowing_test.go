@@ -13,14 +13,10 @@ func TestGroupOutOfRange(t *testing.T) {
 	t.Parallel()
 
 	absStart := func(g uint64) *message.LocationFilter {
-		return &message.LocationFilter{Type: message.FilterAbsoluteStart, StartLocation: message.Location{Group: g}}
+		return &message.LocationFilter{Fields: 2, StartGroup: g, StartObject: 0}
 	}
 	absRange := func(start, delta uint64) *message.LocationFilter {
-		return &message.LocationFilter{
-			Type:          message.FilterAbsoluteRange,
-			StartLocation: message.Location{Group: start},
-			EndGroupDelta: delta,
-		}
+		return &message.LocationFilter{Fields: 3, StartGroup: start, StartObject: 0, EndGroupDelta: delta}
 	}
 
 	tests := []struct {
@@ -33,7 +29,7 @@ func TestGroupOutOfRange(t *testing.T) {
 		{
 			"largest-object filter never out of range",
 			9,
-			&message.LocationFilter{Type: message.FilterLargestObject},
+			&message.LocationFilter{Fields: 2},
 			false,
 		},
 		{"absolute start: below start out", 2, absStart(5), true},

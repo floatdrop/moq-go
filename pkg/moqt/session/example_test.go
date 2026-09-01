@@ -234,45 +234,47 @@ func ExampleRequestMux() {
 	_ = mux.Run(ctx, server)
 }
 
-// Backfilling with a Relative Joining FETCH (§10.12.2): a FilterLargestObject
-// subscription only delivers objects strictly after the live edge, so the
-// current group is invisible until the next one lands. A joining FETCH keyed
-// to the subscription's Request ID backfills it.
-func ExampleSession_Fetch() {
+// Backfilling with a fill fetch stream (§5.1.3): the Next Object filter only
+// delivers objects strictly after the live edge, so the current group is
+// invisible until the next one lands. FILL_PARAMETERS on the same SUBSCRIBE
+// fills it, which is what draft-20 replaced the Relative Joining FETCH with.
+//
+// The fill arrives on a unidirectional fetch stream whose FETCH_HEADER carries
+// the SUBSCRIBE's own Request ID — there is no second request to issue.
+func ExampleSession_Subscribe_fill() {
 	var sess *session.Session
 	ctx := context.Background()
-	var subscribeRequestID uint64 // the RequestID of an earlier SUBSCRIBE
 
-	fetch, err := sess.Fetch(ctx, &message.Fetch{
-		FetchType: message.FetchTypeRelativeJoining,
-		Joining: &message.JoiningFetch{
-			JoiningRequestID: subscribeRequestID,
-			JoiningStart:     0, // 0 = current group only
+	sub, err := sess.Subscribe(ctx, &message.Subscribe{
+		Namespace: wire.Namespace("moq-example"),
+		Name:      []byte("clock"),
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			// StartGroup=1 fills the current group from its start (§5.1.6).
+			message.FillParametersParam(message.Parameters{
+				message.RelativeStartFilter(1),
+			}),
 		},
 	})
 	if err != nil {
-		return // a failed backfill is not fatal — the live subscription stands
+		return
 	}
-	defer fetch.Close()
-	_ = fetch.OK.EndLocation.Group
-	// Objects arrive on a *session.IncomingFetchStream via AcceptDataStream.
+	defer sub.Close()
+	// Objects arrive on a *session.IncomingFetchStream via AcceptDataStream,
+	// keyed by sub.RequestID.
 }
 
-// Standalone FETCH of an explicit [Start, End] range, with no associated
-// subscription — useful for retrieving a known-cached object (a catalog, a
-// keyframe) by its coordinates.
-func ExampleSession_Fetch_standalone() {
+// FETCH of an explicit inclusive range. draft-20 removed the Joining variant,
+// so every FETCH is this shape: a track name plus a LOCATION_FILTER (§5.1.2).
+func ExampleSession_Fetch() {
 	var sess *session.Session
 	ctx := context.Background()
 
 	fetch, err := sess.Fetch(ctx, &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     wire.Namespace("moq-example"),
-			Name:          []byte("clock"),
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: 10, Object: 0},
-		},
+		Namespace: wire.Namespace("moq-example"),
+		Name:      []byte("clock"),
+		// §5.1.2: groups 0 through 10, inclusive.
+		Parameters: message.Parameters{message.AbsoluteRangeFilter(message.Location{}, 10)},
 	})
 	if err != nil {
 		return
@@ -290,7 +292,7 @@ func ExampleIncomingFetchStream() {
 		if err != nil {
 			return // io.EOF on clean FIN
 		}
-		if obj.EndOfNonExistentRange || obj.EndOfUnknownRange {
+		if obj.IsEndOfRange() {
 			continue // §11.4.4.2 absence markers carry no payload
 		}
 		fmt.Printf("backfill group=%d object=%d\n", obj.GroupID, obj.ObjectID)

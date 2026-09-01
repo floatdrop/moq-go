@@ -309,14 +309,12 @@ func TestRequestUpdate_FetchValidUpdateReturnsOK(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	fetchMsg := &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     wire.TrackNamespace{[]byte("video")},
-			Name:          []byte("cam1"),
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: 0, Object: 3},
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			message.GroupOrderParam(message.GroupOrderAscending),
+			fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: 2}),
 		},
-		Parameters: message.Parameters{message.GroupOrderParam(message.GroupOrderAscending)},
 	}
 	reqStream, err := fetchSess.Fetch(t.Context(), fetchMsg)
 	if err != nil {
@@ -368,14 +366,12 @@ func TestRequestUpdate_FetchMalformedRejected(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	fetchMsg := &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     wire.TrackNamespace{[]byte("video")},
-			Name:          []byte("cam1"),
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: 0, Object: 3},
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			message.GroupOrderParam(message.GroupOrderAscending),
+			fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: 2}),
 		},
-		Parameters: message.Parameters{message.GroupOrderParam(message.GroupOrderAscending)},
 	}
 	reqStream, err := fetchSess.Fetch(t.Context(), fetchMsg)
 	if err != nil {

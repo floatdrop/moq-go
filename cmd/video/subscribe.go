@@ -447,7 +447,7 @@ func readCatalogFetch(ctx context.Context, s *session.IncomingFetchStream, watch
 			}
 			return
 		}
-		if obj.EndOfNonExistentRange || obj.EndOfUnknownRange {
+		if obj.IsEndOfRange() {
 			continue
 		}
 		watch.deliver("fetch", obj.Payload)

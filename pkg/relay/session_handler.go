@@ -142,7 +142,7 @@ func (h *sessionHandler) trackRef(name track.FullTrackName) TrackRef {
 // subscribers (§9.4), so a freshly established cross-relay subscription
 // reported no Largest Object until the first object happened to flow. For a
 // track published *once* that never happens — the live subscription carries
-// only future objects, and the §10.12.2 Joining FETCH that exists to backfill
+// only future objects, and the §5.1.3 fill fetch stream that exists to backfill
 // the rest is refused with INVALID_RANGE for having no Joining Location. An MSF
 // catalog is exactly that shape, so across two relays the participant its
 // catalog described stayed invisible for the whole call.
@@ -663,10 +663,13 @@ func (h *sessionHandler) streamFetchRange(
 	objs := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
 
 	// §5.1.4: drop objects that fail the request's Range Filters. §11.4.4.2
-	// unknown-range markers are not objects and are always kept.
+	// end-of-range markers are not objects and are always kept — they carry no
+	// Subgroup ID, Priority or Properties, so matching one against a filter
+	// tests zero values and drops it, turning the span into a plain gap that
+	// §10.13 reads as authoritative non-existence.
 	if rangeFilters != nil {
 		objs = slices.DeleteFunc(objs, func(o *cache.CachedObject) bool {
-			return !o.EndOfUnknownRange &&
+			return !o.IsRangeMarker() &&
 				!rangeFilters.MatchesObject(o.SubgroupID, o.ObjectID, o.PublisherPriority, o.Properties)
 		})
 	}

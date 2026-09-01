@@ -104,7 +104,7 @@ func TestPublish_TrackEntryPrecedesAliasRouting(t *testing.T) {
 //
 // handleFetch reads "an entry exists" as "the track is known", so a lingering
 // empty entry answers a FETCH with INVALID_RANGE ("no objects published", the
-// §10.12.3 rule) where §10.6 wants DOES_NOT_EXIST — "the track or namespace is
+// §10.13 rule) where §10.6 wants DOES_NOT_EXIST — "the track or namespace is
 // not available at the publisher". Those mean different things to a client
 // deciding whether to retry, and nothing would reclaim the entry until an
 // unrelated session teardown swept it.
@@ -135,12 +135,10 @@ func TestPublish_RejectedAliasLeavesTrackUnknown(t *testing.T) {
 
 	fetcher := dialAnotherClient(t, pubSess)
 	_, err = fetcher.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     ns,
-			Name:          second,
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: 1, Object: 1},
+		Namespace: ns,
+		Name:      second,
+		Parameters: message.Parameters{
+			fetchRangeFilter(message.Location{}, message.Location{Group: 1, Object: 0}),
 		},
 	})
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)

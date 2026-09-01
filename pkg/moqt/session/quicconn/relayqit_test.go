@@ -175,26 +175,24 @@ func awaitPeerAndFetchCatalog(t *testing.T, sess *session.Session, selfID, wantI
 	}
 
 	ns := wire.Namespace("room", wantID)
+	// Next Object for the live edge, plus a fill covering the current group —
+	// draft-20's replacement for the SUBSCRIBE + Relative Joining FETCH pair
+	// (§5.1.3, §5.1.6). The fill rides the same request, so a catalog already
+	// behind the live edge still arrives.
 	subMsg := &message.Subscribe{
 		Namespace: ns, Name: []byte("catalog"),
-		Parameters: message.Parameters{message.LocationFilterParam(
-			&message.LocationFilter{Type: message.FilterLargestObject},
-		)},
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			message.FillParametersParam(message.Parameters{
+				message.RelativeStartFilter(1),
+			}),
+		},
 	}
 	subStream, err := sess.Subscribe(t.Context(), subMsg)
 	if err != nil {
 		return fmt.Errorf("[%s] Subscribe %s catalog: %w", selfID, wantID, err)
 	}
 	t.Cleanup(func() { subStream.Close() })
-
-	_, hasLargest := subStream.OK.Parameters.Find(message.ParamLargestObject)
-	if _, ferr := sess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeRelativeJoining,
-		Joining:   &message.JoiningFetch{JoiningRequestID: subMsg.RequestID, JoiningStart: 0},
-	}); ferr != nil {
-		return fmt.Errorf("[%s] joining FETCH for %s failed (hasLargest=%v): %w",
-			selfID, wantID, hasLargest, ferr)
-	}
 	return nil
 }
 

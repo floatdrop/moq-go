@@ -116,14 +116,11 @@ func tryFetchElems(
 ) []fetchElem {
 	t.Helper()
 	fetchReq, err := sess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     ns,
-			Name:          name,
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: lastGroup, Object: 1},
-		},
-		Parameters: params,
+		Namespace: ns,
+		Name:      name,
+		Parameters: append(message.Parameters{
+			fetchRangeFilter(message.Location{}, message.Location{Group: lastGroup, Object: 0}),
+		}, params...),
 	})
 	if err != nil {
 		return nil // not yet serviceable — caller retries
@@ -307,8 +304,11 @@ func TestFetch_PreservesUpstreamUnknownMarker(t *testing.T) {
 
 	fc := unknownGapTopology(t, ns, name, liveLo, liveHi,
 		func(upSess *session.Session, req *session.Request, m *message.Fetch) {
-			sf := m.Standalone
-			if err := req.Reply(&message.FetchOK{EndLocation: sf.EndLocation}); err != nil {
+			_, sfEnd, sfOK := fetchRequestRange(m)
+			if !sfOK {
+				return
+			}
+			if err := req.Reply(&message.FetchOK{EndLocation: sfEnd}); err != nil {
 				return
 			}
 			out, err := upSess.OpenFetchStream(message.FetchHeader{RequestID: m.RequestID})
@@ -324,7 +324,7 @@ func TestFetch_PreservesUpstreamUnknownMarker(t *testing.T) {
 			// Then real objects for the remaining groups, delta-encoded
 			// relative to the marker (§11.4.4.2: the marker is the prior
 			// Group/Object ID; the first actual object spells out Priority).
-			for g := unknownHi + 1; g <= sf.EndLocation.Group; g++ {
+			for g := unknownHi + 1; g <= sfEnd.Group; g++ {
 				fo := &message.FetchObject{
 					SerializationFlags: message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta,
 					GroupIDDelta:       0, // consecutive group
@@ -374,7 +374,10 @@ func TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation(t *testing.T) {
 
 	fc := unknownGapTopology(t, ns, name, liveLo, liveHi,
 		func(upSess *session.Session, req *session.Request, m *message.Fetch) {
-			sf := m.Standalone
+			sfStart, _, sfOK := fetchRequestRange(m)
+			if !sfOK {
+				return
+			}
 			capped := message.Location{Group: upstreamHi, Object: 1}
 			if err := req.Reply(&message.FetchOK{EndLocation: capped}); err != nil {
 				return
@@ -383,7 +386,7 @@ func TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation(t *testing.T) {
 			if err != nil {
 				return
 			}
-			writeFetchGroupRange(out, sf.StartLocation.Group, upstreamHi)
+			writeFetchGroupRange(out, sfStart.Group, upstreamHi)
 			_ = out.Close()
 		})
 
@@ -428,8 +431,11 @@ func TestFetch_DiscardsOutOfRangeUpstreamElements(t *testing.T) {
 
 	fc := unknownGapTopology(t, ns, name, liveLo, liveHi,
 		func(upSess *session.Session, req *session.Request, m *message.Fetch) {
-			sf := m.Standalone
-			if err := req.Reply(&message.FetchOK{EndLocation: sf.EndLocation}); err != nil {
+			_, sfEnd, sfOK := fetchRequestRange(m)
+			if !sfOK {
+				return
+			}
+			if err := req.Reply(&message.FetchOK{EndLocation: sfEnd}); err != nil {
 				return
 			}
 			out, err := upSess.OpenFetchStream(message.FetchHeader{RequestID: m.RequestID})

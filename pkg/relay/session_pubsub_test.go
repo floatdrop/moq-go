@@ -941,7 +941,7 @@ func TestSubscribe_NoAliasCollisionWhenAlsoPublishing(t *testing.T) {
 //
 // Observable through the next SUBSCRIBE: §10.2.17 requires the relay to include
 // LARGEST_OBJECT once objects exist on the track, and that value is the
-// subscriber's Joining Location for a §10.12.2 Joining FETCH. Before the fix the
+// subscriber's live edge, which §5.1.3 has it size a fill against. Before the fix the
 // parameter was dropped, so the relay claimed to know nothing and the backfill
 // was unreachable.
 func TestPublish_SavesLargestObjectFromPublish(t *testing.T) {

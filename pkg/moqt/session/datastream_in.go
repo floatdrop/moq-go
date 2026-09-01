@@ -284,6 +284,17 @@ type DecodedFetchObject struct {
 	EndOfTimedOutRange    bool // §11.4.4.2 flag 0x20C (draft-20)
 }
 
+// IsEndOfRange reports whether this is any §11.4.4.2 end-of-range marker rather
+// than a delivered Object. Markers describe a span of Locations — non-existent,
+// unknown, or timed out — and carry no payload, subgroup, priority or
+// properties, so most consumers want to skip them as a group. Prefer this over
+// testing the three flags individually: draft-20 added the third one, and every
+// place that had enumerated the first two silently started treating it as an
+// Object.
+func (d *DecodedFetchObject) IsEndOfRange() bool {
+	return d.EndOfNonExistentRange || d.EndOfUnknownRange || d.EndOfTimedOutRange
+}
+
 // ReadDecoded reads the next FetchObject and resolves §11.4.4 deltas
 // into absolute coordinates, carrying decoder state across calls.
 // Returns (nil, io.EOF) on clean stream FIN.
@@ -308,7 +319,7 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 	// Group ID and prior Object ID" for the next object. The prior
 	// Subgroup ID / Priority stay those of the last ACTUAL object
 	// (decHaveActual tracks whether one exists).
-	if raw.IsEndOfRangeObject() || raw.IsEndOfRangeGroup() {
+	if raw.IsEndOfRange() {
 		s.decPrevGroup = raw.GroupIDDelta
 		s.decPrevObject = raw.ObjectIDDelta
 		s.decHavePrev = true

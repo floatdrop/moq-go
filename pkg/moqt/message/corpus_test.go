@@ -36,7 +36,7 @@ func benchControlCorpus() []struct {
 	name string
 	msg  Message
 } {
-	filter := &LocationFilter{Type: FilterLargestObject}
+	filter := &LocationFilter{Fields: 2}
 	return []struct {
 		name string
 		msg  Message

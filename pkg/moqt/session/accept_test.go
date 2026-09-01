@@ -23,11 +23,8 @@ func TestAcceptFetchRepliesFetchOK(t *testing.T) {
 
 	fetchMsg := &message.Fetch{
 		RequestID: client.AllocRequestID(),
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace: wire.Namespace("ns"),
-			Name:      []byte("clip"),
-		},
+		Namespace: wire.Namespace("ns"),
+		Name:      []byte("clip"),
 	}
 
 	srvErr := make(chan error, 1)

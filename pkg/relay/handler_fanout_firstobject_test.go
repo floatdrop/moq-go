@@ -151,10 +151,7 @@ func TestFanout_FirstObjectBitOnPlainForward(t *testing.T) {
 // as starting at the subgroup's origin.
 func TestFanout_FirstObjectBitClearedForFilteredHead(t *testing.T) {
 	t.Parallel()
-	filter := &message.LocationFilter{
-		Type:          message.FilterAbsoluteStart,
-		StartLocation: message.Location{Group: 0, Object: 2},
-	}
+	filter := &message.LocationFilter{Fields: 2, StartGroup: 0, StartObject: 2}
 	pub, sub := firstObjectTopology(t,
 		message.Parameters{message.LocationFilterParam(filter)})
 
@@ -259,12 +256,10 @@ func TestFanout_ResolvesImplicitFirstObjectSubgroupID(t *testing.T) {
 	// The cache must file the objects under subgroup 5 too: FETCH the range
 	// back and check the decoded Subgroup IDs.
 	fetchReq, err := sub.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     wire.TrackNamespace{[]byte("video")},
-			Name:          []byte("cam1"),
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: 0, Object: 7},
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: 6}),
 		},
 	})
 	if err != nil {
@@ -286,7 +281,7 @@ func TestFanout_ResolvesImplicitFirstObjectSubgroupID(t *testing.T) {
 		if err != nil {
 			break // io.EOF on FIN
 		}
-		if o.EndOfNonExistentRange || o.EndOfUnknownRange {
+		if o.IsEndOfRange() {
 			continue
 		}
 		if o.SubgroupID != 5 {

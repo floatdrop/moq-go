@@ -63,7 +63,7 @@ func TestSubscribeUpstream_TrackEntryPrecedesAliasRouting(t *testing.T) {
 //
 // For the duration of the round trip an entry stands for a track nobody has
 // vouched for. handleFetch used to read bare existence as "track known", fall
-// through to the §10.12.3 "no Objects have been published" rule, and answer
+// through to the §10.13 "no Objects have been published" rule, and answer
 // INVALID_RANGE — "the range you asked for cannot be satisfied" — where §10.6
 // DOES_NOT_EXIST, "the track or namespace is not available at the publisher",
 // is the truthful answer. A client deciding whether to retry needs them apart.
@@ -102,12 +102,10 @@ func TestFetch_UnconfirmedTrackIsNotKnown(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		_, err := fetcher.Fetch(t.Context(), &message.Fetch{
-			FetchType: message.FetchTypeStandalone,
-			Standalone: &message.StandaloneFetch{
-				Namespace:     ns,
-				Name:          name,
-				StartLocation: message.Location{Group: 0, Object: 0},
-				EndLocation:   message.Location{Group: 1, Object: 1},
+			Namespace: ns,
+			Name:      name,
+			Parameters: message.Parameters{
+				fetchRangeFilter(message.Location{}, message.Location{Group: 1, Object: 0}),
 			},
 		})
 		requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)

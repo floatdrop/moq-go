@@ -170,7 +170,7 @@ func readFetch(s *session.IncomingFetchStream, latest *latestSeen) {
 		}
 		// Skip §11.4.4.2 absence markers — for the clock demo we
 		// only want real payloads.
-		if obj.EndOfNonExistentRange || obj.EndOfUnknownRange {
+		if obj.IsEndOfRange() {
 			continue
 		}
 		logTimeIfFresh(latest, obj.GroupID, obj.ObjectID, obj.Payload)

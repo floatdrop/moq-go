@@ -25,13 +25,10 @@ func TestFetchRoundTrip(t *testing.T) {
 
 	ns := wire.TrackNamespace{[]byte("example.com"), []byte("live")}
 	fetchMsg := &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     ns,
-			Name:          []byte("video"),
-			StartLocation: message.Location{Group: 1, Object: 0},
-			EndLocation:   message.Location{Group: 2, Object: 0},
-		},
+		Namespace: ns,
+		Name:      []byte("video"),
+		// §5.1.2: groups 1 through 2, inclusive.
+		Parameters: message.Parameters{message.AbsoluteRangeFilter(message.Location{Group: 1}, 1)},
 	}
 
 	wantOK := &message.FetchOK{
@@ -196,11 +193,8 @@ func TestFetchRejected(t *testing.T) {
 
 	wg.Go(func() {
 		_, err := cli.Fetch(ctx, &message.Fetch{
-			FetchType: message.FetchTypeStandalone,
-			Standalone: &message.StandaloneFetch{
-				Namespace: wire.TrackNamespace{[]byte("ns")},
-				Name:      []byte("missing"),
-			},
+			Namespace: wire.TrackNamespace{[]byte("ns")},
+			Name:      []byte("missing"),
 		})
 		var rejected *session.RequestRejectedError
 		if !errors.As(err, &rejected) {

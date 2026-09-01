@@ -354,11 +354,8 @@ func TestFetchMandatoryTrackPropertyRejected(t *testing.T) {
 
 	wg.Go(func() {
 		_, err := cli.Fetch(ctx, &message.Fetch{
-			FetchType: message.FetchTypeStandalone,
-			Standalone: &message.StandaloneFetch{
-				Namespace: wire.TrackNamespace{[]byte("ns")},
-				Name:      []byte("track"),
-			},
+			Namespace: wire.TrackNamespace{[]byte("ns")},
+			Name:      []byte("track"),
 		})
 		var unsupported *session.ErrUnsupportedMandatoryTrackProperty
 		if !errors.As(err, &unsupported) {
@@ -409,11 +406,8 @@ func TestFetchMandatoryTrackPropertyAccepted(t *testing.T) {
 
 	wg.Go(func() {
 		stream, err := cli.Fetch(ctx, &message.Fetch{
-			FetchType: message.FetchTypeStandalone,
-			Standalone: &message.StandaloneFetch{
-				Namespace: wire.TrackNamespace{[]byte("ns")},
-				Name:      []byte("track"),
-			},
+			Namespace: wire.TrackNamespace{[]byte("ns")},
+			Name:      []byte("track"),
 		})
 		if err != nil {
 			clientErr = err
@@ -701,11 +695,8 @@ func TestFetchDefaultNoEnforcement(t *testing.T) {
 
 	wg.Go(func() {
 		stream, err := cli.Fetch(ctx, &message.Fetch{
-			FetchType: message.FetchTypeStandalone,
-			Standalone: &message.StandaloneFetch{
-				Namespace: wire.TrackNamespace{[]byte("ns")},
-				Name:      []byte("track"),
-			},
+			Namespace: wire.TrackNamespace{[]byte("ns")},
+			Name:      []byte("track"),
 		})
 		if err != nil {
 			clientErr = err

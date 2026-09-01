@@ -10,77 +10,66 @@ import (
 )
 
 func TestFetchValidate(t *testing.T) {
-	mk := func(start, end Location) *Fetch {
-		return &Fetch{
-			RequestID: 1,
-			FetchType: FetchTypeStandalone,
-			Standalone: &StandaloneFetch{
-				Namespace:     wire.TrackNamespace{[]byte("ns")},
-				Name:          []byte("track"),
-				StartLocation: start,
-				EndLocation:   end,
-			},
-		}
+	// draft-20 stripped FETCH down to a track name plus parameters, so the only
+	// invariant left for Validate is §2.4.1's 4,096-byte full-track-name cap —
+	// the namespace half is already enforced by wire.Reader.TrackNamespace, and
+	// the range moved to LOCATION_FILTER.
+	ok := &Fetch{
+		RequestID: 1,
+		Namespace: wire.TrackNamespace{[]byte("ns")},
+		Name:      []byte("track"),
+	}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("well-formed FETCH must validate: %v", err)
 	}
 
-	// End strictly before Start is rejected (§10.13).
-	if err := mk(Location{Group: 10}, Location{Group: 5}).Validate(); err == nil {
-		t.Fatal("expected error when End < Start")
+	ns := wire.TrackNamespace{bytes.Repeat([]byte("n"), 4000)}
+	tooLong := &Fetch{
+		RequestID: 1,
+		Namespace: ns,
+		Name:      bytes.Repeat([]byte("t"), wire.MaxFullTrackNameBytes-ns.ByteLen()+1),
 	}
-	if err := mk(Location{Group: 5, Object: 9}, Location{Group: 5, Object: 8}).Validate(); err == nil {
-		t.Fatal("expected error when End.Object < Start.Object in same group")
-	}
-	// Equal Start/End is a valid single-object range.
-	if err := mk(Location{Group: 5, Object: 8}, Location{Group: 5, Object: 8}).Validate(); err != nil {
-		t.Fatalf("equal Start/End must be valid: %v", err)
-	}
-	// End after Start is valid.
-	if err := mk(Location{Group: 5}, Location{Group: 6}).Validate(); err != nil {
-		t.Fatalf("End > Start must be valid: %v", err)
-	}
-
-	// Sub-message presence guards.
-	if err := (&Fetch{FetchType: FetchTypeStandalone}).Validate(); err == nil {
-		t.Fatal("expected error for standalone FETCH with no range")
-	}
-	if err := (&Fetch{FetchType: FetchTypeRelativeJoining}).Validate(); err == nil {
-		t.Fatal("expected error for joining FETCH with no joining fields")
+	if err := tooLong.Validate(); err == nil {
+		t.Fatal("expected error for full track name over the §2.4.1 cap")
 	}
 }
 
-// A FETCH frame whose End Location precedes its Start Location must be rejected
-// by the parser, not only by an explicit Validate call.
-func TestFetchParseRejectsInvertedRange(t *testing.T) {
-	bad := &Fetch{
-		RequestID: 1,
-		FetchType: FetchTypeStandalone,
-		Standalone: &StandaloneFetch{
-			Namespace:     wire.TrackNamespace{[]byte("ns")},
-			Name:          []byte("track"),
-			StartLocation: Location{Group: 10, Object: 0},
-			EndLocation:   Location{Group: 5, Object: 0},
-		},
+// The range moved out of FETCH into LOCATION_FILTER (§5.1.2), which the
+// message layer no longer range-checks: a filter naming an end below its own
+// start is well-formed on the wire, and it is the publisher that answers
+// INVALID_RANGE (§10.13). Pin that division of labour so a future "helpful"
+// parse-time rejection doesn't turn a request-scoped error into a session kill.
+func TestFetchParseAcceptsInvertedRangeFilter(t *testing.T) {
+	inverted := &Fetch{
+		RequestID:  1,
+		Namespace:  wire.TrackNamespace{[]byte("ns")},
+		Name:       []byte("track"),
+		Parameters: Parameters{AbsoluteRangeObjectFilter(Location{Group: 5, Object: 10}, 0, 3)},
 	}
 	var buf bytes.Buffer
-	if err := Marshal(&buf, bad); err != nil {
+	if err := Marshal(&buf, inverted); err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if _, err := Parse(&buf); err == nil {
-		t.Fatal("Parse must reject a FETCH with End < Start")
+	got, err := Parse(&buf)
+	if err != nil {
+		t.Fatalf("Parse must accept an inverted range filter: %v", err)
+	}
+	f, err := LocationFilterFromParam(got.(*Fetch).Parameters)
+	if err != nil {
+		t.Fatalf("LocationFilterFromParam: %v", err)
+	}
+	end, hasEnd := f.End()
+	if !hasEnd || end != (Location{Group: 5, Object: 3}) {
+		t.Fatalf("End() = %+v, %v; want {5 3}, true", end, hasEnd)
 	}
 }
 
-func TestFetchStandaloneRoundTrip(t *testing.T) {
+func TestFetchRoundTrip(t *testing.T) {
 	fetch := &Fetch{
-		RequestID: 42,
-		FetchType: FetchTypeStandalone,
-		Standalone: &StandaloneFetch{
-			Namespace:     wire.TrackNamespace{[]byte("example.com"), []byte("live")},
-			Name:          []byte("video"),
-			StartLocation: Location{Group: 100, Object: 0},
-			EndLocation:   Location{Group: 200, Object: 999},
-		},
-		Parameters: Parameters{},
+		RequestID:  42,
+		Namespace:  wire.TrackNamespace{[]byte("example.com"), []byte("live")},
+		Name:       []byte("video"),
+		Parameters: Parameters{AbsoluteRangeFilter(Location{Group: 100}, 100)},
 	}
 
 	w := wire.NewWriter(nil)
@@ -93,105 +82,22 @@ func TestFetchStandaloneRoundTrip(t *testing.T) {
 	if got.RequestID != fetch.RequestID {
 		t.Errorf("RequestID: got %d, want %d", got.RequestID, fetch.RequestID)
 	}
-	if got.FetchType != fetch.FetchType {
-		t.Errorf("FetchType: got %d, want %d", got.FetchType, fetch.FetchType)
+	if !bytes.Equal(got.Name, fetch.Name) {
+		t.Errorf("Name: got %q, want %q", got.Name, fetch.Name)
 	}
-	if got.Standalone == nil {
-		t.Fatal("Standalone is nil")
+	if len(got.Namespace) != 2 || !bytes.Equal(got.Namespace[0], []byte("example.com")) {
+		t.Errorf("Namespace: got %q, want %q", got.Namespace, fetch.Namespace)
 	}
-	if !bytes.Equal(got.Standalone.Name, fetch.Standalone.Name) {
-		t.Errorf("Name: got %q, want %q", got.Standalone.Name, fetch.Standalone.Name)
+	f, err := LocationFilterFromParam(got.Parameters)
+	if err != nil || f == nil {
+		t.Fatalf("LocationFilterFromParam: %v (filter %v)", err, f)
 	}
-	if got.Standalone.StartLocation != fetch.Standalone.StartLocation {
-		t.Errorf("StartLocation: got %+v, want %+v", got.Standalone.StartLocation, fetch.Standalone.StartLocation)
+	if f.Start(Location{}, false) != (Location{Group: 100}) {
+		t.Errorf("Start: got %+v, want {100 0}", f.Start(Location{}, false))
 	}
-	if got.Standalone.EndLocation != fetch.Standalone.EndLocation {
-		t.Errorf("EndLocation: got %+v, want %+v", got.Standalone.EndLocation, fetch.Standalone.EndLocation)
-	}
-}
-
-func TestFetchRelativeJoiningRoundTrip(t *testing.T) {
-	fetch := &Fetch{
-		RequestID: 123,
-		FetchType: FetchTypeRelativeJoining,
-		Joining: &JoiningFetch{
-			JoiningRequestID: 42,
-			JoiningStart:     50,
-		},
-		Parameters: Parameters{},
-	}
-
-	w := wire.NewWriter(nil)
-	fetch.Append(w)
-	got := &Fetch{}
-	if err := got.Parse(wire.NewReader(w.Bytes())); err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-
-	if got.RequestID != fetch.RequestID {
-		t.Errorf("RequestID: got %d, want %d", got.RequestID, fetch.RequestID)
-	}
-	if got.FetchType != fetch.FetchType {
-		t.Errorf("FetchType: got %d, want %d", got.FetchType, fetch.FetchType)
-	}
-	if got.Joining == nil {
-		t.Fatal("Joining is nil")
-	}
-	if got.Joining.JoiningRequestID != fetch.Joining.JoiningRequestID {
-		t.Errorf("JoiningRequestID: got %d, want %d", got.Joining.JoiningRequestID, fetch.Joining.JoiningRequestID)
-	}
-	if got.Joining.JoiningStart != fetch.Joining.JoiningStart {
-		t.Errorf("JoiningStart: got %d, want %d", got.Joining.JoiningStart, fetch.Joining.JoiningStart)
-	}
-}
-
-func TestFetchAbsoluteJoiningRoundTrip(t *testing.T) {
-	fetch := &Fetch{
-		RequestID: 456,
-		FetchType: FetchTypeAbsoluteJoining,
-		Joining: &JoiningFetch{
-			JoiningRequestID: 789,
-			JoiningStart:     1000,
-		},
-		Parameters: Parameters{},
-	}
-
-	w := wire.NewWriter(nil)
-	fetch.Append(w)
-	got := &Fetch{}
-	if err := got.Parse(wire.NewReader(w.Bytes())); err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-
-	if got.RequestID != fetch.RequestID {
-		t.Errorf("RequestID: got %d, want %d", got.RequestID, fetch.RequestID)
-	}
-	if got.FetchType != fetch.FetchType {
-		t.Errorf("FetchType: got %d, want %d", got.FetchType, fetch.FetchType)
-	}
-	if got.Joining == nil {
-		t.Fatal("Joining is nil")
-	}
-	if got.Joining.JoiningRequestID != fetch.Joining.JoiningRequestID {
-		t.Errorf("JoiningRequestID: got %d, want %d", got.Joining.JoiningRequestID, fetch.Joining.JoiningRequestID)
-	}
-	if got.Joining.JoiningStart != fetch.Joining.JoiningStart {
-		t.Errorf("JoiningStart: got %d, want %d", got.Joining.JoiningStart, fetch.Joining.JoiningStart)
-	}
-}
-
-func TestFetchUnknownType(t *testing.T) {
-	w := wire.NewWriter(nil)
-	w.Varint(999) // RequestID
-	w.Varint(99)  // Invalid FetchType
-
-	fetch := &Fetch{}
-	err := fetch.Parse(wire.NewReader(w.Bytes()))
-	if err == nil {
-		t.Fatal("expected error for unknown fetch type")
-	}
-	if !errors.Is(err, ErrUnknownFetchType) {
-		t.Errorf("expected ErrUnknownFetchType, got %T", err)
+	end, _ := f.End()
+	if end.Group != 200 {
+		t.Errorf("end group: got %d, want 200", end.Group)
 	}
 }
 
@@ -391,6 +297,59 @@ func TestFetchObjectEndOfRangeGroup(t *testing.T) {
 	}
 }
 
+// draft-20 added End of Timed-Out Range (0x20C) alongside 0x8C and 0x10C, so a
+// subscriber can tell Objects abandoned when FILL_TIMEOUT expired (§10.2.5)
+// from Objects whose status is genuinely unknown. All three share a wire shape.
+func TestFetchObjectEndOfTimedOutRange(t *testing.T) {
+	obj := &FetchObject{
+		SerializationFlags: FetchEndOfTimedOutRange,
+		GroupIDDelta:       11,
+		ObjectIDDelta:      4,
+	}
+
+	w := wire.NewWriter(nil)
+	obj.Append(w)
+	got := &FetchObject{}
+	r := wire.NewReader(w.Bytes())
+	if err := got.Parse(r); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !r.Empty() {
+		t.Errorf("trailing bytes after parse: %d left", r.Remaining())
+	}
+
+	if !got.IsEndOfTimedOutRange() {
+		t.Error("IsEndOfTimedOutRange: got false, want true")
+	}
+	if got.IsEndOfRangeObject() || got.IsEndOfRangeGroup() {
+		t.Error("0x20C must not be mistaken for the 0x8C or 0x10C markers")
+	}
+	if !got.IsEndOfRange() {
+		t.Error("IsEndOfRange: got false, want true")
+	}
+	if got.GroupIDDelta != 11 || got.ObjectIDDelta != 4 {
+		t.Errorf("range boundary: got {%d %d}, want {11 4}", got.GroupIDDelta, got.ObjectIDDelta)
+	}
+	// Subgroup ID, Priority and Properties are absent on every end-of-range
+	// marker (§11.4.4.2).
+	if len(got.Properties) != 0 || got.SubgroupID != 0 || got.PublisherPriority != 0 {
+		t.Errorf("marker carried object fields: %+v", got)
+	}
+}
+
+// The other two markers must keep answering IsEndOfRange too — the relay's
+// serve path uses it to decide what is a marker rather than an object.
+func TestFetchObjectIsEndOfRangeCoversAllThree(t *testing.T) {
+	for _, flags := range []uint64{FetchEndOfRangeObject, FetchEndOfRangeGroup, FetchEndOfTimedOutRange} {
+		if !(&FetchObject{SerializationFlags: flags}).IsEndOfRange() {
+			t.Errorf("flags %#x: IsEndOfRange = false, want true", flags)
+		}
+	}
+	if (&FetchObject{ObjectPayload: []byte("x")}).IsEndOfRange() {
+		t.Error("a normal object must not report IsEndOfRange")
+	}
+}
+
 func TestFetchObjectValidateInvalidFlags(t *testing.T) {
 	// Values >= 128 that are not end-of-range markers are PROTOCOL_VIOLATION.
 	obj := &FetchObject{
@@ -471,7 +430,7 @@ func TestIsFetchHeaderType(t *testing.T) {
 }
 
 func TestFetchMessageTypes(t *testing.T) {
-	fetch := &Fetch{RequestID: 1, FetchType: FetchTypeStandalone}
+	fetch := &Fetch{RequestID: 1}
 	if fetch.Type() != TypeFetch {
 		t.Errorf("Fetch.Type(): got %d, want %d", fetch.Type(), TypeFetch)
 	}
@@ -489,14 +448,9 @@ func TestFetchWithParameters(t *testing.T) {
 	}
 
 	fetch := &Fetch{
-		RequestID: 777,
-		FetchType: FetchTypeStandalone,
-		Standalone: &StandaloneFetch{
-			Namespace:     wire.TrackNamespace{[]byte("test")},
-			Name:          []byte("track"),
-			StartLocation: Location{Group: 0, Object: 0},
-			EndLocation:   Location{Group: 10, Object: 100},
-		},
+		RequestID:  777,
+		Namespace:  wire.TrackNamespace{[]byte("test")},
+		Name:       []byte("track"),
 		Parameters: params,
 	}
 

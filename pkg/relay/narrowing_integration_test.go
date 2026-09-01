@@ -37,11 +37,9 @@ func TestFanout_NarrowingUpdateResetsOutOfRangeStream(t *testing.T) {
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			// AbsoluteRange covering groups 0..10 — group 2 is in range.
-			message.LocationFilterParam(&message.LocationFilter{
-				Type:          message.FilterAbsoluteRange,
-				StartLocation: message.Location{Group: 0, Object: 0},
-				EndGroupDelta: 10,
-			}),
+			message.LocationFilterParam(
+				&message.LocationFilter{Fields: 3, StartGroup: 0, StartObject: 0, EndGroupDelta: 10},
+			),
 		},
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
@@ -104,11 +102,9 @@ func TestFanout_NarrowingUpdateResetsOutOfRangeStream(t *testing.T) {
 	// Narrow the End Group to 0 — group 2 is now out of range.
 	if _, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{
-			message.LocationFilterParam(&message.LocationFilter{
-				Type:          message.FilterAbsoluteRange,
-				StartLocation: message.Location{Group: 0, Object: 0},
-				EndGroupDelta: 0,
-			}),
+			message.LocationFilterParam(
+				&message.LocationFilter{Fields: 3, StartGroup: 0, StartObject: 0, EndGroupDelta: 0},
+			),
 		}); err != nil {
 		t.Fatalf("UpdateRequest(narrow): %v", err)
 	}

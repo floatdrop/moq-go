@@ -277,12 +277,10 @@ func BenchmarkFetchFromCache(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		stream, err := fetchSess.Fetch(ctx, &message.Fetch{
-			FetchType: message.FetchTypeStandalone,
-			Standalone: &message.StandaloneFetch{
-				Namespace:     benchNS,
-				Name:          benchName,
-				StartLocation: message.Location{Group: 0, Object: 0},
-				EndLocation:   message.Location{Group: 0, Object: rangeObjs - 1},
+			Namespace: benchNS,
+			Name:      benchName,
+			Parameters: message.Parameters{
+				fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: rangeObjs - 2}),
 			},
 		})
 		if err != nil {

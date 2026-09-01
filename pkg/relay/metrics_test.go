@@ -248,12 +248,10 @@ func TestMetricsHooks(t *testing.T) {
 
 	// FETCH the cached range and confirm FetchServed fires with the count.
 	fetchReq, err := subSess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     ns,
-			Name:          name,
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: 0, Object: uint64(sgCount - 1)},
+		Namespace: ns,
+		Name:      name,
+		Parameters: message.Parameters{
+			fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: uint64(sgCount - 2)}),
 		},
 	})
 	if err != nil {

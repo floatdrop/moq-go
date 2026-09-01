@@ -3,6 +3,7 @@ package relay_test
 import (
 	"errors"
 	"io"
+	"math"
 	"reflect"
 	"testing"
 	"time"
@@ -250,7 +251,7 @@ func TestFetch_ObjectIDRangeFilter(t *testing.T) {
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, objs := fetchAndDrain(t, fetchSess,
 		wire.TrackNamespace{[]byte("video")}, []byte("cam1"),
-		message.Location{Group: 0, Object: 0}, message.Location{Group: 0, Object: 4},
+		message.Location{Group: 0, Object: 0}, message.Location{Group: 0, Object: 3},
 		message.GroupOrderAscending,
 		message.RangeFilterParam(&message.RangeFilter{
 			Type: message.ParamObjectIDFilter, Ranges: []message.Range{{Start: 1, End: 2}},
@@ -320,7 +321,7 @@ func TestFetch_SubgroupFilterSelectsOneLayer(t *testing.T) {
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, objs := fetchAndDrain(t, fetchSess,
 		wire.TrackNamespace{[]byte("video")}, []byte("cam1"),
-		message.Location{Group: 0, Object: 0}, message.Location{Group: 0, Object: 0}, // whole group
+		message.Location{Group: 0, Object: 0}, message.Location{Group: 0, Object: math.MaxUint64}, // whole group
 		message.GroupOrderAscending,
 		message.RangeFilterParam(&message.RangeFilter{
 			Type: message.ParamSubgroupFilter, Ranges: []message.Range{{Start: 0, End: 0}},

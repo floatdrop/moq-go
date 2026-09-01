@@ -88,7 +88,7 @@ func BenchmarkMarshalRoundTrip(b *testing.B) {
 // PUBLISH / FETCH carries.
 func BenchmarkParametersRoundTrip(b *testing.B) {
 	params := Parameters{
-		LocationFilterParam(&LocationFilter{Type: FilterLargestObject}),
+		LocationFilterParam(&LocationFilter{Fields: 2}),
 		SubscriberPriorityParam(128),
 		ForwardParam(true),
 	}

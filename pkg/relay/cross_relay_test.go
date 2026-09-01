@@ -1249,7 +1249,7 @@ func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 // The track here is published *once* and then goes quiet, which is what makes
 // the omission fatal rather than merely late. A live subscription carries only
 // future objects, so the sole route to content published before the subscriber
-// arrived is the §10.12.2 Joining FETCH — and that is refused with INVALID_RANGE
+// arrived is a §10.13 FETCH — and that is refused with INVALID_RANGE
 // when the relay has no Joining Location to compute a range from. Before the
 // fix, relay A learned no watermark from B's SUBSCRIBE_OK, omitted
 // LARGEST_OBJECT from its own SUBSCRIBE_OK (violating §10.2.17), and rejected
@@ -1341,19 +1341,23 @@ func TestCrossRelay_JoiningFetchBackfillsPublishOnceTrack(t *testing.T) {
 			"Location from B's SUBSCRIBE_OK (params=%v)", subReq.OK.Parameters)
 	}
 
-	// The Joining FETCH is the only way this subscriber can reach content
-	// published before it arrived. A's own cache is empty — its upstream uses the
-	// §9.4 Largest Object filter — so answering means stitching from B (§9.4).
+	// A FETCH is the only way this subscriber can reach content published before
+	// it arrived. A's own cache is empty — its upstream uses the §9.4 Next Object
+	// filter — so answering means stitching from B (§9.4).
+	//
+	// StartGroup=1 is the relative one-field form (§5.1.2): start at the current
+	// group. On a Fetch an omitted end means Largest Object, so this is the range
+	// draft-19 expressed as a Relative Joining FETCH with JoiningStart=0.
 	fetchReq, err := subSess.Fetch(ctx, &message.Fetch{
-		FetchType: message.FetchTypeRelativeJoining,
-		Joining: &message.JoiningFetch{
-			JoiningRequestID: subMsg.RequestID,
-			JoiningStart:     0, // the largest group itself
+		Namespace: subMsg.Namespace,
+		Name:      subMsg.Name,
+		Parameters: message.Parameters{
+			message.GroupOrderParam(message.GroupOrderAscending),
+			message.RelativeStartFilter(1),
 		},
-		Parameters: message.Parameters{message.GroupOrderParam(message.GroupOrderAscending)},
 	})
 	if err != nil {
-		t.Fatalf("joining FETCH rejected, so the backfill is unreachable: %v", err)
+		t.Fatalf("FETCH rejected, so the backfill is unreachable: %v", err)
 	}
 	defer fetchReq.Close()
 

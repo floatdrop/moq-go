@@ -89,9 +89,8 @@ func (f *LocationFilter) Validate() error {
 // publisher's current Largest Object. hasLargest is false before anything has
 // been published on the track, which §5.1.2 pins to {0, 0}.
 //
-// A relative StartGroup is clamped, not rejected: "If a relative start group
-// results in a computed absolute group less than 0, the computed value is set
-// to 0; if greater than 2^64 - 1, it is set to 2^64 - 1."
+// A relative StartGroup is clamped, not rejected (§5.1.2): a computed absolute
+// group below 0 is set to 0, and one above 2^64 - 1 is set to 2^64 - 1.
 func (f *LocationFilter) Start(largest Location, hasLargest bool) Location {
 	switch {
 	case f.Unfiltered():

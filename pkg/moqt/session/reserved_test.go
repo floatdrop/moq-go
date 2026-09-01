@@ -43,18 +43,18 @@ func TestReservedNamespaceRejection_Classifier(t *testing.T) {
 		{"subscribe namespace dot", &message.SubscribeNamespace{TrackNamespacePrefix: ns(".")}, true},
 		{"subscribe tracks ordinary", &message.SubscribeNamespace{TrackNamespacePrefix: ns("acme")}, false},
 		{
-			"standalone fetch session",
+			"fetch session",
 			&message.Fetch{
-				FetchType:  message.FetchTypeStandalone,
-				Standalone: &message.StandaloneFetch{Namespace: ns(".session"), Name: []byte("v")},
+				Namespace: ns(".session"),
+				Name:      []byte("v"),
 			},
 			true,
 		},
 		{
-			"joining fetch has no namespace",
+			"fetch ordinary namespace",
 			&message.Fetch{
-				FetchType: message.FetchTypeRelativeJoining,
-				Joining:   &message.JoiningFetch{JoiningRequestID: 0, JoiningStart: 1},
+				Namespace: ns("acme"),
+				Name:      []byte("v"),
 			},
 			false,
 		},

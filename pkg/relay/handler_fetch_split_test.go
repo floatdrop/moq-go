@@ -29,19 +29,60 @@ func TestFetchPredecessor(t *testing.T) {
 	}
 }
 
-// exclusiveFetchEnd must be the exact inverse of inclusiveFetchEnd so a relay
-// can round-trip an inclusive bound through the protocol's exclusive wire form.
-func TestExclusiveFetchEnd_InvertsInclusive(t *testing.T) {
-	maxU := uint64(math.MaxUint64)
-	for _, incl := range []message.Location{
-		{Group: 5, Object: 2},
-		{Group: 0, Object: 0},
-		{Group: 4, Object: maxU},
-		{Group: 9, Object: 1},
-	} {
-		if got := inclusiveFetchEnd(exclusiveFetchEnd(incl)); got != incl {
-			t.Errorf("inclusiveFetchEnd(exclusiveFetchEnd(%v)) = %v; want round-trip", incl, got)
-		}
+// draft-20 made both the FETCH range and FETCH_OK's End Location inclusive, so
+// the exclusive/inclusive conversion the relay used to do is gone. What is left
+// is §10.14's cap: the response ends at the requested end, or at Largest Object
+// if the request reaches past it, or at Largest Object when the filter is
+// open-ended ("When they are omitted from a Fetch, the EndGroup and EndObject
+// are Largest Object", §5.1.2).
+func TestCapFetchEndLocation(t *testing.T) {
+	largest := message.Location{Group: 10, Object: 4}
+
+	cases := []struct {
+		name   string
+		filter message.LocationFilter
+		want   message.Location
+	}{
+		{"open-ended ends at largest", message.LocationFilter{}, largest},
+		{
+			"relative start is still open-ended",
+			message.LocationFilter{Fields: 1, StartGroup: 2},
+			largest,
+		},
+		{
+			"end before largest is honoured",
+			message.LocationFilter{Fields: 4, StartGroup: 1, EndGroupDelta: 2, EndObject: 3},
+			message.Location{Group: 3, Object: 3},
+		},
+		{
+			"end past largest is capped",
+			message.LocationFilter{Fields: 4, StartGroup: 1, EndGroupDelta: 100, EndObject: 0},
+			largest,
+		},
+		{
+			"whole-group end past largest is capped",
+			message.LocationFilter{Fields: 3, StartGroup: 10, EndGroupDelta: 0},
+			largest,
+		},
+		{
+			"end exactly at largest",
+			message.LocationFilter{Fields: 4, StartGroup: 0, EndGroupDelta: 10, EndObject: 4},
+			largest,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := capFetchEndLocation(&c.filter, largest); got != c.want {
+				t.Errorf("capFetchEndLocation = %v, want %v", got, c.want)
+			}
+		})
+	}
+
+	// A whole-group end (EndObject omitted) resolves to {G, MaxUint64}, which is
+	// above any real Largest in that group — so it caps rather than escaping.
+	f := message.LocationFilter{Fields: 3, StartGroup: 0, EndGroupDelta: 10}
+	if got := capFetchEndLocation(&f, largest); got != largest {
+		t.Errorf("whole end group = %v, want the capped %v", got, largest)
 	}
 }
 

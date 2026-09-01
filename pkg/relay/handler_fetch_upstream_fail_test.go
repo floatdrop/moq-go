@@ -42,9 +42,9 @@ import (
 func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name        string
-		opts        stitchOpts
-		wantUnknown bool
+		name       string
+		opts       stitchOpts
+		wantMarker stitchMarker
 	}{
 		{
 			// The upstream answered and asserted the sub-range empty.
@@ -52,7 +52,7 @@ func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 			opts: stitchOpts{onFetch: replyThen(func(out *session.OutgoingFetchStream) {
 				_ = out.Close()
 			})},
-			wantUnknown: false,
+			wantMarker: markerNone,
 		},
 		{
 			// Gaps in a half-delivered response assert nothing.
@@ -64,18 +64,18 @@ func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 				_ = out.WriteObject(&message.FetchObject{ObjectPayload: []byte("partial")})
 				out.Cancel(moqt.StreamResetInternalError)
 			})},
-			wantUnknown: true,
+			wantMarker: markerUnknown,
 		},
 		{
 			// Silence before FETCH_OK: the upstream never answers the request
 			// at all, so Session.Fetch itself expires. Must not wedge the
 			// downstream handler, and must not be read as "the range is empty".
-			// The short FILL_TIMEOUT is the subscriber's own budget (§10.2.6),
+			// The short FILL_TIMEOUT is the subscriber's own budget (§10.2.5),
 			// which the relay adopts for the upstream leg; without it these two
 			// cases would each wait out defaultUpstreamFetchTimeout (5s).
-			name:        "an upstream that never answers times out to unknown",
-			opts:        stitchOpts{onFetch: nil, fillTimeout: 300 * time.Millisecond},
-			wantUnknown: true,
+			name:       "an upstream that never answers times out to timed-out",
+			opts:       stitchOpts{onFetch: nil, fillTimeout: 300 * time.Millisecond},
+			wantMarker: markerTimedOut,
 		},
 		{
 			// Silence AFTER FETCH_OK — a separate timeout, and a separate
@@ -83,33 +83,31 @@ func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 			// happily and the relay then waits on the response body stream
 			// that never arrives. An upstream can fail here having looked
 			// entirely healthy a moment earlier.
-			name: "an upstream that acks but never sends the body times out to unknown",
+			name: "an upstream that acks but never sends the body times out to timed-out",
 			opts: stitchOpts{
 				fillTimeout: 300 * time.Millisecond,
 				onFetch: func(_ *session.Session, req *session.Request, m *message.Fetch) {
-					_ = req.Reply(&message.FetchOK{EndLocation: m.Standalone.EndLocation})
+					_ = req.Reply(&message.FetchOK{EndLocation: fetchOKEnd(m)})
 					// ...and never OpenFetchStream.
 				},
 			},
-			wantUnknown: true,
+			wantMarker: markerTimedOut,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			objs := runStitch(t, tc.opts)
 
-			if got := hasUnknownMarker(objs); got != tc.wantUnknown {
-				verdict := map[bool]string{
-					true:  "an End of Unknown Range marker",
-					false: "a plain gap (authoritative non-existence)",
-				}
-				t.Fatalf("stitched response encoded %s, want %s",
-					verdict[got], verdict[tc.wantUnknown])
+			if got := stitchMarkerOf(objs); got != tc.wantMarker {
+				t.Fatalf("stitched response encoded %s, want %s", got, tc.wantMarker)
 			}
 			// The below-floor part must never be served from an upstream
 			// response the relay could not read to completion. Groups below
 			// the cached tail would be exactly that.
-			if groups := stitchedGroups(objs); tc.wantUnknown && len(groups) > 0 && groups[0] < stitchLiveLo {
+			if groups := stitchedGroups(
+				objs,
+			); tc.wantMarker != markerNone && len(groups) > 0 &&
+				groups[0] < stitchLiveLo {
 				t.Errorf("response carried group %d from an upstream response that never "+
 					"completed; partial results must be discarded (got %v)", groups[0], groups)
 			}
@@ -139,8 +137,11 @@ func TestFetch_DescendingCappedUpstreamFallsBackToWholeUnknown(t *testing.T) {
 			// Cap the response one group short of what was asked for, then
 			// serve the part that IS covered — so the fallback is driven by
 			// the cap alone and not by an empty or broken response.
-			sf := m.Standalone
-			capped := message.Location{Group: sf.EndLocation.Group - 1, Object: 0}
+			_, sfEnd, sfOK := fetchRequestRange(m)
+			if !sfOK {
+				return
+			}
+			capped := message.Location{Group: sfEnd.Group - 1, Object: 0}
 			if err := req.Reply(&message.FetchOK{EndLocation: capped}); err != nil {
 				return
 			}
@@ -191,8 +192,11 @@ func TestFetch_StitchedObjectKeepsDatagramForwardingPreference(t *testing.T) {
 	t.Parallel()
 	objs := runStitch(t, stitchOpts{
 		onFetch: func(up *session.Session, req *session.Request, m *message.Fetch) {
-			sf := m.Standalone
-			if err := req.Reply(&message.FetchOK{EndLocation: sf.EndLocation}); err != nil {
+			sfStart, sfEnd, sfOK := fetchRequestRange(m)
+			if !sfOK {
+				return
+			}
+			if err := req.Reply(&message.FetchOK{EndLocation: sfEnd}); err != nil {
 				return
 			}
 			out, err := up.OpenFetchStream(message.FetchHeader{RequestID: m.RequestID})
@@ -206,7 +210,7 @@ func TestFetch_StitchedObjectKeepsDatagramForwardingPreference(t *testing.T) {
 					message.FetchFlagObjectIDDelta |
 					message.FetchFlagPriority |
 					message.FetchFlagDatagram,
-				GroupIDDelta:  sf.StartLocation.Group, // absolute for the first object
+				GroupIDDelta:  sfStart.Group, // absolute for the first object
 				ObjectIDDelta: 0,
 				ObjectPayload: []byte("dgram"),
 			}
@@ -217,7 +221,7 @@ func TestFetch_StitchedObjectKeepsDatagramForwardingPreference(t *testing.T) {
 
 	var stitched *session.DecodedFetchObject
 	for _, o := range objs {
-		if o.EndOfUnknownRange || o.EndOfNonExistentRange {
+		if o.IsEndOfRange() {
 			continue
 		}
 		if o.GroupID < stitchLiveLo { // came from the upstream, not the cache
@@ -258,6 +262,10 @@ type stitchOpts struct {
 	// zero values mean ascending and "no FILL_TIMEOUT parameter".
 	order       message.GroupOrder
 	fillTimeout time.Duration
+
+	// extraParams ride the downstream FETCH alongside the range — Range
+	// Filters (§5.1.4), in practice.
+	extraParams message.Parameters
 }
 
 // replyThen builds an onFetch that accepts the whole requested range and then
@@ -265,7 +273,7 @@ type stitchOpts struct {
 // the response terminates is under test.
 func replyThen(end func(*session.OutgoingFetchStream)) func(*session.Session, *session.Request, *message.Fetch) {
 	return func(up *session.Session, req *session.Request, m *message.Fetch) {
-		if err := req.Reply(&message.FetchOK{EndLocation: m.Standalone.EndLocation}); err != nil {
+		if err := req.Reply(&message.FetchOK{EndLocation: fetchOKEnd(m)}); err != nil {
 			return
 		}
 		out, err := up.OpenFetchStream(message.FetchHeader{RequestID: m.RequestID})
@@ -378,9 +386,21 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 	fc := dialAnotherClient(t, upSess)
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		objs, served := fetchStitched(t, fc, ns, name, stitchLiveHi, opts)
+		// Probe unfiltered: a Range Filter can legitimately drop every real
+		// object, and readiness here means "the cache is warm", not "the
+		// response is non-empty".
+		probe := opts
+		probe.extraParams = nil
+		objs, served := fetchStitched(t, fc, ns, name, stitchLiveHi, probe)
 		if served && len(stitchedGroups(objs)) > 0 {
-			return objs
+			if len(opts.extraParams) == 0 {
+				return objs
+			}
+			filtered, ok := fetchStitched(t, fc, ns, name, stitchLiveHi, opts)
+			if !ok {
+				t.Fatalf("the filtered stitch FETCH was not served%s", upstreamNote())
+			}
+			return filtered
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the relay never served a stitched FETCH (last: served=%v objects=%d)%s",
@@ -408,15 +428,13 @@ func fetchStitched(
 	if opts.fillTimeout > 0 {
 		params = append(params, message.FillTimeoutParam(opts.fillTimeout))
 	}
+	params = append(params, opts.extraParams...)
 	fetchReq, err := sess.Fetch(t.Context(), &message.Fetch{
-		FetchType: message.FetchTypeStandalone,
-		Standalone: &message.StandaloneFetch{
-			Namespace:     ns,
-			Name:          name,
-			StartLocation: message.Location{Group: 0, Object: 0},
-			EndLocation:   message.Location{Group: lastGroup, Object: 1},
-		},
-		Parameters: params,
+		Namespace: ns,
+		Name:      name,
+		Parameters: append(message.Parameters{
+			fetchRangeFilter(message.Location{}, message.Location{Group: lastGroup, Object: 0}),
+		}, params...),
 	})
 	if err != nil {
 		return nil, false
@@ -464,13 +482,41 @@ func fetchStitched(
 	}
 }
 
-func hasUnknownMarker(objs []*session.DecodedFetchObject) bool {
+// stitchMarker names which §11.4.4.2 outcome a stitched response encoded for
+// the sub-range the relay could not answer from cache. draft-20 split what used
+// to be a single "unknown" outcome in two: a timeout is now reported as a
+// Timed-Out gap (§10.2.5), leaving End of Unknown Range for the cases where no
+// source could vouch for the objects at all.
+type stitchMarker int
+
+const (
+	markerNone     stitchMarker = iota // a plain gap: authoritative non-existence
+	markerUnknown                      // End of Unknown Range (0x10C)
+	markerTimedOut                     // End of Timed-Out Range (0x20C)
+)
+
+func (m stitchMarker) String() string {
+	switch m {
+	case markerNone:
+		return "a plain gap (authoritative non-existence)"
+	case markerUnknown:
+		return "an End of Unknown Range marker"
+	case markerTimedOut:
+		return "an End of Timed-Out Range marker"
+	}
+	return "an unknown marker kind"
+}
+
+func stitchMarkerOf(objs []*session.DecodedFetchObject) stitchMarker {
 	for _, o := range objs {
-		if o.EndOfUnknownRange {
-			return true
+		switch {
+		case o.EndOfTimedOutRange:
+			return markerTimedOut
+		case o.EndOfUnknownRange:
+			return markerUnknown
 		}
 	}
-	return false
+	return markerNone
 }
 
 // stitchedGroups returns the group IDs of the actual objects, skipping the
@@ -478,7 +524,7 @@ func hasUnknownMarker(objs []*session.DecodedFetchObject) bool {
 func stitchedGroups(objs []*session.DecodedFetchObject) []uint64 {
 	var groups []uint64
 	for _, o := range objs {
-		if o.EndOfUnknownRange || o.EndOfNonExistentRange {
+		if o.IsEndOfRange() {
 			continue
 		}
 		groups = append(groups, o.GroupID)
@@ -513,5 +559,45 @@ func openSubgroupWaiting(
 			return nil, err
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestFetch_RangeFilterKeepsTimedOutMarker pins that the §5.1.4 Range Filter
+// pass does not eat §11.4.4.2 end-of-range markers.
+//
+// A marker is not an Object: §11.4.4.2 gives it no Subgroup ID, Priority or
+// Properties, so handing one to MatchesObject tests {0, ObjectID, 0, nil}
+// against the filter and any non-trivial filter rejects it. Dropping it turns
+// the span into a plain gap, and §10.13 defines a gap in a FIN-terminated
+// response as "objects that do not exist" — so a subscriber records permanent
+// non-existence for a range that merely timed out, and never retries.
+//
+// draft-20 is what made this reachable: before End of Timed-Out Range existed,
+// the only marker on this path was End of Unknown Range, which the filter pass
+// special-cased by name. The fix is to ask whether the element is a marker at
+// all rather than naming the kinds.
+func TestFetch_RangeFilterKeepsTimedOutMarker(t *testing.T) {
+	t.Parallel()
+
+	// A SUBGROUP_FILTER that only admits subgroup 7. Every real object here is
+	// in subgroup 0, so the filter drops them all — leaving the marker as the
+	// only thing the response can carry, and making its loss unmissable.
+	subgroupOnly7 := message.RangeFilterParam(&message.RangeFilter{
+		Type:   message.ParamSubgroupFilter,
+		Ranges: []message.Range{{Start: 7, End: 7}},
+	})
+
+	// onFetch nil + a short FILL_TIMEOUT is the §10.2.5 budget-exhausted path,
+	// which reports the below-floor span as an End of Timed-Out Range.
+	objs := runStitch(t, stitchOpts{
+		onFetch:     nil,
+		fillTimeout: 300 * time.Millisecond,
+		extraParams: message.Parameters{subgroupOnly7},
+	})
+
+	if got := stitchMarkerOf(objs); got != markerTimedOut {
+		t.Fatalf("stitched response encoded %s, want an End of Timed-Out Range marker; "+
+			"the Range Filter pass must not drop §11.4.4.2 markers, which carry no "+
+			"subgroup, priority or properties to match on", got)
 	}
 }
