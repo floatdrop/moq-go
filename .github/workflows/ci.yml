@@ -8,10 +8,21 @@ on:
     # to it went unbuilt until someone noticed. draft-* covers the current draft
     # branch and the next one without an edit.
     #
-    # Two places still need the literal branch name, so a draft bump has to
-    # touch both: the README's CI badge (GitHub badges take one branch and no
-    # globs) and the publish-coverage job below, which must not deploy Pages
-    # from anything but the default branch.
+    # Three places still need the literal branch name, so a draft bump has to
+    # touch all three: the README's CI badge (GitHub badges take one branch and
+    # no globs), the publish-coverage job below, which must not deploy Pages
+    # from anything but the default branch, and — outside this repo entirely —
+    # the github-pages environment's deployment branch policy, in Settings >
+    # Environments. That last one is not in any file here, so it fails closed
+    # and only after everything else has gone green:
+    #
+    #   Branch "draft-NN" is not allowed to deploy to github-pages due to
+    #   environment protection rules.
+    #
+    # Update it with:
+    #   gh api -X POST repos/floatdrop/moq-go/environments/github-pages/\
+    #     deployment-branch-policies -f name='draft-NN' -f type='branch'
+    # then delete the stale policy listed by the same path with GET.
     branches: ['draft-*']
   # Lets the third-party interop job below be run on demand while it is ungated.
   workflow_dispatch:
