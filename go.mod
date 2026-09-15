@@ -9,7 +9,7 @@ require (
 	github.com/lmittmann/tint v1.2.0
 	github.com/quic-go/quic-go v0.62.0
 	github.com/quic-go/webtransport-go v0.13.0
-	golang.org/x/sync v0.22.0
+	golang.org/x/sync v0.23.0
 )
 
 require (
