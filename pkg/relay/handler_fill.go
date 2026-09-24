@@ -2,11 +2,13 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
@@ -47,7 +49,7 @@ func (h *sessionHandler) maybeServeFill(
 	// fill failure by resetting the stream; it MUST open a fill fetch stream and
 	// reset it immediately after the FETCH_HEADER if necessary."
 	fail := func(err error) error {
-		h.resetFillStream(ctx, requestID)
+		h.resetFillStream(ctx, sub, requestID)
 		return err
 	}
 
@@ -106,7 +108,7 @@ func (h *sessionHandler) maybeServeFill(
 	}
 
 	h.relayGo(func() {
-		h.serveFill(ctx, requestID, entry, fullName, start, end, order, fillTimeout, rangeFilters)
+		h.serveFill(ctx, sub, requestID, entry, fullName, start, end, order, fillTimeout, rangeFilters)
 	})
 	return nil
 }
@@ -122,6 +124,7 @@ func (h *sessionHandler) maybeServeFill(
 // [sessionHandler.streamFetchRange] does that on a write error.
 func (h *sessionHandler) serveFill(
 	ctx context.Context,
+	sub *registry.DownstreamSub,
 	requestID uint64,
 	entry *registry.TrackEntry,
 	fullName track.FullTrackName,
@@ -135,7 +138,7 @@ func (h *sessionHandler) serveFill(
 		slog.Uint64("start_group", start.Group),
 		slog.Uint64("end_group", end.Group))
 
-	h.streamFetchRange(ctx, "fill", requestID, entry, fullName,
+	h.streamFetchRange(ctx, "fill", sub, requestID, entry, fullName,
 		start, end, order, fillTimeout, rangeFilters)
 }
 
@@ -143,12 +146,37 @@ func (h *sessionHandler) serveFill(
 // fill fetch stream and reset it immediately after the FETCH_HEADER. Without
 // it the subscriber cannot tell a failed fill from the legitimate "fill range
 // is empty, so no stream" case (§5.1.3), and waits forever.
-func (h *sessionHandler) resetFillStream(ctx context.Context, requestID uint64) {
-	out, err := h.sess.OpenFetchStream(message.FetchHeader{RequestID: requestID})
+func (h *sessionHandler) resetFillStream(ctx context.Context, sub *registry.DownstreamSub, requestID uint64) {
+	out, err := openFillOrFetchStream(h.sess, sub, requestID)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "could not open fill stream to reset it",
 			slog.Uint64("request_id", requestID), slog.String("err", err.Error()))
 		return
 	}
 	out.Cancel(moqt.StreamResetInternalError)
+}
+
+// errSubscriptionTerminated reports a subgroup or fill stream not opened
+// because its subscription already ended: §10.12 forbids streams after
+// PUBLISH_DONE.
+var errSubscriptionTerminated = errors.New("relay: subscription terminated before the stream opened")
+
+// openFillOrFetchStream opens a FETCH_HEADER stream. A fill fetch stream
+// belongs to sub's subscription and is counted for its §10.12 PUBLISH_DONE
+// Stream Count ("including any fill fetch streams"); a standalone FETCH
+// response passes a nil sub.
+func openFillOrFetchStream(
+	sess *session.Session,
+	sub *registry.DownstreamSub,
+	requestID uint64,
+) (*session.OutgoingFetchStream, error) {
+	if sub == nil {
+		return sess.OpenFetchStream(message.FetchHeader{RequestID: requestID})
+	}
+	if !sub.BeginStream() {
+		return nil, errSubscriptionTerminated
+	}
+	out, err := sess.OpenFetchStream(message.FetchHeader{RequestID: requestID})
+	sub.EndStream(err == nil)
+	return out, err
 }

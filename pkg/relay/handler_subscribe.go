@@ -314,7 +314,7 @@ func (h *sessionHandler) handleSubscribeUpdate(
 			ErrorCode:   code,
 			ErrorReason: err.Error(),
 		})
-		sub.TerminateWithPublishDone(moqt.PublishDoneUpdateFailed, err.Error(), 0)
+		sub.TerminateWithPublishDone(moqt.PublishDoneUpdateFailed, err.Error())
 		return
 	}
 

@@ -618,7 +618,7 @@ func (h *sessionHandler) serveFetchObjects(
 	fillTimeout time.Duration,
 	rangeFilters *message.RangeFilterSet,
 ) {
-	out, ok := h.streamFetchRange(ctx, kind, requestID, entry, fullName,
+	out, ok := h.streamFetchRange(ctx, kind, nil, requestID, entry, fullName,
 		start, end, order, fillTimeout, rangeFilters)
 	if !ok {
 		return
@@ -644,6 +644,7 @@ func (h *sessionHandler) serveFetchObjects(
 func (h *sessionHandler) streamFetchRange(
 	ctx context.Context,
 	kind string,
+	sub *registry.DownstreamSub,
 	requestID uint64,
 	entry *registry.TrackEntry,
 	fullName track.FullTrackName,
@@ -652,7 +653,7 @@ func (h *sessionHandler) streamFetchRange(
 	fillTimeout time.Duration,
 	rangeFilters *message.RangeFilterSet,
 ) (*session.OutgoingFetchStream, bool) {
-	out, err := h.sess.OpenFetchStream(message.FetchHeader{RequestID: requestID})
+	out, err := openFillOrFetchStream(h.sess, sub, requestID)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "OpenFetchStream failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))

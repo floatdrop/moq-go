@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -386,6 +387,57 @@ type DownstreamSub struct {
 	// currently track, so an unset GroupOrder is left at zero and treated as
 	// Ascending.
 	GroupOrder uint8
+
+	// streamsOpened counts the data streams opened for this subscription —
+	// subgroup streams and fill fetch streams — for the §10.12 PUBLISH_DONE
+	// Stream Count; streamsOpening counts opens in flight. Guarded by mu,
+	// the same lock as the lifecycle state, so no stream is counted after
+	// termination. See [DownstreamSub.BeginStream].
+	streamsOpened  uint64
+	streamsOpening int
+}
+
+// BeginStream reserves the open of one data stream for this subscription so
+// PUBLISH_DONE can report the §10.12 Stream Count. It returns false once the
+// subscription is terminated: the caller must not open the stream. Each true
+// must be paired with one [DownstreamSub.EndStream].
+func (d *DownstreamSub) BeginStream() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.state == SubTerminated {
+		return false
+	}
+	d.streamsOpening++
+	return true
+}
+
+// EndStream completes a [DownstreamSub.BeginStream], counting the stream if
+// it was opened.
+func (d *DownstreamSub) EndStream(opened bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.streamsOpening--
+	if opened {
+		d.streamsOpened++
+	}
+}
+
+// terminateCountingStreams is [Subscription.Terminate] plus the §10.12 Stream
+// Count, taken under the same lock so no stream can be opened in between. An
+// open still in flight makes the count inexact, and "If the publisher is
+// unable to set Stream Count to the exact number of streams opened for the
+// subscription, it MUST set Stream Count to 2^64 - 1", which it reports.
+func (d *DownstreamSub) terminateCountingStreams() (terminated bool, streamCount uint64) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.state == SubTerminated {
+		return false, 0
+	}
+	d.state = SubTerminated
+	if d.streamsOpening > 0 {
+		return true, math.MaxUint64
+	}
+	return true, d.streamsOpened
 }
 
 // NewDownstreamSub constructs a DownstreamSub in [SubEstablished]: the relay
@@ -619,15 +671,14 @@ func GroupOutOfRange(group uint64, f *message.LocationFilter) bool {
 // flips the state and writes the message; subsequent calls return
 // without I/O. Safe to call concurrently from any goroutine.
 //
-// streamCount is the §10.12 "Stream Count" field — the number of
-// subgroup streams the relay opened for this subscription. Pass 0
-// when the exact count isn't tracked; subscribers treat 0 as
-// approximate per the spec.
+// The §10.12 Stream Count is the number of data streams opened for this
+// subscription, as tracked by [DownstreamSub.BeginStream].
 //
 // Used by [TrackRegistry] when the last upstream feeding a track
 // disappears, so dependent subscribers stop waiting silently.
-func (d *DownstreamSub) TerminateWithPublishDone(code moqt.PublishDoneCode, reason string, streamCount uint64) {
-	if !d.Terminate() {
+func (d *DownstreamSub) TerminateWithPublishDone(code moqt.PublishDoneCode, reason string) {
+	terminated, streamCount := d.terminateCountingStreams()
+	if !terminated {
 		return // already terminated
 	}
 	if d.Stream == nil {

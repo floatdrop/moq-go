@@ -498,7 +498,7 @@ func (r *TrackRegistry) RemoveUpstream(
 	if upstreamEmpty {
 		for _, sub := range notifyDownstreams {
 			sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded,
-				"relay: upstream gone", 0)
+				"relay: upstream gone")
 		}
 	}
 	return true, upstreamEmpty, entryDeleted
@@ -682,7 +682,7 @@ func (r *TrackRegistry) RemoveSession(sess *session.Session) (upstreamRemoved, d
 	for _, o := range orphans {
 		for _, sub := range o.downstreams {
 			sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded,
-				"relay: publisher session gone", 0)
+				"relay: publisher session gone")
 		}
 	}
 	return upstreamRemoved, downstreamRemoved
