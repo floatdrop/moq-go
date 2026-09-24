@@ -76,10 +76,14 @@ func (s *Session) NewRequestBroker(stream Stream) *RequestBroker {
 // mapUpdateResponse converts a §10.9 response message into the
 // (*message.RequestOK, error) shape Update-style callers return: REQUEST_OK
 // passes through, REQUEST_ERROR becomes a *RequestRejectedError, anything
-// else is a protocol-shape error.
-func mapUpdateResponse(msg message.Message) (*message.RequestOK, error) {
+// else is a protocol-shape error. A REQUEST_UPDATE_OK carrying Track
+// Properties closes the session (§10.5).
+func (s *Session) mapUpdateResponse(msg message.Message) (*message.RequestOK, error) {
 	switch m := msg.(type) {
 	case *message.RequestOK:
+		if err := s.checkRequestOKTrackProperties(nil, m); err != nil {
+			return nil, err
+		}
 		return m, nil
 	case *message.RequestError:
 		return nil, &RequestRejectedError{Code: m.ErrorCode, Reason: m.ErrorReason}
@@ -201,7 +205,7 @@ func (b *RequestBroker) route(msg message.Message) bool {
 	}
 	b.mu.Unlock()
 
-	ok, err := mapUpdateResponse(msg)
+	ok, err := b.sess.mapUpdateResponse(msg)
 	res := updateResult{ok: ok, err: err}
 	for _, ch := range recipients {
 		ch <- res
@@ -295,6 +299,13 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 
 		switch m := msg.(type) {
 		case *message.RequestOK, *message.RequestError:
+			// Every REQUEST_OK read here answers a REQUEST_UPDATE — the
+			// request's own response was read before the broker attached —
+			// so §10.5's empty-Track-Properties rule applies even to one that
+			// arrives after its Update gave up.
+			if err := b.sess.checkRequestOKTrackProperties(nil, m); err != nil {
+				return err
+			}
 			if b.route(msg) {
 				continue
 			}

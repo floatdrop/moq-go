@@ -596,6 +596,10 @@ func awaitRequestResponse[OK message.Message, R any](
 		return zero, fmt.Errorf("moqt/session: read %s response: %w", m.Type(), err)
 	}
 	if ok, isOK := resp.(OK); isOK {
+		if err := s.checkRequestOKTrackProperties(m, resp); err != nil {
+			_ = stream.Close()
+			return zero, err
+		}
 		return onOK(stream, ok)
 	}
 	_ = stream.Close()
@@ -641,7 +645,34 @@ func (s *Session) UpdateRequest(
 	if err != nil {
 		return nil, fmt.Errorf("moqt/session: read REQUEST_UPDATE response: %w", err)
 	}
-	return mapUpdateResponse(resp)
+	return s.mapUpdateResponse(resp)
+}
+
+// checkRequestOKTrackProperties enforces §10.5 on the REQUEST_OK answering
+// req: "Track Properties are populated in TRACK_STATUS_OK; they are empty in
+// PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and
+// PUBLISH_NAMESPACE_OK. If an endpoint receives Track Properties in one of
+// these messages it MUST close the session with a PROTOCOL_VIOLATION." A nil
+// req means the REQUEST_OK answers a REQUEST_UPDATE. Responses the list does
+// not name (TRACK_STATUS_OK, and the SUBSCRIBE_TRACKS OK) are left alone.
+func (s *Session) checkRequestOKTrackProperties(req, resp message.Message) error {
+	ok, isOK := resp.(*message.RequestOK)
+	if !isOK || len(ok.TrackProperties) == 0 {
+		return nil
+	}
+	name := "REQUEST_UPDATE_OK"
+	switch req.(type) {
+	case nil:
+	case *message.Publish:
+		name = "PUBLISH_OK"
+	case *message.PublishNamespace:
+		name = "PUBLISH_NAMESPACE_OK"
+	case *message.SubscribeNamespace:
+		name = "SUBSCRIBE_NAMESPACE_OK"
+	default:
+		return nil
+	}
+	return s.closeProtocolViolation(fmt.Errorf("moqt/session: Track Properties in %s", name))
 }
 
 // Reply marshals a response message onto the request's bidi stream. The
