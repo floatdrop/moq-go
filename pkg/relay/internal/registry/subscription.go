@@ -489,8 +489,8 @@ func (d *DownstreamSub) SetLargestAtSubscribe(loc message.Location, hasLargest b
 //
 //  1. Subscriber: this subscription's SUBSCRIBER_PRIORITY (default 128).
 //  2. Publisher:  publisherPriority — the byte the subgroup carries
-//     (SubgroupHeader.PublisherPriority). The caller passes it because the
-//     relay does not cache the per-track default outside the inbound header.
+//     (SubgroupHeader.PublisherPriority), already resolved to the track's
+//     §12.4 default when the header omits it.
 //  3. GroupKey:   groupID with this subscription's GROUP_ORDER applied —
 //     bitwise-complemented for Descending so a "lower is higher priority"
 //     comparison sends higher Group IDs first.

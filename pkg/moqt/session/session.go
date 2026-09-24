@@ -14,7 +14,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
-	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
@@ -83,11 +82,11 @@ type Session struct {
 	peerRequestIDMax  uint64
 	peerRequestIDGaps map[uint64]struct{}
 
-	// Inbound Track Alias → track.Key mapping (§11.1). Protected by mu.
-	// Populated via RegisterInboundTrackAlias when the peer assigns an alias
+	// Inbound Track Alias → track mapping (§11.1). Protected by mu.
+	// Populated via RegisterInboundTrack when the peer assigns an alias
 	// (SUBSCRIBE_OK or PUBLISH). A duplicate alias for a different track is
 	// a DUPLICATE_TRACK_ALIAS session error.
-	inboundAliases map[uint64]track.Key
+	inboundAliases map[uint64]InboundTrack
 
 	// knownMandatoryTrackProperties is the set of Mandatory Track Property
 	// types (range 0x4000–0x7FFF) this endpoint supports. Configured via
@@ -157,7 +156,7 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 		controlOut:                    make(chan message.Message, 1),
 		goawayCh:                      make(chan struct{}),
 		done:                          make(chan struct{}),
-		inboundAliases:                make(map[uint64]track.Key),
+		inboundAliases:                make(map[uint64]InboundTrack),
 		knownMandatoryTrackProperties: cfg.knownMandatoryTrackProperties,
 		tokenCache:                    NewTokenCache(cfg.maxAuthTokenCacheSize),
 		tokenVerifier:                 cfg.tokenVerifier,

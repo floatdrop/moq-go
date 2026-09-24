@@ -84,6 +84,13 @@ func (s *IncomingSubgroupStream) TrackKey() (track.Key, bool) {
 	return s.sess.LookupInboundTrackAlias(s.Header.TrackAlias)
 }
 
+// InboundTrack is [IncomingSubgroupStream.TrackKey] plus the rest of what the
+// alias is bound to — notably the DEFAULT_PUBLISHER_PRIORITY a header with the
+// DEFAULT_PRIORITY bit inherits (§11.4.2). Resolution is live, as for TrackKey.
+func (s *IncomingSubgroupStream) InboundTrack() (InboundTrack, bool) {
+	return s.sess.LookupInboundTrack(s.Header.TrackAlias)
+}
+
 func (s *IncomingSubgroupStream) isDataStream() {}
 
 // Read returns body bytes that follow the parsed header. Prefer ReadObject

@@ -2,6 +2,7 @@ package message
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
@@ -54,6 +55,49 @@ const (
 	// Value: varint.
 	PropertyPriorObjectIDGap PropertyType = 0x3E
 )
+
+// DefaultPublisherPriority is the Publisher Priority a track has when its
+// DEFAULT_PUBLISHER_PRIORITY property is omitted (§12.4).
+const DefaultPublisherPriority uint8 = 128
+
+// TrackDefaultPublisherPriority returns the DEFAULT_PUBLISHER_PRIORITY (§12.4)
+// carried in a raw Track Properties block, or [DefaultPublisherPriority] when
+// the property is omitted. Per §12.7 the value may sit in the mutable list or
+// inside Immutable Properties and both are searched, the mutable list first.
+// §12.4 says "Priorities above 255 are invalid" without prescribing a
+// reaction; an invalid value, like a malformed block, is read as omitted
+// rather than truncated.
+func TrackDefaultPublisherPriority(trackProperties []byte) uint8 {
+	pairs, err := ParseTrackProperties(trackProperties)
+	if err != nil {
+		return DefaultPublisherPriority
+	}
+	if p, ok := findDefaultPublisherPriority(pairs); ok {
+		return p
+	}
+	for _, kv := range pairs {
+		if kv.Type != PropertyImmutableProperties {
+			continue
+		}
+		nested, err := ParseTrackProperties(kv.ByteVal)
+		if err != nil {
+			return DefaultPublisherPriority
+		}
+		if p, ok := findDefaultPublisherPriority(nested); ok {
+			return p
+		}
+	}
+	return DefaultPublisherPriority
+}
+
+func findDefaultPublisherPriority(pairs []wire.KVPair) (uint8, bool) {
+	for _, kv := range pairs {
+		if kv.Type == PropertyDefaultPublisherPriority && kv.IntVal <= math.MaxUint8 {
+			return uint8(kv.IntVal), true
+		}
+	}
+	return 0, false
+}
 
 // MandatoryTrackPropertyMin and MandatoryTrackPropertyMax define the range of
 // Mandatory Track Property types per §2.5.1.  Properties in [0x4000, 0x7FFF]

@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 
+	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 )
 
@@ -38,26 +39,50 @@ func (e *ErrDuplicateTrackAlias) Error() string {
 	)
 }
 
-// RegisterInboundTrackAlias records that the peer has assigned alias to the
-// track identified by key. This MUST be called by the subscriber when it
-// receives a SUBSCRIBE_OK (whose TrackAlias field is the alias) and by the
-// server when it receives a PUBLISH (whose TrackAlias field is the alias).
+// InboundTrack is what an inbound Track Alias is bound to (§11.1).
+type InboundTrack struct {
+	Key track.Key
+
+	// DefaultPublisherPriority is the DEFAULT_PUBLISHER_PRIORITY (§12.4) in the
+	// Track Properties of the SUBSCRIBE_OK or PUBLISH that bound the alias, or
+	// 128 when omitted. Subgroups and datagrams sent with the DEFAULT_PRIORITY
+	// bit inherit it (§11.4.2, §11.3.1). It is captured together with the
+	// alias, so a data stream that resolves the alias always sees the value of
+	// the control message that established it.
+	DefaultPublisherPriority uint8
+}
+
+// RegisterInboundTrack records that the peer has assigned alias to the track
+// identified by key, along with the Track Properties of the message that did
+// so. This MUST be called by the subscriber when it receives a SUBSCRIBE_OK
+// (whose TrackAlias field is the alias) and by the server when it receives a
+// PUBLISH (whose TrackAlias field is the alias).
 //
 // If alias is already registered for the same track (idempotent re-registration),
-// nil is returned. If alias is already registered for a different track,
-// *ErrDuplicateTrackAlias is returned and the caller MUST close the session
-// with SessionDuplicateTrackAlias (§11.1).
-func (s *Session) RegisterInboundTrackAlias(alias uint64, key track.Key) error {
+// nil is returned and the first registration is kept. If alias is already
+// registered for a different track, *ErrDuplicateTrackAlias is returned and the
+// caller MUST close the session with SessionDuplicateTrackAlias (§11.1).
+func (s *Session) RegisterInboundTrack(alias uint64, key track.Key, trackProperties []byte) error {
+	in := InboundTrack{
+		Key:                      key,
+		DefaultPublisherPriority: message.TrackDefaultPublisherPriority(trackProperties),
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.inboundAliases[alias]; ok {
-		if existing != key {
-			return &ErrDuplicateTrackAlias{Alias: alias, Existing: existing, New: key}
+		if existing.Key != key {
+			return &ErrDuplicateTrackAlias{Alias: alias, Existing: existing.Key, New: key}
 		}
 		return nil // idempotent
 	}
-	s.inboundAliases[alias] = key
+	s.inboundAliases[alias] = in
 	return nil
+}
+
+// RegisterInboundTrackAlias is [Session.RegisterInboundTrack] for a message
+// that carried no Track Properties.
+func (s *Session) RegisterInboundTrackAlias(alias uint64, key track.Key) error {
+	return s.RegisterInboundTrack(alias, key, nil)
 }
 
 // UnregisterInboundTrackAlias removes a previously registered alias, freeing
@@ -74,18 +99,24 @@ func (s *Session) UnregisterInboundTrackAlias(alias uint64) {
 	delete(s.inboundAliases, alias)
 }
 
-// LookupInboundTrackAlias returns the track.Key bound to alias by an earlier
-// [Session.RegisterInboundTrackAlias] call, or (zero, false) if the alias is
-// not currently registered.
+// LookupInboundTrack returns what alias was bound to by an earlier
+// [Session.RegisterInboundTrack] call, or (zero, false) if the alias is not
+// currently registered.
 //
-// This is the recipient-side companion of [Session.RegisterInboundTrackAlias].
 // Inbound data streams (SUBGROUP_HEADER, ObjectDatagram, FETCH_HEADER objects)
 // identify their track by the alias the publisher chose; consumers — most
 // notably the relay's fanout and end-subscriber applications — use this
 // method to recover the canonical track identity for routing or rendering.
-func (s *Session) LookupInboundTrackAlias(alias uint64) (track.Key, bool) {
+func (s *Session) LookupInboundTrack(alias uint64) (InboundTrack, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	key, ok := s.inboundAliases[alias]
-	return key, ok
+	in, ok := s.inboundAliases[alias]
+	return in, ok
+}
+
+// LookupInboundTrackAlias is [Session.LookupInboundTrack] reduced to the
+// track.Key.
+func (s *Session) LookupInboundTrackAlias(alias uint64) (track.Key, bool) {
+	in, ok := s.LookupInboundTrack(alias)
+	return in.Key, ok
 }

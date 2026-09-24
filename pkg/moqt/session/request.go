@@ -684,7 +684,8 @@ func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 	if !isPub {
 		return nil, fmt.Errorf("moqt/session: AcceptPublish on a %s request", r.First.Type())
 	}
-	if err := r.s.RegisterInboundTrackAlias(pub.TrackAlias, track.NewKey(pub.Namespace, pub.Name)); err != nil {
+	key := track.NewKey(pub.Namespace, pub.Name)
+	if err := r.s.RegisterInboundTrack(pub.TrackAlias, key, pub.TrackProperties); err != nil {
 		return nil, err
 	}
 	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
