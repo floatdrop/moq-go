@@ -114,8 +114,11 @@ func (s *IncomingSubgroupStream) ReadObject() (*message.SubgroupObject, error) {
 	if err := obj.Parse(s.rd, s.Header.Properties); err != nil {
 		return nil, s.sess.checkFINMidObject(err)
 	}
+	// An invalid Object Status (§11.2.1.1, SHOULD) or properties on a
+	// non-Normal one (§11.2.1.2, MUST) close the session with
+	// PROTOCOL_VIOLATION.
 	if err := obj.Validate(); err != nil {
-		return nil, fmt.Errorf("moqt/session: subgroup object: %w", err)
+		return nil, s.sess.closeProtocolViolation(fmt.Errorf("moqt/session: subgroup object: %w", err))
 	}
 	return obj, nil
 }

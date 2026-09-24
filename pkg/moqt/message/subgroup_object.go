@@ -139,6 +139,12 @@ func (o *SubgroupObject) Validate() error {
 		default:
 			return fmt.Errorf("moqt/message: invalid object status 0x%X", o.ObjectStatus)
 		}
+		// §11.2.1.2: "If an endpoint receives properties on an Object with
+		// status that is not Normal, it MUST close the session with a
+		// PROTOCOL_VIOLATION." A Properties Length of 0 carries none (§11.4.2).
+		if o.ObjectStatus != ObjectStatusNormal && len(o.Properties) > 0 {
+			return fmt.Errorf("moqt/message: object status 0x%X carries properties", o.ObjectStatus)
+		}
 	}
 
 	return nil

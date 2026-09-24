@@ -423,3 +423,45 @@ func TestFetchIDOverflowClosesSession(t *testing.T) {
 		})
 	}
 }
+
+// TestSubgroupInvalidObjectClosesSession: a subgroup object the draft says
+// is session-fatal must close the session, not just fail its stream.
+//   - §11.2.1.2: properties on a non-Normal status object — "MUST close the
+//     session with a PROTOCOL_VIOLATION".
+//   - §11.2.1.1: an unknown Object Status "SHOULD be treated as a protocol
+//     error and the session SHOULD be closed with a PROTOCOL_VIOLATION".
+func TestSubgroupInvalidObjectClosesSession(t *testing.T) {
+	tests := []struct {
+		name  string
+		props bool
+		body  []byte
+	}{
+		// Object ID Delta 0, Properties Length 2 {type 2, value 1},
+		// Payload Length 0, Status 0x3 (End of Group).
+		{"properties on End of Group", true, []byte{0x00, 0x02, 0x02, 0x01, 0x00, 0x03}},
+		// Object ID Delta 0, Payload Length 0, Status 0x1 (undefined).
+		{"unknown object status", false, []byte{0x00, 0x00, 0x01}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, server := openPair(t)
+			go func() {
+				out, err := client.OpenSubgroup(message.SubgroupHeader{TrackAlias: 7, Properties: tt.props})
+				if err != nil {
+					return
+				}
+				_, _ = out.Write(tt.body)
+				_ = out.Close()
+			}()
+
+			ds, err := server.AcceptDataStream(t.Context())
+			if err != nil {
+				t.Fatalf("AcceptDataStream: %v", err)
+			}
+			if _, err := ds.(*session.IncomingSubgroupStream).ReadObject(); err == nil {
+				t.Fatal("ReadObject accepted the invalid object")
+			}
+			requireClosedProtocolViolation(t, server)
+		})
+	}
+}
