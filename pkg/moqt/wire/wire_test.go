@@ -552,3 +552,29 @@ func TestTrackNamespace_HasPrefix(t *testing.T) {
 		})
 	}
 }
+
+// TestReaderHugeLengthRejected guards the draft-20 varint range (§1.4.1: up to
+// 2^64-1). A peer-supplied length >= 2^63 does not fit an int; it must yield
+// ErrShortBuffer, not a negative FixedBytes argument that panics in make.
+func TestReaderHugeLengthRejected(t *testing.T) {
+	for _, n := range []uint64{1 << 63, 1<<64 - 1} {
+		w := NewWriter(nil)
+		w.Varint(n)
+		if _, err := NewReader(w.Bytes()).VarintBytes(); !errors.Is(err, ErrShortBuffer) {
+			t.Errorf("VarintBytes(len=%d): got %v, want ErrShortBuffer", n, err)
+		}
+	}
+	if _, err := NewReader([]byte{1, 2, 3}).FixedBytes(-1); !errors.Is(err, ErrShortBuffer) {
+		t.Errorf("FixedBytes(-1): got %v, want ErrShortBuffer", err)
+	}
+}
+
+// TestStreamReaderHugeLengthRejected is the StreamReader half of
+// TestReaderHugeLengthRejected: a 2^63 length must fail the size cap.
+func TestStreamReaderHugeLengthRejected(t *testing.T) {
+	w := NewWriter(nil)
+	w.Varint(1 << 63)
+	if _, err := NewStreamReader(bytes.NewReader(w.Bytes())).VarintBytes(); !errors.Is(err, ErrFieldTooLarge) {
+		t.Fatalf("VarintBytes(len=2^63): got %v, want ErrFieldTooLarge", err)
+	}
+}

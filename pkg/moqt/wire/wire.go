@@ -1,5 +1,5 @@
 // Package wire implements MoQT wire-format primitives per
-// draft-ietf-moq-transport-20: variable-length integers (§1.4.1, RFC 9000 §16),
+// draft-ietf-moq-transport-20: variable-length integers (§1.4.1, up to 2^64-1),
 // reason phrases (§1.4.4), track namespaces (§2.4.1), key-value pairs used in
 // SETUP options (§1.4.3, §10.3.1), and control-message framing (§10).
 //
@@ -80,7 +80,9 @@ func (r *Reader) UInt8() (uint8, error) {
 // the caller owns; mutating it does not affect the Reader's buffer, and
 // retaining it does not pin the buffer for GC. Zero-length reads return nil.
 func (r *Reader) FixedBytes(n int) ([]byte, error) {
-	if r.Remaining() < n {
+	// n < 0 when a caller converted a peer-supplied varint >= 2^63 (§1.4.1
+	// allows up to 2^64-1); no buffer is that long, so it is short too.
+	if n < 0 || r.Remaining() < n {
 		return nil, ErrShortBuffer
 	}
 	if n == 0 {
@@ -114,8 +116,12 @@ func (r *Reader) VarintBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	//nolint:gosec // G115: n is a QUIC varint (<=2^62-1); Reader.FixedBytes bounds it by Remaining().
-	return r.FixedBytes(int(n))
+	// §1.4.1 varints reach 2^64-1; bound n before it can wrap in the int
+	// conversion.
+	if n > uint64(r.Remaining()) { //nolint:gosec // G115: Remaining() is len(buf)-off >= 0.
+		return nil, ErrShortBuffer
+	}
+	return r.FixedBytes(int(n)) //nolint:gosec // G115: n <= Remaining() above.
 }
 
 // ReasonPhrase reads a varint-length-prefixed UTF-8 string per §1.4.4. The
@@ -243,7 +249,8 @@ func (s *StreamReader) FixedBytes(n int) ([]byte, error) {
 		return nil, nil
 	}
 	// n is derived from a peer-supplied varint; guard the allocation so a
-	// bogus length cannot OOM us. n < 0 only on a 32-bit int overflow.
+	// bogus length cannot OOM us. n < 0 when a caller's int conversion of a
+	// varint >= 2^63 wrapped.
 	if n < 0 || n > MaxStreamFieldSize {
 		return nil, fmt.Errorf("%w: %d > %d", ErrFieldTooLarge, n, MaxStreamFieldSize)
 	}
@@ -258,8 +265,12 @@ func (s *StreamReader) VarintBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	//nolint:gosec // G115: n is a QUIC varint (<=2^62-1); StreamReader.FixedBytes enforces MaxStreamFieldSize.
-	return s.FixedBytes(int(n))
+	// §1.4.1 varints reach 2^64-1; bound n before it can wrap in the int
+	// conversion.
+	if n > uint64(MaxStreamFieldSize) { //nolint:gosec // G115: a size cap, never negative.
+		return nil, fmt.Errorf("%w: %d > %d", ErrFieldTooLarge, n, MaxStreamFieldSize)
+	}
+	return s.FixedBytes(int(n)) //nolint:gosec // G115: n <= MaxStreamFieldSize above.
 }
 
 // byteReaderAdapter wraps an io.Reader to implement io.ByteReader by reading

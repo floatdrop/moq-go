@@ -93,7 +93,7 @@ func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
 		o.ObjectStatus = status
 		o.Payload = nil
 	} else {
-		//nolint:gosec // G115: payloadLength is a QUIC varint; StreamReader.FixedBytes enforces MaxStreamFieldSize, Reader is buffer-bounded.
+		//nolint:gosec // G115: a payloadLength >= 2^63 wraps negative; both FixedBytes implementations reject it.
 		payload, err := r.FixedBytes(int(payloadLength))
 		if err != nil {
 			return fmt.Errorf("moqt/message: payload: %w", err)
