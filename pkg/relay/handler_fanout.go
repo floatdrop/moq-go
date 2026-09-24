@@ -326,8 +326,11 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		if firstObj {
 			objectID = obj.ObjectIDDelta
 			firstObj = false
-		} else {
-			objectID += obj.ObjectIDDelta + 1
+		} else if objectID, err = message.NextSubgroupObjectID(objectID, obj.ObjectIDDelta); err != nil {
+			// §11.4.2: an Object ID past 2^64-1 is session-fatal.
+			_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+			inboundReset = true
+			return
 		}
 
 		// §11.4.3: terminal status is tracked per inbound stream regardless of
