@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -325,4 +326,100 @@ func TestFetchStreamFINMidObjectClosesSession(t *testing.T) {
 		t.Fatalf("ReadObject = %v, want io.ErrUnexpectedEOF (and not io.EOF)", err)
 	}
 	requireClosedProtocolViolation(t, server)
+}
+
+// TestSubgroupObjectIDOverflowClosesSession pins §11.4.2: "If the resulting
+// Object ID would be greater than 2^64 - 1, the endpoint MUST close the
+// session with a PROTOCOL_VIOLATION." Without the check the ID wraps to 0.
+func TestSubgroupObjectIDOverflowClosesSession(t *testing.T) {
+	client, server := openPair(t)
+	go func() {
+		out, err := client.OpenSubgroup(message.SubgroupHeader{TrackAlias: 7})
+		if err != nil {
+			return
+		}
+		_ = out.WriteObject(&message.SubgroupObject{ObjectIDDelta: math.MaxUint64, Payload: []byte("a")})
+		_ = out.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Payload: []byte("b")})
+		_ = out.Close()
+	}()
+
+	ds, err := server.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	sg := ds.(*session.IncomingSubgroupStream)
+	if _, err := sg.ReadDecoded(); err != nil {
+		t.Fatalf("first object (ID 2^64-1): %v", err)
+	}
+	if obj, err := sg.ReadDecoded(); err == nil {
+		t.Fatalf("second object decoded as ID %d; want an overflow error", obj.ObjectID)
+	}
+	requireClosedProtocolViolation(t, server)
+}
+
+// TestFetchIDOverflowClosesSession pins §11.4.4.1: "If the computed Group ID
+// would be less than 0 or greater than 2^64-1, the Subscriber MUST close the
+// Session with error 'PROTOCOL_VIOLATION'", and the same for the Object ID.
+func TestFetchIDOverflowClosesSession(t *testing.T) {
+	const maxID = uint64(math.MaxUint64)
+	both := message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta
+	// A first object may not reference a prior one for anything (§11.4.4).
+	firstFlags := both | message.FetchFlagPriority | uint64(message.FetchSubgroupIDExplicit)
+	tests := []struct {
+		name   string
+		order  message.GroupOrder
+		first  message.FetchObject
+		second message.FetchObject
+	}{
+		{
+			"object ID delta past 2^64-1", message.GroupOrderAscending,
+			message.FetchObject{SerializationFlags: firstFlags, ObjectIDDelta: maxID},
+			message.FetchObject{SerializationFlags: message.FetchFlagObjectIDDelta, ObjectIDDelta: 1},
+		},
+		{
+			"omitted object ID delta past 2^64-1", message.GroupOrderAscending,
+			message.FetchObject{SerializationFlags: firstFlags, ObjectIDDelta: maxID},
+			message.FetchObject{},
+		},
+		{
+			"ascending group ID past 2^64-1", message.GroupOrderAscending,
+			message.FetchObject{SerializationFlags: firstFlags, GroupIDDelta: maxID},
+			message.FetchObject{SerializationFlags: both},
+		},
+		{
+			"descending group ID below 0", message.GroupOrderDescending,
+			message.FetchObject{SerializationFlags: firstFlags},
+			message.FetchObject{SerializationFlags: both},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, server := openPair(t)
+			go func() {
+				out, err := client.OpenFetchStream(message.FetchHeader{})
+				if err != nil {
+					return
+				}
+				first, second := tt.first, tt.second
+				first.ObjectPayload, second.ObjectPayload = []byte("a"), []byte("b")
+				_ = out.WriteObject(&first)
+				_ = out.WriteObject(&second)
+				_ = out.Close()
+			}()
+
+			ds, err := server.AcceptDataStream(t.Context())
+			if err != nil {
+				t.Fatalf("AcceptDataStream: %v", err)
+			}
+			fs := ds.(*session.IncomingFetchStream)
+			fs.GroupOrder = tt.order
+			if _, err := fs.ReadDecoded(); err != nil {
+				t.Fatalf("first object: %v", err)
+			}
+			if obj, err := fs.ReadDecoded(); err == nil {
+				t.Fatalf("second object decoded as {%d,%d}; want an overflow error", obj.GroupID, obj.ObjectID)
+			}
+			requireClosedProtocolViolation(t, server)
+		})
+	}
 }

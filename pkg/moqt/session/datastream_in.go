@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/bits"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -153,11 +154,11 @@ func (s *IncomingSubgroupStream) ReadDecoded() (*DecodedSubgroupObject, error) {
 		return nil, err
 	}
 
-	var objectID uint64
-	if !s.decHavePrev {
-		objectID = raw.ObjectIDDelta
-	} else {
-		objectID = s.decPrevObject + raw.ObjectIDDelta + 1
+	objectID := raw.ObjectIDDelta
+	if s.decHavePrev {
+		if objectID, err = message.NextSubgroupObjectID(s.decPrevObject, raw.ObjectIDDelta); err != nil {
+			return nil, s.sess.closeProtocolViolation(err)
+		}
 	}
 
 	// Resolve the §11.4.2 SubgroupID mode once per stream. For
@@ -395,22 +396,34 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		// Object ID is the prior Object's ID plus one, regardless of which
 		// group it belongs to." Unlike the §11.4.2 subgroup rule, a present
 		// delta carries no implicit +1.
+		//
+		// Each computation carries §11.4.4.1's bound: a Group ID "less than 0
+		// or greater than 2^64-1", or an Object ID "greater than 2^64-1",
+		// MUST close the session with PROTOCOL_VIOLATION.
+		var over uint64
 		d.GroupID = s.decPrevGroup
 		newGroup := raw.SerializationFlags&message.FetchFlagGroupIDDelta != 0
 		if newGroup {
 			if s.decGroupOrder() == message.GroupOrderDescending {
-				d.GroupID = s.decPrevGroup - raw.GroupIDDelta - 1
+				d.GroupID, over = bits.Sub64(s.decPrevGroup, raw.GroupIDDelta, 1)
 			} else {
-				d.GroupID = s.decPrevGroup + raw.GroupIDDelta + 1
+				d.GroupID, over = bits.Add64(s.decPrevGroup, raw.GroupIDDelta, 1)
 			}
 		}
-		switch {
-		case raw.SerializationFlags&message.FetchFlagObjectIDDelta == 0:
-			d.ObjectID = s.decPrevObject + 1
-		case newGroup:
-			d.ObjectID = raw.ObjectIDDelta
-		default:
-			d.ObjectID = s.decPrevObject + raw.ObjectIDDelta
+		if over == 0 {
+			switch {
+			case raw.SerializationFlags&message.FetchFlagObjectIDDelta == 0:
+				d.ObjectID, over = bits.Add64(s.decPrevObject, 0, 1)
+			case newGroup:
+				d.ObjectID = raw.ObjectIDDelta
+			default:
+				d.ObjectID, over = bits.Add64(s.decPrevObject, raw.ObjectIDDelta, 0)
+			}
+		}
+		if over != 0 {
+			return nil, s.sess.closeProtocolViolation(fmt.Errorf(
+				"%w: FETCH object after {%d,%d} (flags 0x%X)",
+				message.ErrIDOverflow, s.decPrevGroup, s.decPrevObject, raw.SerializationFlags))
 		}
 	}
 

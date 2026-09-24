@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"testing"
 	"time"
 
@@ -173,4 +174,34 @@ func TestRelay_FINMidObjectIsNotForwardedAsCleanEnd(t *testing.T) {
 		}
 	}
 	t.Fatal("read two objects from a stream whose second object was torn")
+}
+
+// TestRelay_ObjectIDOverflowClosesSession: the relay reconstructs absolute
+// Object IDs itself, so it owes §11.4.2 its own check — "If the resulting
+// Object ID would be greater than 2^64 - 1, the endpoint MUST close the
+// session with a PROTOCOL_VIOLATION" — rather than caching the wrapped ID 0.
+func TestRelay_ObjectIDOverflowClosesSession(t *testing.T) {
+	t.Parallel()
+	pubSess, alias := publishWithTrackProps(t, nil)
+	_ = subscribeCam1(t, pubSess)
+
+	go func() {
+		sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+			SubgroupIDMode: message.SubgroupIDExplicit,
+			TrackAlias:     alias,
+			GroupID:        3,
+		})
+		if err != nil {
+			return
+		}
+		_ = sg.WriteObject(&message.SubgroupObject{ObjectIDDelta: math.MaxUint64, Payload: []byte("a")})
+		_ = sg.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Payload: []byte("b")})
+		_ = sg.Close()
+	}()
+
+	select {
+	case <-pubSess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay left the publisher's session open after an Object ID overflow")
+	}
 }

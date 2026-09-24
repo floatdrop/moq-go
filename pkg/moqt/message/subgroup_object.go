@@ -1,10 +1,29 @@
 package message
 
 import (
+	"errors"
 	"fmt"
+	"math/bits"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
+
+// ErrIDOverflow reports a Group or Object ID reconstructed from a delta that
+// falls outside 0..2^64-1. §11.4.2 and §11.4.4.1 make it a session-level
+// PROTOCOL_VIOLATION.
+var ErrIDOverflow = errors.New("moqt/message: Group or Object ID outside 0..2^64-1")
+
+// NextSubgroupObjectID applies a §11.4.2 Object ID Delta to the previous
+// Object ID on a Subgroup stream: "The Object ID Delta + 1 is added to the
+// previous Object ID". A result past 2^64-1 is [ErrIDOverflow], on which "the
+// endpoint MUST close the session with a PROTOCOL_VIOLATION".
+func NextSubgroupObjectID(prev, delta uint64) (uint64, error) {
+	id, carry := bits.Add64(prev, delta, 1)
+	if carry != 0 {
+		return 0, fmt.Errorf("%w: Object ID %d + delta %d + 1", ErrIDOverflow, prev, delta)
+	}
+	return id, nil
+}
 
 // Object Status values for objects with an empty payload (§11.2.1.1).
 const (
