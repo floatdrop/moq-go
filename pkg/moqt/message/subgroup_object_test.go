@@ -309,3 +309,22 @@ func TestSubgroupObject_StreamFINMidObject(t *testing.T) {
 		t.Fatalf("Parse(empty) = %v, want io.EOF", err)
 	}
 }
+
+// TestSubgroupObject_ValidateRejectsPropertiesOnStatusObject pins §11.2.1.2:
+// "If an endpoint receives properties on an Object with status that is not
+// Normal, it MUST close the session with a PROTOCOL_VIOLATION." A Properties
+// Length of 0 is no properties.
+func TestSubgroupObject_ValidateRejectsPropertiesOnStatusObject(t *testing.T) {
+	props := []byte{0x02, 0x01} // one even-typed KV pair
+	for _, status := range []uint64{ObjectStatusEndOfGroup, ObjectStatusEndOfTrack} {
+		if err := (&SubgroupObject{ObjectStatus: status, Properties: props}).Validate(); err == nil {
+			t.Errorf("status 0x%X with properties: Validate() = nil, want an error", status)
+		}
+		if err := (&SubgroupObject{ObjectStatus: status}).Validate(); err != nil {
+			t.Errorf("status 0x%X without properties: Validate() = %v", status, err)
+		}
+	}
+	if err := (&SubgroupObject{Properties: props, Payload: []byte("x")}).Validate(); err != nil {
+		t.Errorf("Normal object with properties: Validate() = %v", err)
+	}
+}
