@@ -63,7 +63,7 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	// §11.1: register the publisher's chosen alias so the fanout path can map
 	// it back to the track and duplicates are detected. A duplicate alias is a
 	// session-level error per spec, but we scope the failure to this request.
-	if err := h.sess.RegisterInboundTrackAlias(msg.TrackAlias, fullName.Key()); err != nil {
+	if err := h.sess.RegisterInboundTrack(msg.TrackAlias, fullName.Key(), msg.TrackProperties); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH alias registration failed",
 			slog.String("err", err.Error()))
 		if createdEntry {

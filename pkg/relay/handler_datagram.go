@@ -45,7 +45,7 @@ func (h *sessionHandler) runDatagramLoop(ctx context.Context) error {
 // goroutine, no §11.4.3 stream-lifecycle bookkeeping, no ObjectIDDelta
 // re-encoding (datagrams carry an absolute Object ID, §11.3.1).
 func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDatagram) {
-	key, ok := h.sess.LookupInboundTrackAlias(d.TrackAlias)
+	in, ok := h.sess.LookupInboundTrack(d.TrackAlias)
 	if !ok {
 		// §11.3: an unknown Track Alias MAY be dropped or briefly buffered for
 		// reordering against the establishing control message. We drop.
@@ -54,11 +54,19 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		return
 	}
 
-	entry, ok := h.tracks.Get(key)
+	entry, ok := h.tracks.Get(in.Key)
 	if !ok {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "datagram: track entry gone",
 			slog.Uint64("alias", d.TrackAlias))
 		return
+	}
+
+	// §11.3.1: a DEFAULT_PRIORITY datagram inherits the DEFAULT_PUBLISHER_PRIORITY
+	// (§12.4) of the message that bound its alias; resolve it before the cache
+	// and the PRIORITY_FILTER read it. The Type keeps the bit, so the forwarded copy
+	// still omits the byte.
+	if d.HasDefaultPriority() {
+		d.PublisherPriority = in.DefaultPublisherPriority
 	}
 
 	// §2.1 dedup across redundant upstream publishers, same ledger as the

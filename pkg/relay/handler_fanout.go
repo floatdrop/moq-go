@@ -132,7 +132,8 @@ func (h *sessionHandler) resolveImplicitSubgroupID(
 func (h *sessionHandler) runFanout(ctx context.Context, stream *session.IncomingSubgroupStream) {
 	hdr := stream.Header
 
-	key, ok := stream.TrackKey()
+	in, ok := stream.InboundTrack()
+	key := in.Key
 	if !ok {
 		// Per §11.1, a Track Alias on a data stream must have been
 		// previously registered (via SUBSCRIBE_OK or PUBLISH). An
@@ -153,6 +154,18 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			slog.Uint64("alias", hdr.TrackAlias))
 		stream.Cancel(moqt.StreamResetInternalError)
 		return
+	}
+
+	// §11.4.2: a DEFAULT_PRIORITY header omits the Priority byte and inherits
+	// the DEFAULT_PUBLISHER_PRIORITY (§12.4) of the SUBSCRIBE_OK or PUBLISH
+	// that bound this alias — captured by the session with the alias, so it is
+	// right even inside the #85 window and per upstream when several publish
+	// the track. Resolve it here so the cache (and thus FETCH, which must spell
+	// it out), the PRIORITY_FILTER and §7.2 scheduling all see the inherited
+	// value, not a zero byte. The outbound header keeps InlinePriority false,
+	// so nothing changes on the wire.
+	if !hdr.InlinePriority {
+		hdr.PublisherPriority = in.DefaultPublisherPriority
 	}
 
 	// One TrackRef for the whole stream: it allocates, and everything below

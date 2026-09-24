@@ -48,7 +48,7 @@ func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscri
 			// §11.1: register the alias the publisher assigned so we can detect
 			// DUPLICATE_TRACK_ALIAS if the same alias is reused for a different track.
 			key := track.NewKey(m.Namespace, m.Name)
-			if err := s.RegisterInboundTrackAlias(ok.TrackAlias, key); err != nil {
+			if err := s.RegisterInboundTrack(ok.TrackAlias, key, ok.TrackProperties); err != nil {
 				_ = stream.Close()
 				return nil, err
 			}

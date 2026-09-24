@@ -186,3 +186,34 @@ func TestFirstUnknownMandatoryTrackProperty(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Wire format: ObjectProperties length prefix correctness
 // ---------------------------------------------------------------------------
+
+// TestTrackDefaultPublisherPriority pins §12.4: an omitted property is 128, and
+// an invalid (> 255) value or malformed block is read as omitted rather than
+// truncated into a different priority. §12.7: the value is also found inside
+// Immutable Properties.
+func TestTrackDefaultPublisherPriority(t *testing.T) {
+	prop := func(v uint64) []byte {
+		return AppendTrackProperties([]wire.KVPair{{Type: PropertyDefaultPublisherPriority, IntVal: v}})
+	}
+	immutable := func(inner []byte) []byte {
+		return AppendTrackProperties([]wire.KVPair{{Type: PropertyImmutableProperties, ByteVal: inner}})
+	}
+	cases := []struct {
+		name  string
+		props []byte
+		want  uint8
+	}{
+		{"omitted", nil, DefaultPublisherPriority},
+		{"zero", prop(0), 0},
+		{"max", prop(255), 255},
+		{"invalid 256", prop(256), DefaultPublisherPriority},
+		{"malformed block", []byte{0x0E}, DefaultPublisherPriority},
+		{"inside Immutable Properties", immutable(prop(10)), 10},
+		{"mutable before immutable", append(prop(20), immutable(prop(10))...), 20},
+	}
+	for _, tc := range cases {
+		if got := TrackDefaultPublisherPriority(tc.props); got != tc.want {
+			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}

@@ -826,11 +826,9 @@ func TestFetch_PartialRangeCarriesPriority(t *testing.T) {
 	pubSess, _, publisherAlias := publishAndCache(t)
 
 	// One subgroup, two objects — they share the subgroup's
-	// publisher priority, which is the §11.4.2 inline default
-	// (PublisherPriority field, 0 unless InlinePriority is set on
-	// the header). For this test we just verify the field round-
-	// trips at all; the per-object delta-encoding test is in the
-	// AscendingMultiGroup test above.
+	// publisher priority. For this test we just verify the field
+	// round-trips at all; the inherited §12.4 default is pinned by
+	// TestDefaultPriority_Subgroup.
 	publishObjects(t, pubSess, publisherAlias, 7, 2)
 	time.Sleep(50 * time.Millisecond)
 
