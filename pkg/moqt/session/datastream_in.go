@@ -459,21 +459,37 @@ func (s *IncomingFetchStream) decGroupOrder() message.GroupOrder {
 // consume the body. The concrete type is either *IncomingSubgroupStream or
 // *IncomingFetchStream; callers type-switch to obtain the typed stream.
 //
-// Per-stream parse failures (unknown Type, malformed varint, truncated
-// header) reset the underlying stream before returning so the caller can
-// keep looping. The returned errors carry the parse outcome:
-//   - *message.ReservedSubgroupIDModeError when the leading Type matches the
-//     SUBGROUP_HEADER pattern but carries the reserved SUBGROUP_ID_MODE 0b11
-//     (§11.4.2) — callers MUST close the session with PROTOCOL_VIOLATION;
-//   - *message.UnknownDataStreamTypeError when the leading Type isn't
-//     recognized;
+// A stream that ends or is reset before its header is complete is abandoned
+// and skipped. A reset is §11.4.1 "Early termination of a unidirectional
+// stream does not affect the MOQT application state". A FIN mid-header is
+// treated the same way: §11.4 asks for PROTOCOL_VIOLATION only on a FIN in the
+// middle of an Object, and says nothing of the header. The returned errors are:
 //   - ErrPaddingStream when a padding stream (§11.5.1) is received — callers
 //     SHOULD loop and call AcceptDataStream again;
-//   - a wrapped parser error otherwise.
+//   - *message.UnknownDataStreamTypeError when the leading Type isn't
+//     recognized (§3.4), or *message.ReservedSubgroupIDModeError when it
+//     matches the SUBGROUP_HEADER pattern with the reserved SUBGROUP_ID_MODE
+//     0b11 (§11.4.2). Both are session-fatal: AcceptDataStream has already
+//     closed the session with PROTOCOL_VIOLATION;
+//   - transport-level errors (session closed, ctx cancelled), unwrapped from
+//     the underlying conn.
 //
-// Transport-level errors (session closed, ctx cancelled) come through
-// unwrapped from the underlying conn and signal the loop should terminate.
+// Every error other than ErrPaddingStream means the loop should terminate.
 func (s *Session) AcceptDataStream(ctx context.Context) (DataStream, error) {
+	for {
+		ds, err := s.acceptDataStream(ctx)
+		if errors.Is(err, errAbortedDataStream) {
+			continue
+		}
+		return ds, err
+	}
+}
+
+// errAbortedDataStream marks a data stream abandoned before its header was
+// complete; [Session.AcceptDataStream] skips it.
+var errAbortedDataStream = errors.New("moqt/session: data stream ended before its header")
+
+func (s *Session) acceptDataStream(ctx context.Context) (DataStream, error) {
 	src, err := s.conn.AcceptUniStream(ctx)
 	if err != nil {
 		return nil, err
@@ -485,35 +501,34 @@ func (s *Session) AcceptDataStream(ctx context.Context) (DataStream, error) {
 		src.CancelRead(uint64(moqt.StreamResetCancelled))
 	})
 	defer stop()
+	// aborted abandons a stream whose header read failed. Header fields are
+	// varints and a fixed byte, so the only failure is the stream ending (FIN)
+	// or being reset early — a per-stream event (see AcceptDataStream), unless
+	// ctx caused it.
+	aborted := func() error {
+		src.CancelRead(uint64(moqt.StreamResetInternalError))
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return errAbortedDataStream
+	}
 	br := bufio.NewReader(src)
 	typ, err := message.ReadDataStreamType(br)
 	if err != nil {
-		src.CancelRead(uint64(moqt.StreamResetInternalError))
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, fmt.Errorf("moqt/session: read data stream type: %w", err)
+		return nil, aborted()
 	}
 	switch {
 	case message.IsSubgroupHeaderType(typ):
 		hdr, err := message.ReadSubgroupHeader(br, typ)
 		if err != nil {
-			src.CancelRead(uint64(moqt.StreamResetInternalError))
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, fmt.Errorf("moqt/session: read SUBGROUP_HEADER: %w", err)
+			return nil, aborted()
 		}
 		in := &IncomingSubgroupStream{Header: hdr, src: src, br: br, rd: wire.NewStreamReader(br), sess: s}
 		return in, nil
 	case message.IsFetchHeaderType(typ):
 		hdr, err := message.ReadFetchHeader(br)
 		if err != nil {
-			src.CancelRead(uint64(moqt.StreamResetInternalError))
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			return nil, fmt.Errorf("moqt/session: read FETCH_HEADER: %w", err)
+			return nil, aborted()
 		}
 		return &IncomingFetchStream{Header: hdr, src: src, br: br, rd: wire.NewStreamReader(br)}, nil
 	case typ == message.PaddingStreamType:
@@ -522,13 +537,14 @@ func (s *Session) AcceptDataStream(ctx context.Context) (DataStream, error) {
 		src.CancelRead(uint64(moqt.StreamResetInternalError))
 		return nil, ErrPaddingStream
 	case message.IsReservedSubgroupHeaderType(typ):
-		// §11.4.2: SUBGROUP_ID_MODE 0b11 is reserved — MUST be treated as
-		// a session-level PROTOCOL_VIOLATION. This is distinct from an
-		// unknown stream type (which may be ignorable / GREASE).
+		// §11.4.2: SUBGROUP_ID_MODE 0b11 is reserved — "MUST close the
+		// session with a PROTOCOL_VIOLATION".
 		src.CancelRead(uint64(moqt.StreamResetInternalError))
-		return nil, &message.ReservedSubgroupIDModeError{Type: typ}
+		return nil, s.closeProtocolViolation(&message.ReservedSubgroupIDModeError{Type: typ})
 	default:
+		// §3.4: "An endpoint that receives an unknown stream type MUST close
+		// the session."
 		src.CancelRead(uint64(moqt.StreamResetInternalError))
-		return nil, &message.UnknownDataStreamTypeError{Type: typ}
+		return nil, s.closeProtocolViolation(&message.UnknownDataStreamTypeError{Type: typ})
 	}
 }

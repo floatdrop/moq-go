@@ -8,9 +8,10 @@ import (
 )
 
 // UnknownDataStreamTypeError is returned when the leading Type of an inbound
-// data uni-stream is not one of the recognized data-stream types. The caller
-// (typically session.AcceptDataStream) resets the underlying stream before
-// surfacing this error so the accept loop can continue.
+// data uni-stream is not one of the recognized data-stream types. It is
+// session-fatal (§3.4 "An endpoint that receives an unknown stream type MUST
+// close the session"): session.AcceptDataStream closes the session with
+// PROTOCOL_VIOLATION before returning it.
 type UnknownDataStreamTypeError struct {
 	Type uint64
 }
@@ -22,8 +23,9 @@ func (e *UnknownDataStreamTypeError) Error() string {
 // ReservedSubgroupIDModeError is returned when the leading Type of an inbound
 // data uni-stream matches the SUBGROUP_HEADER pattern (bit 4 set, bit 7 clear)
 // but carries the reserved SUBGROUP_ID_MODE value 0b11 in bits 1-2. Per
-// §11.4.2, this MUST be treated as a session-level PROTOCOL_VIOLATION — unlike
-// a truly unknown stream type, which may be ignorable (GREASE).
+// §11.4.2, this MUST be treated as a session-level PROTOCOL_VIOLATION. (A truly
+// unknown stream type is session-fatal too, §3.4; the distinct type only
+// names the cause.)
 type ReservedSubgroupIDModeError struct {
 	Type uint64
 }
