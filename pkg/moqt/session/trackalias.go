@@ -11,9 +11,9 @@ import (
 // advertises a new track to the peer (§11.1). Aliases are independent across
 // sessions, so callers must remap when forwarding between two sessions.
 //
-// Allocation starts at 1, never 0: [Session.Publish], [Session.OpenPublish],
-// and the SUBSCRIBE_OK reply path treat a zero TrackAlias as "unset, allocate
-// one for me". If this allocator returned 0, a caller that did the natural
+// Allocation starts at 1, never 0: [Session.Publish] and the SUBSCRIBE_OK
+// reply path treat a zero TrackAlias as "unset, allocate one for me".
+// ([Session.OpenPublish] does not: its caller must allocate.) If this allocator returned 0, a caller that did the natural
 // "alias := AllocOutboundTrackAlias(); Publish(&Publish{TrackAlias: alias})"
 // would have its 0 silently re-allocated to a different value — and any data
 // stream the caller then opened under the original 0 would carry an alias the
