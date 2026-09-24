@@ -712,9 +712,10 @@ func fetchPredecessor(loc message.Location) (message.Location, bool) {
 //
 //   - The first object includes both GroupIDDelta and ObjectIDDelta
 //     flags; the values are absolute (§11.4.4.1).
-//   - Subsequent objects in the same group use ObjectIDDelta only when
-//     the gap is > 0 (a consecutive object omits the flag, the
-//     subscriber reconstructs ObjectID = prior + 1).
+//   - Subsequent objects in the same group omit ObjectIDDelta when
+//     consecutive (the subscriber reconstructs ObjectID = prior + 1);
+//     otherwise ObjectIDDelta = ObjectID - prior, with no +1 unlike the
+//     §11.4.2 subgroup rule (§11.4.4.1).
 //   - Subsequent objects in a different group set GroupIDDelta:
 //     ascending → newGroup - priorGroup - 1, descending →
 //     priorGroup - newGroup - 1 (§11.4.4.1). ObjectIDDelta is then the
@@ -825,11 +826,12 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 					"relay: fetch serialization order violation: {%d,%d} after {%d,%d}",
 					o.GroupID, o.ObjectID, prevGroup, prevObject)
 			}
-			// Omit ObjectIDDelta when consecutive; otherwise include it
-			// with the gap value.
+			// §11.4.4.1: omit ObjectIDDelta when consecutive (prior + 1);
+			// otherwise the delta is added to the prior ID as is — no +1,
+			// unlike the §11.4.2 subgroup rule.
 			if o.ObjectID != prevObject+1 {
 				fo.SerializationFlags |= message.FetchFlagObjectIDDelta
-				fo.ObjectIDDelta = o.ObjectID - prevObject - 1
+				fo.ObjectIDDelta = o.ObjectID - prevObject
 			}
 		}
 
