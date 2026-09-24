@@ -150,7 +150,13 @@ func (s *Session) processRequestTokens(msg message.Message) ([]ResolvedToken, er
 	}
 	tokens, err := message.TokensFromParam(ps)
 	if err != nil {
-		return nil, &TokenCacheError{Code: moqt.SessionMalformedAuthToken, Err: err}
+		// §10.2.2: "If the Token structure cannot be decoded, the receiver
+		// MUST close the Session with KEY_VALUE_FORMATTING_ERROR." That
+		// includes an unknown Alias Type, which leaves the fields that
+		// follow undefined. (§3.5 describes MALFORMED_AUTH_TOKEN as
+		// "Invalid Auth Token serialization during registration"; the
+		// specific MUST above is followed.)
+		return nil, &TokenCacheError{Code: moqt.SessionKeyValueFormattingError, Err: err}
 	}
 	if len(tokens) == 0 {
 		return nil, nil
@@ -188,13 +194,8 @@ func (s *Session) processRequestTokens(msg message.Message) ([]ResolvedToken, er
 			if err := s.tokenCache.Delete(t.TokenAlias); err != nil {
 				return nil, &TokenCacheError{Code: sessionCodeForCacheErr(err), Err: err}
 			}
-
-		default:
-			return nil, &TokenCacheError{
-				Code: moqt.SessionMalformedAuthToken,
-				Err:  fmt.Errorf("unknown token alias type 0x%X", uint64(t.AliasType)),
-			}
 		}
+		// No default: Token.Parse rejects any other Alias Type above.
 	}
 	return resolved, nil
 }

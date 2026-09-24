@@ -63,6 +63,11 @@ func sendSubscribeWithTokens(t *testing.T, client *session.Session, toks ...mess
 	for _, tok := range toks {
 		ps = append(ps, message.AuthorizationTokenParam(tok))
 	}
+	sendSubscribeWithParams(t, client, ps)
+}
+
+func sendSubscribeWithParams(t *testing.T, client *session.Session, ps message.Parameters) {
+	t.Helper()
 	sub := &message.Subscribe{
 		RequestID:  client.AllocRequestID(),
 		Name:       []byte("track"),
@@ -471,5 +476,37 @@ func TestVerifyRequestTokensPreservesVerifierSentinel(t *testing.T) {
 	if !errors.Is(err, errVerifierPolicy) {
 		t.Errorf("errors.Is could not reach the verifier's sentinel through "+
 			"TokenDeniedError; a policy cannot tell its own denials apart (err=%v)", err)
+	}
+}
+
+// TestAcceptRequestUndecodableTokenIsKeyValueFormattingError pins §10.2.2: "If
+// the Token structure cannot be decoded, the receiver MUST close the Session
+// with KEY_VALUE_FORMATTING_ERROR." An unknown Alias Type is undecodable too:
+// the Alias Type is what says which fields follow.
+func TestAcceptRequestUndecodableTokenIsKeyValueFormattingError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+	}{
+		{"unknown alias type", []byte{0x09}},
+		{"REGISTER without its alias", []byte{byte(message.AliasTypeRegister)}},
+		// DELETE and USE_ALIAS carry "an Alias but no Type or Value".
+		{"DELETE with trailing bytes", []byte{byte(message.AliasTypeDelete), 0x05, 0xFF}},
+		{"USE_ALIAS with trailing bytes", []byte{byte(message.AliasTypeUseAlias), 0x05, 0xFF}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := openTokenPair(t)
+			sendSubscribeWithParams(t, client, message.Parameters{
+				message.BytesParam(message.ParamAuthorizationToken, tc.raw),
+			})
+			_, err := server.AcceptRequest(t.Context())
+			tce, ok := errors.AsType[*session.TokenCacheError](err)
+			if !ok {
+				t.Fatalf("AcceptRequest error = %v, want *TokenCacheError", err)
+			}
+			if tce.Code != moqt.SessionKeyValueFormattingError {
+				t.Errorf("Code = 0x%X, want KEY_VALUE_FORMATTING_ERROR (0x6)", uint64(tce.Code))
+			}
+		})
 	}
 }
