@@ -305,8 +305,9 @@ func (h *sessionHandler) runRequestLoop(ctx context.Context) error {
 // streams to [sessionHandler.runFanout], fetch response streams to the fetch
 // router (see the inline comments below).
 //
-// Per-stream errors do not terminate the loop (§9.5: one bad data stream must
-// not kill the session); transport-level errors from AcceptDataStream do.
+// AcceptDataStream skips streams abandoned mid-header (§11.4.1) itself and
+// closes the session on a session-fatal header (§3.4, §11.4.2), so any error
+// other than a padding stream means the session is gone and the loop ends.
 func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 	for {
 		ds, err := h.sess.AcceptDataStream(ctx)

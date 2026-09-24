@@ -151,4 +151,99 @@ func TestAcceptDataStreamReservedSubgroupIDMode(t *testing.T) {
 	if _, ok := errors.AsType[*message.UnknownDataStreamTypeError](acceptErr); ok {
 		t.Errorf("error should NOT be *message.UnknownDataStreamTypeError, but errors.As matched")
 	}
+	requireClosedProtocolViolation(t, server)
+}
+
+// TestAcceptDataStreamUnknownTypeClosesSession pins §3.4: "An endpoint that
+// receives an unknown stream type MUST close the session." AcceptDataStream
+// does so itself, so no caller can leave the session half-open by merely
+// stopping its accept loop.
+func TestAcceptDataStreamUnknownTypeClosesSession(t *testing.T) {
+	client, server := openPair(t)
+
+	go func() {
+		uni, err := session.SessionConn(client).OpenUniStream()
+		if err != nil {
+			return // surfaces as the AcceptDataStream error below
+		}
+		// 0x01 is none of SUBGROUP_HEADER (bit 4 set), FETCH_HEADER (0x05)
+		// or PADDING (0x132B3E28).
+		_, _ = uni.Write([]byte{0x01})
+		_ = uni.Close()
+	}()
+
+	_, acceptErr := server.AcceptDataStream(t.Context())
+	if _, ok := errors.AsType[*message.UnknownDataStreamTypeError](acceptErr); !ok {
+		t.Fatalf("AcceptDataStream error = %v (%T), want *message.UnknownDataStreamTypeError", acceptErr, acceptErr)
+	}
+	requireClosedProtocolViolation(t, server)
+}
+
+// TestAcceptDataStreamSkipsAbortedHeaders pins §11.4.1: "Early termination of
+// a unidirectional stream does not affect the MOQT application state." A data
+// stream that ends or is reset before its header is complete is abandoned, and
+// AcceptDataStream goes on to return the next stream rather than an error the
+// caller would take as fatal.
+func TestAcceptDataStreamSkipsAbortedHeaders(t *testing.T) {
+	client, server := openPair(t)
+	conn := session.SessionConn(client)
+	want := message.SubgroupHeader{TrackAlias: 7, GroupID: 3}
+
+	// The in-process pipe is unbuffered, so the peer writes from its own
+	// goroutine while the server accepts. Streams are accepted in open order.
+	go func() {
+		// Empty: FIN before the stream type.
+		if empty, err := conn.OpenUniStream(); err == nil {
+			_ = empty.Close()
+		}
+		// Truncated: SUBGROUP_HEADER type, then FIN before Track Alias.
+		if truncated, err := conn.OpenUniStream(); err == nil {
+			_, _ = truncated.Write([]byte{0x10})
+			_ = truncated.Close()
+		}
+		// Reset: FETCH_HEADER type, then the publisher cancels the stream.
+		if reset, err := conn.OpenUniStream(); err == nil {
+			_, _ = reset.Write([]byte{0x05})
+			reset.CancelWrite(uint64(moqt.StreamResetCancelled))
+		}
+		// A failure here surfaces as the AcceptDataStream error below.
+		if out, err := client.OpenSubgroup(want); err == nil {
+			_ = out.Close()
+		}
+	}()
+
+	ds, err := server.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	sg, ok := ds.(*session.IncomingSubgroupStream)
+	if !ok {
+		t.Fatalf("AcceptDataStream returned %T, want *session.IncomingSubgroupStream", ds)
+	}
+	if sg.Header != want {
+		t.Errorf("Header = %+v, want %+v", sg.Header, want)
+	}
+	select {
+	case <-server.Done():
+		t.Fatalf("session closed after aborted data stream headers: %v", server.Err())
+	default:
+	}
+}
+
+// requireClosedProtocolViolation waits for sess to close and checks the code.
+func requireClosedProtocolViolation(t *testing.T, sess *session.Session) {
+	t.Helper()
+	select {
+	case <-sess.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("session stayed open; want PROTOCOL_VIOLATION close")
+	}
+	closed, ok := errors.AsType[*session.ClosedError](sess.Err())
+	if !ok {
+		t.Fatalf("Err() = %v, want a *session.ClosedError", sess.Err())
+	}
+	if closed.Code != moqt.SessionProtocolViolation {
+		t.Errorf("closed with code %#x, want PROTOCOL_VIOLATION (%#x)",
+			uint64(closed.Code), uint64(moqt.SessionProtocolViolation))
+	}
 }
