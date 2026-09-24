@@ -93,7 +93,7 @@ By package, bottom-up along the dependency stack:
 | 3.2     | Extension negotiation                | DONE   | SETUP options exchanged as KV pairs; peer options parsed. |
 | 3.2.1   | Reserved namespaces                  | DONE   | `AcceptRequest` rejects an exact `.` first field with DOES_NOT_EXIST; other `.`-prefixed namespaces pass through to the application per spec. |
 | 3.2.2   | Session-level tracks/namespaces      | DONE   | `.session` requests are rejected with DOES_NOT_EXIST before the application/relay sees them (no session-level extensions implemented), so relays never forward them; covers the empty-track-name rule. |
-| 3.3     | Session initialization               | PARTIAL| Control streams + SETUP exchange; early data-stream buffering. A bidi stream opening with an unexpected message type resets that stream instead of closing the session with PROTOCOL_VIOLATION as §3.3 requires — see Limitations. |
+| 3.3     | Session initialization               | DONE   | Control streams + SETUP exchange; early data-stream buffering. A bidi stream opening with anything but the seven request messages closes the session with PROTOCOL_VIOLATION (`AcceptRequest`). |
 | 3.3.2   | Request cancellation / rejection     | DONE   | STOP_SENDING, stream resets, REQUEST_ERROR in `request.go`. |
 | 3.3.3   | Stream reset error codes             | DONE   | All codes in `errors.go` (`StreamReset*`). |
 | 3.4     | Unidirectional stream types          | DONE   | SUBGROUP / FETCH / PADDING / SETUP type IDs dispatched. |
@@ -188,7 +188,7 @@ By package, bottom-up along the dependency stack:
 | 10.6    | REQUEST_ERROR (+ Redirect)    | 0x05   | DONE   | Redirect required only when code==REDIRECT. |
 | 10.7    | SUBSCRIBE                     | 0x03   | DONE   | |
 | 10.8    | SUBSCRIBE_OK                  | 0x04   | DONE   | Registers inbound track alias. |
-| 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | A REQUEST_UPDATE opening a request stream is rejected as a PROTOCOL_VIOLATION (`ErrUnexpectedRequestUpdate`). |
+| 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | A REQUEST_UPDATE opening a request stream closes the session with PROTOCOL_VIOLATION (`ErrUnexpectedRequestUpdate`). |
 | 10.10   | PUBLISH                       | 0x1D   | DONE   | |
 | 10.11   | PUBLISH_DONE                  | 0x0B   | DONE   | |
 | 10.12   | FETCH (standalone + joining)  | 0x16   | DONE   | All three fetch types. |
@@ -291,12 +291,6 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   not record which mapping a session arrived on (it merges both into one accept
   queue) — recoverable by conn type, since `quicconn` and `wtconn` are distinct
   implementations, but not currently carried.
-- **An unexpected first message resets the stream instead of closing the session
-  (§3.3)** — "Bidirectional streams MUST NOT begin with any other message type
-  unless negotiated. If they do, the peer MUST close the Session with a
-  PROTOCOL_VIOLATION." The relay's `OnUnknown` resets that one bidi stream and
-  keeps the session up, deliberately isolating the failure to a single request.
-  That is friendlier, and it is not what the draft requires.
 - **Delivery-timeout enforcement is outbound-only, and not on the raw path
   (§8)** — the publisher side is wired end to end: `OutgoingSubgroupStream`
   enforces `OBJECT`/`SUBGROUP_DELIVERY_TIMEOUT` (including the §12.1/§12.2

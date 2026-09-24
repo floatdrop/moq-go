@@ -205,3 +205,28 @@ func TestRelay_ObjectIDOverflowClosesSession(t *testing.T) {
 		t.Fatal("relay left the publisher's session open after an Object ID overflow")
 	}
 }
+
+// TestRelay_NonFirstRequestOpenerClosesSession: a request stream opened with
+// a message not marked "First" in draft-20 Table 5 is a PROTOCOL_VIOLATION.
+// PUBLISH_STATE_NOTIFY is the case the relay used to let through: §10.10 says
+// an endpoint receiving one "from the subscriber, MUST close the session with
+// a PROTOCOL_VIOLATION", yet only a stray REQUEST_UPDATE closed it.
+func TestRelay_NonFirstRequestOpenerClosesSession(t *testing.T) {
+	t.Parallel()
+	l := newPipeListener()
+	_, teardown := connectRelayOn(t, relay.Config{}, l)
+	defer teardown()
+
+	peer, conn := dialRaw(t, l)
+	stream, err := conn.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	go func() { _ = message.Marshal(stream, &message.PublishStateNotify{}) }()
+
+	select {
+	case <-peer.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay left the session open after a PUBLISH_STATE_NOTIFY opened a request stream")
+	}
+}

@@ -91,7 +91,9 @@ func (m *RequestMux) OnUnknown(f func(*Request)) {
 // *ErrDuplicateRequestID) or a token-cache fault (*TokenCacheError) — that the
 // caller MUST escalate by closing the session with the mapped code (see
 // [Session.AcceptRequest]). Run surfaces the error unchanged so the caller can
-// inspect it with errors.As and Close accordingly.
+// inspect it with errors.As and Close accordingly. A request stream opened by
+// anything but a request message (§3.3, *ErrUnexpectedRequestOpener and
+// friends) arrives with the session already closed.
 //
 // Dispatch is synchronous: a handler runs to completion before Run accepts the
 // next request, mirroring a hand-written accept loop and [Demux.Run]. A handler

@@ -103,3 +103,56 @@ func TestAcceptRequestRejectsStrayRequestUpdate(t *testing.T) {
 		t.Fatalf("AcceptRequest = %v, want *ErrUnexpectedRequestUpdate", err)
 	}
 }
+
+// TestAcceptRequestNonFirstOpenerClosesSession pins draft-20 Table 5:
+// "Messages marked "First" MUST be the first message on a new request
+// stream." Only SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS, PUBLISH_NAMESPACE,
+// SUBSCRIBE_NAMESPACE and SUBSCRIBE_TRACKS may open one. Anything else is a
+// PROTOCOL_VIOLATION that AcceptRequest closes the session on itself, rather
+// than handing it to the application or trusting every caller to close.
+func TestAcceptRequestNonFirstOpenerClosesSession(t *testing.T) {
+	t.Parallel()
+	for _, first := range []message.Message{
+		&message.RequestUpdate{RequestID: 0},
+		&message.PublishStateNotify{},
+		&message.SubscribeOK{TrackAlias: 1},
+		&message.RequestOK{},
+		&message.PublishDone{},
+		&message.Namespace{},
+		&message.Goaway{},
+	} {
+		t.Run(first.Type().String(), func(t *testing.T) {
+			t.Parallel()
+			_, server, cliConn, _ := openPairWithConns(t)
+			stream, err := cliConn.OpenStream()
+			if err != nil {
+				t.Fatalf("OpenStream: %v", err)
+			}
+			go func() { _ = message.Marshal(stream, first) }()
+
+			if req, err := server.AcceptRequest(t.Context()); err == nil {
+				t.Fatalf("AcceptRequest accepted a stream opened with %T", req.First)
+			}
+			requireClosedProtocolViolation(t, server)
+		})
+	}
+}
+
+// TestAcceptRequestUnknownTypeOpenerClosesSession: a message type this
+// endpoint does not know cannot be one of the seven §3.3 request openers
+// either, and closes the session rather than just resetting the stream.
+func TestAcceptRequestUnknownTypeOpenerClosesSession(t *testing.T) {
+	t.Parallel()
+	_, server, cliConn, _ := openPairWithConns(t)
+	stream, err := cliConn.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	go func() { _ = wire.WriteFrame(stream, 0x3F00, nil) }() // unassigned type
+
+	_, err = server.AcceptRequest(t.Context())
+	if _, ok := errors.AsType[*session.ErrUnexpectedRequestOpener](err); !ok {
+		t.Fatalf("AcceptRequest = %v, want *ErrUnexpectedRequestOpener", err)
+	}
+	requireClosedProtocolViolation(t, server)
+}
