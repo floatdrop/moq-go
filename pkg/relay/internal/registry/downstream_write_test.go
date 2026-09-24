@@ -3,6 +3,7 @@ package registry_test
 import (
 	"bytes"
 	"context"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -51,7 +52,7 @@ func TestDownstreamSub_WritesSerialized(t *testing.T) {
 			_ = sub.WriteMessage(&message.RequestOK{})
 		})
 		wg.Go(func() {
-			sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "publisher gone", 0)
+			sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "publisher gone")
 		})
 		wg.Wait()
 	}
@@ -106,7 +107,7 @@ func TestDownstreamSub_TerminateBeforeOKAnswersWithRequestError(t *testing.T) {
 	stream := &recordingStream{}
 	sub := registry.NewDownstreamSub(1, nil, stream, 7)
 
-	sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone", 0)
+	sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone")
 	if err := sub.WriteSubscribeOK(&message.SubscribeOK{TrackAlias: 7}); err == nil {
 		t.Fatal("WriteSubscribeOK after termination must be refused")
 	}
@@ -136,7 +137,7 @@ func TestDownstreamSub_TerminateAfterOKSendsPublishDone(t *testing.T) {
 	if err := sub.WriteSubscribeOK(&message.SubscribeOK{TrackAlias: 7}); err != nil {
 		t.Fatalf("WriteSubscribeOK: %v", err)
 	}
-	sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone", 3)
+	sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone")
 
 	msgs := stream.messages(t)
 	if len(msgs) != 2 {
@@ -168,7 +169,7 @@ func TestDownstreamSub_SubscribeOKTerminateRace(t *testing.T) {
 			_ = sub.WriteSubscribeOK(&message.SubscribeOK{TrackAlias: 7})
 		})
 		wg.Go(func() {
-			sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone", 0)
+			sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone")
 		})
 		wg.Wait()
 
@@ -187,5 +188,58 @@ func TestDownstreamSub_SubscribeOKTerminateRace(t *testing.T) {
 		default:
 			t.Fatalf("wrote %d messages, want 1 or 2: %v", len(msgs), msgs)
 		}
+	}
+}
+
+// TestDownstreamSub_PublishDoneStreamCount pins the §10.12 Stream Count the
+// relay reports on the paths the relay-level tests cannot reach
+// deterministically: an open still in flight at termination makes the count
+// inexact, which MUST be sent as 2^64-1, and no stream may begin afterwards.
+func TestDownstreamSub_PublishDoneStreamCount(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name     string
+		opened   int
+		failed   int
+		inFlight bool
+		want     uint64
+	}{
+		{"none opened", 0, 0, false, 0},
+		{"exact", 2, 0, false, 2},
+		{"failed opens are not counted", 1, 2, false, 1},
+		{"open in flight", 2, 0, true, math.MaxUint64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			stream := &recordingStream{}
+			sub := registry.NewDownstreamSub(1, nil, stream, 7)
+			if err := sub.WriteSubscribeOK(&message.SubscribeOK{TrackAlias: 7}); err != nil {
+				t.Fatalf("WriteSubscribeOK: %v", err)
+			}
+			for range tc.opened {
+				sub.BeginStream()
+				sub.EndStream(true)
+			}
+			for range tc.failed {
+				sub.BeginStream()
+				sub.EndStream(false)
+			}
+			if tc.inFlight {
+				sub.BeginStream()
+			}
+			sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone")
+			if sub.BeginStream() {
+				t.Error("BeginStream after termination = true, want false")
+			}
+
+			msgs := stream.messages(t)
+			pd, ok := msgs[len(msgs)-1].(*message.PublishDone)
+			if !ok {
+				t.Fatalf("last message is %T, want *message.PublishDone", msgs[len(msgs)-1])
+			}
+			if pd.StreamCount != tc.want {
+				t.Errorf("StreamCount = %d, want %d", pd.StreamCount, tc.want)
+			}
+		})
 	}
 }

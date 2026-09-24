@@ -644,7 +644,7 @@ func (w *subgroupWriter) run() {
 			// should never carry this mode here.)
 			hdr.SubgroupIDMode = message.SubgroupIDExplicit
 		}
-		fresh, err := w.sub.Session.OpenSubgroupContext(w.ctx, hdr)
+		fresh, err := w.openCounted(hdr)
 		if err != nil {
 			w.log.Debug("fanout: OpenSubgroup (reopen) failed",
 				"sub_id", w.sub.ID, "err", err.Error())
@@ -867,6 +867,18 @@ func (w *subgroupWriter) run() {
 	// subscription wanted was delivered, so we FIN the outbound stream
 	// per §11.4.3.
 	_ = w.out.Close()
+}
+
+// openCounted opens a subgroup stream for w's subscription, counting it for
+// the §10.12 PUBLISH_DONE Stream Count and refusing once the subscription has
+// terminated, since no stream may follow PUBLISH_DONE.
+func (w *subgroupWriter) openCounted(hdr message.SubgroupHeader) (*session.OutgoingSubgroupStream, error) {
+	if !w.sub.BeginStream() {
+		return nil, errSubscriptionTerminated
+	}
+	out, err := w.sub.Session.OpenSubgroupContext(w.ctx, hdr)
+	w.sub.EndStream(err == nil)
+	return out, err
 }
 
 // applyPriority pushes the §7.2 effective priority for this writer's current
