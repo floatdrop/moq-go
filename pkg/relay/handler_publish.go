@@ -146,9 +146,12 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		// so every inbound PUBLISH is a fresh forwarding attempt, and a track we
 		// skipped earlier is retried here.
 		fwd := &message.Publish{
-			Namespace:       msg.Namespace,
-			Name:            msg.Name,
-			TrackAlias:      msg.TrackAlias, // not yet remapped per-session
+			Namespace: msg.Namespace,
+			Name:      msg.Name,
+			// §11.1: aliases are per session. Allocate from the subscriber
+			// session's space, which the relay's SUBSCRIBE_OK aliases share;
+			// the upstream's alias would collide with those.
+			TrackAlias:      sub.Session.AllocOutboundTrackAlias(),
 			Parameters:      publishParamsForSubscriber(msg.Parameters, sub, entry),
 			TrackProperties: msg.TrackProperties,
 		}

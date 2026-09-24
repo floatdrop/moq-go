@@ -9,6 +9,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
@@ -145,10 +146,12 @@ func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	if string(pub.Name) != "rtp" {
 		t.Fatalf("forwarded Name = %q, want %q", pub.Name, "rtp")
 	}
-	if pub.TrackAlias != 99 {
-		// PUBLISH forwarding does not remap the alias on this layer.
-		// Pin the current behaviour so we notice when remapping arrives.
-		t.Fatalf("forwarded TrackAlias = %d, want 99 (preserves the publisher's alias)", pub.TrackAlias)
+	if pub.TrackAlias == 0 {
+		// §11.1: the alias is per session, so the relay allocates its own on
+		// the subscriber's session (never 0, see AllocOutboundTrackAlias)
+		// rather than copying the publisher's 99 — see
+		// TestPublish_ForwardedAliasDoesNotCollide.
+		t.Fatal("forwarded TrackAlias is 0; want one allocated on the subscriber's session")
 	}
 	// §10.20.1: the SUBSCRIBE_TRACKS omitted FORWARD and GROUP_ORDER, so the
 	// forwarded PUBLISH carries neither (FORWARD defaults to 1, GROUP_ORDER to
@@ -158,6 +161,73 @@ func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	}
 	if p, ok := pub.Parameters.Find(message.ParamGroupOrder); ok {
 		t.Errorf("forwarded GROUP_ORDER present (=%d), want omitted", p.Byte)
+	}
+}
+
+// TestPublish_ForwardedAliasDoesNotCollide pins §11.1 for PUBLISH forwarded to
+// a SUBSCRIBE_TRACKS holder: "The same Track Alias MUST NOT be used by a
+// publisher to refer to two different Tracks simultaneously in the same
+// session." Track Aliases are per session, so the relay must allocate the
+// forwarded PUBLISH's alias from the subscriber session's own space, shared
+// with the aliases it hands out in SUBSCRIBE_OK. Copying the upstream
+// publisher's alias collides as soon as those two spaces overlap — here the
+// subscriber already holds relay alias 1 for cam1 when a second publisher
+// PUBLISHes rtp under its own alias 1.
+func TestPublish_ForwardedAliasDoesNotCollide(t *testing.T) {
+	t.Parallel()
+	pub1, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	pub1Req, err := pub1.Publish(t.Context(), &message.Publish{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("Publish cam1: %v", err)
+	}
+	defer pub1Req.Close()
+
+	subSess := dialAnotherClient(t, pub1)
+	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("Subscribe cam1: %v", err)
+	}
+	defer subReq.Close()
+
+	tracksReq, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+	})
+	if err != nil {
+		t.Fatalf("SubscribeTracks: %v", err)
+	}
+	defer tracksReq.Close()
+
+	pub2 := dialAnotherClient(t, pub1)
+	pub2Req, err := pub2.Publish(t.Context(), &message.Publish{
+		Namespace:  wire.TrackNamespace{[]byte("video"), []byte("cam7")},
+		Name:       []byte("rtp"),
+		TrackAlias: subReq.OK.TrackAlias, // the alias the subscriber already holds for cam1
+	})
+	if err != nil {
+		t.Fatalf("Publish rtp: %v", err)
+	}
+	defer pub2Req.Close()
+
+	req, err := subSess.AcceptRequest(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptRequest: %v", err)
+	}
+	fwd, ok := req.First.(*message.Publish)
+	if !ok {
+		t.Fatalf("got %T, want *message.Publish", req.First)
+	}
+	// The alias registration AcceptPublish performs, without its REQUEST_OK
+	// write: the relay does not yet read its end of a forwarded PUBLISH stream,
+	// so on the unbuffered in-process pipe that write would never complete.
+	if err := subSess.RegisterInboundTrackAlias(fwd.TrackAlias, track.NewKey(fwd.Namespace, fwd.Name)); err != nil {
+		t.Fatalf("registering the forwarded PUBLISH's alias: %v", err)
 	}
 }
 
