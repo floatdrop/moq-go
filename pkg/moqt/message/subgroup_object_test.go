@@ -2,6 +2,8 @@ package message
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
@@ -272,5 +274,38 @@ func TestSubgroupObject_ParseErrors(t *testing.T) {
 				t.Errorf("Parse() error = %v, want containing %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestSubgroupObject_StreamFINMidObject pins §11.4: a stream that ends with a
+// FIN "in the middle of a serialized Object" is not a clean end. Only a FIN
+// before an object's first byte may surface as io.EOF; every later truncation
+// must be io.ErrUnexpectedEOF, or a caller reading to io.EOF takes a torn
+// stream for a complete one.
+func TestSubgroupObject_StreamFINMidObject(t *testing.T) {
+	tests := []struct {
+		name          string
+		data          []byte
+		hasProperties bool
+	}{
+		{"after object ID delta", []byte{0x00}, false},
+		{"after object ID delta, before properties", []byte{0x00}, true},
+		{"after properties", []byte{0x00, 0x00}, true},
+		{"before status", []byte{0x00, 0x00}, false},
+		{"before payload", []byte{0x00, 0x05}, false},
+		{"mid payload", []byte{0x00, 0x05, 'a', 'b'}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := (&SubgroupObject{}).Parse(wire.NewStreamReader(bytes.NewReader(tt.data)), tt.hasProperties)
+			if !errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+				t.Fatalf("Parse() = %v, want io.ErrUnexpectedEOF (and not io.EOF)", err)
+			}
+		})
+	}
+
+	// A FIN on an object boundary is the clean end.
+	if err := (&SubgroupObject{}).Parse(wire.NewStreamReader(bytes.NewReader(nil)), false); !errors.Is(err, io.EOF) {
+		t.Fatalf("Parse(empty) = %v, want io.EOF", err)
 	}
 }
