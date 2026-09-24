@@ -143,6 +143,12 @@ func (t *Token) Parse(raw []byte) error {
 		return fmt.Errorf("moqt/message: unknown token alias type 0x%X", at)
 	}
 
+	// REGISTER and USE_VALUE take the rest as the Token Value; DELETE and
+	// USE_ALIAS carry "an Alias but no Type or Value" (§10.2.2), so anything
+	// after the alias means the structure did not decode.
+	if n := r.Remaining(); n > 0 {
+		return fmt.Errorf("moqt/message: %d trailing bytes after token alias", n)
+	}
 	return nil
 }
 
