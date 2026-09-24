@@ -1,6 +1,8 @@
 package relay_test
 
 import (
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -114,5 +116,46 @@ func TestRelay_AbortedDataStreamHeaderKeepsServing(t *testing.T) {
 	}()
 	if !awaitSubgroupObject(t, subSess, 2*time.Second) {
 		t.Fatal("relay stopped forwarding after a data stream ended mid-header")
+	}
+}
+
+// TestRelay_FINMidObjectIsNotForwardedAsCleanEnd: a publisher's END_OF_GROUP
+// subgroup stream that ends with a FIN in the middle of an object (§11.4) is
+// torn, not complete. If the relay forwarded it as a clean FIN, the subscriber
+// would conclude it holds the whole group. The forwarded stream must end in an
+// error instead.
+func TestRelay_FINMidObjectIsNotForwardedAsCleanEnd(t *testing.T) {
+	t.Parallel()
+	pubSess, alias := publishWithTrackProps(t, nil)
+	subSess := subscribeCam1(t, pubSess)
+
+	go func() {
+		sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+			SubgroupIDMode: message.SubgroupIDExplicit,
+			TrackAlias:     alias,
+			GroupID:        3,
+			EndOfGroup:     true,
+		})
+		if err != nil {
+			return
+		}
+		_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte("whole")})
+		_, _ = sg.Write([]byte{0x00}) // next object: Object ID Delta only
+		_ = sg.Close()
+	}()
+
+	ds, err := subSess.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	sg, ok := ds.(*session.IncomingSubgroupStream)
+	if !ok {
+		t.Fatalf("got %T, want *session.IncomingSubgroupStream", ds)
+	}
+	if _, err := sg.ReadObject(); err != nil {
+		t.Fatalf("first (complete) object: %v", err)
+	}
+	if _, err := sg.ReadObject(); err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("after the torn object: ReadObject = %v, want a stream error, not a clean end", err)
 	}
 }

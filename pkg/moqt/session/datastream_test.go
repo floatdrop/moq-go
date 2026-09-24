@@ -247,3 +247,82 @@ func requireClosedProtocolViolation(t *testing.T, sess *session.Session) {
 			uint64(closed.Code), uint64(moqt.SessionProtocolViolation))
 	}
 }
+
+// TestSubgroupStreamFINMidObjectClosesSession pins §11.4: "If a stream ends
+// gracefully (i.e., the stream terminates with a FIN) in the middle of a
+// serialized Object, the session SHOULD be closed with a PROTOCOL_VIOLATION."
+// ReadObject must neither report the torn stream as a clean io.EOF nor leave
+// the session open.
+func TestSubgroupStreamFINMidObjectClosesSession(t *testing.T) {
+	client, server := openPair(t)
+	go func() {
+		out, err := client.OpenSubgroup(message.SubgroupHeader{TrackAlias: 7, EndOfGroup: true})
+		if err != nil {
+			return // surfaces as the AcceptDataStream error below
+		}
+		_, _ = out.Write([]byte{0x00}) // Object ID Delta, then FIN
+		_ = out.Close()
+	}()
+
+	ds, err := server.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	_, err = ds.(*session.IncomingSubgroupStream).ReadObject()
+	if errors.Is(err, io.EOF) || !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("ReadObject = %v, want io.ErrUnexpectedEOF (and not io.EOF)", err)
+	}
+	requireClosedProtocolViolation(t, server)
+}
+
+// TestSubgroupStreamResetMidObjectKeepsSession is the other half: a reset is
+// §11.4.1 cancellation, not a malformed stream, and leaves the session alone.
+func TestSubgroupStreamResetMidObjectKeepsSession(t *testing.T) {
+	client, server := openPair(t)
+	go func() {
+		out, err := client.OpenSubgroup(message.SubgroupHeader{TrackAlias: 7})
+		if err != nil {
+			return
+		}
+		_, _ = out.Write([]byte{0x00})
+		out.Cancel(moqt.StreamResetCancelled)
+	}()
+
+	ds, err := server.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	if _, err := ds.(*session.IncomingSubgroupStream).ReadObject(); err == nil || errors.Is(err, io.EOF) {
+		t.Fatalf("ReadObject = %v, want a reset error", err)
+	}
+	select {
+	case <-server.Done():
+		t.Fatalf("session closed after a mid-object reset: %v", server.Err())
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+// TestFetchStreamFINMidObjectClosesSession is the FETCH-stream counterpart of
+// TestSubgroupStreamFINMidObjectClosesSession: §11.4 covers every data stream.
+func TestFetchStreamFINMidObjectClosesSession(t *testing.T) {
+	client, server := openPair(t)
+	go func() {
+		out, err := client.OpenFetchStream(message.FetchHeader{RequestID: 1})
+		if err != nil {
+			return
+		}
+		// Serialization Flags with Group and Object ID Delta present, then FIN.
+		_, _ = out.Write([]byte{byte(message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta)})
+		_ = out.Close()
+	}()
+
+	ds, err := server.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	_, err = ds.(*session.IncomingFetchStream).ReadObject()
+	if errors.Is(err, io.EOF) || !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("ReadObject = %v, want io.ErrUnexpectedEOF (and not io.EOF)", err)
+	}
+	requireClosedProtocolViolation(t, server)
+}

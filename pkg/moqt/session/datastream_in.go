@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -110,7 +111,7 @@ func (s *IncomingSubgroupStream) Cancel(code moqt.StreamResetCode) {
 func (s *IncomingSubgroupStream) ReadObject() (*message.SubgroupObject, error) {
 	obj := &message.SubgroupObject{}
 	if err := obj.Parse(s.rd, s.Header.Properties); err != nil {
-		return nil, err
+		return nil, s.sess.checkFINMidObject(err)
 	}
 	if err := obj.Validate(); err != nil {
 		return nil, fmt.Errorf("moqt/session: subgroup object: %w", err)
@@ -209,6 +210,8 @@ type IncomingFetchStream struct {
 	// every ReadObject call — see [IncomingSubgroupStream.rd].
 	rd *wire.StreamReader
 
+	sess *Session
+
 	// GroupOrder tells [IncomingFetchStream.ReadDecoded] how to
 	// interpret cross-group GroupIDDeltas (§11.4.4.1): ascending →
 	// newGroup = prevGroup + delta + 1; descending → newGroup =
@@ -257,7 +260,7 @@ func (s *IncomingFetchStream) Cancel(code moqt.StreamResetCode) {
 func (s *IncomingFetchStream) ReadObject() (*message.FetchObject, error) {
 	obj := &message.FetchObject{}
 	if err := obj.Parse(s.rd); err != nil {
-		return nil, err
+		return nil, s.sess.checkFINMidObject(err)
 	}
 	if err := obj.Validate(); err != nil {
 		return nil, fmt.Errorf("moqt/session: fetch object: %w", err)
@@ -485,6 +488,19 @@ func (s *Session) AcceptDataStream(ctx context.Context) (DataStream, error) {
 	}
 }
 
+// checkFINMidObject closes the session when a data stream ended with a FIN in
+// the middle of an object: §11.4 "If a stream ends gracefully (i.e., the stream
+// terminates with a FIN) in the middle of a serialized Object, the session
+// SHOULD be closed with a PROTOCOL_VIOLATION." The parsers report exactly that
+// case as io.ErrUnexpectedEOF; a reset surfaces as a stream error and is left
+// alone (§11.4.1). err is returned unchanged.
+func (s *Session) checkFINMidObject(err error) error {
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		_ = s.closeProtocolViolation(err)
+	}
+	return err
+}
+
 // errAbortedDataStream marks a data stream abandoned before its header was
 // complete; [Session.AcceptDataStream] skips it.
 var errAbortedDataStream = errors.New("moqt/session: data stream ended before its header")
@@ -530,7 +546,7 @@ func (s *Session) acceptDataStream(ctx context.Context) (DataStream, error) {
 		if err != nil {
 			return nil, aborted()
 		}
-		return &IncomingFetchStream{Header: hdr, src: src, br: br, rd: wire.NewStreamReader(br)}, nil
+		return &IncomingFetchStream{Header: hdr, src: src, br: br, rd: wire.NewStreamReader(br), sess: s}, nil
 	case typ == message.PaddingStreamType:
 		// §11.5.1: padding streams MUST be silently discarded. CancelRead
 		// (STOP_SENDING) abandons the stream and frees its flow control.

@@ -61,6 +61,11 @@ func (o *SubgroupObject) Append(w *wire.Writer, hasProperties bool) {
 // r may be a *wire.Reader (in-memory) or a *wire.StreamReader (streaming).
 // The hasProperties parameter indicates whether the parent SubgroupHeader
 // had the Properties bit set, which determines if Properties are included.
+//
+// io.EOF is returned only for a stream that ends before the object's first
+// byte. Once the Object ID Delta has been read, a FIN is a stream ending "in
+// the middle of a serialized Object" (§11.4) and surfaces as
+// io.ErrUnexpectedEOF.
 func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
 	delta, err := r.Varint()
 	if err != nil {
@@ -72,7 +77,7 @@ func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
 	if hasProperties {
 		props, err := r.VarintBytes()
 		if err != nil {
-			return fmt.Errorf("moqt/message: properties: %w", err)
+			return fmt.Errorf("moqt/message: properties: %w", truncated(err))
 		}
 		o.Properties = props
 	} else {
@@ -81,14 +86,14 @@ func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
 
 	payloadLength, err := r.Varint()
 	if err != nil {
-		return fmt.Errorf("moqt/message: payload length: %w", err)
+		return fmt.Errorf("moqt/message: payload length: %w", truncated(err))
 	}
 
 	// Object Status is present only when Payload Length == 0
 	if payloadLength == 0 {
 		status, err := r.Varint()
 		if err != nil {
-			return fmt.Errorf("moqt/message: object status: %w", err)
+			return fmt.Errorf("moqt/message: object status: %w", truncated(err))
 		}
 		o.ObjectStatus = status
 		o.Payload = nil
@@ -96,7 +101,7 @@ func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
 		//nolint:gosec // G115: a payloadLength >= 2^63 wraps negative; both FixedBytes implementations reject it.
 		payload, err := r.FixedBytes(int(payloadLength))
 		if err != nil {
-			return fmt.Errorf("moqt/message: payload: %w", err)
+			return fmt.Errorf("moqt/message: payload: %w", truncated(err))
 		}
 		o.Payload = payload
 		o.ObjectStatus = 0
