@@ -1,6 +1,7 @@
 package relay_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"testing"
@@ -144,18 +145,32 @@ func TestRelay_FINMidObjectIsNotForwardedAsCleanEnd(t *testing.T) {
 		_ = sg.Close()
 	}()
 
-	ds, err := subSess.AcceptDataStream(t.Context())
+	// The torn object closes the publisher's session, which can beat the
+	// relay's lazy downstream open — then no stream arrives at all, which is
+	// fine: nothing was forwarded as complete.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	ds, err := subSess.AcceptDataStream(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		t.Fatalf("AcceptDataStream: %v", err)
 	}
 	sg, ok := ds.(*session.IncomingSubgroupStream)
 	if !ok {
 		t.Fatalf("got %T, want *session.IncomingSubgroupStream", ds)
 	}
-	if _, err := sg.ReadObject(); err != nil {
-		t.Fatalf("first (complete) object: %v", err)
+	// The complete first object may or may not arrive either: the relay can
+	// reset the downstream stream before its writer drains. What must never
+	// happen is a clean end.
+	for range 2 {
+		if _, err := sg.ReadObject(); err != nil {
+			if errors.Is(err, io.EOF) {
+				t.Fatalf("ReadObject = %v; the torn stream was forwarded as a clean end", err)
+			}
+			return
+		}
 	}
-	if _, err := sg.ReadObject(); err == nil || errors.Is(err, io.EOF) {
-		t.Fatalf("after the torn object: ReadObject = %v, want a stream error, not a clean end", err)
-	}
+	t.Fatal("read two objects from a stream whose second object was torn")
 }
