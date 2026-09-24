@@ -21,7 +21,9 @@ type FetchObject struct {
 	// Only present on the wire when the mode is FetchSubgroupIDExplicit (0x03).
 	SubgroupID uint64
 
-	// ObjectIDDelta is the delta from the previous Object ID. Present when
+	// ObjectIDDelta is the delta from the previous Object ID, added with no
+	// +1 — or the absolute Object ID on the first object and whenever
+	// GroupIDDelta is present (§11.4.4.1). Present when the
 	// FetchFlagObjectIDDelta bit (0x04) is set.
 	ObjectIDDelta uint64
 

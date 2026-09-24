@@ -105,7 +105,7 @@ func decodeFetchStream(t *testing.T, fs *session.IncomingFetchStream, order mess
 		default:
 			g = prevGroup
 			if fo.SerializationFlags&message.FetchFlagObjectIDDelta != 0 {
-				o = prevObject + fo.ObjectIDDelta + 1
+				o = prevObject + fo.ObjectIDDelta // §11.4.4.1: no +1
 			} else {
 				o = prevObject + 1
 			}
@@ -1038,4 +1038,84 @@ func fetchRequestRange(m *message.Fetch) (start, end message.Location, ok bool) 
 func fetchOKEnd(m *message.Fetch) message.Location {
 	_, end, _ := fetchRequestRange(m)
 	return end
+}
+
+// TestFetch_ObjectIDDeltaEncoding pins the relay's FETCH encoder to
+// §11.4.4.1 on the wire rather than through a decoder sharing its reading:
+// without a Group ID Delta "the Object ID is the prior Object's ID plus the
+// Object ID Delta" (no +1, unlike the subgroup rule), and a consecutive ID is
+// sent by omitting the field. Objects 0, 1 and 5 of one group must therefore
+// encode as: absolute 0, delta omitted, delta 4.
+func TestFetch_ObjectIDDeltaEncoding(t *testing.T) {
+	t.Parallel()
+	pubSess, alias := publishWithTrackProps(t, nil)
+	subSess := subscribeCam1(t, pubSess)
+
+	go func() {
+		sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+			SubgroupIDMode: message.SubgroupIDExplicit,
+			TrackAlias:     alias,
+			GroupID:        3,
+		})
+		if err != nil {
+			return
+		}
+		// Subgroup deltas (§11.4.2, +1 applies): IDs 0, 1, then 5.
+		for _, d := range []uint64{0, 0, 3} {
+			_ = sg.WriteObject(&message.SubgroupObject{ObjectIDDelta: d, Payload: []byte("x")})
+		}
+		_ = sg.Close()
+	}()
+	// The relay caches before it forwards, so the subscriber holding all
+	// three objects means the cache does too. The ID gap makes the relay
+	// reset and reopen the live stream (§11.4.3), so follow it across streams.
+	var live *session.IncomingSubgroupStream
+	for got := 0; got < 3; {
+		if live == nil {
+			ds, err := subSess.AcceptDataStream(t.Context())
+			if err != nil {
+				t.Fatalf("AcceptDataStream: %v", err)
+			}
+			live = ds.(*session.IncomingSubgroupStream)
+		}
+		if _, err := live.ReadObject(); err != nil {
+			live = nil
+			continue
+		}
+		got++
+	}
+
+	fetchSess := dialAnotherClient(t, pubSess)
+	reqStream, err := fetchSess.Fetch(t.Context(), &message.Fetch{
+		Namespace: wire.TrackNamespace{[]byte("video")},
+		Name:      []byte("cam1"),
+		Parameters: message.Parameters{
+			fetchRangeFilter(message.Location{Group: 3}, message.Location{Group: 3, Object: 5}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	defer reqStream.Close()
+	fds, err := fetchSess.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	fs := fds.(*session.IncomingFetchStream)
+
+	type delta struct {
+		present bool
+		value   uint64
+	}
+	want := []delta{{true, 0}, {false, 0}, {true, 4}}
+	for i, w := range want {
+		fo, err := fs.ReadObject()
+		if err != nil {
+			t.Fatalf("FETCH object #%d: %v", i, err)
+		}
+		got := delta{fo.SerializationFlags&message.FetchFlagObjectIDDelta != 0, fo.ObjectIDDelta}
+		if got != w {
+			t.Errorf("FETCH object #%d: Object ID Delta (present, value) = %v, want %v", i, got, w)
+		}
+	}
 }

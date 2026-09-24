@@ -387,22 +387,30 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		// First object: deltas carry absolute IDs (§11.4.4).
 		d.GroupID = raw.GroupIDDelta
 		d.ObjectID = raw.ObjectIDDelta
-	case raw.SerializationFlags&message.FetchFlagGroupIDDelta != 0:
-		// Cross-group: apply direction.
-		if s.decGroupOrder() == message.GroupOrderDescending {
-			d.GroupID = s.decPrevGroup - raw.GroupIDDelta - 1
-		} else {
-			d.GroupID = s.decPrevGroup + raw.GroupIDDelta + 1
-		}
-		d.ObjectID = raw.ObjectIDDelta
 	default:
-		// Same group, possibly consecutive. ObjectIDDelta is the
-		// gap (zero implied when the flag is absent).
+		// §11.4.4.1: "When the Group ID Delta field is present, the Object ID
+		// is the value of Object ID Delta if present. When the Group ID Delta
+		// field is not present, the Object ID is the prior Object's ID plus the
+		// Object ID Delta if present. If Object ID Delta is not present, the
+		// Object ID is the prior Object's ID plus one, regardless of which
+		// group it belongs to." Unlike the §11.4.2 subgroup rule, a present
+		// delta carries no implicit +1.
 		d.GroupID = s.decPrevGroup
-		if raw.SerializationFlags&message.FetchFlagObjectIDDelta != 0 {
-			d.ObjectID = s.decPrevObject + raw.ObjectIDDelta + 1
-		} else {
+		newGroup := raw.SerializationFlags&message.FetchFlagGroupIDDelta != 0
+		if newGroup {
+			if s.decGroupOrder() == message.GroupOrderDescending {
+				d.GroupID = s.decPrevGroup - raw.GroupIDDelta - 1
+			} else {
+				d.GroupID = s.decPrevGroup + raw.GroupIDDelta + 1
+			}
+		}
+		switch {
+		case raw.SerializationFlags&message.FetchFlagObjectIDDelta == 0:
 			d.ObjectID = s.decPrevObject + 1
+		case newGroup:
+			d.ObjectID = raw.ObjectIDDelta
+		default:
+			d.ObjectID = s.decPrevObject + raw.ObjectIDDelta
 		}
 	}
 

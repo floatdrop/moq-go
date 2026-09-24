@@ -540,11 +540,15 @@ func TestIncomingFetchStream_ReadDecoded_Ascending(t *testing.T) {
 
 	hdr := message.FetchHeader{RequestID: 0}
 
-	// Write four objects:
+	// Write five objects. §11.4.4.1: without a Group ID Delta "the Object ID
+	// is the prior Object's ID plus the Object ID Delta" — no +1, unlike the
+	// subgroup rule — and an absent Object ID Delta means "the prior Object's
+	// ID plus one, regardless of which group it belongs to".
 	//   {G=5, O=2, Sub=10, Pri=7}  first — flags carry absolute IDs
-	//   {G=5, O=3, Sub=10, Pri=7}  same group, consecutive, inherit subgroup+priority
-	//   {G=5, O=7, Sub=11, Pri=7}  same group, gap (ObjectIDDelta=3 → +4), Sub=Prior+1
+	//   {G=5, O=3, Sub=10, Pri=7}  same group, delta absent → 2+1, inherit subgroup+priority
+	//   {G=5, O=6, Sub=11, Pri=7}  same group, ObjectIDDelta=3 → 3+3, Sub=Prior+1
 	//   {G=8, O=0, Sub=20, Pri=9}  cross-group (GroupIDDelta=2 → +3), explicit subgroup, new pri
+	//   {G=9, O=1, Sub=20, Pri=9}  cross-group (GroupIDDelta=0 → +1), Object ID Delta absent → 0+1
 	written := []*message.FetchObject{
 		{
 			SerializationFlags: message.FetchFlagGroupIDDelta |
@@ -582,6 +586,13 @@ func TestIncomingFetchStream_ReadDecoded_Ascending(t *testing.T) {
 			PublisherPriority: 9,
 			ObjectPayload:     []byte("o4"),
 		},
+		{
+			// Cross-group with the Object ID Delta omitted: prior ID + 1.
+			SerializationFlags: message.FetchFlagGroupIDDelta |
+				uint64(message.FetchSubgroupIDPrior),
+			GroupIDDelta:  0,
+			ObjectPayload: []byte("o5"),
+		},
 	}
 
 	writeErr := make(chan error, 1)
@@ -612,8 +623,9 @@ func TestIncomingFetchStream_ReadDecoded_Ascending(t *testing.T) {
 	want := []session.DecodedFetchObject{
 		{GroupID: 5, ObjectID: 2, SubgroupID: 10, PublisherPriority: 7, Payload: []byte("o1")},
 		{GroupID: 5, ObjectID: 3, SubgroupID: 10, PublisherPriority: 7, Payload: []byte("o2")},
-		{GroupID: 5, ObjectID: 7, SubgroupID: 11, PublisherPriority: 7, Payload: []byte("o3")},
+		{GroupID: 5, ObjectID: 6, SubgroupID: 11, PublisherPriority: 7, Payload: []byte("o3")},
 		{GroupID: 8, ObjectID: 0, SubgroupID: 20, PublisherPriority: 9, Payload: []byte("o4")},
+		{GroupID: 9, ObjectID: 1, SubgroupID: 20, PublisherPriority: 9, Payload: []byte("o5")},
 	}
 
 	for i, w := range want {
