@@ -56,7 +56,7 @@ func (e *ErrDuplicateRequestID) Error() string {
 // request stream whose first message is a REQUEST_UPDATE. §10.9 permits
 // REQUEST_UPDATE only as a follow-up on an existing request stream (or against
 // a PUBLISH-established subscription); a REQUEST_UPDATE in any other position
-// is a PROTOCOL_VIOLATION. The caller MUST close the session with
+// is a PROTOCOL_VIOLATION. AcceptRequest has already closed the session with
 // SessionProtocolViolation.
 type ErrUnexpectedRequestUpdate struct {
 	RequestID uint64
@@ -65,7 +65,7 @@ type ErrUnexpectedRequestUpdate struct {
 // ErrUnexpectedPublishStateNotify is returned by AcceptRequest when a peer
 // opens a request stream with PUBLISH_STATE_NOTIFY. §10.10 admits it only as a
 // publisher's unilateral notification on a subscription's existing stream, so
-// this is a PROTOCOL_VIOLATION and the caller MUST close the session.
+// this is a PROTOCOL_VIOLATION; AcceptRequest has already closed the session.
 var ErrUnexpectedPublishStateNotify = errors.New(
 	"moqt/session: PUBLISH_STATE_NOTIFY as the first message of a request stream — PROTOCOL_VIOLATION")
 
@@ -74,6 +74,33 @@ func (e *ErrUnexpectedRequestUpdate) Error() string {
 		"moqt/session: REQUEST_UPDATE (Request ID %d) as the first message of a request stream — PROTOCOL_VIOLATION",
 		e.RequestID,
 	)
+}
+
+// ErrUnexpectedRequestOpener is returned by AcceptRequest when a peer opens a
+// request stream with anything but the seven request messages — a response or
+// follow-up such as SUBSCRIBE_OK, PUBLISH_DONE or GOAWAY, or an unknown type.
+// §3.3: "Bidirectional streams MUST NOT begin with any other message type
+// unless negotiated. If they do, the peer MUST close the Session with a
+// PROTOCOL_VIOLATION." AcceptRequest has already closed the session.
+// (REQUEST_UPDATE and PUBLISH_STATE_NOTIFY keep their own error values.)
+type ErrUnexpectedRequestOpener struct {
+	Type message.Type
+}
+
+func (e *ErrUnexpectedRequestOpener) Error() string {
+	return fmt.Sprintf(
+		"moqt/session: %s as the first message of a request stream — PROTOCOL_VIOLATION", e.Type)
+}
+
+// isRequestOpener reports whether msg is one of the seven messages that may
+// open a request stream (§3.3; marked "First" in Table 5).
+func isRequestOpener(msg message.Message) bool {
+	switch msg.(type) {
+	case *message.Subscribe, *message.Publish, *message.Fetch, *message.TrackStatus,
+		*message.PublishNamespace, *message.SubscribeNamespace, *message.SubscribeTracks:
+		return true
+	}
+	return false
 }
 
 // ErrTooManyRequestUpdates is returned by [RequestUpdateLimiter.Received] when
@@ -193,10 +220,12 @@ type Request struct {
 // requests for session-level tracks and namespaces". AcceptRequest loops until
 // it has an application-visible request to return.
 //
-// If the first message fails to parse, the bidi stream is reset and the error
-// is returned. §3.3 / §10 require the receiver to treat such conditions as
-// session-level PROTOCOL_VIOLATIONs; the caller decides whether to escalate
-// by calling Session.Close.
+// A stream opened by anything but the seven request messages (§3.3) — an
+// unknown type, a response, REQUEST_UPDATE or PUBLISH_STATE_NOTIFY — makes
+// AcceptRequest close the session with PROTOCOL_VIOLATION itself and return
+// *ErrUnexpectedRequestOpener, *ErrUnexpectedRequestUpdate or
+// ErrUnexpectedPublishStateNotify. Any other failure to read the first message
+// (truncation, reset, a malformed known type) only resets that stream.
 func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 	for {
 		stream, err := s.conn.AcceptStream(ctx)
@@ -212,17 +241,20 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
+			// §3.3: an unknown type cannot be one of the seven openers.
+			if typ, ok := errors.AsType[message.ErrUnknownType](err); ok {
+				return nil, s.closeProtocolViolation(&ErrUnexpectedRequestOpener{Type: message.Type(typ)})
+			}
 			return nil, fmt.Errorf("moqt/session: parse request first message: %w", err)
 		}
 
 		// §10.9: REQUEST_UPDATE is valid only as a follow-up on an existing
 		// request stream (or against a PUBLISH-established subscription), never
 		// as the message that opens a stream. Receiving one here is a
-		// PROTOCOL_VIOLATION; the caller MUST close the session
-		// (SessionProtocolViolation), as with the Request-ID violations below.
+		// PROTOCOL_VIOLATION (§3.3), and the session is closed with it.
 		if upd, ok := msg.(*message.RequestUpdate); ok {
 			resetStream(stream)
-			return nil, &ErrUnexpectedRequestUpdate{RequestID: upd.RequestID}
+			return nil, s.closeProtocolViolation(&ErrUnexpectedRequestUpdate{RequestID: upd.RequestID})
 		}
 
 		// §10.10: PUBLISH_STATE_NOTIFY is a unilateral publisher-to-subscriber
@@ -233,7 +265,16 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 		// accounting below would not catch it either.
 		if _, ok := msg.(*message.PublishStateNotify); ok {
 			resetStream(stream)
-			return nil, ErrUnexpectedPublishStateNotify
+			return nil, s.closeProtocolViolation(ErrUnexpectedPublishStateNotify)
+		}
+
+		// §3.3: a request stream begins with one of seven message types;
+		// "Bidirectional streams MUST NOT begin with any other message type
+		// unless negotiated. If they do, the peer MUST close the Session with
+		// a PROTOCOL_VIOLATION."
+		if !isRequestOpener(msg) {
+			resetStream(stream)
+			return nil, s.closeProtocolViolation(&ErrUnexpectedRequestOpener{Type: msg.Type()})
 		}
 
 		// §10.1 parity + duplicate enforcement, shared with the follow-up

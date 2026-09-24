@@ -275,10 +275,11 @@ func (h *sessionHandler) run(ctx context.Context) error {
 //   - the session emits an unrecoverable error from AcceptRequest,
 //   - a non-shutdown read failure occurs.
 //
-// Per-request protocol errors (parse failures, unknown message types, auth
-// failures) do NOT terminate the loop — the relay rejects the individual
-// request and continues serving the session. This matches §9.5's rule that
-// a single bad request must not break unrelated subscriptions.
+// Per-request failures (auth, rejected requests) do NOT terminate the loop —
+// the relay rejects the individual request and continues serving the session.
+// A stream opened by anything but a request message is different: §3.3 makes
+// it session-fatal, and AcceptRequest has closed the session by the time the
+// loop sees the error.
 func (h *sessionHandler) runRequestLoop(ctx context.Context) error {
 	err := h.requestMux(ctx).Run(ctx, h.sess)
 	// A malformed / duplicate / overflowing / unknown AUTHORIZATION_TOKEN alias
@@ -291,13 +292,9 @@ func (h *sessionHandler) runRequestLoop(ctx context.Context) error {
 			slog.Uint64("code", uint64(tce.Code)))
 		_ = h.sess.Close(tce.Code, tce.Error())
 	}
-	// §10.9: a REQUEST_UPDATE that opens a request stream is a PROTOCOL_VIOLATION
-	// AcceptRequest surfaces as *ErrUnexpectedRequestUpdate; close the session.
-	if _, ok := errors.AsType[*session.ErrUnexpectedRequestUpdate](err); ok {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "relay closing session on stray REQUEST_UPDATE",
-			slog.String("err", err.Error()))
-		_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
-	}
+	// A request stream opened by anything but a Table 5 "First" message
+	// (REQUEST_UPDATE, PUBLISH_STATE_NOTIFY, a response, ...) is a
+	// PROTOCOL_VIOLATION that AcceptRequest has already closed the session on.
 	return err
 }
 
@@ -355,12 +352,9 @@ func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 // namespaceRequest folds in the §13.7.1 per-session cap for the three
 // namespace-state requests (the §13.1 subscription cap is inline on SUBSCRIBE).
 //
-// An unexpected first-message type violates §10 ("Messages marked "First" MUST
-// be the first message on a new request stream"): OnUnknown resets the bidi
-// stream per §3.3.3 and logs. The session is NOT closed — §9.5
-// ("if a Session is closed due to an unknown or invalid control message [...] the
-// Relay MUST NOT propagate that message [...] to another Session") means the
-// relay isolates the failure to the one request.
+// All seven request types are registered. Any other first message is a §3.3
+// PROTOCOL_VIOLATION that [session.Session.AcceptRequest] closes the session on
+// before dispatch, so no OnUnknown fallback is needed.
 func (h *sessionHandler) requestMux(ctx context.Context) *session.RequestMux {
 	mux := session.NewRequestMux()
 
@@ -401,13 +395,6 @@ func (h *sessionHandler) requestMux(ctx context.Context) *session.RequestMux {
 	})
 	mux.HandleType(func(req *session.Request, msg *message.SubscribeTracks) {
 		h.namespaceRequest(ctx, req, func() { h.handleSubscribeTracks(ctx, req, msg) })
-	})
-
-	mux.OnUnknown(func(req *session.Request) {
-		h.log.LogAttrs(ctx, slog.LevelWarn, "relay rejected unknown request type",
-			slog.String("type", fmt.Sprintf("%T", req.First)))
-		req.Stream.CancelRead(uint64(moqt.StreamResetInternalError))
-		req.Stream.CancelWrite(uint64(moqt.StreamResetInternalError))
 	})
 
 	return mux
