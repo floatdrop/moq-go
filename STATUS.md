@@ -505,4 +505,3 @@ Relay:
   - a REQUEST_UPDATE on a SUBSCRIBE_TRACKS request is answered REQUEST_OK but
     its Range Filters (§5.1.4 names TRACK_PROPERTY_FILTER for it) are not
     applied: the filters and forwarded-PUBLISH parameters stay as sent.
-- Fill streams do not inherit the subscription's Range Filters (§5.1.3).
