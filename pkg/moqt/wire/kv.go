@@ -48,8 +48,20 @@ func (w *Writer) KVPairs(pairs []KVPair) {
 }
 
 // KVPair reads a single KVPair using prev as the running previous Type, and
-// returns the pair plus the new previous Type.
+// returns the pair plus the new previous Type. A byte value is a copy.
 func (r *Reader) KVPair(prev uint64) (KVPair, uint64, error) {
+	return r.kvPair(prev, true)
+}
+
+// KVPairView is [Reader.KVPair] with a byte value that aliases the reader's
+// buffer instead of copying it, for callers that only inspect the pairs
+// (per-Object validation) and must not allocate. The value is valid only as
+// long as the buffer is.
+func (r *Reader) KVPairView(prev uint64) (KVPair, uint64, error) {
+	return r.kvPair(prev, false)
+}
+
+func (r *Reader) kvPair(prev uint64, copyBytes bool) (KVPair, uint64, error) {
 	delta, err := r.Varint()
 	if err != nil {
 		return KVPair{}, prev, err
@@ -60,7 +72,7 @@ func (r *Reader) KVPair(prev uint64) (KVPair, uint64, error) {
 	t := prev + delta
 	p := KVPair{Type: t}
 	if p.IsBytes() {
-		b, err := r.VarintBytes()
+		b, err := r.varintBytes(copyBytes)
 		if err != nil {
 			return KVPair{}, prev, err
 		}

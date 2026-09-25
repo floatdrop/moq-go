@@ -112,6 +112,12 @@ func (r *Reader) RemainingBytes() []byte {
 // VarintBytes reads a varint length followed by that many bytes. The returned
 // slice is owned by the caller (see FixedBytes).
 func (r *Reader) VarintBytes() ([]byte, error) {
+	return r.varintBytes(true)
+}
+
+// varintBytes is VarintBytes, returning a slice of the buffer rather than a
+// copy when copyBytes is false.
+func (r *Reader) varintBytes(copyBytes bool) ([]byte, error) {
 	n, err := r.Varint()
 	if err != nil {
 		return nil, err
@@ -121,7 +127,13 @@ func (r *Reader) VarintBytes() ([]byte, error) {
 	if n > uint64(r.Remaining()) { //nolint:gosec // G115: Remaining() is len(buf)-off >= 0.
 		return nil, ErrShortBuffer
 	}
-	return r.FixedBytes(int(n)) //nolint:gosec // G115: n <= Remaining() above.
+	if copyBytes {
+		return r.FixedBytes(int(n)) //nolint:gosec // G115: n <= Remaining() above.
+	}
+	end := r.off + int(n) //nolint:gosec // G115: n <= Remaining() above.
+	b := r.buf[r.off:end:end]
+	r.off = end
+	return b, nil
 }
 
 // ReasonPhrase reads a varint-length-prefixed UTF-8 string per §1.4.4. The

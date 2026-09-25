@@ -19,6 +19,18 @@ import (
 // AcceptDataStream again.
 var ErrPaddingStream = errors.New("moqt/session: padding stream received (ignorable)")
 
+// ErrMalformedTrack wraps the error a read returns for an Object that makes
+// its track malformed (§2.4.2) — so far, Object Properties that fail
+// [message.CheckObjectProperties]. §2.4.2: "When a subscriber detects a
+// Malformed Track, it MUST cancel any corresponding subscription or fetches
+// for that Track from that publisher (see Section 3.3.3), and SHOULD deliver
+// an error to the application." The session delivers this error and leaves
+// the cancelling to the caller, which holds the subscription or fetch; the
+// session stays up. A relay "MUST immediately terminate downstream
+// subscriptions with PUBLISH_DONE and reset any fetch streams with Status
+// Code MALFORMED_TRACK", and must not cache the Object.
+var ErrMalformedTrack = errors.New("moqt/session: malformed track")
+
 // ---------------------------------------------------------------------------
 // DataStream — sealed interface returned by AcceptDataStream
 // ---------------------------------------------------------------------------
@@ -61,7 +73,8 @@ type IncomingSubgroupStream struct {
 	// SubgroupObject.Parse).
 	rd *wire.StreamReader
 
-	// Decoder state for ReadDecoded.
+	// Decoder state: the absolute ID of the last Object ReadObject read
+	// (§11.4.2), and ReadDecoded's resolved Subgroup ID.
 	decPrevObject       uint64
 	decHavePrev         bool
 	decSubgroupID       uint64 // resolved per §11.4.2 (zero / first-object / explicit)
@@ -127,6 +140,9 @@ func (s *IncomingSubgroupStream) Cancel(code moqt.StreamResetCode) {
 // returned [message.SubgroupObject] holds the raw §11.4.2 ObjectIDDelta;
 // use [IncomingSubgroupStream.ReadDecoded] when you want absolute IDs and
 // implicit SubgroupID resolution done for you.
+//
+// An Object whose Properties make the track malformed returns an error
+// wrapping [ErrMalformedTrack].
 func (s *IncomingSubgroupStream) ReadObject() (*message.SubgroupObject, error) {
 	obj := &message.SubgroupObject{}
 	if err := obj.Parse(s.rd, s.Header.Properties); err != nil {
@@ -137,6 +153,22 @@ func (s *IncomingSubgroupStream) ReadObject() (*message.SubgroupObject, error) {
 	// PROTOCOL_VIOLATION.
 	if err := obj.Validate(); err != nil {
 		return nil, s.sess.closeProtocolViolation(fmt.Errorf("moqt/session: subgroup object: %w", err))
+	}
+	// §11.4.2: the first Object's delta is its ID; later ones encode
+	// (current - previous - 1). Resolved here, not only in ReadDecoded, so
+	// the Properties check below has the Object's absolute ID.
+	objectID := obj.ObjectIDDelta
+	if s.decHavePrev {
+		var err error
+		if objectID, err = message.NextSubgroupObjectID(s.decPrevObject, obj.ObjectIDDelta); err != nil {
+			return nil, s.sess.closeProtocolViolation(err)
+		}
+	}
+	s.decPrevObject, s.decHavePrev = objectID, true
+	if len(obj.Properties) > 0 {
+		if err := message.CheckObjectProperties(obj.Properties, s.Header.GroupID, objectID); err != nil {
+			return nil, fmt.Errorf("%w: Group %d Object %d: %w", ErrMalformedTrack, s.Header.GroupID, objectID, err)
+		}
 	}
 	return obj, nil
 }
@@ -174,13 +206,7 @@ func (s *IncomingSubgroupStream) ReadDecoded() (*DecodedSubgroupObject, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	objectID := raw.ObjectIDDelta
-	if s.decHavePrev {
-		if objectID, err = message.NextSubgroupObjectID(s.decPrevObject, raw.ObjectIDDelta); err != nil {
-			return nil, s.sess.closeProtocolViolation(err)
-		}
-	}
+	objectID := s.decPrevObject // ReadObject resolved it
 
 	// Resolve the §11.4.2 SubgroupID mode once per stream. For
 	// SubgroupIDImplicitFirstObject the resolution depends on the
@@ -205,10 +231,6 @@ func (s *IncomingSubgroupStream) ReadDecoded() (*DecodedSubgroupObject, error) {
 		Properties:   raw.Properties,
 		Payload:      raw.Payload,
 	}
-
-	s.decPrevObject = objectID
-	s.decHavePrev = true
-
 	return d, nil
 }
 
@@ -342,6 +364,10 @@ func (d *DecodedFetchObject) IsEndOfRange() bool {
 // directly in the delta fields (per §11.4.4.1); subsequent objects' deltas
 // are interpreted using [IncomingFetchStream.GroupOrder] for cross-group
 // transitions.
+//
+// An Object whose Properties make the track malformed returns an error
+// wrapping [ErrMalformedTrack]. ReadObject does not check: it has no
+// absolute IDs to check a Prior Group / Object ID Gap against.
 func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 	raw, err := s.ReadObject()
 	if err != nil {
@@ -484,6 +510,11 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 	s.decHavePrev = true
 	s.decHaveActual = true
 
+	if len(d.Properties) > 0 {
+		if err := message.CheckObjectProperties(d.Properties, d.GroupID, d.ObjectID); err != nil {
+			return nil, fmt.Errorf("%w: Group %d Object %d: %w", ErrMalformedTrack, d.GroupID, d.ObjectID, err)
+		}
+	}
 	return d, nil
 }
 
