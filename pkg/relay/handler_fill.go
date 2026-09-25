@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -99,12 +100,21 @@ func (h *sessionHandler) maybeServeFill(
 	}
 	fillTimeout := resolveFillBudget(inner)
 
-	rangeFilters, err := message.RangeFiltersFromParams(inner)
-	if err == nil && rangeFilters != nil {
-		err = rangeFilters.Validate(h.sess.MaxFilterRanges())
-	}
-	if err != nil {
-		return fail(err)
+	// §5.1.3: "The fill fetch stream inherits the subscription's parameters,
+	// including subscriber priority, range filters and authorization;
+	// parameters carried inside FILL_PARAMETERS override them". A filter type
+	// named inside overrides the subscription's filter of that type, as a
+	// REQUEST_UPDATE would (§5.1.4: non-zero replaces, zero-length removes);
+	// the other types are inherited.
+	rangeFilters := sub.GetRangeFilters()
+	if slices.ContainsFunc(inner, func(p message.Parameter) bool { return message.IsRangeFilterParam(p.Type) }) {
+		rangeFilters, err = rangeFilters.Update(inner)
+		if err == nil && rangeFilters != nil {
+			err = rangeFilters.Validate(h.sess.MaxFilterRanges())
+		}
+		if err != nil {
+			return fail(err)
+		}
 	}
 
 	h.relayGo(func() {
