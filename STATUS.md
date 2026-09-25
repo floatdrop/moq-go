@@ -427,12 +427,6 @@ Found while fixing:
   applied, but none can be sent: there is no Option for it, and so no purge
   of a REGISTER the peer's MAX_AUTH_TOKEN_CACHE_SIZE could not hold.
 
-Request lifecycle:
-
-- The relay's REQUEST_UPDATE_OK to a downstream subscriber never carries
-  LARGEST_OBJECT (§10.9.1, §10.2.17). The session's `Publication` handling
-  does.
-
 Validation:
 
 - Object Properties are never validated on receipt: nested Immutable
