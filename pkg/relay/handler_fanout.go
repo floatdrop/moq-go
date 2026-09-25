@@ -224,7 +224,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	// the track. Resolve it here so the cache (and thus FETCH, which must spell
 	// it out), the PRIORITY_FILTER and §7.2 scheduling all see the inherited
 	// value, not a zero byte. The outbound header keeps InlinePriority false,
-	// so nothing changes on the wire.
+	// so nothing changes on the wire, except for a subscriber that asked for
+	// no Track Properties (see openWriterForSub).
 	if !hdr.InlinePriority {
 		hdr.PublisherPriority = in.DefaultPublisherPriority
 	}
@@ -503,6 +504,11 @@ func (h *sessionHandler) openWriterForSub(
 	}
 	subHdr := hdr
 	subHdr.TrackAlias = sub.TrackAlias
+	// A subscriber without Track Properties (§10.2.21) cannot inherit the
+	// DEFAULT_PUBLISHER_PRIORITY (§12.4) hdr resolved, so it is written out.
+	if !sub.IncludesProperties() {
+		subHdr.InlinePriority = true
+	}
 	// ioCtx bounds every blocking stream operation the writer performs
 	// (open, header write, object writes): cancelIO unblocks a writer
 	// wedged on a subscriber that stopped reading, so the teardown join

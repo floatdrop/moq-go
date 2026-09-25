@@ -122,9 +122,13 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 	// independent of which objects we end up streaming, so reply FETCH_OK
 	// before doing any (possibly slow) upstream stitching.
 	endLocation := capFetchEndLocation(filter, largest)
+	var properties []byte
+	if includeProperties(msg.Parameters) { // §10.2.21
+		properties = entry.GetProperties()
+	}
 	if err := req.Reply(&message.FetchOK{
 		EndLocation:     endLocation,
-		TrackProperties: entry.GetProperties(),
+		TrackProperties: properties,
 	}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH_OK reply failed",
 			slog.String("err", err.Error()))

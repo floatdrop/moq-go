@@ -175,7 +175,10 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 			),
 		}
 	}
-	properties := entry.GetProperties()
+	var properties []byte
+	if sub.IncludesProperties() { // §10.2.21
+		properties = entry.GetProperties()
+	}
 	// sub.WriteSubscribeOK, not req.Reply: the sub is registered, so a
 	// registry teardown goroutine can already reach it — every write on this
 	// stream must go through the sub's write lock from here on, and the
@@ -778,6 +781,7 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	if p, ok := ps.Find(message.ParamGroupOrder); ok {
 		sub.SetGroupOrder(p.Byte)
 	}
+	sub.SetIncludeProperties(includeProperties(ps))
 
 	// §10.2.3 / §10.2.4 delivery timeouts, overridden per parameter — the same
 	// "override present" behaviour as the fields above, applied to each
@@ -876,6 +880,16 @@ func checkGroupOrderParam(ps message.Parameters) error {
 		}
 	}
 	return nil
+}
+
+// includeProperties reports whether a request's INCLUDE_PROPERTIES (§10.2.21)
+// asks for Track Properties in the response or the resulting PUBLISHes: yes
+// unless it is 0 ("If INCLUDE_PROPERTIES is 0, the Track Properties are still
+// present in the message, but they SHOULD be empty"). The session has already
+// closed over a value other than 0 or 1.
+func includeProperties(ps message.Parameters) bool {
+	p, ok := ps.Find(message.ParamIncludeProperties)
+	return !ok || p.Byte != 0
 }
 
 // upstreamRejection is the REQUEST_ERROR for a downstream SUBSCRIBE whose
