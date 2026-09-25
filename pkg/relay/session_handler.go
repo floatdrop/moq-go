@@ -159,41 +159,36 @@ func saveLargestLocation(entry *registry.TrackEntry, ps message.Parameters) {
 	}
 }
 
-// handleInboundGoaway implements §10.4: when the peer sends GOAWAY, grant the
-// timeout it declared for in-flight subscriptions to wrap up, then close the
-// session. Per-session registry cleanup drops the entries on teardown.
+// logInboundGoaway records the peer's GOAWAY (§10.4). The relay does not
+// close the session for it: the Timeout is "The time in milliseconds the
+// sender will wait for graceful closure", after which the sender "closes the
+// session with GOAWAY_TIMEOUT [...] if there are still open requests"; a
+// Timeout of 0 sets no deadline at all. What the relay owes the peer is to
+// stop initiating requests to it (see [peerSentGoaway]).
 //
-// The relay does not migrate upstream subscriptions to the peer's NewSessionURI
-// (§9.5.1); dependent DownstreamSubs see their tracks end and the client
-// re-subscribes, which may re-establish the track via the on-demand upstream
+// As the subscriber on such a session the relay does not do the rest of what
+// §9.4.1 and §3.6 describe: it neither moves its subscriptions to the peer's
+// NewSessionURI nor closes the session itself once none remain. Dependent
+// DownstreamSubs see their tracks end when the session does, and clients
+// re-subscribe, which may re-establish the track via the on-demand upstream
 // subscribe path.
-//
-// Blocks on the declared timeout, sess.Done() (peer closed earlier), or ctx
-// (relay shutdown). The caller's defer then cancels runCtx to unblock the loops.
-func (h *sessionHandler) handleInboundGoaway(ctx context.Context) {
+func (h *sessionHandler) logInboundGoaway(ctx context.Context) {
 	g := h.sess.PeerGoaway()
-	if g == nil {
-		return
-	}
 	//nolint:gosec // G115: g.Timeout is a peer-supplied ms value; an out-of-range value yields a wrong duration, not a memory-safety issue.
 	timeout := time.Duration(g.Timeout) * time.Millisecond
 	h.log.LogAttrs(ctx, slog.LevelInfo, "relay received inbound GOAWAY",
 		slog.Duration("timeout", timeout),
 		slog.String("new_session_uri", string(g.NewSessionURI)))
-
-	if timeout > 0 {
-		timer := time.NewTimer(timeout)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-h.sess.Done():
-			return // peer drained cleanly
-		case <-ctx.Done():
-			return // relay-level shutdown took priority
-		}
-	}
-	_ = h.sess.Close(moqt.SessionGoawayTimeout, "inbound GOAWAY timeout")
 }
+
+// peerSentGoaway reports whether sess's peer has sent GOAWAY on the control
+// stream. §10.4: "Upon receiving a GOAWAY on the control stream, an endpoint
+// SHOULD NOT initiate new requests to the peer including SUBSCRIBE, PUBLISH,
+// FETCH, PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS and
+// TRACK_STATUS." The relay initiates SUBSCRIBE (on demand and to late
+// publishers), FETCH (stitching) and PUBLISH (to SUBSCRIBE_TRACKS holders);
+// each checks this first.
+func peerSentGoaway(sess *session.Session) bool { return sess.PeerGoaway() != nil }
 
 // subIDCounter allocates process-globally unique subscription IDs. It MUST
 // be global, not per-handler: a TrackEntry aggregates subscriptions from
@@ -214,16 +209,20 @@ func (h *sessionHandler) allocSubID() uint64 {
 // not close the session itself except on a protocol violation detected by a loop.
 func (h *sessionHandler) run(ctx context.Context) error {
 	// Watcher ties runCtx to the parent ctx and the session's Done channel so
-	// loops unblock as soon as the session terminates, and folds in inbound
-	// GOAWAY handling (see handleInboundGoaway).
+	// loops unblock as soon as the session terminates. An inbound GOAWAY is
+	// only logged (see logInboundGoaway); the session runs on until it ends.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
 		select {
+		case <-h.sess.GoawayReceived():
+			h.logInboundGoaway(ctx)
 		case <-h.sess.Done():
 		case <-runCtx.Done():
-		case <-h.sess.GoawayReceived():
-			h.handleInboundGoaway(ctx)
+		}
+		select {
+		case <-h.sess.Done():
+		case <-runCtx.Done():
 		}
 		cancel()
 	}()

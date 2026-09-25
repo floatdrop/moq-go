@@ -352,7 +352,8 @@ func (h *sessionHandler) stitchedFetchObjects(
 // avoids a self-loop (mirrors subscribeUpstream's guard).
 func (h *sessionHandler) pickFetchUpstream(entry *registry.TrackEntry) *registry.UpstreamSub {
 	for _, u := range entry.CopyUpstream() {
-		if u.FetchCapable && u.IsEstablished() && u.Session != nil && u.Session != h.sess {
+		if u.FetchCapable && u.IsEstablished() && u.Session != nil && u.Session != h.sess &&
+			!peerSentGoaway(u.Session) {
 			return u
 		}
 	}

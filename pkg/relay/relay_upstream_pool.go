@@ -178,6 +178,12 @@ func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamesp
 			p.metrics.UpstreamDialFailed(info.RelayAddr)
 			continue // fall through to the next-ranked relay
 		}
+		if peerSentGoaway(sess) {
+			// A relay that sent GOAWAY takes no new requests (§10.4), so it
+			// must not hold a fan-in slot: fall through to the next-ranked
+			// one while it drains.
+			continue
+		}
 		out = append(out, sess)
 		if p.fanIn > 0 && len(out) >= p.fanIn {
 			break // opt-in bound reached; deeper candidates are the fallback pool

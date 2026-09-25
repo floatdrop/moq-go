@@ -25,6 +25,9 @@ func (h *sessionHandler) forwardTrack(
 	params message.Parameters,
 ) func(*registry.SubscriberEntry, *registry.TrackEntry) {
 	return func(sub *registry.SubscriberEntry, te *registry.TrackEntry) {
+		if peerSentGoaway(h.sess) {
+			return // §10.4: no new PUBLISH to a peer that sent GOAWAY
+		}
 		fullName := te.FullName
 		if !fullName.Namespace.HasPrefix(sub.Prefix()) {
 			return // a TRACK_NAMESPACE_PREFIX update moved the subscription away
