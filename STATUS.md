@@ -501,6 +501,10 @@ Relay:
 - Upstream PUBLISH_DONE codes are flattened to TRACK_ENDED; §10.12 asks for "a
   relevant status code".
 - Duplicate objects from redundant upstreams are not compared (§9.1).
+- A subgroup stream from which Objects were omitted because the subscription
+  was paused (Forward State 0) ends with a FIN when the inbound subgroup does,
+  where §11.4.3 lists "Omitting a Subgroup Object due to the subscriber's
+  Forward State" among the cases that MUST reset the stream.
 - After an inbound GOAWAY the relay stops initiating requests to that peer
   (§10.4) but, as its subscriber, neither unsubscribes ("A subscriber SHOULD
   individually unsubscribe from each existing subscription"), nor migrates to

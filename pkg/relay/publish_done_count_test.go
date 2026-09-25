@@ -35,7 +35,7 @@ func awaitPublishDone(t *testing.T, sub *session.Subscription) *message.PublishD
 		}
 		return pd
 	case <-time.After(2 * time.Second):
-		t.Fatal("no PUBLISH_DONE after the publisher left")
+		t.Fatal("no PUBLISH_DONE on the subscription stream")
 		return nil
 	}
 }
