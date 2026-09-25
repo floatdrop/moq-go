@@ -438,7 +438,8 @@ func rejectStreamWithError(stream Stream, code moqt.RequestErrorCode, reason str
 // Update and Broker methods.
 type requestHandle struct {
 	// Stream is the request stream, still open for follow-up traffic.
-	// Close it to end the request.
+	// [requestHandle.Close] ends the request; Stream.Close only FINs this
+	// side, which does not cancel it (§3.3.2).
 	Stream
 
 	s         *Session
@@ -446,6 +447,37 @@ type requestHandle struct {
 
 	brokerOnce sync.Once
 	broker     atomic.Pointer[RequestBroker]
+
+	// finished records that writeThenClose delivered this side's final
+	// message and FIN, so Close must not reset what it sent.
+	finished atomic.Bool
+}
+
+// Close ends the request by cancelling it (§3.3.3): "abruptly terminating any
+// directions of the stream that are still open, using RESET_STREAM for a
+// direction they are sending and STOP_SENDING for a direction they are
+// receiving". A FIN alone would not do — "it is not a request cancellation"
+// (§3.3.2). If this side already finished sending (e.g. [Publication.Done]
+// wrote PUBLISH_DONE and FIN), only reading is stopped, so the final message
+// is not lost.
+//
+// Close does not track whether the peer already completed the request. A
+// Close after that (e.g. a deferred one after PUBLISH_DONE arrived) resets
+// where §3.3.2 says the requester SHOULD FIN; the request is over either way.
+// Use Stream.Close to FIN instead.
+func (h *requestHandle) Close() error {
+	if h.finished.Load() {
+		h.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
+		return nil
+	}
+	cancelRequest(h.Stream)
+	return nil
+}
+
+// cancelRequest cancels a request stream in both directions (§3.3.3).
+func cancelRequest(s Stream) {
+	s.CancelRead(uint64(moqt.StreamResetCancelled))
+	s.CancelWrite(uint64(moqt.StreamResetCancelled))
 }
 
 // Broker returns this request's [RequestBroker], creating it on first call.
@@ -482,12 +514,20 @@ func (h *requestHandle) Update(ctx context.Context, params message.Parameters) (
 // terminal handle methods like [Publication.Done].
 func (h *requestHandle) writeThenClose(msg message.Message) error {
 	if b := h.broker.Load(); b != nil {
-		return b.writeThenClose(msg)
+		if err := b.writeThenClose(msg); err != nil {
+			return err
+		}
+		h.finished.Store(true)
+		return nil
 	}
 	if err := message.Marshal(h.Stream, msg); err != nil {
 		return err
 	}
-	return h.Stream.Close()
+	if err := h.Stream.Close(); err != nil {
+		return err
+	}
+	h.finished.Store(true)
+	return nil
 }
 
 // openRequest opens a new outbound bidirectional stream and writes first as

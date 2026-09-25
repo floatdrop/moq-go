@@ -41,15 +41,16 @@ func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscri
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.SubscribeOK) (*Subscription, error) {
 			// §2.5.1: reject tracks with unknown mandatory track properties.
+			// "the subscriber MUST cancel the subscription" (§2.5.1).
 			if err := s.validateTrackProperties(ok.TrackProperties, "SUBSCRIBE_OK"); err != nil {
-				_ = stream.Close()
+				cancelRequest(stream)
 				return nil, err
 			}
 			// §11.1: register the alias the publisher assigned so we can detect
 			// DUPLICATE_TRACK_ALIAS if the same alias is reused for a different track.
 			key := track.NewKey(m.Namespace, m.Name)
 			if err := s.RegisterInboundTrack(ok.TrackAlias, key, ok.TrackProperties); err != nil {
-				_ = stream.Close()
+				cancelRequest(stream)
 				return nil, err
 			}
 			return &Subscription{

@@ -41,8 +41,9 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.FetchOK) (*FetchRequest, error) {
 			// §2.5.1: reject tracks with unknown mandatory track properties.
+			// "the subscriber MUST cancel the fetch" (§2.5.1).
 			if err := s.validateTrackProperties(ok.TrackProperties, "FETCH_OK"); err != nil {
-				_ = stream.Close()
+				cancelRequest(stream)
 				return nil, err
 			}
 			return &FetchRequest{

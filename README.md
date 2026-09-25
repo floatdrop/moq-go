@@ -76,7 +76,9 @@ pub, err := sess.Publish(ctx, &message.Publish{
 if err != nil {
 	return err
 }
-defer pub.Close()
+// Done ends the publication gracefully (PUBLISH_DONE, then FIN). pub.Close()
+// cancels it instead (§3.3.3).
+defer pub.Done(moqt.PublishDoneTrackEnded, "")
 
 // Publish assigned the Track Alias; the returned Publication carries it, so
 // pub.OpenSubgroup fills it in for you. To manage aliases yourself, set
