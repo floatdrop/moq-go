@@ -601,8 +601,19 @@ type subgroupWriter struct {
 	// Subgroup other than one before its Start Location — a filter, Forward
 	// State 0, an inbox overflow or an expiry. No stream of this writer can
 	// then carry the whole Subgroup, so each ends with a reset, not a FIN
-	// (§11.4.3). Set under dropsMu.
-	incomplete bool
+	// (§11.4.3), with incompleteCode: CANCELLED, or EXCESSIVE_LOAD for an
+	// overflow (§3.3.4). Set under dropsMu.
+	//
+	// Objects published before a subscription joined never reach its writer,
+	// so they do not count: the user chose to treat them like Objects before
+	// its Start Location, and a joiner's partial stream (FIRST_OBJECT clear)
+	// may still end with a FIN.
+	incomplete     bool
+	incompleteCode moqt.StreamResetCode
+	// admitted records that admit let an Object through, so a later
+	// SkipBeforeStart can only mean the Start was raised past it. Only
+	// touched by admit, under sg.Mu.
+	admitted bool
 }
 
 // admit decides whether w takes the Object at objectID of the subgroup hdr
@@ -610,13 +621,14 @@ type subgroupWriter struct {
 func (w *subgroupWriter) admit(hdr message.SubgroupHeader, objectID uint64, props []byte) bool {
 	switch w.sub.ForwardDecision(hdr.GroupID, objectID, hdr.SubgroupID, hdr.PublisherPriority, props) {
 	case registry.Forward:
+		w.admitted = true
 		return true
 	case registry.SkipObject, registry.SkipPaused:
 		// The Object takes no queue slot (a paused subscription's control
 		// messages still flow), and the stream stays open: a later Object
 		// may pass, or Forward State return to 1. But the Subgroup is now
 		// incomplete for this subscription (§11.4.3).
-		w.markIncomplete()
+		w.markIncomplete(moqt.StreamResetCancelled)
 	case registry.SkipGroup, registry.SkipEnded:
 		// The stream will never carry another Object: the subscription has
 		// narrowed so this whole group is out of range, or it has ended
@@ -627,17 +639,31 @@ func (w *subgroupWriter) admit(hdr message.SubgroupHeader, objectID uint64, prop
 		// on w.done.
 		w.close(true, moqt.StreamResetCancelled)
 	case registry.SkipBeforeStart:
-		// §11.4.3 allows a FIN after omitting these.
+		// §11.4.3 allows a FIN after omitting these — but Object IDs rise
+		// within a Subgroup, so one after an admitted Object means a
+		// REQUEST_UPDATE raised the Start past it: "A REQUEST_UPDATE moving
+		// [...] the Start Location to a larger Location" MUST reset.
+		if w.admitted {
+			w.markIncomplete(moqt.StreamResetCancelled)
+		}
 	}
 	return false
 }
 
 // markIncomplete records that this subscription will not receive the whole
-// Subgroup; see subgroupWriter.incomplete.
-func (w *subgroupWriter) markIncomplete() {
+// Subgroup, and the reset code to end its stream with; see
+// subgroupWriter.incomplete. The first code recorded stands.
+func (w *subgroupWriter) markIncomplete(code moqt.StreamResetCode) {
 	w.dropsMu.Lock()
-	w.incomplete = true
+	w.markIncompleteLocked(code)
 	w.dropsMu.Unlock()
+}
+
+func (w *subgroupWriter) markIncompleteLocked(code moqt.StreamResetCode) {
+	if !w.incomplete {
+		w.incomplete = true
+		w.incompleteCode = code
+	}
 }
 
 // publish does a non-blocking send onto the inbox, stamping the enqueue time
@@ -666,7 +692,9 @@ func (w *subgroupWriter) publish(fwd fwdObject) {
 		w.metrics.ObjectDropped(w.ref, w.hdr.SubgroupID)
 		w.dropsMu.Lock()
 		w.drops++
-		w.incomplete = true // §11.4.3: the dropped Object is missing downstream
+		// §11.4.3: the dropped Object is missing downstream; §3.3.4
+		// EXCESSIVE_LOAD is why.
+		w.markIncompleteLocked(moqt.StreamResetExcessiveLoad)
 		drops := w.drops
 		capped := w.maxDropsBeforeReset > 0 && w.drops > w.maxDropsBeforeReset
 		w.dropsMu.Unlock()
@@ -712,7 +740,7 @@ func (w *subgroupWriter) expired(fwd fwdObject) bool {
 //
 // Either way the Subgroup is now incomplete for this subscription (§11.4.3).
 func (w *subgroupWriter) dropExpired(hasWritten bool) {
-	w.markIncomplete()
+	w.markIncomplete(moqt.StreamResetCancelled)
 	if hasWritten || w.out == nil {
 		return
 	}
@@ -950,7 +978,7 @@ func (w *subgroupWriter) run() {
 	dropCapped := w.maxDropsBeforeReset > 0 && w.drops > w.maxDropsBeforeReset
 	inboundReset := w.inboundReset
 	inboundResetCode := w.inboundResetCode
-	incomplete := w.incomplete
+	incomplete, incompleteCode := w.incomplete, w.incompleteCode
 	w.dropsMu.Unlock()
 
 	if lagExceeded || dropCapped {
@@ -1027,7 +1055,7 @@ func (w *subgroupWriter) run() {
 		// §11.4.3: FIN only after "all objects in a Subgroup" (bar those
 		// before the Start Location) went out on the stream; otherwise
 		// "it MUST reset the stream".
-		w.closeOut(false, moqt.StreamResetCancelled)
+		w.closeOut(false, incompleteCode)
 		return
 	}
 

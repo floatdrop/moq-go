@@ -650,7 +650,8 @@ const (
 	// Forward: enqueue the Object.
 	Forward ForwardVerdict = iota
 	// SkipBeforeStart: the Object lies before the subscription's Start
-	// Location — the one omission §11.4.3 still allows a FIN after.
+	// Location — the one omission §11.4.3 still allows a FIN after, unless
+	// the Start was raised past Objects already sent (the caller can tell).
 	SkipBeforeStart
 	// SkipObject: a filter drops this Object only (a Range Filter, or the
 	// Location filter past its End); a later one in the group may still
@@ -661,8 +662,9 @@ const (
 	// The Subgroup is incomplete for this subscription (§11.4.3: "Omitting a
 	// Subgroup Object due to the subscriber's Forward State").
 	SkipPaused
-	// SkipGroup: the Location filter has narrowed so this whole group is
-	// permanently out of range (§11.4.3); the stream can be reset promptly.
+	// SkipGroup: the Location filter puts this whole group permanently out of
+	// range — it lies before an absolute Start or past the End (§11.4.3); the
+	// stream can be reset promptly.
 	SkipGroup
 	// SkipEnded: the subscription is terminated and takes no new Object
 	// (§10.12).
@@ -700,14 +702,16 @@ func (d *DownstreamSub) ForwardDecision(
 	case paused:
 		return SkipPaused
 	}
-	// Location filter first, so its group-exhaustion signal (§11.4.3) governs.
+	// Location filter first, so its group-exhaustion signal (§11.4.3) governs:
+	// a whole group out of range (below a raised Start as much as past a
+	// narrowed End) resets the stream promptly.
 	loc := message.Location{Group: group, Object: object}
 	if f != nil && !f.Matches(loc, largest, has) {
 		switch {
-		case loc.Less(f.Start(largest, has)):
-			return SkipBeforeStart
 		case GroupOutOfRange(group, f):
 			return SkipGroup
+		case loc.Less(f.Start(largest, has)):
+			return SkipBeforeStart
 		}
 		return SkipObject
 	}
