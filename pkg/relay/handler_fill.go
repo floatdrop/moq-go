@@ -154,6 +154,7 @@ func (h *sessionHandler) resetFillStream(ctx context.Context, sub *registry.Down
 		return
 	}
 	out.Cancel(moqt.StreamResetInternalError)
+	sub.StreamClosed()
 }
 
 // errSubscriptionTerminated reports a subgroup or fill stream not opened

@@ -453,22 +453,9 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			if w == nil {
 				continue
 			}
-			// One lock acquisition folds the §9.2 Forward-State gate and the
-			// §5.1.2 filter test. A paused subscription (Forward State 0) takes
-			// no queue slot; control messages on its request stream still flow.
-			forward, groupExhausted := w.sub.ForwardDecision(
-				hdr.GroupID, objectID, hdr.SubgroupID, hdr.PublisherPriority, obj.Properties)
-			if !forward {
-				// §11.4.3: if the subscription has narrowed so this whole
-				// group is now out of range, the stream will never carry
-				// another object — reset it promptly (not FIN). close is
-				// idempotent; the teardown still waits on w.done.
-				if groupExhausted {
-					w.close(true, moqt.StreamResetCancelled)
-				}
-				continue
+			if w.admit(hdr, objectID, obj.Properties) {
+				w.publish(fwdObject{obj: obj, absID: objectID, first: isTrueFirst})
 			}
-			w.publish(fwdObject{obj: obj, absID: objectID, first: isTrueFirst})
 		}
 		sg.Mu.Unlock()
 
@@ -612,6 +599,31 @@ type subgroupWriter struct {
 	inboundResetCode moqt.StreamResetCode // §3.3.4 reset code when inboundReset; set inside close
 }
 
+// admit decides whether w takes the Object at objectID of the subgroup hdr
+// names, closing w when it will take none again.
+func (w *subgroupWriter) admit(hdr message.SubgroupHeader, objectID uint64, props []byte) bool {
+	// §10.12: an ended subscription takes no new Object. Its stream is reset
+	// (the subgroup is unfinished) once what is already queued is written, so
+	// its PUBLISH_DONE, which waits for its streams to close, can follow.
+	if w.sub.IsTerminated() {
+		w.close(true, moqt.StreamResetCancelled)
+		return false
+	}
+	// One lock acquisition folds the §9.2 Forward-State gate and the §5.1.2
+	// filter test. A paused subscription (Forward State 0) takes no queue
+	// slot; control messages on its request stream still flow.
+	forward, groupExhausted := w.sub.ForwardDecision(
+		hdr.GroupID, objectID, hdr.SubgroupID, hdr.PublisherPriority, props)
+	if !forward && groupExhausted {
+		// §11.4.3: if the subscription has narrowed so this whole group is
+		// now out of range, the stream will never carry another object —
+		// reset it promptly (not FIN). close is idempotent; the teardown
+		// still waits on w.done.
+		w.close(true, moqt.StreamResetCancelled)
+	}
+	return forward
+}
+
 // publish does a non-blocking send onto the inbox, stamping the enqueue time
 // so the writer goroutine can measure how long the object waited before it was
 // written (the §8 lag window — see [subgroupWriter.run]). On overflow the
@@ -688,8 +700,31 @@ func (w *subgroupWriter) dropExpired(hasWritten bool) {
 		w.unbridge()
 		w.unbridge = nil
 	}
-	w.out.Cancel(moqt.StreamResetCancelled)
+	w.closeOut(false, moqt.StreamResetCancelled)
+}
+
+// closeOut ends the writer's current outbound stream — a FIN when fin, else a
+// reset with code — and reports it closed to the subscription, whose
+// PUBLISH_DONE waits until every stream it opened is closed (§10.12).
+func (w *subgroupWriter) closeOut(fin bool, code moqt.StreamResetCode) {
+	if w.out == nil {
+		return
+	}
+	if fin {
+		_ = w.out.Close()
+	} else {
+		w.out.Cancel(code)
+	}
+	w.dropOut()
+}
+
+// dropOut is closeOut for an outbound stream the session has already reset.
+func (w *subgroupWriter) dropOut() {
+	if w.out == nil {
+		return
+	}
 	w.out = nil
+	w.sub.StreamClosed()
 }
 
 func (w *subgroupWriter) run() {
@@ -724,9 +759,7 @@ func (w *subgroupWriter) run() {
 			w.unbridge()
 			w.unbridge = nil
 		}
-		if w.out != nil {
-			w.out.Cancel(moqt.StreamResetCancelled)
-		}
+		w.closeOut(false, moqt.StreamResetCancelled)
 		hdr := w.hdr
 		hdr.ReplayingSubgroup = !first
 		if !first && hdr.SubgroupIDMode == message.SubgroupIDImplicitFirstObject {
@@ -740,7 +773,6 @@ func (w *subgroupWriter) run() {
 		if err != nil {
 			w.log.Debug("fanout: OpenSubgroup (reopen) failed",
 				"sub_id", w.sub.ID, "err", err.Error())
-			w.out = nil
 			return false
 		}
 		// §8: enforce the delivery timeouts on this stream.
@@ -764,6 +796,9 @@ func (w *subgroupWriter) run() {
 		if w.unbridge != nil {
 			w.unbridge()
 		}
+		// Every exit below closes the stream; this only guards a path that
+		// would otherwise leave it open, and PUBLISH_DONE waiting on it.
+		w.closeOut(false, moqt.StreamResetCancelled)
 	}()
 
 	// failWrites latches this writer broken: no further stream writes will
@@ -870,15 +905,14 @@ func (w *subgroupWriter) run() {
 					"sub_id", w.sub.ID, "group", w.hdr.GroupID,
 					"subgroup", w.hdr.SubgroupID)
 				w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseDeliveryTimeout)
-				w.out = nil
+				w.dropOut()
 				failWrites()
 				continue
 			}
 			w.log.Debug("fanout: WriteObject failed",
 				"sub_id", w.sub.ID, "err", err.Error())
 			w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseWriteError)
-			w.out.Cancel(moqt.StreamResetInternalError)
-			w.out = nil
+			w.closeOut(false, moqt.StreamResetInternalError)
 			failWrites()
 			continue
 		}
@@ -923,9 +957,7 @@ func (w *subgroupWriter) run() {
 		w.dropsMu.Lock()
 		w.closed = true
 		w.dropsMu.Unlock()
-		if w.out != nil {
-			w.out.Cancel(resetCode)
-		}
+		w.closeOut(false, resetCode)
 		w.sub.Terminate()
 
 		// Also cancel the subscriber's request stream so the
@@ -962,14 +994,14 @@ func (w *subgroupWriter) run() {
 		// upstream reset / ctx-cancel, MALFORMED_TRACK for a §11.4.3
 		// post-terminal-object violation).
 		w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseInboundReset)
-		w.out.Cancel(inboundResetCode)
+		w.closeOut(false, inboundResetCode)
 		return
 	}
 
 	// Clean inbound FIN propagation: every forwarded object that this
 	// subscription wanted was delivered, so we FIN the outbound stream
 	// per §11.4.3.
-	_ = w.out.Close()
+	w.closeOut(true, 0)
 }
 
 // openCounted opens a subgroup stream for w's subscription, counting it for

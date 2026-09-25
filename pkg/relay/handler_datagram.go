@@ -110,7 +110,14 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		// Properties, Status, Payload all forward verbatim.
 		out := *d
 		out.TrackAlias = sub.TrackAlias
-		if err := sub.Session.SendDatagram(&out); err != nil {
+		// §10.12: PUBLISH_DONE waits for a send in progress, and none starts
+		// after it.
+		if !sub.BeginDatagram() {
+			continue
+		}
+		err := sub.Session.SendDatagram(&out)
+		sub.EndDatagram()
+		if err != nil {
 			// Per §11.3 datagrams may be dropped silently when
 			// the transport can't deliver them; treat send errors
 			// the same way and log at Debug for postmortem.

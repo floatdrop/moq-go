@@ -698,6 +698,11 @@ func (h *sessionHandler) streamFetchRange(
 			slog.String("kind", kind), slog.String("err", err.Error()))
 		return false
 	}
+	if sub != nil {
+		// Both exits below close the stream; a fill stream's subscription
+		// holds its PUBLISH_DONE until then (§10.12).
+		defer sub.StreamClosed()
+	}
 
 	// Gather cached objects, stitching the below-floor portion from upstream
 	// when the cache doesn't cover the whole range (§9.4).
