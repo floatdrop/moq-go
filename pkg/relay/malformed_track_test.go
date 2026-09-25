@@ -99,3 +99,53 @@ func TestRelay_MalformedObjectEndsTrack(t *testing.T) {
 		})
 	}
 }
+
+// TestRelay_MalformedObjectEndsTrackWithStreamsOpen: "immediately terminate
+// downstream subscriptions with PUBLISH_DONE" must not wait on the
+// subscription's other outbound streams. Here the publisher leaves a second
+// subgroup stream open and idle; PUBLISH_DONE, which follows the last open
+// stream (§10.12), still arrives because the relay resets it.
+func TestRelay_MalformedObjectEndsTrackWithStreamsOpen(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	pub := publishVideoTrack(t, pubSess, "cam1", 7)
+	subSess := dialAnotherClient(t, pubSess)
+	subReq := subscribeCam1Req(t, subSess)
+
+	idle, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+		SubgroupIDMode: message.SubgroupIDExplicit, TrackAlias: 7, GroupID: 1,
+	})
+	if err != nil {
+		t.Fatalf("OpenSubgroup: %v", err)
+	}
+	defer idle.Close()
+	if err := idle.WriteObject(&message.SubgroupObject{Payload: []byte("ok")}); err != nil {
+		t.Fatalf("WriteObject: %v", err)
+	}
+	// The subscriber reads the idle stream's Object, so its outbound
+	// stream is open, and then leaves it; later streams are drained.
+	ds, err := subSess.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	if _, err := ds.(*session.IncomingSubgroupStream).ReadObject(); err != nil {
+		t.Fatalf("ReadObject: %v", err)
+	}
+	go drainAllStreams(t.Context(), subSess)
+
+	go func() {
+		sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+			SubgroupIDMode: message.SubgroupIDExplicit, TrackAlias: 7, GroupID: 2, Properties: true,
+		})
+		if err != nil {
+			return
+		}
+		_ = sg.WriteObject(&message.SubgroupObject{Properties: mandatoryObjectProps(), Payload: []byte("x")})
+		_ = sg.Close()
+	}()
+	if pd := awaitPublishDone(t, subReq); pd.StatusCode != moqt.PublishDoneMalformedTrack {
+		t.Fatalf("downstream PUBLISH_DONE %#x, want MALFORMED_TRACK", uint64(pd.StatusCode))
+	}
+	requireUpstreamCancelled(t, pub)
+}

@@ -12,7 +12,11 @@ import (
 //
 //   - a Key-Value-Pair that cannot be parsed, in the mutable list or inside
 //     Immutable Properties (§12.7);
-//   - more than one Immutable Properties, or one inside another (§12.7);
+//   - Immutable Properties inside Immutable Properties (§12.7);
+//   - more than one Immutable Properties. §12.7 says only "An Object MUST NOT
+//     contain more than one instance of this property", outside its list of
+//     malformed conditions; treating it as malformed is this package's reading
+//     of §2.4.2's non-exhaustive list;
 //   - more than one Prior Group ID Gap or Prior Object ID Gap, counting both
 //     lists, or one larger than the Object's Group ID / Object ID (§12.8,
 //     §12.9);
@@ -61,7 +65,8 @@ func (c *objectPropertiesCheck) walk(raw []byte, nested bool) error {
 				return errors.New("moqt/message: Immutable Properties inside Immutable Properties (§12.7)")
 			}
 			if c.immutables++; c.immutables > 1 {
-				return fmt.Errorf("moqt/message: Immutable Properties: %w (§12.7)", errTooManyInstances)
+				// An interpretation: see CheckObjectProperties.
+				return fmt.Errorf("moqt/message: Immutable Properties: %w (§12.7, §2.4.2)", errTooManyInstances)
 			}
 			if err := c.walk(kv.ByteVal, true); err != nil {
 				return err

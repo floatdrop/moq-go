@@ -134,3 +134,36 @@ func TestFetchObjectMalformedProperties(t *testing.T) {
 	ds.(*session.IncomingFetchStream).Cancel(0)
 	wg.Wait()
 }
+
+// TestImplicitSubgroupIDSurvivesMalformedFirstObject: §11.4.2 SUBGROUP_ID_MODE
+// 0b01 makes the Subgroup ID the stream's first Object ID. It stays so for a
+// caller that reads on after that first Object was reported malformed.
+func TestImplicitSubgroupIDSurvivesMalformedFirstObject(t *testing.T) {
+	cli, srv := openPair(t)
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		out, err := cli.OpenSubgroup(message.SubgroupHeader{
+			TrackAlias: 1, GroupID: 7, SubgroupIDMode: message.SubgroupIDImplicitFirstObject, Properties: true,
+		})
+		if err != nil {
+			return
+		}
+		_ = out.WriteObject(&message.SubgroupObject{
+			ObjectIDDelta: 5, Properties: objProps(wire.KVPair{Type: 0x4000, IntVal: 1}),
+		})
+		_ = out.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Properties: []byte{}})
+		_ = out.Close()
+	})
+	ds, err := srv.AcceptDataStream(t.Context())
+	must(t, err)
+	in := ds.(*session.IncomingSubgroupStream)
+	if _, err := in.ReadDecoded(); !errors.Is(err, session.ErrMalformedTrack) {
+		t.Fatalf("first Object: %v, want ErrMalformedTrack", err)
+	}
+	d, err := in.ReadDecoded()
+	must(t, err)
+	if d.SubgroupID != 5 || d.ObjectID != 6 {
+		t.Fatalf("second Object = Subgroup %d Object %d, want Subgroup 5 Object 6", d.SubgroupID, d.ObjectID)
+	}
+	wg.Wait()
+}

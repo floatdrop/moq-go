@@ -438,7 +438,13 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   Group), and §2.4.2's list other than an Object after END_OF_GROUP on the
   same stream. A downstream FETCH already being served from the cache when
   the track is found malformed is not reset: the relay does not track fetch
-  streams per track.
+  streams per track. One interpretation: an Object with two Immutable
+  Properties is treated as malformed, although §12.7 states "MUST NOT contain
+  more than one instance" outside its list of malformed conditions.
+- **LOC properties inside Immutable Properties (§12.7)** — `loc.Properties.Parse`
+  reads only the mutable list, so a LOC Timestamp and the like placed inside
+  Immutable Properties is not found. Filling the fields from there would make
+  `Append` re-emit them in the mutable list, changing what a relay forwards.
 
 ### Draft-20 compliance review backlog
 

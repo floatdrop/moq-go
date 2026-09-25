@@ -73,8 +73,8 @@ type IncomingSubgroupStream struct {
 	// SubgroupObject.Parse).
 	rd *wire.StreamReader
 
-	// Decoder state: the absolute ID of the last Object ReadObject read
-	// (§11.4.2), and ReadDecoded's resolved Subgroup ID.
+	// Decoder state, kept by ReadObject: the absolute ID of the last Object
+	// it read and the stream's resolved Subgroup ID (§11.4.2).
 	decPrevObject       uint64
 	decHavePrev         bool
 	decSubgroupID       uint64 // resolved per §11.4.2 (zero / first-object / explicit)
@@ -130,6 +130,11 @@ func (s *IncomingSubgroupStream) isDataStream() {}
 // for correctly-framed object access.
 func (s *IncomingSubgroupStream) Read(p []byte) (int, error) { return s.br.Read(p) }
 
+// ObjectID returns the absolute Object ID (§11.4.2) of the Object the last
+// ReadObject or ReadDecoded call read, including one it returned with
+// [ErrMalformedTrack].
+func (s *IncomingSubgroupStream) ObjectID() uint64 { return s.decPrevObject }
+
 // Cancel resets the stream with the given application code (§3.3.4).
 func (s *IncomingSubgroupStream) Cancel(code moqt.StreamResetCode) {
 	s.src.CancelRead(uint64(code))
@@ -165,6 +170,20 @@ func (s *IncomingSubgroupStream) ReadObject() (*message.SubgroupObject, error) {
 		}
 	}
 	s.decPrevObject, s.decHavePrev = objectID, true
+	// Resolve the §11.4.2 SubgroupID mode once per stream, before anything
+	// can fail: for SubgroupIDImplicitFirstObject it is the first Object's
+	// ID even if that Object is malformed.
+	if !s.decSubgroupResolved {
+		switch s.Header.SubgroupIDMode {
+		case message.SubgroupIDImplicitZero:
+			s.decSubgroupID = 0
+		case message.SubgroupIDImplicitFirstObject:
+			s.decSubgroupID = objectID
+		case message.SubgroupIDExplicit:
+			s.decSubgroupID = s.Header.SubgroupID
+		}
+		s.decSubgroupResolved = true
+	}
 	if len(obj.Properties) > 0 {
 		if err := message.CheckObjectProperties(obj.Properties, s.Header.GroupID, objectID); err != nil {
 			return nil, fmt.Errorf("%w: Group %d Object %d: %w", ErrMalformedTrack, s.Header.GroupID, objectID, err)
@@ -206,27 +225,10 @@ func (s *IncomingSubgroupStream) ReadDecoded() (*DecodedSubgroupObject, error) {
 	if err != nil {
 		return nil, err
 	}
-	objectID := s.decPrevObject // ReadObject resolved it
-
-	// Resolve the §11.4.2 SubgroupID mode once per stream. For
-	// SubgroupIDImplicitFirstObject the resolution depends on the
-	// first object's absolute ID, which is why we do it lazily here.
-	if !s.decSubgroupResolved {
-		switch s.Header.SubgroupIDMode {
-		case message.SubgroupIDImplicitZero:
-			s.decSubgroupID = 0
-		case message.SubgroupIDImplicitFirstObject:
-			s.decSubgroupID = objectID
-		case message.SubgroupIDExplicit:
-			s.decSubgroupID = s.Header.SubgroupID
-		}
-		s.decSubgroupResolved = true
-	}
-
-	d := &DecodedSubgroupObject{
+	d := &DecodedSubgroupObject{ // ReadObject resolved the IDs
 		GroupID:      s.Header.GroupID,
 		SubgroupID:   s.decSubgroupID,
-		ObjectID:     objectID,
+		ObjectID:     s.decPrevObject,
 		ObjectStatus: raw.ObjectStatus,
 		Properties:   raw.Properties,
 		Payload:      raw.Payload,
