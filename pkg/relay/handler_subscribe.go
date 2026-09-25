@@ -105,7 +105,9 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 					slog.String("name", string(msg.Name)),
 					slog.Uint64("request_id", msg.RequestID),
 					slog.String("err", err.Error()))
-				_ = req.RejectError(upstreamFailureCode(err), "relay: no upstream for track: "+err.Error())
+				rej := upstreamRejection(err)
+				rej.Reason = "relay: no upstream for track: " + err.Error()
+				_ = req.Reject(rej)
 				return
 			}
 			if !established {
@@ -868,18 +870,47 @@ func checkGroupOrderParam(ps message.Parameters) error {
 	return nil
 }
 
-// upstreamFailureCode is the REQUEST_ERROR code for a downstream SUBSCRIBE
-// whose upstream SUBSCRIBE failed. §2.5.1: when the upstream's track carries a
-// Mandatory Track Property this relay does not understand, a relay "MUST send
-// REQUEST_ERROR with error code UNSUPPORTED_EXTENSION to the downstream
-// subscribers". Unparseable Track Properties are MALFORMED_TRACK, which is
-// this repo's choice: the draft does not cover them. Any other failure reads
-// as the track not existing.
-func upstreamFailureCode(err error) moqt.RequestErrorCode {
+// upstreamRejection is the REQUEST_ERROR for a downstream SUBSCRIBE whose
+// upstream SUBSCRIBE failed with err.
+//
+// §2.5.1: when the upstream's track carries a Mandatory Track Property this
+// relay does not understand, a relay "MUST send REQUEST_ERROR with error code
+// UNSUPPORTED_EXTENSION to the downstream subscribers". Unparseable Track
+// Properties are MALFORMED_TRACK, which is this repo's choice: the draft does
+// not cover them.
+//
+// An upstream REQUEST_ERROR is passed on by meaning — §10.6.2: "The
+// application SHOULD use a relevant error code" — with its Retry Interval
+// kept, so "retry in N ms" does not become "SHOULD NOT be retried". A code
+// about the track or the publisher's load says the same thing to the
+// downstream subscriber and passes through. One about the relay's own hop —
+// its authorization, the upstream going away, a REDIRECT the relay does not
+// follow — or about the relay's own Next Object filter (INVALID_RANGE,
+// INVALID_FILTER), or a code this relay does not know, becomes
+// INTERNAL_ERROR.
+//
+// Any other failure (the upstream session died, the SUBSCRIBE timed out on
+// this side) reads as the track not existing.
+func upstreamRejection(err error) *session.RequestRejectedError {
 	if isTrackPropertiesErr(err) {
-		return session.TrackPropertiesRejectCode(err)
+		return &session.RequestRejectedError{Code: session.TrackPropertiesRejectCode(err)}
 	}
-	return moqt.RequestDoesNotExist
+	up, ok := errors.AsType[*session.RequestRejectedError](err)
+	if !ok {
+		return &session.RequestRejectedError{Code: moqt.RequestDoesNotExist}
+	}
+	rej := &session.RequestRejectedError{Code: moqt.RequestInternalError, RetryInterval: up.RetryInterval}
+	switch up.Code {
+	case moqt.RequestDoesNotExist, moqt.RequestTimeout, moqt.RequestExcessiveLoad,
+		moqt.RequestMalformedTrack, moqt.RequestUnsupportedExtension:
+		rej.Code = up.Code
+	case moqt.RequestInternalError, moqt.RequestUnauthorized, moqt.RequestNotSupported,
+		moqt.RequestMalformedAuthToken, moqt.RequestExpiredAuthToken, moqt.RequestGoingAway,
+		moqt.RequestInvalidRange, moqt.RequestInvalidFilter, moqt.RequestRedirect,
+		moqt.RequestUninterested, moqt.RequestPrefixOverlap, moqt.RequestNamespaceTooLarge:
+		// about the relay's hop or request, or not a SUBSCRIBE answer at all
+	}
+	return rej
 }
 
 // isTrackPropertiesErr reports whether err is a Track Properties validation
