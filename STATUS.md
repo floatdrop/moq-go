@@ -447,8 +447,17 @@ Relay:
   subscriptions: "it MUST send a SUBSCRIBE to the publisher that sent the
   PUBLISH_NAMESPACE for each matching subscription" (§9.5). This is the "Late
   publisher pickup" bullet above.
-- The MAX_CACHE_DURATION Track Property is ignored (§12.3).
 - Mandatory Track Properties are not enforced (§2.5.1).
+- MAX_CACHE_DURATION (§12.3) is enforced on cache reads and the live path, but:
+  - FETCH and fill write their cache snapshot without re-checking age, so a
+    blocked write can start sending an expired Object; a drop there needs an
+    End of Unknown Range marker.
+  - Objects that expire out of arrival order show up in FETCH as plain gaps,
+    which assert non-existence, where §12.3 says their state is unknown.
+  - It is per track, the first upstream's value (first-setter-wins
+    Properties), where §12.3 says "this subscription or fetch".
+  - A live writer opened before the track's Properties arrive (the #85
+    window) does not enforce it.
 - Namespace subscriptions:
   - a TRACK_NAMESPACE_PREFIX REQUEST_UPDATE is acknowledged but not applied
     (§10.9.2, §10.2.20);

@@ -202,10 +202,11 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// the per-object joiner scan picks up subs that join mid-stream.
 		initialSubs, gen := entry.CopyDownstreamWithGen()
 		pubTimeouts := entry.DeliveryTimeouts()
+		maxCacheAge := entry.MaxCacheDuration()
 		sg.Mu.Lock()
 		set.gen = gen
 		for _, sub := range initialSubs {
-			h.openWriterForSub(ctx, set.hdr, sub, set.writers, pubTimeouts, ref)
+			h.openWriterForSub(ctx, set.hdr, sub, set.writers, pubTimeouts, maxCacheAge, ref)
 		}
 		sg.Mu.Unlock()
 	}
@@ -387,7 +388,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		newSubs, set.gen = entry.UpdateLargestAndDetectNew(loc,
 			func(s *registry.DownstreamSub) bool { _, ok := set.writers[s]; return ok }, set.gen)
 		for _, sub := range newSubs {
-			h.openWriterForSub(ctx, set.hdr, sub, set.writers, entry.DeliveryTimeouts(), ref)
+			h.openWriterForSub(ctx, set.hdr, sub, set.writers,
+				entry.DeliveryTimeouts(), entry.MaxCacheDuration(), ref)
 		}
 
 		// §5.1.2 filter evaluation per-subscriber, pre-enqueue. A filter miss
@@ -443,6 +445,7 @@ func (h *sessionHandler) openWriterForSub(
 	sub *registry.DownstreamSub,
 	writers map[*registry.DownstreamSub]*subgroupWriter,
 	pubTimeouts message.DeliveryTimeouts,
+	maxCacheAge time.Duration,
 	ref TrackRef,
 ) {
 	if _, already := writers[sub]; already {
@@ -478,6 +481,7 @@ func (h *sessionHandler) openWriterForSub(
 		// an override outrank a shorter subscriber timeout.
 		pubTimeouts: pubTimeouts,
 		subTimeouts: sub.GetDeliveryTimeouts(),
+		maxCacheAge: maxCacheAge,
 	}
 	writers[sub] = w
 	h.spawn(w.run)
@@ -536,6 +540,9 @@ type subgroupWriter struct {
 	ref                 TrackRef
 	maxDropsBeforeReset int
 	maxLag              time.Duration
+	// maxCacheAge is the track's MAX_CACHE_DURATION (§12.3), zero when
+	// absent: an Object older than this is not forwarded.
+	maxCacheAge time.Duration
 	// pubTimeouts and subTimeouts are the §8 delivery-timeout halves for this
 	// (subgroup, subscriber), handed to every outbound stream the writer opens
 	// and resolved there once the first object's properties are known. Zero
@@ -600,6 +607,37 @@ func (w *subgroupWriter) publish(fwd fwdObject) {
 // If WriteObject fails mid-stream (QUIC-level error) the writer cancels the
 // outbound stream, marks writeFailed, and keeps draining until close is called,
 // keeping publish non-blocking without a second drain goroutine.
+// lagging reports whether fwd waited in the queue longer than the §8 lag
+// window allows.
+func (w *subgroupWriter) lagging(fwd fwdObject) bool {
+	return w.maxLag > 0 && time.Since(fwd.enqueuedAt) > w.maxLag
+}
+
+// expired reports whether fwd is older than the track's MAX_CACHE_DURATION
+// (§12.3), past which it must not start being forwarded. Like §8's timeouts,
+// the age runs from when the relay finished reading the Object, not from "the
+// beginning of the Object" — lenient by the Object's inbound transfer time.
+func (w *subgroupWriter) expired(fwd fwdObject) bool {
+	return w.maxCacheAge > 0 && time.Since(fwd.enqueuedAt) > w.maxCacheAge
+}
+
+// dropExpired handles an Object skipped by [subgroupWriter.expired]. If the
+// current stream has carried nothing yet, its header may claim FIRST_OBJECT for
+// an Object that will now never arrive on it — asserting the skipped Objects do
+// not exist, where §12.3 makes their state unknown. Reset that header-only
+// stream; the next Object opens a fresh one as a replay (§11.4.2).
+func (w *subgroupWriter) dropExpired(hasWritten bool) {
+	if hasWritten || w.out == nil {
+		return
+	}
+	if w.unbridge != nil {
+		w.unbridge()
+		w.unbridge = nil
+	}
+	w.out.Cancel(moqt.StreamResetCancelled)
+	w.out = nil
+}
+
 func (w *subgroupWriter) run() {
 	defer close(w.done)
 
@@ -695,7 +733,7 @@ func (w *subgroupWriter) run() {
 		// behind the live edge the subscriber is. Once that exceeds maxLag the
 		// subscriber has been unable to keep up for too long — stop draining
 		// and escalate to a reset below.
-		if w.maxLag > 0 && time.Since(fwd.enqueuedAt) > w.maxLag {
+		if w.lagging(fwd) {
 			w.log.Warn("fanout: subscriber exceeded MaxFanoutLag, terminating",
 				"sub_id", w.sub.ID, "lag", time.Since(fwd.enqueuedAt).String())
 			lagExceeded = true
@@ -728,6 +766,17 @@ func (w *subgroupWriter) run() {
 				failWrites()
 				continue
 			}
+		}
+
+		// §12.3: "the relay MUST NOT start forwarding any individual Object
+		// ... after the specified number of milliseconds has elapsed since
+		// the beginning of the Object was received". Checked here, right
+		// before the write, because opening the stream above can block on a
+		// slow subscriber. Skipping leaves a gap the next forwarded Object
+		// handles like a filter drop (§11.4.3).
+		if w.expired(fwd) {
+			w.dropExpired(hasWritten)
+			continue
 		}
 
 		// Re-encode ObjectIDDelta against the previous *forwarded*
