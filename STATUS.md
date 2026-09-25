@@ -93,7 +93,7 @@ By package, bottom-up along the dependency stack:
 | 3.2     | Extension negotiation                | DONE   | SETUP options exchanged as KV pairs; peer options parsed. |
 | 3.2.1   | Reserved namespaces                  | DONE   | `AcceptRequest` rejects an exact `.` first field with DOES_NOT_EXIST; other `.`-prefixed namespaces pass through to the application per spec. |
 | 3.2.2   | Session-level tracks/namespaces      | DONE   | `.session` requests are rejected with DOES_NOT_EXIST before the application/relay sees them (no session-level extensions implemented), so relays never forward them; covers the empty-track-name rule. |
-| 3.3     | Session initialization               | DONE   | Control streams + SETUP exchange; early data-stream buffering. A bidi stream opening with anything but the seven request messages closes the session with PROTOCOL_VIOLATION (`AcceptRequest`). |
+| 3.3     | Session initialization               | DONE   | Control streams + SETUP exchange. Up to 32 data streams that arrive before the peer's control stream are held unread and delivered by `AcceptDataStream` once setup completes (more are refused with EXCESSIVE_LOAD); request streams wait in the transport until `AcceptRequest`. A bidi stream opening with anything but the seven request messages closes the session with PROTOCOL_VIOLATION (`AcceptRequest`). |
 | 3.3.2   | Graceful request stream closure      | DONE   | A FIN is not a cancel: the relay keeps a FIN'd request alive until the peer cancels, and FINs back to complete a finished FETCH. |
 | 3.3.3   | Request cancellation / rejection     | DONE   | STOP_SENDING, stream resets, REQUEST_ERROR in `request.go`; `Close()` on request handles cancels. |
 | 3.3.4   | Stream reset error codes             | DONE   | All codes in `errors.go` (`StreamReset*`). |
@@ -460,11 +460,6 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
 A full review against draft-ietf-moq-transport-20 (dated August 2026) found
 the gaps below, which are still open. Items are grouped by area; each names the
 rule it misses.
-
-Validation:
-
-- A data stream that arrives before the control streams fails the handshake
-  (§3.3 SHOULD buffer).
 
 Relay:
 

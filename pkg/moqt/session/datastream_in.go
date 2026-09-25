@@ -583,7 +583,7 @@ func (s *Session) checkFINMidObject(err error) error {
 var errAbortedDataStream = errors.New("moqt/session: data stream ended before its header")
 
 func (s *Session) acceptDataStream(ctx context.Context) (DataStream, error) {
-	src, err := s.conn.AcceptUniStream(ctx)
+	src, err := s.nextUniStream(ctx)
 	if err != nil {
 		return nil, err
 	}
