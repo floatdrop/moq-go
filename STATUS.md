@@ -236,8 +236,8 @@ By package, bottom-up along the dependency stack:
 | 12.5  | DEFAULT_PUBLISHER_GROUP_ORDER  | 0x22 | DONE   | Validated. |
 | 12.6  | DYNAMIC_GROUPS                 | 0x30 | DONE   | Property defined & scope-validated (flow: see §5.1.6.1). |
 | 12.7  | Immutable properties           | 0x0B | DONE   | Relays cache & forward verbatim, never add. Property lookups search its contents too (`message.ExpandImmutable`), the mutable value winning: delivery timeouts, MAX_CACHE_DURATION, DYNAMIC_GROUPS, Mandatory Track Property screening, and property Range Filters. |
-| 12.8  | Prior group ID gap             | 0x3C | DONE   | Object-scope; encoder in `msf/groupid.go`. |
-| 12.9  | Prior object ID gap            | 0x3E | DONE   | Object-scope. |
+| 12.8  | Prior group ID gap             | 0x3C | PARTIAL| Object-scope; encoder in `msf/groupid.go`. More than one, or one past the Group ID, makes the track malformed (`message.CheckObjectProperties`); the rules that need earlier Objects are not checked — see Limitations. |
+| 12.9  | Prior object ID gap            | 0x3E | PARTIAL| Object-scope. More than one, or one past the Object ID, makes the track malformed; the rules that need earlier Objects are not checked — see Limitations. |
 
 ## §13 Security considerations
 
@@ -428,6 +428,17 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   subscription"), nor migrates to the New Session URI, nor closes the session
   once no subscriptions remain (§3.6 RECOMMENDED). It waits for the sender to
   close.
+- **Malformed tracks: only per-Object conditions (§2.4.2, §12.8, §12.9)** —
+  the session reports Object Properties that make a track malformed
+  (`session.ErrMalformedTrack`), and the relay then ends the track: PUBLISH_DONE
+  MALFORMED_TRACK to every downstream subscriber, its subscription to that
+  publisher cancelled, the Object not cached. Not detected: the gap rules that
+  need earlier Objects (a gap covering an Object already received, an Object
+  inside a gap already communicated, differing Prior Group ID Gaps in a
+  Group), and §2.4.2's list other than an Object after END_OF_GROUP on the
+  same stream. A downstream FETCH already being served from the cache when
+  the track is found malformed is not reset: the relay does not track fetch
+  streams per track.
 
 ### Draft-20 compliance review backlog
 
@@ -443,9 +454,6 @@ Found while fixing:
 
 Validation:
 
-- Object Properties are never validated on receipt: nested Immutable
-  Properties, duplicate gap properties, and Mandatory Track Properties used as
-  Object Properties (§12.7–§12.9, §2.5.1).
 - A data stream that arrives before the control streams fails the handshake
   (§3.3 SHOULD buffer).
 

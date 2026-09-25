@@ -3,6 +3,7 @@ package relay_test
 import (
 	"errors"
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,12 +33,28 @@ func TestRelay_UpstreamFetchOKUnknownMandatoryPropertyResetsStream(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			refusedFetchResetsStream(t, tc.props)
+			refusedFetchResetsStream(t, tc.props, nil)
 		})
 	}
 }
 
-func refusedFetchResetsStream(t *testing.T, upstreamProps []byte) {
+// TestRelay_UpstreamFetchMalformedObjectResetsStream: §2.4.2 "If a relay
+// detects a Malformed Track, it MUST [...] reset any fetch streams with
+// Status Code MALFORMED_TRACK." Here the upstream's FETCH response carries an
+// Object whose Properties make the track malformed; the downstream fetch
+// stream is reset rather than served, and the track's live subscribers get
+// PUBLISH_DONE (see TestRelay_MalformedObjectEndsTrack).
+func TestRelay_UpstreamFetchMalformedObjectResetsStream(t *testing.T) {
+	t.Parallel()
+	refusedFetchResetsStream(t, nil, mandatoryObjectProps())
+}
+
+// refusedFetchResetsStream: the upstream answers the relay's FETCH with
+// FETCH_OK carrying upstreamProps and, when objProps is non-nil, a response
+// stream whose one Object carries objProps — only once armed, so the FETCHes
+// that wait for the live tail to be cached do not end the track first.
+func refusedFetchResetsStream(t *testing.T, upstreamProps, objProps []byte) {
+	var armed atomic.Bool
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 	ns := wire.TrackNamespace{[]byte("video")}
@@ -51,7 +68,7 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps []byte) {
 			if err != nil {
 				return
 			}
-			switch req.First.(type) {
+			switch first := req.First.(type) {
 			case *message.Subscribe:
 				if req.Reply(&message.SubscribeOK{TrackAlias: 42}) != nil {
 					return
@@ -71,6 +88,19 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps []byte) {
 					EndLocation:     message.Location{Group: stitchLiveLo - 1},
 					TrackProperties: upstreamProps,
 				})
+				if objProps == nil || !armed.Load() {
+					continue
+				}
+				out, err := pubSess.OpenFetchStream(message.FetchHeader{RequestID: first.RequestID})
+				if err != nil {
+					return
+				}
+				_ = out.WriteObject(&message.FetchObject{
+					SerializationFlags: message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta |
+						message.FetchFlagPriority | message.FetchFlagProperties,
+					Properties: objProps, ObjectPayload: []byte("x"),
+				})
+				_ = out.Close()
 			}
 		}
 	}()
@@ -94,6 +124,7 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps []byte) {
 	}
 
 	// Reaches below the cache, so the relay stitches from the upstream.
+	armed.Store(true)
 	fr, err := fc.Fetch(t.Context(), &message.Fetch{
 		Namespace: ns, Name: name,
 		Parameters: message.Parameters{fetchRangeFilter(message.Location{}, message.Location{Group: stitchLiveHi})},
@@ -113,9 +144,9 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps []byte) {
 	obj, err := fs.ReadDecoded()
 	switch {
 	case err == nil:
-		t.Fatalf("the relay forwarded Object {%d,%d} of a track whose Track Properties it refused",
+		t.Fatalf("the relay forwarded Object {%d,%d} of a track it refused",
 			obj.GroupID, obj.ObjectID)
 	case errors.Is(err, io.EOF):
-		t.Fatal("the FETCH stream completed; want it reset over the upstream's Track Properties")
+		t.Fatal("the FETCH stream completed; want it reset over what the upstream sent")
 	}
 }
