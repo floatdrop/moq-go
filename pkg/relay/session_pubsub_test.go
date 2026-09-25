@@ -1,6 +1,7 @@
 package relay_test
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"testing"
@@ -65,7 +66,7 @@ func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 		Namespace:       wire.TrackNamespace{[]byte("video")},
 		Name:            []byte("cam1"),
 		TrackAlias:      42,
-		TrackProperties: []byte("hello props"),
+		TrackProperties: opaqueProps("hello props"),
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -88,8 +89,8 @@ func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 	}
 	// §9.6 — properties must be echoed back. The relay treats them
 	// opaquely so the bytes round-trip verbatim.
-	if got := string(subStream.OK.TrackProperties); got != "hello props" {
-		t.Fatalf("TrackProperties = %q, want %q", got, "hello props")
+	if got, want := subStream.OK.TrackProperties, opaqueProps("hello props"); !bytes.Equal(got, want) {
+		t.Fatalf("TrackProperties = %x, want %x", got, want)
 	}
 	// The relay's outbound alias for the subscriber's session is
 	// independent of the publisher's alias (§11.1). We don't check
@@ -368,7 +369,7 @@ func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 		}
 		if err := req.Reply(&message.SubscribeOK{
 			TrackAlias:      77,
-			TrackProperties: []byte("upstream props"),
+			TrackProperties: opaqueProps("upstream props"),
 		}); err != nil {
 			t.Errorf("publisher SubscribeOK reply: %v", err)
 			return
@@ -391,8 +392,8 @@ func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 	// §9.6: Track Properties must be echoed back. The relay captured them
 	// from the upstream SUBSCRIBE_OK and replays them on the downstream
 	// reply.
-	if got := string(subStream.OK.TrackProperties); got != "upstream props" {
-		t.Fatalf("downstream TrackProperties = %q, want %q", got, "upstream props")
+	if got, want := subStream.OK.TrackProperties, opaqueProps("upstream props"); !bytes.Equal(got, want) {
+		t.Fatalf("downstream TrackProperties = %x, want %x", got, want)
 	}
 }
 
@@ -1129,4 +1130,10 @@ func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
 	if seen != 1 {
 		t.Errorf("forwarded PUBLISH carried %d LARGEST_OBJECT parameters, want exactly 1", seen)
 	}
+}
+
+// opaqueProps is well-formed Track Properties holding one property of a type
+// the relay does not interpret, so it must pass through byte for byte.
+func opaqueProps(v string) []byte {
+	return message.AppendTrackProperties([]wire.KVPair{{Type: 0x101, ByteVal: []byte(v)}})
 }

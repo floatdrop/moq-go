@@ -447,7 +447,10 @@ Relay:
   subscriptions: "it MUST send a SUBSCRIBE to the publisher that sent the
   PUBLISH_NAMESPACE for each matching subscription" (§9.5). This is the "Late
   publisher pickup" bullet above.
-- Mandatory Track Properties are not enforced (§2.5.1).
+- Mandatory Track Properties (§2.5.1) are enforced on PUBLISH and upstream
+  SUBSCRIBE_OK (`Config.KnownMandatoryTrackProperties`), but not on an
+  upstream FETCH_OK. There the MUST is unmet: the FETCH fails the way any failed
+  upstream FETCH does (an unknown range), not with UNSUPPORTED_EXTENSION.
 - MAX_CACHE_DURATION (§12.3) is enforced on cache reads and the live path, but:
   - FETCH and fill write their cache snapshot without re-checking age, so a
     blocked write can start sending an expired Object; a drop there needs an

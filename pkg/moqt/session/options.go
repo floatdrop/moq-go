@@ -145,11 +145,15 @@ func WithGrease() Option {
 // Property types (range 0x4000–0x7FFF per §2.5.1) that this endpoint
 // understands. When the session receives Track Properties (in SUBSCRIBE_OK,
 // FETCH_OK, or TRACK_STATUS_OK) containing a mandatory property not in this
-// set, it returns *ErrUnsupportedMandatoryTrackProperty.
+// set, it returns *ErrUnsupportedMandatoryTrackProperty; an inbound PUBLISH
+// carrying one is refused by [Request.AcceptPublish] with REQUEST_ERROR
+// UNSUPPORTED_EXTENSION (§2.5.1).
 //
 // If this option is never called, mandatory track property enforcement is
-// disabled — all properties are forwarded without inspection. This is the
-// correct default for relays and other forwarding endpoints.
+// disabled and all properties pass through without inspection. §2.5.1 says an
+// endpoint that does not understand a Mandatory Track Property MUST NOT
+// process or forward the track, so leave it unset only when the application
+// checks the properties itself. pkg/relay always sets it from its Config.
 //
 // End subscribers that interpret track data should call this option to opt
 // in to enforcement. Pass an empty (non-nil) map to reject all mandatory

@@ -122,7 +122,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 					slog.String("name", string(msg.Name)),
 					slog.Uint64("request_id", msg.RequestID),
 					slog.String("err", err.Error()))
-				_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no upstream for track: "+err.Error())
+				_ = req.RejectError(upstreamFailureCode(err), "relay: no upstream for track: "+err.Error())
 				return
 			}
 			if !established {
@@ -477,8 +477,13 @@ func (h *sessionHandler) subscribeUpstream(
 		if err != nil {
 			// A candidate that fails (session dying, rejection) must not mask the
 			// other publishers or the Discovery fallback. Remember the error and
-			// keep going; surface it only if nothing else works out.
-			lastErr = err
+			// keep going; surface it only if nothing else works out. A
+			// Track Properties refusal outranks any other failure: §2.5.1
+			// fixes the downstream code for it, so a later candidate's
+			// unrelated error must not replace it.
+			if !isTrackPropertiesErr(lastErr) {
+				lastErr = err
+			}
 			h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: candidate failed, continuing",
 				slog.String("source", src), slog.String("err", err.Error()))
 			return
@@ -837,4 +842,25 @@ func checkGroupOrderParam(ps message.Parameters) error {
 		}
 	}
 	return nil
+}
+
+// upstreamFailureCode is the REQUEST_ERROR code for a downstream SUBSCRIBE
+// whose upstream SUBSCRIBE failed. §2.5.1: when the upstream's track carries a
+// Mandatory Track Property this relay does not understand, a relay "MUST send
+// REQUEST_ERROR with error code UNSUPPORTED_EXTENSION to the downstream
+// subscribers". Unparseable Track Properties are MALFORMED_TRACK, which is
+// this repo's choice: the draft does not cover them. Any other failure reads
+// as the track not existing.
+func upstreamFailureCode(err error) moqt.RequestErrorCode {
+	if isTrackPropertiesErr(err) {
+		return session.TrackPropertiesRejectCode(err)
+	}
+	return moqt.RequestDoesNotExist
+}
+
+// isTrackPropertiesErr reports whether err is a Track Properties validation
+// failure from [session.Session.Subscribe].
+func isTrackPropertiesErr(err error) bool {
+	_, ok := errors.AsType[*session.ErrUnsupportedMandatoryTrackProperty](err)
+	return ok || errors.Is(err, session.ErrMalformedTrackProperties)
 }
