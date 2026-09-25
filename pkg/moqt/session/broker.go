@@ -134,6 +134,13 @@ func (b *RequestBroker) answerUpdate(upd *message.RequestUpdate) (bool, error) {
 		if ok == nil {
 			ok = &message.RequestOK{}
 		}
+		if len(ok.TrackProperties) > 0 {
+			// §10.5: REQUEST_UPDATE_OK's Track Properties are empty; sending
+			// them would make the peer close the session.
+			err = fmt.Errorf("%w: REQUEST_UPDATE_OK", ErrTrackPropertiesNotAllowed)
+		}
+	}
+	if err == nil {
 		if werr := b.WriteMessage(ok); werr != nil {
 			return false, fmt.Errorf("moqt/session: write REQUEST_UPDATE_OK: %w", werr)
 		}

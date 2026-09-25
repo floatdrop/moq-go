@@ -27,7 +27,7 @@ func replyOKWithProperties(t *testing.T, server *session.Session) {
 		if err != nil {
 			return
 		}
-		_ = req.Reply(&message.RequestOK{TrackProperties: trackProps})
+		_ = message.Marshal(req.Stream, &message.RequestOK{TrackProperties: trackProps})
 	}()
 }
 
@@ -85,7 +85,7 @@ func testRequestUpdateOKWithTrackProperties(t *testing.T, viaBroker bool) {
 		if _, err := message.Parse(req.Stream); err != nil { // the REQUEST_UPDATE
 			return
 		}
-		_ = req.Reply(&message.RequestOK{TrackProperties: trackProps})
+		_ = message.Marshal(req.Stream, &message.RequestOK{TrackProperties: trackProps})
 	}()
 
 	sub, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})

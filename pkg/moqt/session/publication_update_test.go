@@ -24,6 +24,16 @@ import (
 // handles.
 func servedPublication(t *testing.T) (*session.Session, *session.Subscription, *session.Publication) {
 	t.Helper()
+	return servedPublicationWith(t, nil)
+}
+
+// servedPublicationWith is servedPublication with onUpdate, when non-nil,
+// deciding the subscriber's REQUEST_UPDATEs in place of the built-in handling.
+func servedPublicationWith(
+	t *testing.T,
+	onUpdate session.UpdateHandler,
+) (*session.Session, *session.Subscription, *session.Publication) {
+	t.Helper()
 	client, server := openPair(t)
 	pubs := make(chan *session.Publication, 1)
 	go func() {
@@ -41,6 +51,9 @@ func servedPublication(t *testing.T) (*session.Session, *session.Subscription, *
 	must(t, err)
 	pub := <-pubs
 	b := pub.Broker()
+	if onUpdate != nil {
+		b.HandleUpdates(onUpdate)
+	}
 	go func() { _ = b.Serve(t.Context(), nil) }()
 	return client, sub, pub
 }
