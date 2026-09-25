@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
@@ -32,9 +34,10 @@ func publish(ctx context.Context, addr string) error {
 	slog.InfoContext(ctx, "PUBLISH_OK", "alias", pub.TrackAlias())
 
 	// Serve the publish request stream through its broker: subscriber
-	// REQUEST_UPDATEs are answered with the mandated REQUEST_OK (§10.9),
-	// AUTHORIZATION_TOKEN parameters go through the session token cache
-	// (§10.2.2), and — with the broker attached — the shutdown
+	// REQUEST_UPDATEs are applied by the Publication's built-in handling
+	// (FORWARD pauses and resumes OpenSubgroup) and answered as §10.9
+	// requires, AUTHORIZATION_TOKEN parameters go through the session token
+	// cache (§10.2.2), and — with the broker attached — the shutdown
 	// [session.Publication.Done] below is automatically serialized against
 	// those replies.
 	go func() {
@@ -66,6 +69,12 @@ func publish(ctx context.Context, addr string) error {
 				SubgroupIDMode: message.SubgroupIDImplicitZero,
 				GroupID:        groupID,
 			})
+			if errors.Is(err, session.ErrForwardPaused) {
+				// §5.1: no objects while the subscriber's Forward State is
+				// 0. The clock keeps ticking; this second is skipped.
+				groupID++
+				continue
+			}
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -77,6 +86,11 @@ func publish(ctx context.Context, addr string) error {
 			if err := sg.WriteObjectAt(0, &message.SubgroupObject{
 				Payload: payload,
 			}); err != nil {
+				if errors.Is(err, session.ErrForwardPaused) {
+					// Paused between open and write; the stream was reset.
+					groupID++
+					continue
+				}
 				sg.Cancel(moqt.StreamResetInternalError)
 				return fmt.Errorf("write object: %w", err)
 			}

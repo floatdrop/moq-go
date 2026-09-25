@@ -84,6 +84,14 @@ type OutgoingSubgroupStream struct {
 	// first object is written (its delta is the absolute ID).
 	encPrevObject uint64
 	encHavePrev   bool
+
+	// onObject, when set (by [Publication.OpenSubgroup]), is told the
+	// absolute Location of each object written, for LARGEST_OBJECT.
+	onObject func(group, object uint64)
+
+	// paused, when set (by [Publication.OpenSubgroup]), reports a Forward
+	// State of 0; a write then resets the stream (§11.4.3).
+	paused func() bool
 }
 
 // WithDeliveryTimeouts returns a shallow copy of s configured with the §8
@@ -163,6 +171,13 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	}
 	s.sawFirstObject = true
 
+	// §5.1: no Objects while the Forward State is 0. §11.4.3 lists
+	// "Omitting a Subgroup Object due to the subscriber's Forward State"
+	// among the reasons to reset the stream.
+	if s.paused != nil && s.paused() {
+		s.dst.CancelWrite(uint64(moqt.StreamResetCancelled))
+		return ErrForwardPaused
+	}
 	if err := s.checkObjectTimeout(receivedAt); err != nil {
 		return err
 	}
@@ -171,7 +186,19 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	obj.Append(wr, s.header.Properties)
 	_, err := s.dst.Write(wr.Bytes())
 	writerPool.Put(wr)
-	return err
+	if err != nil {
+		return err
+	}
+	// Track the absolute Object ID (§11.4.2: delta + 1 after the first).
+	objectID := obj.ObjectIDDelta
+	if s.encHavePrev {
+		objectID = s.encPrevObject + obj.ObjectIDDelta + 1
+	}
+	s.encPrevObject, s.encHavePrev = objectID, true
+	if s.onObject != nil {
+		s.onObject(s.header.GroupID, objectID)
+	}
+	return nil
 }
 
 // WriteObjectAt writes obj with its §11.4.2 ObjectIDDelta computed from the
@@ -199,12 +226,7 @@ func (s *OutgoingSubgroupStream) WriteObjectAt(objectID uint64, obj *message.Sub
 	} else {
 		obj.ObjectIDDelta = objectID
 	}
-	if err := s.WriteObject(obj); err != nil {
-		return err
-	}
-	s.encPrevObject = objectID
-	s.encHavePrev = true
-	return nil
+	return s.WriteObject(obj)
 }
 
 // Write appends raw body bytes after the previously-written header. Prefer

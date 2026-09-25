@@ -412,12 +412,13 @@ Found while fixing, left open deliberately:
 
 Request lifecycle:
 
-- The session broker answers every REQUEST_UPDATE with an empty REQUEST_OK, and
-  applies none of its parameters: FORWARD=0 does not stop objects (§5.1).
-- REQUEST_UPDATE_OK never carries LARGEST_OBJECT, in the session broker or the
-  relay (§10.9.1, §10.2.17).
+- The relay's REQUEST_UPDATE_OK to a downstream subscriber never carries
+  LARGEST_OBJECT (§10.9.1, §10.2.17). The session's `Publication` handling
+  does.
 - Nothing checks who may send REQUEST_UPDATE or PUBLISH_STATE_NOTIFY on an
-  existing stream (§10.9, §10.10).
+  existing stream (§10.9, §10.10). Note for the fix: on an accepted PUBLISH the
+  publisher, as the request's sender, MAY send REQUEST_UPDATE; the relay's
+  upstream broker currently declines it with NOT_SUPPORTED.
 
 Validation:
 

@@ -26,8 +26,12 @@ import (
 //   - AUTHORIZATION_TOKEN parameters on follow-ups are resolved through the
 //     session token cache (§10.2.2); a cache fault closes the session with
 //     the mandated code.
-//   - A peer REQUEST_UPDATE is answered with the single REQUEST_OK §10.9
-//     mandates; the broker applies no parameters.
+//   - A peer REQUEST_UPDATE is answered with the single REQUEST_OK or
+//     REQUEST_ERROR §10.9 mandates, as decided by the handler installed with
+//     [RequestBroker.HandleUpdates]. With no handler it is declined
+//     (REQUEST_ERROR NOT_SUPPORTED): acknowledging an update without applying
+//     it would misstate the request's state. [Publication.Broker] installs a
+//     handler that applies FORWARD itself.
 //   - Everything else (PUBLISH_DONE, unsolicited responses, …) is handed to
 //     Serve's callback.
 //
@@ -52,6 +56,65 @@ type RequestBroker struct {
 	// e.g. a PUBLISH_DONE after the peer tore its side down.
 	updatesClosed bool
 	streamClosed  bool
+
+	// onUpdate decides each peer REQUEST_UPDATE; nil declines it.
+	// onUpdateFailed runs after a declined update — §10.9.1's follow-up,
+	// e.g. PUBLISH_DONE UPDATE_FAILED for a subscription. Both are set
+	// before Serve runs.
+	onUpdate       UpdateHandler
+	onUpdateFailed func()
+}
+
+// UpdateHandler decides a peer's REQUEST_UPDATE (§10.9). It returns the
+// REQUEST_OK to send, or an error: a *[RequestRejectedError] is sent as
+// REQUEST_ERROR with its code and reason, any other error as INTERNAL_ERROR.
+type UpdateHandler func(upd *message.RequestUpdate) (*message.RequestOK, error)
+
+// HandleUpdates installs the handler that decides peer REQUEST_UPDATEs,
+// replacing any earlier one (for a [Publication], its built-in handling —
+// which the new handler can still reuse via [Publication.ApplyUpdate]). Call
+// it before [RequestBroker.Serve].
+func (b *RequestBroker) HandleUpdates(h UpdateHandler) { b.onUpdate = h }
+
+// answerUpdate writes the §10.9 response to upd and reports whether the
+// update was accepted.
+func (b *RequestBroker) answerUpdate(upd *message.RequestUpdate) (bool, error) {
+	var (
+		ok  *message.RequestOK
+		err error
+	)
+	if b.onUpdate == nil {
+		err = &RequestRejectedError{Code: moqt.RequestNotSupported, Reason: "REQUEST_UPDATE not supported"}
+	} else {
+		ok, err = b.onUpdate(upd)
+	}
+	// A handler that closed the session (e.g. §10.2.18's PROTOCOL_VIOLATION
+	// on a bad FORWARD) ends Serve; there is no request left to answer.
+	select {
+	case <-b.sess.Done():
+		if err == nil {
+			err = ErrRequestStreamClosed
+		}
+		return false, err
+	default:
+	}
+	if err == nil {
+		if ok == nil {
+			ok = &message.RequestOK{}
+		}
+		if werr := b.WriteMessage(ok); werr != nil {
+			return false, fmt.Errorf("moqt/session: write REQUEST_UPDATE_OK: %w", werr)
+		}
+		return true, nil
+	}
+	rej, isRej := errors.AsType[*RequestRejectedError](err)
+	if !isRej {
+		rej = &RequestRejectedError{Code: moqt.RequestInternalError, Reason: err.Error()}
+	}
+	if werr := b.WriteMessage(&message.RequestError{ErrorCode: rej.Code, ErrorReason: rej.Reason}); werr != nil {
+		return false, fmt.Errorf("moqt/session: write REQUEST_UPDATE error: %w", werr)
+	}
+	return false, nil
 }
 
 // updateResult carries one §10.9 response to a waiting Update call.
@@ -252,9 +315,11 @@ func (b *RequestBroker) Close(code moqt.StreamResetCode) {
 //
 // Responses route to Update waiters; token parameters go through the
 // session's token cache (a cache fault closes the session with the §10.2.2
-// code and ends Serve); peer REQUEST_UPDATEs are acknowledged with
-// REQUEST_OK. Every other message — and any unsolicited response — is passed
-// to onMsg (nil means "discard"); return false from onMsg to stop serving.
+// code and ends Serve); peer REQUEST_UPDATEs are answered as the handler
+// installed with [RequestBroker.HandleUpdates] decides, and declined with
+// NOT_SUPPORTED when there is none. Every message — including each
+// REQUEST_UPDATE and any unsolicited response — is passed to onMsg (nil means
+// "discard"); return false from onMsg to stop serving.
 //
 // A malformed follow-up (any non-EOF parse error) resets the read side with
 // INTERNAL_ERROR so the peer learns reads stopped instead of filling flow
@@ -325,13 +390,16 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 				return err
 			}
 			// §10.9: the receiver of a REQUEST_UPDATE "MUST respond with
-			// exactly one REQUEST_OK or REQUEST_ERROR". The broker keeps
-			// no mutable per-request parameters, so the update is
-			// acknowledged without further action; onMsg still observes it.
-			if err := b.WriteMessage(&message.RequestOK{}); err != nil {
-				return fmt.Errorf("moqt/session: write REQUEST_UPDATE_OK: %w", err)
+			// exactly one REQUEST_OK or REQUEST_ERROR"; the handler decides
+			// which. onMsg still observes the update.
+			accepted, err := b.answerUpdate(m)
+			if err != nil {
+				return err
 			}
 			updates.Responded()
+			if !accepted && b.onUpdateFailed != nil {
+				b.onUpdateFailed()
+			}
 		}
 
 		if onMsg != nil && !onMsg(msg) {

@@ -655,8 +655,9 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 // serveUpstreamStream owns ALL reads on an upstream request stream (the
 // relay's on-demand SUBSCRIBE to a publisher, or an accepted PUBLISH) via
 // the sub's [session.RequestBroker]: §10.9 responses route to in-flight
-// [registry.UpstreamSub.Update] calls, peer REQUEST_UPDATEs are answered
-// with the single mandated REQUEST_OK, and AUTHORIZATION_TOKEN parameters
+// [registry.UpstreamSub.Update] calls, peer REQUEST_UPDATEs are declined
+// (NOT_SUPPORTED — the relay installs no update handler here), and
+// AUTHORIZATION_TOKEN parameters
 // go through the session token cache (§10.2.2) — all inside Serve. Other
 // follow-ups need no action (PUBLISH_DONE precedes the FIN that ends the
 // loop); unsolicited responses are logged. It returns when the publisher
