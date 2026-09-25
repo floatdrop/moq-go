@@ -269,6 +269,11 @@ func checkOutboundSetupOptions(r role, conn Conn, opts []wire.KVPair) error {
 					"HTTP/3 carries the path and authority in the CONNECT request", name)
 		}
 	}
+	// A server closes the session over one that is not RFC 3986; refuse to
+	// send it. uri.Parse goes through net/url, which lets some through.
+	if _, err := checkPathAndAuthoritySyntax(opts); err != nil {
+		return fmt.Errorf("moqt/session: %w", err)
+	}
 	return nil
 }
 
@@ -322,10 +327,11 @@ func (s *Session) checkPeerSetupOptions() (moqt.SessionErrorCode, error) {
 }
 
 // checkPathAndAuthoritySyntax enforces the syntax rule of PATH (§10.3.1.2)
-// and AUTHORITY (§10.3.1.1) on a server over native QUIC, where receiving
-// them is legal: each "follows the URI formatting rules [RFC3986]", and "If
-// an AUTHORITY option does not conform to these rules, the session MUST be
-// closed with MALFORMED_AUTHORITY" — likewise PATH with MALFORMED_PATH.
+// and AUTHORITY (§10.3.1.1) — on receipt by a server over native QUIC, where
+// receiving them is legal, and on a client before it sends them: each
+// "follows the URI formatting rules [RFC3986]", and "If an AUTHORITY option
+// does not conform to these rules, the session MUST be closed with
+// MALFORMED_AUTHORITY" — likewise PATH with MALFORMED_PATH.
 func checkPathAndAuthoritySyntax(opts []wire.KVPair) (moqt.SessionErrorCode, error) {
 	for _, opt := range opts {
 		switch message.SetupOption(opt.Type) {

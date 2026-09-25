@@ -883,14 +883,21 @@ func checkGroupOrderParam(ps message.Parameters) error {
 // application SHOULD use a relevant error code" — with its Retry Interval
 // kept, so "retry in N ms" does not become "SHOULD NOT be retried". A code
 // about the track or the publisher's load says the same thing to the
-// downstream subscriber and passes through. One about the relay's own hop —
-// its authorization, the upstream going away, a REDIRECT the relay does not
-// follow — or about the relay's own Next Object filter (INVALID_RANGE,
+// downstream subscriber and passes through. MALFORMED_TRACK is among them:
+// §10.6.2 scopes it to FETCH, but this relay already answers a SUBSCRIBE with
+// it over malformed Track Properties. One about the relay's own hop — its
+// authorization, the upstream going away, a REDIRECT the relay does not
+// follow — or about the relay's own upstream filter (INVALID_RANGE,
 // INVALID_FILTER), or a code this relay does not know, becomes
-// INTERNAL_ERROR.
+// INTERNAL_ERROR. The upstream SUBSCRIBE always carries the relay's own Next
+// Object filter, which is its choice under §9.4's "MAY combine filters from
+// downstream subscribers"; if it ever combines them, INVALID_RANGE becomes
+// about the downstream request and this mapping must change.
 //
-// Any other failure (the upstream session died, the SUBSCRIBE timed out on
-// this side) reads as the track not existing.
+// Any other failure (the upstream session died mid-request) reads as the
+// track not existing. There is no local deadline on the upstream SUBSCRIBE; one
+// that expired would be §10.6.2's TIMEOUT example, "a relay could not
+// establish an upstream subscription within the timeout".
 func upstreamRejection(err error) *session.RequestRejectedError {
 	if isTrackPropertiesErr(err) {
 		return &session.RequestRejectedError{Code: session.TrackPropertiesRejectCode(err)}

@@ -667,19 +667,21 @@ func (c closeRecordingConn) CloseWithError(code uint64, reason string) error {
 // TestServerClosesMalformedPathOrAuthority covers the syntax rule of
 // §10.3.1.1/§10.3.1.2: "If an AUTHORITY option does not conform to these
 // rules, the session MUST be closed with MALFORMED_AUTHORITY", and likewise
-// PATH with MALFORMED_PATH. A well-formed pair still opens.
+// PATH with MALFORMED_PATH. A well-formed pair still opens. The client is
+// hand-rolled: a moq-go client refuses to send a malformed value (see
+// TestRefusesToSendMalformedPathOrAuthority).
 func TestServerClosesMalformedPathOrAuthority(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		opts []session.Option
+		opts []wire.KVPair
 		want moqt.SessionErrorCode // SessionNoError: the session opens
 	}{
-		{"well-formed", []session.Option{
-			session.WithAuthority("relay.example:4433"), session.WithPath("/relay?room=1"),
+		{"well-formed", []wire.KVPair{
+			message.AuthorityOption("relay.example:4433"), message.PathOption("/relay?room=1"),
 		}, moqt.SessionNoError},
-		{"AUTHORITY", []session.Option{session.WithAuthority("relay example")}, moqt.SessionMalformedAuthority},
-		{"AUTHORITY empty host", []session.Option{session.WithAuthority(":4433")}, moqt.SessionMalformedAuthority},
-		{"PATH", []session.Option{session.WithPath("relay")}, moqt.SessionMalformedPath},
+		{"AUTHORITY", []wire.KVPair{message.AuthorityOption("relay example")}, moqt.SessionMalformedAuthority},
+		{"AUTHORITY empty host", []wire.KVPair{message.AuthorityOption(":4433")}, moqt.SessionMalformedAuthority},
+		{"PATH", []wire.KVPair{message.PathOption("relay")}, moqt.SessionMalformedPath},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -687,13 +689,23 @@ func TestServerClosesMalformedPathOrAuthority(t *testing.T) {
 			clientConn, serverConn := sessiontest.NewConnPair()
 			rec := closeRecordingConn{Conn: serverConn, code: make(chan uint64, 1)}
 
-			go func() {
-				if c, err := session.Client(ctx, clientConn, tc.opts...); err == nil {
-					<-ctx.Done()
-					_ = c.Close(moqt.SessionNoError, "test cleanup")
+			var wg sync.WaitGroup
+			wg.Go(func() {
+				send, err := clientConn.OpenUniStream()
+				if err != nil {
+					t.Errorf("hand-rolled client: OpenUniStream: %v", err)
+					return
 				}
-			}()
+				if err := message.Marshal(send, &message.Setup{Options: tc.opts}); err != nil {
+					t.Errorf("hand-rolled client: Marshal SETUP: %v", err)
+					return
+				}
+				if recv, err := clientConn.AcceptUniStream(ctx); err == nil {
+					_, _ = message.Parse(recv)
+				}
+			})
 			sess, err := session.Server(ctx, rec)
+			wg.Wait()
 			if tc.want == moqt.SessionNoError {
 				if err != nil {
 					t.Fatalf("server refused well-formed PATH/AUTHORITY: %v", err)
@@ -712,6 +724,32 @@ func TestServerClosesMalformedPathOrAuthority(t *testing.T) {
 				}
 			default:
 				t.Fatalf("server returned %v without closing the conn", err)
+			}
+		})
+	}
+}
+
+// TestRefusesToSendMalformedPathOrAuthority: the send side of the syntax rule.
+// A server closes the session with MALFORMED_PATH / MALFORMED_AUTHORITY on a
+// value that is not RFC 3986 (§10.3.1.1–2), so the client refuses to open
+// with one rather than send it. The values are ones uri.Parse, which goes
+// through net/url, lets through.
+func TestRefusesToSendMalformedPathOrAuthority(t *testing.T) {
+	for name, opt := range map[string]session.Option{
+		"PATH":      session.WithPath("/room?tags=[a,b]"),
+		"AUTHORITY": session.WithAuthority("[fe80::1%en0]:4433"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			t.Cleanup(cancel)
+			clientConn, _ := sessiontest.NewConnPair()
+			sess, err := session.Client(ctx, clientConn, opt)
+			if err == nil {
+				_ = sess.Close(moqt.SessionNoError, "test cleanup")
+				t.Fatalf("client sent a malformed %s option", name)
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error %q does not name the %s option", err, name)
 			}
 		})
 	}
