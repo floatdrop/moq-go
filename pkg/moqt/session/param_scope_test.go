@@ -282,3 +282,44 @@ func TestParamScopeSubscribeTracksStillScoped(t *testing.T) {
 	_, _ = server.AcceptRequest(t.Context())
 	requireClosedProtocolViolation(t, server)
 }
+
+// TestIncludePropertiesOutOfRangeCloses: §10.2.21 "The allowed values are 0
+// (do not send Properties) or 1 (send Properties) [...] If an endpoint
+// receives a value outside this range, it MUST close the session with
+// PROTOCOL_VIOLATION." Checked for each message that may carry it.
+func TestIncludePropertiesOutOfRangeCloses(t *testing.T) {
+	t.Parallel()
+	bad := message.Parameters{message.ByteParam(message.ParamIncludeProperties, 2)}
+	cases := []struct {
+		name string
+		send func(*session.Session)
+	}{
+		{"SUBSCRIBE", func(c *session.Session) {
+			_, _ = c.Subscribe(t.Context(), &message.Subscribe{Namespace: videoNS, Name: []byte("t"), Parameters: bad})
+		}},
+		{"FETCH", func(c *session.Session) {
+			_, _ = c.Fetch(t.Context(), &message.Fetch{Namespace: videoNS, Name: []byte("t"), Parameters: bad})
+		}},
+		{"TRACK_STATUS", func(c *session.Session) {
+			_, _ = c.TrackStatus(
+				t.Context(),
+				&message.TrackStatus{Namespace: videoNS, Name: []byte("t"), Parameters: bad},
+			)
+		}},
+		{"SUBSCRIBE_TRACKS", func(c *session.Session) {
+			_, _ = c.SubscribeTracks(
+				t.Context(),
+				&message.SubscribeTracks{TrackNamespacePrefix: videoNS, Parameters: bad},
+			)
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client, server := openPair(t)
+			go tc.send(client)
+			_, _ = server.AcceptRequest(t.Context())
+			requireClosedProtocolViolation(t, server)
+		})
+	}
+}

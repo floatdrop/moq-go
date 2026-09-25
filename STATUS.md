@@ -178,7 +178,7 @@ By package, bottom-up along the dependency stack:
 | 10.2.18 | FORWARD                       | 0x10   | DONE   | |
 | 10.2.19 | NEW_GROUP_REQUEST             | 0x32   | DONE   | |
 | 10.2.20 | TRACK_NAMESPACE_PREFIX        | 0x34   | DONE   | Applied on REQUEST_UPDATE; SUBSCRIBE_NAMESPACE reconciles its announced set. |
-| 10.2.21 | INCLUDE_PROPERTIES            | 0x35   | PARTIAL| Parsed and scope-checked, not applied (see backlog). |
+| 10.2.21 | INCLUDE_PROPERTIES            | 0x35   | PARTIAL| Parsed and scope-checked; a value other than 0 or 1 closes the session. Not applied (see backlog). |
 | 10.3    | SETUP                         | 0x2F00 | DONE   | Bidirectional handshake; options as KV pairs. |
 | 10.3.1.1| AUTHORITY option              | 0x05   | PARTIAL| Sent (`WithAuthority`) and carried as a SETUP KV pair, but never validated on receipt: `SessionInvalidAuthority` is unused — see Limitations. |
 | 10.3.1.2| PATH option                   | 0x01   | PARTIAL| Sent (`WithPath`) and carried as a SETUP KV pair, but never validated on receipt: `SessionInvalidPath` is unused — see Limitations. |
@@ -491,8 +491,7 @@ Relay:
   - a TRACK_NAMESPACE_PREFIX update forwards nothing for tracks that already
     exist under the new prefix; only later PUBLISHes are forwarded;
   - INCLUDE_PROPERTIES=0 is ignored: forwarded PUBLISHes (and SUBSCRIBE_OK)
-    still carry Track Properties (§10.2.21 SHOULD), and a value other than 0
-    or 1 is not refused (§10.2.21 MUST close the session).
+    still carry Track Properties (§10.2.21 SHOULD).
 - Fill streams do not inherit the subscription's Range Filters (§5.1.3).
 - Fill streams are not scheduled against their subscription (§7.2 rules 3
   and 4): a subscription-delivered object should go first when the fill's
