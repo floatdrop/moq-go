@@ -44,6 +44,13 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		slog.String("name", string(msg.Name)),
 		slog.Uint64("alias", msg.TrackAlias))
 
+	// §10.2.18: an out-of-range FORWARD "MUST close the session with
+	// PROTOCOL_VIOLATION", as on the SUBSCRIBE path.
+	if err := checkForwardParam(msg.Parameters); err != nil {
+		_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+		return
+	}
+
 	if err := h.auth.AuthorizePublish(ctx, h.sess, msg); err != nil {
 		h.rejectAuth(ctx, req, "Publish", err)
 		return
@@ -81,6 +88,13 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	// the PUBLISH's ID is recorded for identity/diagnostics.
 	// The publisher sent the PUBLISH, so it may send REQUEST_UPDATE (§10.9).
 	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias, msg.RequestID, true)
+	// §5.1: "The initiator of the subscription sets the initial Forward State
+	// in either PUBLISH or SUBSCRIBE". NewUpstreamSub assumes the omitted
+	// default of 1; a PUBLISH that says FORWARD=0 is paused until the relay
+	// resumes it below or via §9.2 propagation.
+	if f, ok := msg.Parameters.Find(message.ParamForward); ok && f.Byte == 0 {
+		sub.SetForwardState(0)
+	}
 
 	// Register the upstream and reply REQUEST_OK atomically under the
 	// stream's broker write lock. Both orderings matter:
@@ -118,6 +132,14 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	}()
 	h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH accepted, waiting for publisher",
 		slog.String("name", string(msg.Name)))
+
+	// §9.5: "If at least one downstream subscriber for the Track has Forward
+	// State=1, the Relay MUST change the Forward State to 1 with
+	// REQUEST_UPDATE." Spawned: the update's response is read by the broker's
+	// Serve loop, which serveUpstreamStream below starts.
+	if sub.ForwardState() == 0 && anyDownstreamForwards(entry) {
+		h.spawn(func() { h.propagateForwardUpstream(ctx, fullName) })
+	}
 
 	// Forward to every SUBSCRIBE_TRACKS holder whose prefix matches.
 	// Per §6.1 / §9.5 the relay sends a PUBLISH for the track to each such

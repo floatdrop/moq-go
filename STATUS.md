@@ -443,8 +443,6 @@ Validation:
 
 Relay:
 
-- A PUBLISH that arrives with FORWARD=0 is not switched to Forward=1 when at
-  least one downstream subscriber has Forward State 1 (§9.5, §9.2).
 - A new PUBLISH_NAMESPACE does not trigger SUBSCRIBEs for existing
   subscriptions: "it MUST send a SUBSCRIBE to the publisher that sent the
   PUBLISH_NAMESPACE for each matching subscription" (§9.5). This is the "Late
