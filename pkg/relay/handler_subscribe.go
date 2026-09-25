@@ -301,7 +301,7 @@ func (h *sessionHandler) handleSubscribeUpdate(
 		}
 		h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE parameter parse failed",
 			slog.String("err", err.Error()))
-		// §10.9: a failed subscription update is answered with REQUEST_ERROR
+		// §10.9.1: a failed subscription update is answered with REQUEST_ERROR
 		// and the publisher MUST also terminate the subscription with
 		// PUBLISH_DONE / UPDATE_FAILED. A bad Range Filter uses INVALID_FILTER
 		// (§10.6); other malformed params use MALFORMED_TRACK. Writes go through

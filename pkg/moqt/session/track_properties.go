@@ -43,6 +43,15 @@ func (e *ErrUnsupportedMandatoryTrackProperty) Error() string {
 // MALFORMED_TRACK only for FETCH, so that code is this package's choice.
 var ErrMalformedTrackProperties = errors.New("moqt/session: malformed track properties")
 
+// ErrTrackPropertiesNotAllowed is returned when an endpoint asks to send a
+// REQUEST_OK with Track Properties where §10.5 says they are empty: in
+// PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and
+// PUBLISH_NAMESPACE_OK. Nothing is sent, since the peer "MUST close the
+// session with a PROTOCOL_VIOLATION" on receiving one. [Request.Reply] cannot
+// tell a REQUEST_UPDATE_OK on a SUBSCRIBE_TRACKS stream from that stream's
+// first OK, so it sends that one as given.
+var ErrTrackPropertiesNotAllowed = errors.New("moqt/session: track properties not allowed in this REQUEST_OK")
+
 // ValidateTrackProperties parses raw Track Properties bytes and checks for
 // unknown Mandatory Track Properties (range 0x4000–0x7FFF per §2.5.1).
 //
