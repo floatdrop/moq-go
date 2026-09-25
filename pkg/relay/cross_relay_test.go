@@ -1410,3 +1410,51 @@ func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 	relayA.stop(t)
 	relayB.stop(t)
 }
+
+// TestCrossRelay_PublishDoneCodeCrossesRelays: §10.12 "The application SHOULD
+// use a relevant status code in PUBLISH_DONE". A code about the track reaches
+// a subscriber two relays away: the origin relay passes the publisher's code
+// to its downstream, which here is relay A's own upstream SUBSCRIBE, and A
+// passes it on in turn rather than reporting its upstream's end as
+// TRACK_ENDED.
+func TestCrossRelay_PublishDoneCodeCrossesRelays(t *testing.T) {
+	t.Parallel()
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+	ctx := t.Context()
+
+	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
+	defer relayB.stop(t)
+	relayA := startTestRelay(ctx, relay.Config{
+		Discovery: store,
+		RelayAddr: "relay-A",
+		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
+			if addr == "relay-B" {
+				return relayB.l.Dial()
+			}
+			return nil, fmt.Errorf("no relay at %q", addr)
+		},
+	})
+	defer relayA.stop(t)
+
+	pubSess := dialClient(t, relayB)
+	defer func() { _ = pubSess.Close(0, "done") }()
+	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()})
+	if err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	defer func() { _ = pns.Close() }()
+	pub := publishVideoTrack(t, pubSess, "cam1", 7)
+
+	subSess := dialClient(t, relayA)
+	defer func() { _ = subSess.Close(0, "done") }()
+	subReq := subscribeCam1Req(t, subSess)
+
+	if err := pub.Done(moqt.PublishDoneMalformedTrack, "bad track"); err != nil {
+		t.Fatalf("Done: %v", err)
+	}
+	if pd := awaitPublishDone(t, subReq); pd.StatusCode != moqt.PublishDoneMalformedTrack {
+		t.Fatalf("PUBLISH_DONE across two relays %#x, want MALFORMED_TRACK %#x",
+			pd.StatusCode, moqt.PublishDoneMalformedTrack)
+	}
+}
