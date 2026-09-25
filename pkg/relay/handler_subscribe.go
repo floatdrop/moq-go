@@ -318,7 +318,16 @@ func (h *sessionHandler) handleSubscribeUpdate(
 		return
 	}
 
-	if err := sub.WriteMessage(&message.RequestOK{}); err != nil {
+	// §10.2.17: "If Objects have been published on this Track the Publisher
+	// MUST include" LARGEST_OBJECT, in REQUEST_UPDATE_OK as elsewhere; §10.9.1
+	// has the subscriber FETCH a widened range's gap up to it.
+	reply := &message.RequestOK{}
+	if entry, ok := h.tracks.Get(fullName.Key()); ok {
+		if largest, has := entry.GetLargest(); has {
+			reply.Parameters = message.Parameters{message.LargestObjectParam(largest.Group, largest.Object)}
+		}
+	}
+	if err := sub.WriteMessage(reply); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE_OK write failed",
 			slog.String("err", err.Error()))
 		return
