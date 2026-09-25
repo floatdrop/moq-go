@@ -226,9 +226,10 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		h.propagateForwardUpstream(ctx, fullName)
 	}
 
-	// Read follow-ups (§10.9 REQUEST_UPDATE, peer FIN/reset) on the bidi stream
-	// until the subscriber tears it down or ctx is cancelled, dispatching
-	// REQUEST_UPDATE so Forward / priority / filter can change mid-flight.
+	// Read follow-ups (§10.9 REQUEST_UPDATE) on the bidi stream until the
+	// subscriber cancels, the relay ends the subscription, or ctx is
+	// cancelled, dispatching REQUEST_UPDATE so Forward / priority / filter can
+	// change mid-flight. A subscriber FIN is not a cancel (§3.3.2).
 	h.readSubscribeUpdates(ctx, req, sub, fullName)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE stream ended",
 		slog.String("name", string(msg.Name)))
@@ -238,11 +239,12 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 // downstream SUBSCRIBE. It parses messages off the bidi request stream and
 // routes REQUEST_UPDATE (§10.9) to [sessionHandler.handleSubscribeUpdate];
 // any other DECODABLE follow-up is ignored. An undecodable one ends the
-// loop and resets the read side (see [readRequestStream]) — the eviction
-// that follows is the same as on FIN/reset. The loop exits on io.EOF /
-// reset (subscriber tore the stream down) or ctx cancellation (session
-// shutdown), at which point the deferred cleanup in handleSubscribe evicts
-// the subscription.
+// loop and resets the read side (see [readRequestStream]). A reset (the
+// subscriber cancelled) or ctx cancellation (session shutdown) ends it too.
+// A subscriber FIN does not: §3.3.2 says it "is not a request cancellation",
+// so the subscription lives on in [awaitRequestEnd] until the subscriber's
+// STOP_SENDING or the relay's own PUBLISH_DONE + FIN. On return the deferred
+// cleanup in handleSubscribe evicts the subscription.
 func (h *sessionHandler) readSubscribeUpdates(
 	ctx context.Context,
 	req *session.Request,
@@ -250,7 +252,7 @@ func (h *sessionHandler) readSubscribeUpdates(
 	fullName track.FullTrackName,
 ) {
 	updates := h.sess.NewRequestUpdateLimiter()
-	readRequestStream(ctx, req.Stream, func(m message.Message) bool {
+	fin := readRequestStream(ctx, req.Stream, func(m message.Message) bool {
 		if upd, ok := m.(*message.RequestUpdate); ok {
 			// §10.1: the update consumes a Request ID; a parity or
 			// duplicate violation is session-fatal.
@@ -271,6 +273,11 @@ func (h *sessionHandler) readSubscribeUpdates(
 		}
 		return true
 	})
+	if fin {
+		// The subscriber will send no more updates; the subscription lives
+		// on until it cancels or ends (§3.3.2).
+		awaitRequestEnd(ctx, req.Stream)
+	}
 }
 
 // handleSubscribeUpdate applies a REQUEST_UPDATE (§10.9) to an established

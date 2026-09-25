@@ -547,7 +547,7 @@ func (h *sessionHandler) handleFollowupTokens(ctx context.Context, msg message.M
 
 // readRequestStream owns all reads on an established request stream: it
 // parses follow-up messages off the stream and dispatches each to onMsg
-// until the peer tears the stream down (EOF / reset), onMsg returns false,
+// until the peer ends its side (FIN or reset), onMsg returns false,
 // or ctx is cancelled (the read side is then reset with
 // StreamResetSessionClosed to unblock the parse). A malformed follow-up —
 // any non-EOF parse error — resets the read side with
@@ -559,10 +559,14 @@ func (h *sessionHandler) handleFollowupTokens(ctx context.Context, msg message.M
 // in their per-message dispatch. (Requester-side upstream streams use
 // [session.RequestBroker.Serve] instead, which additionally routes §10.9
 // responses to in-flight Update calls.)
-func readRequestStream(ctx context.Context, stream session.Stream, onMsg func(message.Message) bool) {
-	done := make(chan struct{})
+//
+// It reports fin when the requester ended its side with a FIN. That is not a
+// cancellation (§3.3.2); callers decide what the request does next — see
+// [awaitRequestEnd].
+func readRequestStream(ctx context.Context, stream session.Stream, onMsg func(message.Message) bool) (fin bool) {
+	// done carries the fin result, so nothing else escapes to the heap.
+	done := make(chan bool, 1)
 	go func() {
-		defer close(done)
 		for {
 			m, err := message.Parse(stream)
 			if err != nil {
@@ -570,29 +574,48 @@ func readRequestStream(ctx context.Context, stream session.Stream, onMsg func(me
 				// already-reset stream is a transport no-op), and may run
 				// after the ctx arm's SessionClosed CancelRead — the first
 				// code sent wins on every bundled adapter.
-				if !errors.Is(err, io.EOF) {
+				eof := errors.Is(err, io.EOF)
+				if !eof {
 					stream.CancelRead(uint64(moqt.StreamResetInternalError))
 				}
+				done <- eof
 				return
 			}
 			if !onMsg(m) {
+				done <- false
 				return
 			}
 		}
 	}()
 	select {
-	case <-done:
+	case fin = <-done:
+		return fin
 	case <-ctx.Done():
 		stream.CancelRead(uint64(moqt.StreamResetSessionClosed))
 		<-done
+		return false
+	}
+}
+
+// awaitRequestEnd keeps a request whose requester FINned its side alive until
+// it really ends. §3.3.2: a FIN "is not a request cancellation"; §3.3.3: a
+// requester that has FINned "and subsequently wishes to cancel sends
+// STOP_SENDING on the receiving direction". The stream's send Context ends on
+// exactly that STOP_SENDING — or when the relay itself finishes or resets its
+// side (e.g. PUBLISH_DONE + FIN) — and ctx ends with the session.
+func awaitRequestEnd(ctx context.Context, stream session.Stream) {
+	select {
+	case <-stream.Context().Done():
+	case <-ctx.Done():
 	}
 }
 
 // serveFetchObjects is the shared response tail of the standalone and
 // joining FETCH handlers: open the data stream, stream the stitched range,
 // count the objects actually written (the FetchServed metric), FIN, and
-// park in the §10.9 follow-up loop until the peer tears the request stream
-// down. kind tags log lines with the FETCH flavour ("standalone" / "joining").
+// park in the §10.9 follow-up loop until the requester resets or FINs the
+// request stream — on a FIN the relay FINs back, completing the request.
+// kind tags log lines with the FETCH flavour ("standalone" / "joining").
 func (h *sessionHandler) serveFetchObjects(
 	ctx context.Context,
 	req *session.Request,
@@ -611,10 +634,10 @@ func (h *sessionHandler) serveFetchObjects(
 		return
 	}
 
-	// Read follow-ups (§10.9 REQUEST_UPDATE, peer FIN/reset) on the bidi
-	// request stream until the peer tears it down or ctx is cancelled, so a
-	// malformed FETCH update is answered with REQUEST_ERROR and the data
-	// stream reset per §10.9.
+	// Read follow-ups (§10.9 REQUEST_UPDATE) on the bidi request stream until
+	// the requester resets or FINs it or ctx is cancelled, so a malformed
+	// FETCH update is answered with REQUEST_ERROR and the data stream reset
+	// per §10.9.
 	h.readFetchUpdates(ctx, req, out)
 }
 

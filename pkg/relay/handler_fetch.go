@@ -170,10 +170,12 @@ func (h *sessionHandler) fetchRangeFilters(
 
 // readFetchUpdates is the follow-up dispatch loop for an established FETCH:
 // REQUEST_UPDATE (§10.9) routes to [sessionHandler.handleFetchUpdate]; any
-// other follow-up is ignored. Scaffolding lives in [readRequestStream].
+// other follow-up is ignored. A requester FIN means no more updates; the
+// response is already complete, so the relay FINs back (§3.3.2). Scaffolding
+// lives in [readRequestStream].
 func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Request, out *session.OutgoingFetchStream) {
 	updates := h.sess.NewRequestUpdateLimiter()
-	readRequestStream(ctx, req.Stream, func(m message.Message) bool {
+	fin := readRequestStream(ctx, req.Stream, func(m message.Message) bool {
 		if upd, ok := m.(*message.RequestUpdate); ok {
 			// §10.1: the update consumes a Request ID; a parity or
 			// duplicate violation is session-fatal.
@@ -194,6 +196,11 @@ func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Requ
 		}
 		return true
 	})
+	if fin {
+		// The requester will send no REQUEST_UPDATE, and the response is
+		// complete: FIN this side too, which completes the request (§3.3.2).
+		_ = req.Stream.Close()
+	}
 }
 
 // handleFetchUpdate applies a REQUEST_UPDATE (§10.9) to an in-flight FETCH.

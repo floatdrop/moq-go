@@ -412,10 +412,6 @@ Found while fixing, left open deliberately:
 
 Request lifecycle:
 
-- A requester's FIN is treated as a cancellation, which tears down a FIN'd
-  SUBSCRIBE or PUBLISH_NAMESPACE (§3.3.2: "it is not a request cancellation").
-- A subscriber ends a subscription with FIN rather than STOP_SENDING (§3.3.2,
-  §5.1).
 - The session broker answers every REQUEST_UPDATE with an empty REQUEST_OK, and
   applies none of its parameters: FORWARD=0 does not stop objects (§5.1).
 - REQUEST_UPDATE_OK never carries LARGEST_OBJECT, in the session broker or the

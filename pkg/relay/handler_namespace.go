@@ -19,8 +19,10 @@ import (
 //  4. Forward to every matching downstream SUBSCRIBE_NAMESPACE holder as a
 //     NAMESPACE message (§9.5).
 //  5. Block reading the request stream until the publisher cancels it
-//     (FIN / RESET_STREAM, §6.2). On exit, unregister from the
-//     registry.NamespaceRegistry and emit NAMESPACE_DONE to the same subscribers.
+//     (RESET_STREAM, or STOP_SENDING after a FIN — §6.2 "withdrawn by
+//     cancelling the request", §3.3.3; a FIN alone is not a withdrawal,
+//     §3.3.2). On exit, unregister from the registry.NamespaceRegistry and
+//     emit NAMESPACE_DONE to the same subscribers.
 //
 // The §9.5 "issue upstream SUBSCRIBE for matching downstream subs"
 // optimisation is handled by the SUBSCRIBE handler's on-demand
@@ -65,8 +67,8 @@ func (h *sessionHandler) handlePublishNamespace(
 		notified = append(notified, sub)
 	}
 
-	// Block until the publisher cancels (request stream FIN/reset) or our
-	// ctx is cancelled. Per §6.2 the bidi stream is the publisher's
+	// Block until the publisher cancels (§6.2, §3.3.3: reset, or
+	// STOP_SENDING after a FIN) or our ctx is cancelled. Per §6.2 the bidi stream is the publisher's
 	// keepalive for the advertisement; NAMESPACE / NAMESPACE_DONE
 	// follow-ups from the publisher need no action (the §9.5 fanout keys
 	// off tracks, not per-namespace sub-announcements), but REQUEST_UPDATEs
@@ -311,7 +313,7 @@ func (h *sessionHandler) serveNamespaceFollowups(
 	write func(message.Message) error,
 ) {
 	updates := h.sess.NewRequestUpdateLimiter()
-	readRequestStream(ctx, stream, func(m message.Message) bool {
+	fin := readRequestStream(ctx, stream, func(m message.Message) bool {
 		upd, ok := m.(*message.RequestUpdate)
 		if !ok {
 			return true
@@ -340,6 +342,13 @@ func (h *sessionHandler) serveNamespaceFollowups(
 		updates.Responded()
 		return true
 	})
+	if fin {
+		// A FIN is not a withdrawal or unsubscribe (§3.3.2): PUBLISH_NAMESPACE
+		// is "withdrawn by cancelling the request" (§6.2), SUBSCRIBE_NAMESPACE
+		// and SUBSCRIBE_TRACKS are cancelled "by resetting or sending
+		// STOP_SENDING on the stream" (§6.1). Keep the state until then.
+		awaitRequestEnd(ctx, stream)
+	}
 }
 
 // namespaceKey returns a canonical map key for a namespace tuple (its wire

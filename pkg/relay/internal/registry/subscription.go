@@ -653,10 +653,10 @@ func GroupOutOfRange(group uint64, f *message.LocationFilter) bool {
 
 // TerminateWithPublishDone gracefully ends this downstream subscription
 // per §10.12: the relay writes a PUBLISH_DONE message on the
-// subscriber's request stream and FINs the send side. The subscriber
-// eventually FINs its side too, the handler's readSubscribeUpdates
-// loop sees EOF and exits, and its defer evicts the [DownstreamSub]
-// from the [TrackRegistry].
+// subscriber's request stream and FINs the send side. That ends the
+// handler's wait (the stream's send Context), whether or not the subscriber
+// has FINned its own side, and its defer evicts the [DownstreamSub] from the
+// [TrackRegistry].
 //
 // If the SUBSCRIBE_OK never went out — the sub is registered (and thus
 // reachable by teardown) before the handler replies, so a terminator can
