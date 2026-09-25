@@ -548,8 +548,13 @@ func (r *TrackRegistry) RemoveUpstream(
 
 	entry.mu.Lock()
 	before := len(entry.Upstream)
+	var gone *UpstreamSub
 	entry.Upstream = slices.DeleteFunc(entry.Upstream, func(s *UpstreamSub) bool {
-		return s.ID == subID
+		if s.ID == subID {
+			gone = s
+			return true
+		}
+		return false
 	})
 	removed = len(entry.Upstream) < before
 	upstreamEmpty = len(entry.Upstream) == 0
@@ -580,9 +585,11 @@ func (r *TrackRegistry) RemoveUpstream(
 	r.mu.Unlock()
 
 	if upstreamEmpty {
+		// §10.12: carry the last upstream's reason where it is about the
+		// track (see DownstreamDoneCode).
+		code := DownstreamDoneCode(gone.publishDone())
 		for _, sub := range notifyDownstreams {
-			sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded,
-				"relay: upstream gone")
+			sub.TerminateWithPublishDone(code, "relay: upstream gone")
 		}
 	}
 	return true, upstreamEmpty, entryDeleted

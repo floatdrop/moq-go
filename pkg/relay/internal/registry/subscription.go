@@ -218,6 +218,49 @@ type UpstreamSub struct {
 	// via [UpstreamSub.WriteMessage] must not interleave. nil only for
 	// literal-constructed test fixtures; [NewUpstreamSub] always builds one.
 	Broker *session.RequestBroker
+
+	// done is the PUBLISH_DONE the upstream sent, nil until it does. Guarded
+	// by the embedded Subscription's mu.
+	done *message.PublishDone
+}
+
+// SetPublishDone records the PUBLISH_DONE the upstream ended this
+// subscription with (§10.12); see [DownstreamDoneCode].
+func (u *UpstreamSub) SetPublishDone(pd *message.PublishDone) {
+	u.mu.Lock()
+	u.done = pd
+	u.mu.Unlock()
+}
+
+// publishDone returns what [UpstreamSub.SetPublishDone] recorded.
+func (u *UpstreamSub) publishDone() *message.PublishDone {
+	u.mu.RLock()
+	defer u.mu.RUnlock()
+	return u.done
+}
+
+// DownstreamDoneCode is the PUBLISH_DONE status code the relay sends its
+// subscribers when a track's last upstream ended with upstream (nil: it ended
+// without one — reset, or its session went away). §10.12: "The application
+// SHOULD use a relevant status code". A code about the track passes through;
+// one about the relay's own upstream subscription (it fell behind, its update
+// failed, it expired, it lost its authorization, the upstream was overloaded
+// or going away) says nothing true about the subscriber's, so it becomes
+// INTERNAL_ERROR, as does a code this relay does not know. An upstream gone
+// without PUBLISH_DONE ends the track as far as the relay can tell.
+func DownstreamDoneCode(upstream *message.PublishDone) moqt.PublishDoneCode {
+	if upstream == nil {
+		return moqt.PublishDoneTrackEnded
+	}
+	switch upstream.StatusCode {
+	case moqt.PublishDoneTrackEnded, moqt.PublishDoneMalformedTrack:
+		return upstream.StatusCode
+	case moqt.PublishDoneInternalError, moqt.PublishDoneUnauthorized, moqt.PublishDoneGoingAway,
+		moqt.PublishDoneTooFarBehind, moqt.PublishDoneExpired, moqt.PublishDoneUpdateFailed,
+		moqt.PublishDoneExcessiveLoad:
+		return moqt.PublishDoneInternalError
+	}
+	return moqt.PublishDoneInternalError // a code this relay does not know
 }
 
 // updateResponseTimeout bounds the wait for the §10.9 REQUEST_OK /

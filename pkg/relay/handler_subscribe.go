@@ -689,16 +689,17 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 // the broker for the §10.9 responses.
 func (h *sessionHandler) serveUpstreamStream(ctx context.Context, up *registry.UpstreamSub) {
 	err := up.Broker.Serve(ctx, func(m message.Message) bool {
-		switch m.(type) {
+		switch m := m.(type) {
+		case *message.PublishDone:
+			// Kept for the downstream PUBLISH_DONE code (§10.12); the
+			// publisher FINs the stream afterwards, which ends the loop and
+			// lets the caller unregister the upstream.
+			up.SetPublishDone(m)
 		case *message.RequestOK, *message.RequestError:
 			// Serve only hands responses here when no Update was pending.
 			h.log.LogAttrs(ctx, slog.LevelDebug,
 				"unsolicited response on upstream request stream",
 				slog.Uint64("sub_id", up.ID))
-		default:
-			// PUBLISH_DONE and other follow-ups: the publisher FINs
-			// the stream afterwards, which ends the loop and lets
-			// the caller unregister the upstream.
 		}
 		return true
 	})

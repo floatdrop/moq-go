@@ -196,7 +196,7 @@ By package, bottom-up along the dependency stack:
 | 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | A REQUEST_UPDATE opening a request stream closes the session with PROTOCOL_VIOLATION (`ErrUnexpectedRequestUpdate`). |
 | 10.10   | PUBLISH_STATE_NOTIFY          | 0x22   | DONE   | Only the publisher may send it; enforced by brokers and the relay. |
 | 10.11   | PUBLISH                       | 0x1D   | DONE   | |
-| 10.12   | PUBLISH_DONE                  | 0x0B   | DONE   | Sent once every stream of the subscription has closed and no datagram send is in progress, with the exact Stream Count; written on its own goroutine, so subscribers do not wait on each other. |
+| 10.12   | PUBLISH_DONE                  | 0x0B   | DONE   | Sent once every stream of the subscription has closed and no datagram send is in progress, with the exact Stream Count; written on its own goroutine, so subscribers do not wait on each other. When a track's last upstream ends, its PUBLISH_DONE code reaches subscribers if it is about the track (TRACK_ENDED, MALFORMED_TRACK); codes about the relay's own upstream subscription become INTERNAL_ERROR. |
 | 10.13   | FETCH                         | 0x16   | DONE   | Standalone, the only kind in draft-20. |
 | 10.14   | FETCH_OK                      | 0x18   | DONE   | An End Location before the FETCH's Start closes the session. A Start relative to the Largest Object is compared through End ≤ Largest; an End of {0,0} is let through, as it cannot be told apart from "no content yet". |
 | 10.15   | TRACK_STATUS                  | 0x0D   | DONE   | Reply via REQUEST_OK, then FIN; any follow-up from the requester closes the session. |
@@ -478,8 +478,6 @@ Relay:
 - Fill streams are not scheduled against their subscription (§7.2 rules 3
   and 4): a subscription-delivered object should go first when the fill's
   Group Order differs, and the fill-delivered one first within a group.
-- Upstream PUBLISH_DONE codes are flattened to TRACK_ENDED; §10.12 asks for "a
-  relevant status code".
 - Duplicate objects from redundant upstreams are not compared (§9.1).
 - A subgroup whose fanout state is torn down and rebuilt (the last inbound
   contributor left, then a replay or redundant upstream brings it back) starts
