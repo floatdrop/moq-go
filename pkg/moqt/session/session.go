@@ -93,6 +93,10 @@ type Session struct {
 	// a DUPLICATE_TRACK_ALIAS session error.
 	inboundAliases map[uint64]InboundTrack
 
+	// inboundAliasRefs counts the registrations of each alias in
+	// inboundAliases; see [Session.RegisterInboundTrack]. Protected by mu.
+	inboundAliasRefs map[uint64]int
+
 	// aliasRegistered is closed, and replaced, each time RegisterInboundTrack
 	// binds a new alias, waking [IncomingSubgroupStream.AwaitInboundTrack].
 	// Protected by mu.
@@ -167,6 +171,7 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 		goawayCh:                      make(chan struct{}),
 		done:                          make(chan struct{}),
 		inboundAliases:                make(map[uint64]InboundTrack),
+		inboundAliasRefs:              make(map[uint64]int),
 		aliasRegistered:               make(chan struct{}),
 		knownMandatoryTrackProperties: cfg.knownMandatoryTrackProperties,
 		tokenCache:                    NewTokenCache(cfg.maxAuthTokenCacheSize),

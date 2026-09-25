@@ -453,9 +453,8 @@ Relay:
 - Two upstream SUBSCRIBEs to one publisher for one track can both go out when
   two downstream SUBSCRIBEs race for a track with no upstream yet, or one
   races a §9.5 late-publisher SUBSCRIBE (late-publisher SUBSCRIBEs themselves
-  are deduplicated). §5.1 allows it, but a publisher that gives both the same
-  Track Alias loses routing for the survivor when the first ends, because
-  `UnregisterInboundTrackAlias` is not reference-counted.
+  are deduplicated). §5.1 allows it; it costs a second upstream subscription.
+  A Track Alias the publisher shares between them stays routed until both end.
 - `Request.RejectError` always sends Retry Interval 0 ("SHOULD NOT be
   retried", §10.6.2). So the relay turns an upstream's "retry in N ms" into a
   permanent refusal when it passes the rejection downstream, and its
