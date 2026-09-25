@@ -1,9 +1,13 @@
 package registry
 
 import (
+	"maps"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/relay/cache"
 )
@@ -82,6 +86,11 @@ type TrackEntry struct {
 
 	// Downstream is the set of subscriber subscriptions to fan out to.
 	Downstream []*DownstreamSub
+
+	// refusals are the publisher registrations that refused a §9.5
+	// late-publisher SUBSCRIBE for this track, each with the time it may be
+	// asked again (zero: never); see [TrackEntry.NoteRefusal]. Guarded by mu.
+	refusals map[*PublisherEntry]time.Time
 
 	// downstreamGen counts appends to Downstream. The per-object fanout
 	// (UpdateLargestAndDetectNew) snapshots it alongside its initial
@@ -440,6 +449,67 @@ func (e *TrackEntry) CopyUpstream() []*UpstreamSub {
 	out := make([]*UpstreamSub, len(e.Upstream))
 	copy(out, e.Upstream)
 	return out
+}
+
+// HasUpstreamOn reports whether one of the entry's upstream subscriptions is
+// on sess.
+func (e *TrackEntry) HasUpstreamOn(sess *session.Session) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return slices.ContainsFunc(e.Upstream, func(u *UpstreamSub) bool { return u.Session == sess })
+}
+
+// NoteRefusal records that pub refused a late-publisher SUBSCRIBE for this
+// track and may not be asked again before retryAt; a zero retryAt means not
+// while this entry and that PUBLISH_NAMESPACE registration both last. A new
+// registration is a new *PublisherEntry and starts clean.
+func (e *TrackEntry) NoteRefusal(pub *PublisherEntry, retryAt time.Time) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.refusals == nil {
+		e.refusals = make(map[*PublisherEntry]time.Time)
+	}
+	e.refusals[pub] = retryAt
+}
+
+// Refused reports whether a refusal from pub still stands at now.
+func (e *TrackEntry) Refused(pub *PublisherEntry, now time.Time) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	retryAt, ok := e.refusals[pub]
+	return ok && (retryAt.IsZero() || now.Before(retryAt))
+}
+
+// RetainRefusals forgets refusals that no longer stand at now or whose
+// publisher is not in current, the registrations still covering the track.
+// The write lock is taken only when there is one to forget.
+func (e *TrackEntry) RetainRefusals(current []*PublisherEntry, now time.Time) {
+	stale := func(p *PublisherEntry, retryAt time.Time) bool {
+		return (!retryAt.IsZero() && !now.Before(retryAt)) || !slices.Contains(current, p)
+	}
+	e.mu.RLock()
+	anyStale := false
+	for p, retryAt := range e.refusals {
+		if stale(p, retryAt) {
+			anyStale = true
+			break
+		}
+	}
+	e.mu.RUnlock()
+	if !anyStale {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	maps.DeleteFunc(e.refusals, stale)
+}
+
+// HasDownstreamOn reports whether one of the entry's downstream subscriptions
+// is on sess.
+func (e *TrackEntry) HasDownstreamOn(sess *session.Session) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return slices.ContainsFunc(e.Downstream, func(d *DownstreamSub) bool { return d.Session == sess })
 }
 
 // CopyDownstream returns a snapshot of the current downstream slice. See

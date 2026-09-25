@@ -85,7 +85,8 @@ func (b *RequestBroker) PeerMessages(requestUpdate, publishStateNotify bool) {
 
 // UpdateHandler decides a peer's REQUEST_UPDATE (§10.9). It returns the
 // REQUEST_OK to send, or an error: a *[RequestRejectedError] is sent as
-// REQUEST_ERROR with its code and reason, any other error as INTERNAL_ERROR.
+// REQUEST_ERROR with its code, reason and Retry Interval, any other error as
+// INTERNAL_ERROR.
 type UpdateHandler func(upd *message.RequestUpdate) (*message.RequestOK, error)
 
 // HandleUpdates installs the handler that decides peer REQUEST_UPDATEs,
@@ -129,7 +130,11 @@ func (b *RequestBroker) answerUpdate(upd *message.RequestUpdate) (bool, error) {
 	if !isRej {
 		rej = &RequestRejectedError{Code: moqt.RequestInternalError, Reason: err.Error()}
 	}
-	if werr := b.WriteMessage(&message.RequestError{ErrorCode: rej.Code, ErrorReason: rej.Reason}); werr != nil {
+	if werr := b.WriteMessage(&message.RequestError{
+		ErrorCode:     rej.Code,
+		RetryInterval: rej.RetryInterval,
+		ErrorReason:   rej.Reason,
+	}); werr != nil {
 		return false, fmt.Errorf("moqt/session: write REQUEST_UPDATE error: %w", werr)
 	}
 	return false, nil
@@ -167,7 +172,7 @@ func (s *Session) mapUpdateResponse(msg message.Message) (*message.RequestOK, er
 		}
 		return m, nil
 	case *message.RequestError:
-		return nil, &RequestRejectedError{Code: m.ErrorCode, Reason: m.ErrorReason}
+		return nil, &RequestRejectedError{Code: m.ErrorCode, Reason: m.ErrorReason, RetryInterval: m.RetryInterval}
 	default:
 		return nil, fmt.Errorf("moqt/session: unexpected %s in REQUEST_UPDATE response", msg.Type())
 	}

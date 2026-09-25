@@ -93,6 +93,9 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		reusedUpstream  bool
 		added           bool
 	)
+	// Publishers that register after this point are picked up below, once the
+	// downstream is on the entry.
+	pubSeq := h.names.Seq()
 	for range 2 {
 		e, ok := h.tracks.Get(fullName.Key())
 		if !ok || !hasEstablishedUpstream(e) {
@@ -160,6 +163,8 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		return
 	}
 	sub.SetLargestAtSubscribe(snapshotLargest, snapshotHas)
+	// §9.5: "Relays MUST send SUBSCRIBE messages to all matching publishers".
+	h.subscribeMissingPublishers(ctx, entry, reusedUpstream, pubSeq)
 
 	subRef := h.trackRef(fullName)
 	h.metrics.SubscriptionOpened(subRef)
@@ -471,9 +476,17 @@ func (h *sessionHandler) subscribeUpstream(
 			return
 		}
 		subscribed[sess] = true // even on failure: don't retry the same source here
+		// Hold the claim when it is free, so a late-publisher SUBSCRIBE for the
+		// same (publisher, track) skips rather than duplicating this one. Never
+		// wait on another holder: its SUBSCRIBE carried its own Forward and
+		// NEW_GROUP_REQUEST and may fail for its own reasons, so this request
+		// subscribes for itself (§9.5), as it always has.
+		if release, claimed := h.tracks.ClaimUpstream(sess, fullName.Key()); claimed {
+			defer release()
+		}
 		h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: issuing upstream SUBSCRIBE",
 			slog.String("source", src))
-		entry, established, err := h.subscribeUpstreamOnSession(ctx, sess, fullName, extra, wantForward)
+		entry, _, err := h.subscribeUpstreamOnSession(ctx, sess, fullName, extra, wantForward)
 		if err != nil {
 			// A candidate that fails (session dying, rejection) must not mask the
 			// other publishers or the Discovery fallback. Remember the error and
@@ -488,11 +501,9 @@ func (h *sessionHandler) subscribeUpstream(
 				slog.String("source", src), slog.String("err", err.Error()))
 			return
 		}
-		if established {
-			anyEstab = true
-			if resultEntry == nil {
-				resultEntry = entry
-			}
+		anyEstab = true
+		if resultEntry == nil {
+			resultEntry = entry
 		}
 	}
 
@@ -555,7 +566,7 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	fullName track.FullTrackName,
 	extra message.Parameters,
 	wantForward bool,
-) (*registry.TrackEntry, bool, error) {
+) (*registry.TrackEntry, *registry.UpstreamSub, error) {
 	// §9.4 Largest Object filter — keeps the upstream subscription stable
 	// as downstream subscribers come and go with varying filters.
 	filter := &message.LocationFilter{Fields: 2}
@@ -604,7 +615,7 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 			// SUBSCRIBEs to names that do not resolve.
 			h.tracks.DeleteIfUnused(fullName)
 		}
-		return nil, false, err
+		return nil, nil, err
 	}
 	if hook := testHookAfterAliasRegistered.Load(); hook != nil {
 		(*hook)(fullName)
@@ -659,7 +670,7 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 		sess.UnregisterInboundTrackAlias(upstreamStream.OK.TrackAlias)
 	})
 
-	return entry, true, nil
+	return entry, upstreamSub, nil
 }
 
 // serveUpstreamStream owns ALL reads on an upstream request stream (the

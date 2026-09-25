@@ -341,10 +341,18 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   bad GROUP_ORDER to a REQUEST_ERROR / silent coercion pending the same
   promotion.
 - **Late publisher pickup (§9.5)** — multiple publishers per track are merged
-  and deduplicated, but a publisher (or remote relay) that begins advertising
-  *after* a track's upstream set is established is not retroactively pulled in
-  until that set drains and a fresh SUBSCRIBE re-establishes it; publishers that
-  PUBLISH proactively are always merged.
+  and deduplicated, and a local PUBLISH_NAMESPACE that arrives after a track's
+  upstream set is established is SUBSCRIBEd for each matching track. Two
+  deliberate deviations from "for each matching subscription": a track with no
+  downstream subscriber is skipped (an on-demand upstream is released only
+  when its last downstream leaves, so one opened then would never be), and so
+  is a track the new publisher itself receives from the relay. Each later
+  downstream SUBSCRIBE on the track asks every registered matching publisher
+  that has no upstream for it, so a skipped one is picked up then. A refusal
+  on that path holds for its §10.6.2 Retry Interval, or while the track entry
+  and the publisher's registration last when the interval is 0. A *remote relay* that Discovery
+  starts resolving later is not pulled in until the set drains and a fresh
+  SUBSCRIBE re-establishes it.
 - **Subscriber-priority scheduling (§7.2 / §10.2.7)** — fully plumbed but not
   enforced on the wire: the §7.2 composite key is computed
   (`EffectiveStreamPriority`) and pushed through `session.PrioritizedSendStream`,
@@ -443,10 +451,16 @@ Validation:
 
 Relay:
 
-- A new PUBLISH_NAMESPACE does not trigger SUBSCRIBEs for existing
-  subscriptions: "it MUST send a SUBSCRIBE to the publisher that sent the
-  PUBLISH_NAMESPACE for each matching subscription" (§9.5). This is the "Late
-  publisher pickup" bullet above.
+- Two upstream SUBSCRIBEs to one publisher for one track can both go out when
+  two downstream SUBSCRIBEs race for a track with no upstream yet, or one
+  races a §9.5 late-publisher SUBSCRIBE (late-publisher SUBSCRIBEs themselves
+  are deduplicated). §5.1 allows it, but a publisher that gives both the same
+  Track Alias loses routing for the survivor when the first ends, because
+  `UnregisterInboundTrackAlias` is not reference-counted.
+- `Request.RejectError` always sends Retry Interval 0 ("SHOULD NOT be
+  retried", §10.6.2). So the relay turns an upstream's "retry in N ms" into a
+  permanent refusal when it passes the rejection downstream, and its
+  EXCESSIVE_LOAD limit rejections never invite a retry.
 - Mandatory Track Properties (§2.5.1) are enforced on PUBLISH and upstream
   SUBSCRIBE_OK (`Config.KnownMandatoryTrackProperties`), but not on an
   upstream FETCH_OK. There the MUST is unmet: the FETCH fails the way any failed
