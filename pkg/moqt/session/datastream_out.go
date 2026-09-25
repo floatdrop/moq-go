@@ -54,8 +54,9 @@ var writerPool = sync.Pool{
 //     exceeds the timeout the stream is reset with StreamResetDeliveryTimeout
 //     and ErrDeliveryTimeout is returned.
 //   - SUBGROUP_DELIVERY_TIMEOUT: a timer is started when Close() is called.
-//     If the timer fires before the transport acknowledges all data
-//     (SendStream.Context() done), the stream is reset.
+//     If the timer fires before the peer acknowledges all data, the stream is
+//     reset. This needs a transport that reports acknowledgement (see
+//     [DeliveryTrackingSendStream]); on one that does not, it is not enforced.
 type OutgoingSubgroupStream struct {
 	header message.SubgroupHeader
 
@@ -239,7 +240,8 @@ func (s *OutgoingSubgroupStream) WriteObjectAt(objectID uint64, obj *message.Sub
 // begins — bytes handed to Write carry no such boundary. A caller that wants
 // the timeout enforced should use
 // [OutgoingSubgroupStream.WriteObjectReceivedAt], which has both facts.
-// SUBGROUP_DELIVERY_TIMEOUT still applies, since Close observes it.
+// SUBGROUP_DELIVERY_TIMEOUT still applies where the transport supports it,
+// since Close enforces it.
 func (s *OutgoingSubgroupStream) Write(p []byte) (int, error) {
 	return s.dst.Write(p)
 }
@@ -266,21 +268,22 @@ func (s *OutgoingSubgroupStream) checkObjectTimeout(receivedAt time.Time) error 
 // Close FINs the send side cleanly. Callers must have no concurrent Writes
 // in flight.
 //
-// If SUBGROUP_DELIVERY_TIMEOUT is set, Close starts a background goroutine
-// that resets the stream if the transport has not acknowledged all data
-// within the timeout duration. "All data acknowledged" is signalled by
-// SendStream.Context() being done.
+// If SUBGROUP_DELIVERY_TIMEOUT is set and the transport reports
+// acknowledgement ([DeliveryTrackingSendStream]), Close starts a background
+// goroutine that resets the stream if the peer has not acknowledged all data
+// within the timeout (§8: the timer runs until "all data committed").
 func (s *OutgoingSubgroupStream) Close() error {
 	err := s.dst.Close()
-	if s.subgroupTimeout > 0 {
-		streamCtx := s.dst.Context()
+	tracked, ok := s.dst.(DeliveryTrackingSendStream)
+	if s.subgroupTimeout > 0 && ok {
+		finished := tracked.Finished()
 		timeout := s.subgroupTimeout
 		dst := s.dst
 		go func() {
 			timer := time.NewTimer(timeout)
 			defer timer.Stop()
 			select {
-			case <-streamCtx.Done():
+			case <-finished:
 				// All data acknowledged (or stream already reset) — nothing to do.
 			case <-timer.C:
 				// Timer fired before ACK: reset the stream per §8.

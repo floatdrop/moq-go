@@ -127,6 +127,27 @@ type ReliableResetStream interface {
 	SetReliableBoundary()
 }
 
+// DeliveryTrackingSendStream is optionally implemented by [SendStream]
+// implementations whose transport reports when the peer has acknowledged the
+// stream. §8 SUBGROUP_DELIVERY_TIMEOUT needs that signal: once the subgroup is
+// closed, a stream that has not reached "all data committed" within the
+// timeout MUST be reset. [SendStream.Context] cannot stand in for it, since it
+// ends when Close queues the FIN.
+//
+// None of the bundled adapters implement it — quic-go tracks acknowledgement
+// internally but exposes no API for it (quic-go#3291), and webtransport-go
+// wraps quic-go — so on them SUBGROUP_DELIVERY_TIMEOUT is not enforced.
+// Resetting on the timer alone is not a substitute: it would reset streams the
+// peer already holds in full, and a peer that has not read them yet would drop
+// that data.
+type DeliveryTrackingSendStream interface {
+	// Finished returns a channel that is closed once the send side is done
+	// for good: the peer has acknowledged every byte written and the FIN, or
+	// the stream has been reset. Close alone never closes it. An
+	// implementation may also close it when the connection ends.
+	Finished() <-chan struct{}
+}
+
 // ReceiveStream is one direction of a unidirectional QUIC stream as seen by
 // the recipient.
 type ReceiveStream interface {
