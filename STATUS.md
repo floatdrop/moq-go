@@ -204,7 +204,7 @@ By package, bottom-up along the dependency stack:
 | 10.17   | NAMESPACE                     | 0x08   | DONE   | Per namespace, counted over local and remote sources. |
 | 10.18   | NAMESPACE_DONE                | 0x0E   | DONE   | Never before its NAMESPACE. |
 | 10.19   | SUBSCRIBE_NAMESPACE           | 0x50   | DONE   | |
-| 10.20   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | §10.20.1: its SUBSCRIBE parameters become each forwarded PUBLISH's subscription; an out-of-range value closes the session (§10.2.8/§10.2.18). |
+| 10.20   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | §10.20.1: its SUBSCRIBE parameters become each forwarded PUBLISH's subscription; an out-of-range value closes the session (§10.2.8/§10.2.18). A REQUEST_UPDATE merges into them for later PUBLISHes (§10.2.18: "Existing subscriptions are unaffected"), and existing tracks that newly match by prefix or Range Filter are forwarded then. |
 | 10.21   | PUBLISH_SKIPPED               | 0x0F   | DONE   | Prohibition scoped to a single PUBLISH (§6.1) — not sticky across re-PUBLISHes. |
 
 ## §11 Data streams and datagrams
@@ -498,10 +498,5 @@ Relay:
   - a track that gains an upstream through the relay's own SUBSCRIBE, rather
     than an inbound PUBLISH, after the SUBSCRIBE_TRACKS arrived is not
     forwarded to it.
-  - a TRACK_NAMESPACE_PREFIX update forwards nothing for tracks that already
-    exist under the new prefix; only later PUBLISHes are forwarded;
   - INCLUDE_PROPERTIES=0 is ignored: forwarded PUBLISHes (and SUBSCRIBE_OK)
     still carry Track Properties (§10.2.21 SHOULD).
-  - a REQUEST_UPDATE on a SUBSCRIBE_TRACKS request is answered REQUEST_OK but
-    its Range Filters (§5.1.4 names TRACK_PROPERTY_FILTER for it) are not
-    applied: the filters and forwarded-PUBLISH parameters stay as sent.

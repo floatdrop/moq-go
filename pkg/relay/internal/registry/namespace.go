@@ -43,6 +43,30 @@ type PublisherEntry struct {
 	Seq uint64
 }
 
+// TracksParams are a SUBSCRIBE_TRACKS's parameters: "the initial Subscription
+// parameters when a PUBLISH is sent as a result of SUBSCRIBE_TRACKS"
+// (§10.20.1). A REQUEST_UPDATE replaces the whole value, and it applies to the
+// PUBLISHes sent from then on — "Existing subscriptions are unaffected"
+// (§10.2.18) — so a value is never modified once stored.
+type TracksParams struct {
+	// Params are the parameters as sent, merged with each update.
+	Params message.Parameters
+
+	// Forward and GroupOrder are the resolved FORWARD (§10.2.18) and
+	// GROUP_ORDER (§10.2.8): Forward is true unless FORWARD is 0; GroupOrder
+	// is 0 when omitted (the publisher's default applies).
+	Forward    bool
+	GroupOrder byte
+
+	// RangeFilters are the §5.1.4 Range Filters; a PUBLISH whose Track
+	// Properties fail the TRACK_PROPERTY_FILTER is not forwarded. nil = no
+	// restriction.
+	RangeFilters *message.RangeFilterSet
+}
+
+// defaultTracksParams is what a SUBSCRIBE_TRACKS with no parameters means.
+var defaultTracksParams = &TracksParams{Forward: true}
+
 // SubscriberEntry records a single SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS
 // announcement received from a subscriber (or downstream relay). §6.1 says
 // these are open-ended subscriptions to a *prefix*: the relay must echo any
@@ -71,21 +95,9 @@ type SubscriberEntry struct {
 	// dispatches on this flag.
 	WantsTracks bool
 
-	// Forward and GroupOrder carry the FORWARD (§10.2.18) and GROUP_ORDER
-	// (§10.2.8) parameters from the SUBSCRIBE_TRACKS, which §10.20.1 copies
-	// onto every PUBLISH the subscription triggers. Set once at registration
-	// (never mutated), so reads in the PUBLISH fanout need no lock. They are
-	// meaningful only when WantsTracks: Forward defaults to true (FORWARD
-	// omitted or 1); GroupOrder is 0 when omitted (the publisher's default
-	// applies) or the validated Ascending/Descending value.
-	Forward    bool
-	GroupOrder byte
-
-	// RangeFilters holds the §5.1.4 Range Filters on the SUBSCRIBE_TRACKS. The
-	// PUBLISH forwarding loop evaluates TRACK_PROPERTY_FILTER (§10.2.14) against
-	// each PUBLISH's Track Properties via MatchesTrack; a PUBLISH that fails is
-	// not forwarded (§5.1.4). Set once at registration. nil = no restriction.
-	RangeFilters *message.RangeFilterSet
+	// tracks holds the SUBSCRIBE_TRACKS parameters as last updated; see
+	// [SubscriberEntry.TracksParams]. Meaningful only when WantsTracks.
+	tracks atomic.Pointer[TracksParams]
 
 	// ForwardTrack forwards a PUBLISH for a track to a SUBSCRIBE_TRACKS
 	// subscriber (§6.1, §10.20). It is the subscriber's handler's, set at
@@ -143,6 +155,17 @@ func (e *SubscriberEntry) ReleaseForward(key track.Key) {
 // zero-field prefix means "all namespaces" (§6.1). A TRACK_NAMESPACE_PREFIX
 // update (§10.9.2) changes it.
 func (e *SubscriberEntry) Prefix() wire.TrackNamespace { return *e.prefix.Load() }
+
+// TracksParams returns the SUBSCRIBE_TRACKS parameters now in effect.
+func (e *SubscriberEntry) TracksParams() *TracksParams { return e.tracks.Load() }
+
+// SetTracksParams replaces them, for the PUBLISHes sent from now on.
+func (e *SubscriberEntry) SetTracksParams(p *TracksParams) {
+	if p == nil {
+		p = defaultTracksParams
+	}
+	e.tracks.Store(p)
+}
 
 func (e *SubscriberEntry) close() {
 	e.closeOnce.Do(func() {
@@ -316,9 +339,9 @@ func (r *NamespaceRegistry) UnregisterPublisher(entry *PublisherEntry) bool {
 }
 
 // RegisterSubscriber records a subscriber's SUBSCRIBE_NAMESPACE (when
-// wantsTracks is false) or SUBSCRIBE_TRACKS (when true). forward, groupOrder,
-// and rangeFilters carry the SUBSCRIBE_TRACKS FORWARD/GROUP_ORDER passthrough
-// (§10.20.1) and §5.1.4 Range Filters, and are ignored unless wantsTracks.
+// wantsTracks is false) or SUBSCRIBE_TRACKS (when true). params are the
+// SUBSCRIBE_TRACKS parameters (§10.20.1), ignored unless wantsTracks; nil
+// means none.
 // Returns the canonical pointer for use with
 // [NamespaceRegistry.UnregisterSubscriber].
 func (r *NamespaceRegistry) RegisterSubscriber(
@@ -326,9 +349,7 @@ func (r *NamespaceRegistry) RegisterSubscriber(
 	sess *session.Session,
 	stream session.Stream,
 	wantsTracks bool,
-	forward bool,
-	groupOrder byte,
-	rangeFilters *message.RangeFilterSet,
+	params *TracksParams,
 	forwardTrack func(*SubscriberEntry, *TrackEntry),
 ) *SubscriberEntry {
 	entry := &SubscriberEntry{
@@ -336,13 +357,11 @@ func (r *NamespaceRegistry) RegisterSubscriber(
 		Session:      sess,
 		Stream:       stream,
 		WantsTracks:  wantsTracks,
-		Forward:      forward,
-		GroupOrder:   groupOrder,
-		RangeFilters: rangeFilters,
 		outReady:     make(chan struct{}, 1),
 		closed:       make(chan struct{}),
 	}
 	entry.prefix.Store(&prefix)
+	entry.SetTracksParams(params)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.subscribers = append(r.subscribers, entry)
