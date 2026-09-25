@@ -181,8 +181,8 @@ By package, bottom-up along the dependency stack:
 | 10.2.20 | TRACK_NAMESPACE_PREFIX        | 0x34   | DONE   | Applied on REQUEST_UPDATE; SUBSCRIBE_NAMESPACE reconciles its announced set. |
 | 10.2.21 | INCLUDE_PROPERTIES            | 0x35   | PARTIAL| Parsed and scope-checked; a value other than 0 or 1 closes the session. Not applied (see backlog). |
 | 10.3    | SETUP                         | 0x2F00 | DONE   | Bidirectional handshake; options as KV pairs. |
-| 10.3.1.1| AUTHORITY option              | 0x05   | PARTIAL| Sent (`WithAuthority`) and carried as a SETUP KV pair, but never validated on receipt: `SessionInvalidAuthority` is unused — see Limitations. |
-| 10.3.1.2| PATH option                   | 0x01   | PARTIAL| Sent (`WithPath`) and carried as a SETUP KV pair, but never validated on receipt: `SessionInvalidPath` is unused — see Limitations. |
+| 10.3.1.1| AUTHORITY option              | 0x05   | PARTIAL| Sent (`WithAuthority`); refused from a server or over WebTransport (INVALID_AUTHORITY) and when not RFC 3986 syntax (MALFORMED_AUTHORITY, `uri.CheckAuthority`). Whether the server serves it is not checked — see Limitations. |
+| 10.3.1.2| PATH option                   | 0x01   | PARTIAL| Sent (`WithPath`); refused from a server or over WebTransport (INVALID_PATH) and when not RFC 3986 syntax (MALFORMED_PATH, `uri.CheckPathAndQuery`). Whether the server serves it is not checked — see Limitations. |
 | 10.3.1.3| MAX_AUTH_TOKEN_CACHE_SIZE      | 0x04   | DONE   | Sizes the token cache. |
 | 10.3.1.4| AUTHORIZATION_TOKEN (setup)   | 0x03   | PARTIAL| Received tokens are applied to the token cache as a request's are (REGISTER over the cache size is used as a value; DELETE / USE_ALIAS from a client closes the session) and exposed by `Session.SetupTokens`. Not sendable (see backlog). |
 | 10.3.1.5| MOQT_IMPLEMENTATION           | 0x07   | DONE   | Advisory. |
@@ -274,14 +274,15 @@ never pulls in its client library.
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
 
-- **PATH / AUTHORITY are sent but never validated on receipt (§10.3.1.1,
-  §10.3.1.2)** — `WithPath` / `WithAuthority` emit the SETUP parameters, but
-  nothing checks them on the receiving side: `SessionInvalidPath` (0x8) and
-  `SessionInvalidAuthority` (0x19) are defined in `pkg/moqt/errors.go` and used
-  nowhere. Enforcement is also per transport mapping, and `relaynet.Listen` does
-  not record which mapping a session arrived on (it merges both into one accept
-  queue) — recoverable by conn type, since `quicconn` and `wtconn` are distinct
-  implementations, but not currently carried.
+- **PATH / AUTHORITY: a server does not check it serves them (§10.3.1.1,
+  §10.3.1.2)** — a PATH or AUTHORITY from a server, or over WebTransport,
+  closes the session with INVALID_PATH / INVALID_AUTHORITY, and one that is
+  not RFC 3986 syntax with MALFORMED_PATH / MALFORMED_AUTHORITY. The third
+  INVALID_* condition, "the server does not support the specified path"
+  (or authority), is not enforced: a server is never told which paths and
+  authorities it serves. WebTransport is recognised by the `wtconn` adapter
+  only; a third-party adapter that does not report it is treated as native
+  QUIC.
 - **Delivery-timeout enforcement is outbound-only, subgroup-only, not on the
   raw path, and SUBGROUP_DELIVERY_TIMEOUT needs transport support (§8)** — the
   publisher side is wired end to end: `OutgoingSubgroupStream` resolves both
@@ -447,9 +448,6 @@ Validation:
   Object Properties (§12.7–§12.9, §2.5.1).
 - OBJECT/SUBGROUP_DELIVERY_TIMEOUT inside Immutable Properties is ignored
   (§12.7).
-- AUTHORITY / PATH are not validated against RFC 3986 (MALFORMED_AUTHORITY /
-  MALFORMED_PATH, §10.3.1.1–2). The PATH / AUTHORITY entry in Limitations
-  covers part of this.
 - A data stream that arrives before the control streams fails the handshake
   (§3.3 SHOULD buffer).
 
