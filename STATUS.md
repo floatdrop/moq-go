@@ -298,8 +298,8 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   subgroup stream it opens, sourcing the publisher's from the entry's Track
   Properties and the subscriber's from the SUBSCRIBE parameters. Four gaps
   remain. SUBGROUP_DELIVERY_TIMEOUT is enforced only on a transport that
-  reports acknowledgement, which the bundled ones do not (see the review
-  backlog). Datagrams are sent regardless of age: neither `SendDatagram` nor
+  reports acknowledgement, which the bundled ones do not (see its own entry
+  below). Datagrams are sent regardless of age: neither `SendDatagram` nor
   the relay's datagram forwarding drops an expired one, where §8 says the
   implementation "MUST drop the datagrams if the time elapsed exceeds
   OBJECT_DELIVERY_TIMEOUT" (SUBGROUP_DELIVERY_TIMEOUT acting the same way for
@@ -372,21 +372,13 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   a selector needs is surfaced (AltGroup, Width/Height, Bitrate, RenderGroup,
   Depends, TemporalID, SpatialID), but variant-selection policy is the
   application's job.
-
-### Draft-20 compliance review backlog
-
-A full review against draft-ietf-moq-transport-20 (dated August 2026) found
-the gaps below, which are still open. Items are grouped by area; each names the
-rule it misses.
-
-Found while fixing, left open deliberately:
-
 - **Multi-publisher default priority downstream (§11.4.2, §12.4)** — the relay
   resolves each upstream's inherited DEFAULT_PUBLISHER_PRIORITY per alias, but
   forwards the DEFAULT_PRIORITY bit unchanged. A downstream subscriber therefore
   inherits the default from the SUBSCRIBE_OK it was sent, which carries the
   first publisher's properties.
-- **PUBLISH_DONE waits on the subscription's streams (§10.12)** — so it is as
+- **PUBLISH_DONE waits on the subscription's streams (§10.12)** — as the draft
+  requires, so it is as
   late as the slowest of them to close. A terminated subscription takes no new
   Object: its stream is reset at the next one, so while its upstream is live
   it waits at most for that. A publisher that ends a track but leaves a
@@ -409,16 +401,40 @@ Found while fixing, left open deliberately:
 - **TRACK_NAMESPACE_PREFIX encoding (§10.2.20)** — encoded length-prefixed, as
   moxygen, moqtail and libquicr do. The draft text reads as a bare Track
   Namespace. Open WG issue: moq-wg/moq-transport#1942.
+- **Repeated AUTHORIZATION TOKENs (§10.2.2)** — a message "MAY" repeat the
+  parameter "as long as the combination of Token Type and Token Value are
+  unique after resolving any aliases". Uniqueness is not checked, in SETUP or
+  in requests; the draft names no action for the receiver.
+- **Handles the application reads itself (§10, §10.2.1, §10.9, §10.10)** —
+  REQUEST_UPDATE / PUBLISH_STATE_NOTIFY roles and Message Parameter scope are
+  enforced by brokers from typed handles'
+  `Broker()`, by the session's own reads, and by the relay. Handles the
+  application reads itself (the namespace handles, `FetchResponder`, or any
+  stream read with `message.Parse`) are checked only if it calls
+  `Session.CheckPeerParams`. Likewise for §10 framing: such a reader must close
+  the session itself on an error wrapping `message.ErrMalformedMessage`, or read
+  through `Session.NewRequestBroker(stream).Serve`, which does.
+- **Duplicate upstream SUBSCRIBEs (§5.1)** — two to one publisher for one
+  track can both go out when
+  two downstream SUBSCRIBEs race for a track with no upstream yet, or one
+  races a §9.5 late-publisher SUBSCRIBE (late-publisher SUBSCRIBEs themselves
+  are deduplicated). §5.1 allows it; it costs a second upstream subscription.
+  A Track Alias the publisher shares between them stays routed until both end.
+
+### Draft-20 compliance review backlog
+
+A full review against draft-ietf-moq-transport-20 (dated August 2026) found
+the gaps below, which are still open. Items are grouped by area; each names the
+rule it misses.
+
+Found while fixing:
+
 - **REQUEST_OK Track Properties on send (§10.5)** — receipt is enforced.
   `Request.Reply` still sends whatever it is given, so an application can emit a
   non-empty PUBLISH_OK.
 - **AUTHORIZATION TOKEN setup option (§10.3.1.4)** — received tokens are
   applied, but none can be sent: there is no Option for it, and so no purge
   of a REGISTER the peer's MAX_AUTH_TOKEN_CACHE_SIZE could not hold.
-- **Repeated AUTHORIZATION TOKENs (§10.2.2)** — a message "MAY" repeat the
-  parameter "as long as the combination of Token Type and Token Value are
-  unique after resolving any aliases". Uniqueness is not checked, in SETUP or
-  in requests; the draft names no action for the receiver.
 
 Request lifecycle:
 
@@ -428,36 +444,22 @@ Request lifecycle:
 
 Validation:
 
-- REQUEST_UPDATE / PUBLISH_STATE_NOTIFY roles (§10.9, §10.10) and Message
-  Parameter scope (§10.2.1) are enforced by brokers from typed handles'
-  `Broker()`, by the session's own reads, and by the relay. Handles the
-  application reads itself (the namespace handles, `FetchResponder`, or any
-  stream read with `message.Parse`) are checked only if it calls
-  `Session.CheckPeerParams`. Likewise for §10 framing: such a reader must close
-  the session itself on an error wrapping `message.ErrMalformedMessage`, or read
-  through `Session.NewRequestBroker(stream).Serve`, which does.
-
 - Object Properties are never validated on receipt: nested Immutable
   Properties, duplicate gap properties, and Mandatory Track Properties used as
   Object Properties (§12.7–§12.9, §2.5.1).
 - OBJECT/SUBGROUP_DELIVERY_TIMEOUT inside Immutable Properties is ignored
   (§12.7).
 - AUTHORITY / PATH are not validated against RFC 3986 (MALFORMED_AUTHORITY /
-  MALFORMED_PATH, §10.3.1.1–2). The existing PATH / AUTHORITY bullet above
+  MALFORMED_PATH, §10.3.1.1–2). The PATH / AUTHORITY entry in Limitations
   covers part of this.
 - A zero-length Range Filter is rejected everywhere, including the initial
   SUBSCRIBE and FETCH, although §5.1.4 defines it as "no filter". The Range
-  Filter REQUEST_UPDATE bullet above covers the update case.
+  Filter REQUEST_UPDATE entry in Limitations covers the update case.
 - A data stream that arrives before the control streams fails the handshake
   (§3.3 SHOULD buffer).
 
 Relay:
 
-- Two upstream SUBSCRIBEs to one publisher for one track can both go out when
-  two downstream SUBSCRIBEs race for a track with no upstream yet, or one
-  races a §9.5 late-publisher SUBSCRIBE (late-publisher SUBSCRIBEs themselves
-  are deduplicated). §5.1 allows it; it costs a second upstream subscription.
-  A Track Alias the publisher shares between them stays routed until both end.
 - `Request.RejectError` always sends Retry Interval 0 ("SHOULD NOT be
   retried", §10.6.2). So the relay turns an upstream's "retry in N ms" into a
   permanent refusal when it passes the rejection downstream, and its
