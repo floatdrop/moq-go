@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
@@ -238,6 +239,44 @@ func TestParamScopeDuplicateInsideFillParameters(t *testing.T) {
 				message.GroupOrderParam(message.GroupOrderAscending),
 				message.GroupOrderParam(message.GroupOrderDescending),
 			})},
+		})
+	}()
+	_, _ = server.AcceptRequest(t.Context())
+	requireClosedProtocolViolation(t, server)
+}
+
+// TestParamScopeSubscribeTracksTakesSubscribeParameters: "Any Parameter that
+// can be specified on a Subscription (ie: in SUBSCRIBE) is valid in
+// SUBSCRIBE_TRACKS, unless otherwise specified" (§10.20.1) — including a
+// Location Filter and FILL_PARAMETERS, which it names.
+func TestParamScopeSubscribeTracksTakesSubscribeParameters(t *testing.T) {
+	for _, p := range []message.Parameter{
+		message.SubgroupDeliveryTimeoutParam(time.Second),
+		message.NextObjectFilter(),
+		message.FillParametersParam(nil),
+		message.SubscriberPriorityParam(7),
+	} {
+		t.Run(p.Type.String(), func(t *testing.T) {
+			client, server := openPair(t)
+			go func() {
+				_, _ = client.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+					TrackNamespacePrefix: videoNS, Parameters: message.Parameters{p},
+				})
+			}()
+			if _, err := server.AcceptRequest(t.Context()); err != nil {
+				t.Fatalf("AcceptRequest refused SUBSCRIBE_TRACKS with %s: %v", p.Type, err)
+			}
+		})
+	}
+}
+
+// TestParamScopeSubscribeTracksStillScoped: §10.20.1 widens SUBSCRIBE_TRACKS by
+// SUBSCRIBE's parameters only; EXPIRES, a response parameter, still closes.
+func TestParamScopeSubscribeTracksStillScoped(t *testing.T) {
+	client, server := openPair(t)
+	go func() {
+		_, _ = client.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+			TrackNamespacePrefix: videoNS, Parameters: message.Parameters{message.ExpiresParam(time.Second)},
 		})
 	}()
 	_, _ = server.AcceptRequest(t.Context())

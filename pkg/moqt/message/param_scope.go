@@ -66,6 +66,8 @@ const (
 )
 
 // paramScopes is each parameter's "MAY appear in" list, from its definition.
+// [Parameters.CheckScope] adds SUBSCRIBE_TRACKS to every SUBSCRIBE parameter
+// (§10.20.1).
 var paramScopes = map[ParamID]ParamScope{
 	// §10.2.2
 	ParamAuthorizationToken: ScopePublish | ScopeSubscribe | scopeAnyUpdate | ScopeSubscribeNamespace |
@@ -232,7 +234,14 @@ func (e *ParamScopeError) Error() string {
 // error is a session-level PROTOCOL_VIOLATION.
 func (ps Parameters) CheckScope(scope ParamScope) error {
 	for _, p := range ps {
-		if paramScopes[p.Type]&scope == 0 {
+		allowed := paramScopes[p.Type]
+		// §10.20.1: "Any Parameter that can be specified on a Subscription
+		// (ie: in SUBSCRIBE) is valid in SUBSCRIBE_TRACKS, unless otherwise
+		// specified." They become the subscriptions' initial parameters.
+		if allowed&ScopeSubscribe != 0 {
+			allowed |= ScopeSubscribeTracks
+		}
+		if allowed&scope == 0 {
 			return &ParamScopeError{Type: p.Type, Scope: scope}
 		}
 	}
