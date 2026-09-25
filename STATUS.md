@@ -378,16 +378,15 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   inherits the default from the SUBSCRIBE_OK it was sent, which carries the
   first publisher's properties.
 - **PUBLISH_DONE waits on the subscription's streams (§10.12)** — as the draft
-  requires, so it is as
-  late as the slowest of them to close. A terminated subscription takes no new
-  Object: its stream is reset at the next one, so while its upstream is live
-  it waits at most for that. A publisher that ends a track but leaves a
-  subgroup stream open, and sends nothing more on it, holds the relay's
-  PUBLISH_DONE until that stream ends or its session does. A subscriber not
-  reading its data streams holds its own: subgroup streams until the fanout
-  writer's drain limit resets them, a fill fetch stream until the session
-  ends (fill writes have no deadline). The goroutine that writes PUBLISH_DONE
-  is not joined by `Relay.Stop`; it ends when its session does.
+  requires, so it is as late as the slowest of them to close. A terminated
+  subscription takes no new Object: its stream is reset at the next one, so
+  while its upstream is live it waits at most for that. A publisher that ends a
+  track but leaves a subgroup stream open, and sends nothing more on it, holds
+  the relay's PUBLISH_DONE until that stream ends or its session does. A
+  subscriber not reading its data streams holds its own: subgroup streams until
+  the fanout writer's drain limit resets them, a fill fetch stream until the
+  session ends (fill writes have no deadline). The goroutine that writes
+  PUBLISH_DONE is not joined by `Relay.Stop`; it ends when its session does.
 - **SUBGROUP_DELIVERY_TIMEOUT is not enforced on quic-go / WebTransport (§8)**
   — the reset needs to know when the peer has acknowledged the whole stream
   ("all data committed"). quic-go tracks that internally but exposes no API for
@@ -405,21 +404,21 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   parameter "as long as the combination of Token Type and Token Value are
   unique after resolving any aliases". Uniqueness is not checked, in SETUP or
   in requests; the draft names no action for the receiver.
-- **Handles the application reads itself (§10, §10.2.1, §10.9, §10.10)** —
-  REQUEST_UPDATE / PUBLISH_STATE_NOTIFY roles and Message Parameter scope are
-  enforced by brokers from typed handles'
-  `Broker()`, by the session's own reads, and by the relay. Handles the
-  application reads itself (the namespace handles, `FetchResponder`, or any
-  stream read with `message.Parse`) are checked only if it calls
-  `Session.CheckPeerParams`. Likewise for §10 framing: such a reader must close
-  the session itself on an error wrapping `message.ErrMalformedMessage`, or read
-  through `Session.NewRequestBroker(stream).Serve`, which does.
-- **Duplicate upstream SUBSCRIBEs (§5.1)** — two to one publisher for one
-  track can both go out when
-  two downstream SUBSCRIBEs race for a track with no upstream yet, or one
-  races a §9.5 late-publisher SUBSCRIBE (late-publisher SUBSCRIBEs themselves
-  are deduplicated). §5.1 allows it; it costs a second upstream subscription.
-  A Track Alias the publisher shares between them stays routed until both end.
+- **Handles the application reads itself** — REQUEST_UPDATE /
+  PUBLISH_STATE_NOTIFY roles (§10.9, §10.10) and Message Parameter scope
+  (§10.2.1) are enforced by brokers from typed handles' `Broker()`, by the
+  session's own reads, and by the relay. Handles the application reads itself
+  (the namespace handles, `FetchResponder`, or any stream read with
+  `message.Parse`) are checked only if it calls `Session.CheckPeerParams`.
+  Likewise for §10 framing: such a reader must close the session itself on an
+  error wrapping `message.ErrMalformedMessage`, or read through
+  `Session.NewRequestBroker(stream).Serve`, which does.
+- **Duplicate upstream SUBSCRIBEs (§5.1)** — two to one publisher for one track
+  can both go out when two downstream SUBSCRIBEs race for a track with no
+  upstream yet, or one races a §9.5 late-publisher SUBSCRIBE (late-publisher
+  SUBSCRIBEs themselves are deduplicated). §5.1 allows it; it costs a second
+  upstream subscription. A Track Alias the publisher shares between them stays
+  routed until both end.
 
 ### Draft-20 compliance review backlog
 
