@@ -22,8 +22,8 @@ const (
 	greaseStep uint64 = 0x7F
 )
 
-// maxGreaseN is the largest N that fits in a 62-bit QUIC varint
-// (max varint = 2^62 - 1 = 0x3FFFFFFFFFFFFFFF).
+// maxGreaseN is the largest N in §14's reserved range, whose last value is
+// 0x3fffffffffffffde.
 // 0x7F * N + 0x9D ≤ 0x3FFFFFFFFFFFFFFF  →  N ≤ (0x3FFFFFFFFFFFFFFF - 0x9D) / 0x7F.
 const maxGreaseN uint64 = (0x3FFFFFFFFFFFFFFF - greaseBase) / greaseStep
 

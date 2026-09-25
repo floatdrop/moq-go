@@ -20,7 +20,7 @@ func dynamicGroupsProperties(value uint64) []byte {
 }
 
 // watchUpstreamNewGroup reads the publisher's PUBLISH stream looking for the
-// relay's upstream REQUEST_UPDATE (§10.2.13) and reports the first
+// relay's upstream REQUEST_UPDATE (§10.9, §10.2.19) and reports the first
 // NEW_GROUP_REQUEST value it carries on the returned channel. Any REQUEST_UPDATE
 // is answered with REQUEST_OK so the relay's UpdateRequest can complete.
 func watchUpstreamNewGroup(t *testing.T, pubStream session.Stream) <-chan uint64 {
@@ -55,7 +55,7 @@ func newGroupReqValue(ps message.Parameters) (uint64, bool) {
 	return 0, false
 }
 
-// TestNewGroupRequest_ForwardedUpstreamOnUpdate is the §10.2.13 end-to-end
+// TestNewGroupRequest_ForwardedUpstreamOnUpdate is the §10.2.19 end-to-end
 // test: a downstream subscriber sends a REQUEST_UPDATE carrying
 // NEW_GROUP_REQUEST on a track that advertises DYNAMIC_GROUPS=1, and the relay
 // forwards a REQUEST_UPDATE with the same NEW_GROUP_REQUEST to the original

@@ -479,9 +479,8 @@ func (r *TrackRegistry) AddDownstream(fullName track.FullTrackName, sub *Downstr
 //     snapshot pre-dates our append)
 //
 // resulting in an object whose Location is > our snapshot AND was never
-// pushed to us via live — a gap that the Joining FETCH can't cover
-// (FETCH end = JoiningLocation = our snapshot, which doesn't include
-// the missed object).
+// pushed to us via live — a gap a fill fetch stream can't cover (its
+// range ends at our snapshot, which doesn't include the missed object).
 //
 // Holding entry.mu across both operations serialises with
 // [TrackEntry.UpdateLargest] (which also locks entry.mu): either we

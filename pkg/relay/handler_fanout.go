@@ -363,7 +363,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// and the last-contributor teardown.
 		sg.Mu.Lock()
 
-		// Cache the object (for joining FETCHes) before bumping LARGEST_OBJECT so
+		// Cache the object (for FETCH and fill fetch streams) before bumping LARGEST_OBJECT so
 		// a concurrent handleSubscribe-then-FETCH that snapshots the new watermark
 		// always finds it cached.
 		entry.Cache.Put(&cache.CachedObject{
@@ -382,7 +382,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// serialises with handleSubscribe's AddDownstreamSnapshotLargest: a new
 		// sub either snapshots the pre-update Largest AND appears in newSubs
 		// (delivered live below), or snapshots the post-update Largest (its
-		// Joining FETCH covers this object — already cached above).
+		// fill fetch stream covers this object — already cached above).
 		loc := message.Location{Group: hdr.GroupID, Object: objectID}
 		var newSubs []*registry.DownstreamSub
 		newSubs, set.gen = entry.UpdateLargestAndDetectNew(loc,
@@ -512,8 +512,8 @@ func (h *sessionHandler) openWriterForSub(
 //     forwarding — WITHOUT terminating the subscription. The two escalations
 //     are not interchangeable, and §3.3.4 is explicit about which is which:
 //     TOO_FAR_BEHIND says "the corresponding subscription ... is being
-//     terminated", whereas DELIVERY_TIMEOUT says only "a delivery timeout was
-//     exceeded for this stream". So a subgroup the publisher marked as
+//     terminated", whereas DELIVERY_TIMEOUT says only "A delivery timeout
+//     (Section 8) was exceeded for this stream". So a subgroup the publisher marked as
 //     short-lived expires on its own without costing the subscriber the track,
 //     which is what lets a publisher stripe disposable data (an enhancement
 //     layer, say) across subgroups the relay may shed under load.

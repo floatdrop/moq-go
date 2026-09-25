@@ -37,7 +37,7 @@ type ObjectDatagram struct {
 }
 
 // IsValidDatagramType checks if a datagram type value is valid per §11.3.1
-// Figure 23: 0x00..0x0F / 0x20..0x21 / 0x24..0x25 / 0x28..0x29 / 0x2C..0x2D.
+// Figure 24: 0x00..0x0F / 0x20..0x21 / 0x24..0x25 / 0x28..0x29 / 0x2C..0x2D.
 //
 // The two invalid classes MUST cause a session PROTOCOL_VIOLATION:
 //
@@ -198,7 +198,7 @@ func (d *ObjectDatagram) Parse(r *wire.Reader) error {
 		if err != nil {
 			return fmt.Errorf("failed to read object status: %w", err)
 		}
-		// The status varint is the last field (§11.3.1 Figure 23); trailing
+		// The status varint is the last field (§11.3.1 Figure 24); trailing
 		// bytes mean the sender and receiver disagree on the layout.
 		if !r.Empty() {
 			return fmt.Errorf("invalid datagram: %d trailing byte(s) after Object Status", r.Remaining())

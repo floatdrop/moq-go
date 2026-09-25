@@ -32,11 +32,10 @@ const (
 	ParamFillParameters          ParamID = 0x23
 	// Range Filter parameters (§5.1.4, §10.2.10-14). All five carry a
 	// length-prefixed blob (SetID, optional Property Type, delta-encoded
-	// Ranges) — see rangefilter.go. NOTE: 0x26/0x28 are even, so under the
-	// §1.4.3 KV-pair rule they would carry a bare varint with no Length; but
-	// §5.1.4's figure shows a Length on all five, and this codebase encodes
-	// parameters by a per-type Kind (paramKinds), not by §1.4.3 parity — so all
-	// five register as KindBytes (length-prefixed).
+	// Ranges) — see rangefilter.go. Message Parameters are not Key-Value-Pairs:
+	// "The encoding is specified by each parameter definition" (§10.2), so type
+	// parity says nothing about them, and all five are length-prefixed as
+	// §5.1.4's figures show (KindBytes, in paramKinds).
 	ParamSubgroupFilter       ParamID = 0x25
 	ParamObjectIDFilter       ParamID = 0x26
 	ParamPriorityFilter       ParamID = 0x27
@@ -369,7 +368,7 @@ func (ps *Parameters) parse(r *wire.Reader) error {
 	if err != nil {
 		return err
 	}
-	// count is an untrusted varint (up to 2^62-1); never preallocate from it
+	// count is an untrusted varint (up to 2^64-1, §1.4.1); never preallocate from it
 	// directly or a crafted message triggers an out-of-range makeslice panic.
 	// Each parameter occupies at least one byte on the wire (its type-delta
 	// varint), so the real count cannot exceed the remaining bytes — the loop

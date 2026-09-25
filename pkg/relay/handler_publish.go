@@ -216,7 +216,7 @@ func publishParamsForSubscriber(
 // emitPublishSkipped sends a PUBLISH_SKIPPED (§10.21) to sub for the track
 // fullName. It is the §6.1 response to an exhausted bidi-stream limit: the
 // relay cannot open the PUBLISH stream for this PUBLISH, so it tells the
-// subscriber on its SUBSCRIBE_TRACKS response stream. Per draft-19 §6.1 the
+// subscriber on its SUBSCRIBE_TRACKS response stream. Per §6.1 the
 // prohibition is scoped to this single PUBLISH — a later re-PUBLISH for the
 // track is a fresh forwarding attempt — so nothing is recorded here.
 //

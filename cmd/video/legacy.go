@@ -89,7 +89,7 @@ type legacyFrame struct {
 //
 // The timestamp is a QUIC varint (RFC 9000 §16), decoded with quic-go's
 // own reader rather than with [wire.Reader.Varint] — MOQT's varint is the
-// leading-ones encoding of draft-19 §1.4.1, a different format that reads
+// leading-ones encoding of §1.4.1, a different format that reads
 // these same bytes without complaining and returns the wrong number. On
 // the measured stream it took 0xc0 as a three-byte encoding of zero, so
 // every frame came out stamped 0 and the reassembled file had no timeline

@@ -34,7 +34,7 @@ type FetchObject struct {
 	Properties []byte
 
 	// ObjectPayload is always present, encoded on the wire with a varint
-	// length prefix (§11.4.4 Figure 27). FETCH objects carry no Object
+	// length prefix (§11.4.4 Figure 28). FETCH objects carry no Object
 	// Status field (§11.2.1.1); absent ranges are expressed with the
 	// end-of-range markers instead.
 	ObjectPayload []byte
@@ -129,7 +129,7 @@ func (o *FetchObject) Append(w *wire.Writer) {
 		w.VarintBytes(o.Properties)
 	}
 
-	// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 27.
+	// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 28.
 	w.VarintBytes(o.ObjectPayload)
 }
 
@@ -211,7 +211,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 		o.Properties = props
 	}
 
-	// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 27.
+	// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 28.
 	payload, err := r.VarintBytes()
 	if err != nil {
 		return truncated(err)

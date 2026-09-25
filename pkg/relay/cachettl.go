@@ -50,8 +50,8 @@ const CacheTTLInfinite = time.Duration(-1)
 // retain catalogs longer than media: a catalog is published once on join and
 // republished only when tracks change, so under the default 30-second
 // retention it is evicted from the cache within the first minute of a call.
-// After that a participant who joins later gets nothing from the Relative
-// Joining FETCH that backfills it — and since the live SUBSCRIBE starts at the
+// After that a participant who joins later gets nothing from the fill fetch
+// stream that backfills it — and since the live SUBSCRIBE starts at the
 // largest object, they never learn that participant's nickname, version or
 // tracks at all. The bug is invisible from the publisher's side, because the
 // people already in the room are unaffected.

@@ -4,11 +4,11 @@
 //	moqt-URI = "moqt" "://" authority path-abempty [ "?" query ]
 //
 // A parsed [URI] exposes everything the connection-setup paths need:
-// [URI.HostPort] for dialing (applying the §3.1.1 default port of 443),
+// [URI.HostPort] for dialing (applying the §3.1.3 default port of 443),
 // [URI.Authority] and [URI.PathAndQuery] for the AUTHORITY / PATH Setup
-// Options carried on a native-QUIC connection (§3.1.4 / §10.3.1), and
+// Options carried on a native-QUIC connection (§3.1.5 / §10.3.1), and
 // [URI.HTTPSURL] for the https URL a WebTransport client connects to
-// (§3.1.3). Fragments are parsed and validated but, per §3.1.2, are processed
+// (§3.1.4). Fragments are parsed and validated but, per §3.1.2, are processed
 // locally by the client and never transmitted to the server.
 //
 // The package depends only on the standard library so it can be used from any
@@ -25,7 +25,7 @@ import (
 // Scheme is the URI scheme defined for MOQT servers (§3.1.1).
 const Scheme = "moqt"
 
-// DefaultPort is used when the authority omits an explicit port (§3.1.1:
+// DefaultPort is used when the authority omits an explicit port (§3.1.3:
 // "If the port is omitted in the URI, a default port of 443 is used").
 const DefaultPort = "443"
 
@@ -102,7 +102,7 @@ func Parse(raw string) (*URI, error) {
 		Port:      port,
 		// EscapedPath, not Path: the struct carries the RAW path-abempty
 		// component. url.URL.Path is percent-DECODED — using it would turn
-		// "/a%3Fb" into "/a?b", making the §3.1.4 PATH Setup Option
+		// "/a%3Fb" into "/a?b", making the PATH Setup Option (§3.1.5, §10.3.1.2)
 		// ambiguous and String()/HTTPSURL() emit invalid URIs.
 		Path:     u.EscapedPath(),
 		RawQuery: u.RawQuery,
@@ -155,14 +155,14 @@ func validFragmentType(s string) bool {
 	return true
 }
 
-// HostPort returns the "host:port" string for dialing, applying the §3.1.1
+// HostPort returns the "host:port" string for dialing, applying the §3.1.3
 // default port of 443 when the URI omitted one.
 func (u *URI) HostPort() string {
 	return net.JoinHostPort(u.Host, u.Port)
 }
 
 // PathAndQuery returns the path-abempty with the query appended, the value to
-// carry in the PATH Setup Option (§3.1.4 / §10.3.1.2). It is empty when the
+// carry in the PATH Setup Option (§3.1.5 / §10.3.1.2). It is empty when the
 // URI has neither a path nor a query.
 func (u *URI) PathAndQuery() string {
 	if u.RawQuery == "" {
@@ -172,7 +172,7 @@ func (u *URI) PathAndQuery() string {
 }
 
 // HTTPSURL converts the moqt URI to the https URL a WebTransport client
-// connects to (§3.1.3): the scheme is replaced with https and the authority,
+// connects to (§3.1.4): the scheme is replaced with https and the authority,
 // path, and query are preserved. The fragment is omitted because it is
 // processed locally and never sent to the server (§3.1.2).
 func (u *URI) HTTPSURL() string {

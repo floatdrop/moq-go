@@ -50,7 +50,7 @@ func main() {
 	)
 	// Long-lived "catalog" tracks are the classic example of data that
 	// must survive past the default 30s TTL: a late-joining subscriber
-	// retrieves the catalog via Joining FETCH, which only works while
+	// retrieves the catalog via a fill fetch stream (§5.1.3), which only works while
 	// the catalog object is still in the per-track cache. These flags
 	// let the operator name a track that should be cached indefinitely
 	// (or for a custom duration); the matching is namespace-agnostic so
@@ -123,7 +123,7 @@ func main() {
 	// §3.1) and "h3" for MOQT-over-WebTransport. relaynet.Listen then decides per
 	// connection, so a client picks its transport by URL scheme rather than the
 	// relay picking for everyone. The negotiated ALPN also fixes the draft
-	// version, since draft-19 SETUP carries no version field.
+	// version, since SETUP carries no version field (§10.3).
 	tlsCfg, err := relaynet.TLSConfig(*certFile, *keyFile, relaynet.DualALPNs)
 	if err != nil {
 		log.Fatal(err)

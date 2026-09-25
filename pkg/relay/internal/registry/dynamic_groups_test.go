@@ -65,7 +65,7 @@ func TestTrackEntry_DynamicGroups(t *testing.T) {
 	})
 }
 
-// TestConsiderNewGroupRequest pins the §10.2.13 relay decision and its
+// TestConsiderNewGroupRequest pins the §10.2.19 relay decision and its
 // outstanding-request bookkeeping.
 func TestConsiderNewGroupRequest(t *testing.T) {
 	t.Parallel()

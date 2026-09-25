@@ -33,7 +33,7 @@ const (
 )
 
 // SubgroupObject represents a single object serialized on a SUBGROUP_HEADER
-// stream after the SubgroupHeader (§11.4.2, Figure 25).
+// stream after the SubgroupHeader (§11.4.2, Figure 26).
 type SubgroupObject struct {
 	// ObjectIDDelta is always present on the wire. For the first object in
 	// the stream it is the absolute Object ID; for subsequent objects it is

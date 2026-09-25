@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestVarintSpecVectors pins the draft-18 §1.4.1 leading-ones encoding against
+// TestVarintSpecVectors pins the §1.4.1 leading-ones encoding against
 // hand-computed byte vectors, including the message-type codes that exposed the
 // QUIC-varint vs leading-ones interop bug (SETUP 0x2F00, SUBSCRIBE_NAMESPACE
 // 0x50, PUBLISH_NAMESPACE 0x06).

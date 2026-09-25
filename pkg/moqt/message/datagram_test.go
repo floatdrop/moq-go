@@ -38,7 +38,7 @@ func TestIsValidDatagramType(t *testing.T) {
 		{"Invalid type 0x2B", 0x2B, false},
 		{"Invalid type 0x2E", 0x2E, false},
 		{"Invalid type 0x2F", 0x2F, false},
-		// Valid: STATUS+PROPERTIES types are listed in Figure 23
+		// Valid: STATUS+PROPERTIES types are listed in Figure 24
 		// (0x20..0x21 / 0x24..0x25 / 0x28..0x29 / 0x2C..0x2D); they only
 		// become an error when the Object Status is not Normal — a
 		// per-value rule in Validate, not a type-level one.
@@ -214,7 +214,7 @@ func TestObjectDatagramValidate(t *testing.T) {
 			errorMsg:    "invalid datagram: non-Normal status 0x3 with Properties",
 		},
 		{
-			// §11.3.1 Figure 23: 0x21 with a Normal (0x0) status is valid.
+			// §11.3.1 Figure 24: 0x21 with a Normal (0x0) status is valid.
 			name: "Valid: Normal status with Properties (type 0x21)",
 			datagram: &ObjectDatagram{
 				Type:         DatagramStatusBit | DatagramPropertiesBit, // 0x21
@@ -284,7 +284,7 @@ func TestObjectDatagramRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			// §11.3.1 Figure 23: STATUS+PROPERTIES (0x21) with Normal
+			// §11.3.1 Figure 24: STATUS+PROPERTIES (0x21) with Normal
 			// status is a valid wire form — Properties precede the status
 			// varint and there is no payload.
 			name: "STATUS+PROPERTIES with Normal status (type 0x21)",
@@ -437,7 +437,7 @@ func TestParseObjectDatagramErrors(t *testing.T) {
 			expectError: "invalid datagram: non-Normal status 0x3 with Properties",
 		},
 		{
-			// §11.3.1 Figure 23: the status varint is the last field —
+			// §11.3.1 Figure 24: the status varint is the last field —
 			// trailing bytes are malformed. Type 0x20 fields: TrackAlias,
 			// GroupID, ObjectID, Priority, Status, then one stray byte.
 			name:        "trailing bytes after Object Status (type 0x20)",

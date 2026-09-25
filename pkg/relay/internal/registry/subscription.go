@@ -331,7 +331,7 @@ func (u *UpstreamSub) GetFilter() *message.LocationFilter {
 // DownstreamSub represents one subscription the relay holds for a
 // subscriber: the relay accepted a SUBSCRIBE from the peer and is now
 // responsible for forwarding objects, applying the §5.1.2 filter, honouring
-// priority (§7) and group order (§5.2), and respecting the Forward flag
+// priority (§7) and group order (§10.2.8), and respecting the Forward flag
 // (§9.2).
 type DownstreamSub struct {
 	Subscription
@@ -345,7 +345,7 @@ type DownstreamSub struct {
 	// triggered by a *publisher* leaving).
 	writeMu sync.Mutex
 
-	// okSent records that the §10.7 SUBSCRIBE_OK response went out on the
+	// okSent records that the §10.8 SUBSCRIBE_OK response went out on the
 	// stream, or that the relay's own PUBLISH opened it (OpenedByPublish);
 	// guarded by writeMu. A termination racing the subscribe
 	// handler consults it to answer the request correctly: the peer must
@@ -374,7 +374,7 @@ type DownstreamSub struct {
 
 	// LargestAtSubscribe is the largest object the relay had observed on
 	// this track at the moment the SUBSCRIBE was accepted, per §5.1.2 /
-	// §9.4 ("a relay handling a SUBSCRIBE acts as the publisher").
+	// §9.4, the relay acting as the publisher for its downstream subscribers.
 	// The Next Object and relative-start filters resolve their start
 	// location against this snapshot — not against the live, ever-advancing
 	// TrackEntry watermark — so the subscription's start is fixed at
@@ -392,7 +392,7 @@ type DownstreamSub struct {
 	// Default per §7 / §10.2.7 is 128 (mid-range), set in NewDownstreamSub.
 	Priority uint8
 
-	// GroupOrder is the §5.2 Group Order preference. Encoded per §10.2.8:
+	// GroupOrder is the Group Order preference (§7, §10.2.8), encoded as
 	// 0x1 = ascending, 0x2 = descending. It drives the group-order
 	// tie-breaker in both reorder-capable paths (FETCH responses) and the
 	// §7.2 rule-3 GroupKey of the subgroup-stream scheduling priority.
@@ -526,8 +526,9 @@ func (d *DownstreamSub) SetPriority(p uint8) {
 	d.mu.Unlock()
 }
 
-// SetGroupOrder records the §5.2 Group Order. Updated when the peer sends a
-// REQUEST_UPDATE.
+// SetGroupOrder records the Group Order (§10.2.8), set once from the SUBSCRIBE:
+// "The group order of an existing subscription cannot be changed" (§7.1), and
+// GROUP_ORDER is not in a REQUEST_UPDATE's scope.
 func (d *DownstreamSub) SetGroupOrder(o uint8) {
 	d.mu.Lock()
 	d.GroupOrder = o
@@ -719,7 +720,7 @@ func (d *DownstreamSub) TerminateWithPublishDone(code moqt.PublishDoneCode, reas
 	_ = d.Stream.Close()
 }
 
-// WriteSubscribeOK writes the §10.7 SUBSCRIBE_OK response under the write
+// WriteSubscribeOK writes the §10.8 SUBSCRIBE_OK response under the write
 // lock and records that the request now has its response, so a later
 // termination emits PUBLISH_DONE (§10.12) rather than a second response.
 // If a termination won the race first, it returns

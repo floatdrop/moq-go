@@ -73,14 +73,14 @@ func quicConfig() *quic.Config {
 
 func (h *harness) dialQUIC(ctx context.Context, u *url.URL) (*session.Session, error) {
 	// internal/dial parses the moqt:// URI itself and carries its authority
-	// and path/query in the §3.1.4 AUTHORITY / PATH Setup Options — the
+	// and path/query in the AUTHORITY / PATH Setup Options (§10.3.1.1, §10.3.1.2) — the
 	// §10.3.1.1 MUST this binary's hand-rolled dial used to drop.
 	return dialpkg.QUIC(ctx, u.String(), dialpkg.Options{
 		Implementation:     "moq-interop-client/0.1",
 		InsecureSkipVerify: h.insecure, // CLI flag for self-signed interop relays
 		// Offer the one MOQT-over-QUIC ALPN we speak. Per §3.1 the selected
-		// "moqt-NN" ALPN fixes the draft version — draft-19 SETUP carries no
-		// version field.
+		// "moqt-NN" ALPN fixes the draft version — SETUP carries no version
+		// field (§10.3).
 		ALPN: []string{"moqt-20"},
 	})
 }

@@ -14,8 +14,8 @@ import (
 // too slow", and the relay must not confuse them. §3.3.4 draws the line by the
 // reset code it attaches: TOO_FAR_BEHIND is defined as "the corresponding
 // subscription has exceeded the publisher's resource limits and is being
-// terminated", whereas DELIVERY_TIMEOUT says only "a delivery timeout was
-// exceeded for this stream". The tests below pin the difference from the
+// terminated", whereas DELIVERY_TIMEOUT says only "A delivery timeout
+// (Section 8) was exceeded for this stream". The tests below pin the difference from the
 // subscriber's side, which is the only side that can observe it: after a
 // delivery timeout the track keeps flowing, after a lag breach it does not
 // (see TestFanout_LagWindowResetsSlowSubscriber).

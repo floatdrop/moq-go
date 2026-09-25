@@ -510,8 +510,9 @@ func TestDuplicateGoawayClosesPeerSession(t *testing.T) {
 }
 
 // TestSendGoawayClientRejectsURI verifies that a client-side session rejects
-// SendGoaway with a non-empty URI per §10.4: "A client MUST NOT include a
-// New Session URI." The server side must still be allowed to include one.
+// SendGoaway with a non-empty URI per §10.4: "A client MUST send a
+// zero-length New Session URI in any GOAWAY". The server side must still be
+// allowed to include one.
 func TestSendGoawayClientRejectsURI(t *testing.T) {
 	client, server := openPair(t)
 

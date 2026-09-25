@@ -225,9 +225,9 @@ func (h *sessionHandler) handleFetchUpdate(ctx context.Context, req *session.Req
 	}
 }
 
-// TODO(draft-19): §10.2.8 says an out-of-range GROUP_ORDER "MUST close the
+// TODO: §10.2.8 says an out-of-range GROUP_ORDER "MUST close the
 // session with PROTOCOL_VIOLATION". The SUBSCRIBE / SUBSCRIBE_TRACKS paths do
-// (see [checkGroupOrderParam]); the standalone and joining FETCH paths still
+// (see [checkGroupOrderParam]); the FETCH path still
 // read an invalid value here as Ascending.
 //
 // fetchGroupOrder pulls the GROUP_ORDER parameter (§10.2.8) out of a
@@ -393,8 +393,8 @@ func (h *sessionHandler) fetchUpstreamRange(
 	unknownWhole := unknownWholeRange(start, endIncl, order)
 	timedOutWhole := timedOutWholeRange(start, endIncl, order)
 
-	// §10.2.5: "A value of 0 indicates the relay MUST NOT wait for upstream
-	// delivery and MUST report any unavailable Objects as Timed-Out gaps."
+	// §10.2.5: a value of 0 means "the relay MUST NOT wait for upstream
+	// delivery and MUST report any unavailable Objects as Timed-Out gaps".
 	// fillTimeout arrives already resolved (see [resolveFillBudget]), so a zero
 	// here is the subscriber's explicit 0, not an absent parameter.
 	if fillTimeout == 0 {
