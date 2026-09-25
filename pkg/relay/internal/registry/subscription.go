@@ -597,9 +597,9 @@ func (d *DownstreamSub) GetDeliveryTimeouts() message.DeliveryTimeouts {
 	return d.deliveryTimeouts
 }
 
-// RangeFilterSet returns the subscription's current §5.1.4 Range Filters, nil
+// GetRangeFilters returns the subscription's current §5.1.4 Range Filters, nil
 // when it has none.
-func (d *DownstreamSub) RangeFilterSet() *message.RangeFilterSet {
+func (d *DownstreamSub) GetRangeFilters() *message.RangeFilterSet {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.rangeFilters

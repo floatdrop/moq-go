@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay"
@@ -97,4 +98,32 @@ func TestRequestUpdate_ZeroLengthRemovesOneRangeFilterType(t *testing.T) {
 	if ds, err := subSess.AcceptDataStream(ctx); err == nil {
 		t.Fatalf("got a second data stream (%T); subgroup 1 is outside the kept SUBGROUP_FILTER", ds)
 	}
+}
+
+// TestRequestUpdate_RangeFilterLimitCountsMergedSet: MAX_FILTER_RANGES "limits
+// the total number of Ranges allowed in all Range Filter parameters for a
+// given subscription" (§5.1.4). After an update merges into the filters the
+// subscription keeps, the limit applies to the merged set, not to the update
+// alone.
+func TestRequestUpdate_RangeFilterLimitCountsMergedSet(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{MaxFilterRanges: 2})
+	defer teardown()
+	publishVideoTrack(t, pubSess, "cam1", 1)
+	subSess := dialAnotherClient(t, pubSess)
+	subReq := subscribeCam1Req(t, subSess,
+		message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamSubgroupFilter, Ranges: []message.Range{{Start: 0, End: 0}},
+		}),
+		message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamPriorityFilter, Ranges: []message.Range{{Start: 0, End: 10}},
+		}),
+	)
+	// One range on its own, a third one merged.
+	_, err := subSess.UpdateRequest(t.Context(), subReq, message.Parameters{
+		message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamObjectIDFilter, Ranges: []message.Range{{Start: 1, End: 1}},
+		}),
+	})
+	requireRejectedWithCode(t, err, moqt.RequestInvalidFilter)
 }
