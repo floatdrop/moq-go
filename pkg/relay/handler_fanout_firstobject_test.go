@@ -335,22 +335,36 @@ func TestFanout_ImplicitFirstObjectEdgeStreams(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("write terminal marker: %v", err)
 	}
+	// The subscriber reads the forwarded marker before the violation is
+	// sent: the relay ends the whole track over it (§2.4.2), resetting the
+	// stream, so a marker still queued then would never arrive.
+	ds, err := sub.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	in, ok := ds.(*session.IncomingSubgroupStream)
+	if !ok {
+		t.Fatalf("AcceptDataStream = %T, want a subgroup stream", ds)
+	}
+	if in.Header.GroupID != 1 || in.Header.SubgroupID != 4 ||
+		in.Header.SubgroupIDMode != message.SubgroupIDExplicit {
+		t.Errorf("header = group %d subgroup %d mode %v, want group 1, explicit subgroup 4",
+			in.Header.GroupID, in.Header.SubgroupID, in.Header.SubgroupIDMode)
+	}
+	if obj, err := in.ReadDecoded(); err != nil || obj.ObjectID != 4 {
+		t.Fatalf("first forwarded Object = %+v, %v; want the terminal marker at 4", obj, err)
+	}
+
 	// §11.4.3 violation: an object after the terminal marker. The relay may
 	// reset the inbound stream while this write is in flight; an error here
 	// is acceptable.
 	_ = term.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Payload: []byte("x")})
 
-	caps := captureSubgroups(t, sub, 1)
-	c := caps[0]
-	if c.Header.GroupID != 1 || c.Header.SubgroupID != 4 ||
-		c.Header.SubgroupIDMode != message.SubgroupIDExplicit {
-		t.Errorf("header = group %d subgroup %d mode %v, want group 1, explicit subgroup 4",
-			c.Header.GroupID, c.Header.SubgroupID, c.Header.SubgroupIDMode)
-	}
-	if len(c.Objects) != 1 || c.Objects[0] != 4 {
-		t.Errorf("objects = %v, want just the terminal marker at 4", c.Objects)
-	}
-	if errors.Is(c.Err, io.EOF) {
+	obj, err := in.ReadDecoded()
+	switch {
+	case err == nil:
+		t.Errorf("forwarded Object %d after the terminal marker", obj.ObjectID)
+	case errors.Is(err, io.EOF):
 		t.Error("outbound stream FIN'd; a post-terminal violation must reset it")
 	}
 }

@@ -322,12 +322,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		joinWriters(ws)
 	}()
 
-	// objectID tracks the running absolute Object ID across the inbound
-	// stream. Per §11.4.2, ObjectIDDelta on the wire is the absolute Object
-	// ID for the first object, and (currentID - previousID - 1) for every
-	// subsequent object — so sequential IDs all encode as 0.
 	var (
-		objectID uint64
 		firstObj = true
 		// terminalSeen records that a terminal-status object (EndOfGroup /
 		// EndOfTrack) has been seen on this Subgroup stream. Per §11.4.3
@@ -395,15 +390,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// their own outbound headers only when their stream really begins
 		// with it.
 		isTrueFirst := firstObj && !hdr.ReplayingSubgroup
-		if firstObj {
-			objectID = obj.ObjectIDDelta
-			firstObj = false
-		} else if objectID, err = message.NextSubgroupObjectID(objectID, obj.ObjectIDDelta); err != nil {
-			// §11.4.2: an Object ID past 2^64-1 is session-fatal.
-			_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
-			inboundReset = true
-			return
-		}
+		firstObj = false
+		objectID := stream.ObjectID() // resolved by ReadObject (§11.4.2)
 
 		// §11.4.3: terminal status is tracked per inbound stream regardless of
 		// whether this copy wins the dedup claim below, so a post-terminal object

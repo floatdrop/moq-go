@@ -205,6 +205,15 @@ func (e *TrackEntry) AcquireSubgroup(key SubgroupKey, newSet func() any) (sg *Sh
 	return sg, true
 }
 
+// CopySubgroups returns the Subgroups currently being fanned out, for a
+// caller that must act on every open writer at once (see the relay's
+// malformed-track handling). The caller takes each one's Mu itself.
+func (e *TrackEntry) CopySubgroups() []*SharedSubgroup {
+	e.sgMu.Lock()
+	defer e.sgMu.Unlock()
+	return slices.Collect(maps.Values(e.subgroups))
+}
+
 // deliveredGroupWindow bounds the §2.1 dedup ledger ([TrackEntry.delivered]):
 // dedup state is retained for the most recent deliveredGroupWindow groups. An
 // object whose group is more than this many groups behind the largest group
