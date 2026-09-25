@@ -603,15 +603,17 @@ type subgroupWriter struct {
 // names, closing w when it will take none again.
 func (w *subgroupWriter) admit(hdr message.SubgroupHeader, objectID uint64, props []byte) bool {
 	// §10.12: an ended subscription takes no new Object. Its stream is reset
-	// (the subgroup is unfinished) once what is already queued is written, so
-	// its PUBLISH_DONE, which waits for its streams to close, can follow.
+	// once what is already queued is written — §11.4.3 makes "A publisher's
+	// decision to end the subscription early" a reset, not a FIN — so its
+	// PUBLISH_DONE, which waits for its streams to close, can follow.
 	if w.sub.IsTerminated() {
 		w.close(true, moqt.StreamResetCancelled)
 		return false
 	}
-	// One lock acquisition folds the §9.2 Forward-State gate and the §5.1.2
-	// filter test. A paused subscription (Forward State 0) takes no queue
-	// slot; control messages on its request stream still flow.
+	// ForwardDecision folds the §9.2 Forward-State gate and the §5.1.2
+	// filter test into one lock acquisition. A paused subscription (Forward
+	// State 0) takes no queue slot; control messages on its request stream
+	// still flow.
 	forward, groupExhausted := w.sub.ForwardDecision(
 		hdr.GroupID, objectID, hdr.SubgroupID, hdr.PublisherPriority, props)
 	if !forward && groupExhausted {
@@ -796,8 +798,10 @@ func (w *subgroupWriter) run() {
 		if w.unbridge != nil {
 			w.unbridge()
 		}
-		// Every exit below closes the stream; this only guards a path that
-		// would otherwise leave it open, and PUBLISH_DONE waiting on it.
+		// Every exit below already closes the stream, so this does nothing
+		// today. It guards against a future exit that forgets to: a stream
+		// left unreported would hold the subscription's PUBLISH_DONE for
+		// good (§10.12).
 		w.closeOut(false, moqt.StreamResetCancelled)
 	}()
 
@@ -958,7 +962,6 @@ func (w *subgroupWriter) run() {
 		w.closed = true
 		w.dropsMu.Unlock()
 		w.closeOut(false, resetCode)
-		w.sub.Terminate()
 
 		// Also cancel the subscriber's request stream so the
 		// handleSubscribe goroutine's readSubscribeUpdates loop returns and
@@ -966,8 +969,11 @@ func (w *subgroupWriter) run() {
 		// Without this the sub would linger in registry.SubTerminated state in
 		// entry.Downstream until the subscriber's session itself
 		// dies — runFanout would skip it (because !IsEstablished()),
-		// but the registry entry would stay around.
-		if w.sub.Stream != nil {
+		// but the registry entry would stay around. Only when this writer
+		// ended the subscription: one already terminated has its
+		// PUBLISH_DONE under way (closeOut may just have released it), and
+		// resetting the stream now could discard it.
+		if w.sub.Terminate() && w.sub.Stream != nil {
 			w.sub.Stream.CancelRead(uint64(resetCode))
 			w.sub.Stream.CancelWrite(uint64(resetCode))
 		}

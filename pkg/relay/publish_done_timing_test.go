@@ -241,12 +241,26 @@ func TestPublishDone_AfterDeliveryTimeout(t *testing.T) {
 	// Not reading stalls the relay's writer, so the Objects queued behind it
 	// age past the timeout and the stream is reset.
 	time.Sleep(4 * timeout)
-	go func() { _, _ = io.Copy(io.Discard, ds) }()
+	copied := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, ds)
+		copied <- err
+	}()
 
 	if err := pub.Done(moqt.PublishDoneTrackEnded, "done"); err != nil {
 		t.Fatalf("Done: %v", err)
 	}
 	awaitPublishDone(t, subReq)
+	// The path under test is the reset: a FIN would mean the timeout never
+	// fired and this test proved nothing.
+	select {
+	case err := <-copied:
+		if err == nil {
+			t.Fatal("the subgroup stream ended with a FIN; want the DELIVERY_TIMEOUT reset")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the subgroup stream never ended")
+	}
 }
 
 // TestPublishDone_AfterFailedFill: a fill fetch stream the relay opens only to

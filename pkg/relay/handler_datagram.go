@@ -90,9 +90,6 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 
 	downstream := entry.CopyDownstream()
 	for _, sub := range downstream {
-		if !sub.IsEstablished() {
-			continue
-		}
 		// One lock acquisition folds the §9.2 Forward-State gate and the
 		// §5.1.2 filter test, exactly like the subgroup fanout: a paused
 		// subscription (Forward State 0) receives no datagrams. There is
