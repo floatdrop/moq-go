@@ -284,8 +284,10 @@ func (s *IncomingFetchStream) ReadObject() (*message.FetchObject, error) {
 	if err := obj.Parse(s.rd); err != nil {
 		return nil, s.sess.checkFINMidObject(err)
 	}
+	// §11.4.4: a Serialization Flags value of 128 or more that is not an
+	// End of Range marker "is a PROTOCOL_VIOLATION".
 	if err := obj.Validate(); err != nil {
-		return nil, fmt.Errorf("moqt/session: fetch object: %w", err)
+		return nil, s.sess.closeProtocolViolation(fmt.Errorf("moqt/session: fetch object: %w", err))
 	}
 	return obj, nil
 }
@@ -337,7 +339,7 @@ func (d *DecodedFetchObject) IsEndOfRange() bool {
 // PRIORITY flag is absent.
 //
 // The first object on the stream carries absolute GroupID / ObjectID
-// directly in the delta fields (per §11.4.4); subsequent objects' deltas
+// directly in the delta fields (per §11.4.4.1); subsequent objects' deltas
 // are interpreted using [IncomingFetchStream.GroupOrder] for cross-group
 // transitions.
 func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
@@ -370,7 +372,7 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		Payload:    raw.ObjectPayload,
 	}
 
-	// §11.4.4 / §11.4.4.2: flags that reference the prior Object's
+	// §11.4.4.1 / §11.4.4.2: flags that reference the prior Object's
 	// Subgroup ID or Priority are a PROTOCOL_VIOLATION until a real object
 	// has been decoded — the very first object, and any object whose only
 	// predecessor is an End-of-Range marker, must spell both out. (When
@@ -380,33 +382,33 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		if !raw.IsDatagram() {
 			if m := raw.SubgroupMode(); m == message.FetchSubgroupIDPrior ||
 				m == message.FetchSubgroupIDPriorPlusOne {
-				return nil, fmt.Errorf(
+				return nil, s.sess.closeProtocolViolation(fmt.Errorf(
 					"moqt/session: fetch object references prior subgroup with no prior object (flags 0x%X)",
-					raw.SerializationFlags)
+					raw.SerializationFlags))
 			}
 		}
 		if raw.SerializationFlags&message.FetchFlagPriority == 0 {
-			return nil, fmt.Errorf(
+			return nil, s.sess.closeProtocolViolation(fmt.Errorf(
 				"moqt/session: fetch object references prior priority with no prior object (flags 0x%X)",
-				raw.SerializationFlags)
+				raw.SerializationFlags))
 		}
 	}
 
 	// Group / Object reconstruction.
 	switch {
 	case !s.decHavePrev:
-		// §11.4.4: the first object MUST include both a Group ID Delta and
+		// §11.4.4.1: the first object MUST include both a Group ID Delta and
 		// an Object ID Delta (its absolute IDs). If it instead uses a flag
 		// that references the prior object, that is a PROTOCOL_VIOLATION.
 		// (An End-of-Range marker counts as a prior for this dimension —
 		// decHavePrev is already true then.)
 		if raw.SerializationFlags&message.FetchFlagGroupIDDelta == 0 ||
 			raw.SerializationFlags&message.FetchFlagObjectIDDelta == 0 {
-			return nil, fmt.Errorf(
+			return nil, s.sess.closeProtocolViolation(fmt.Errorf(
 				"moqt/session: first fetch object missing Group/Object ID delta (flags 0x%X)",
-				raw.SerializationFlags)
+				raw.SerializationFlags))
 		}
-		// First object: deltas carry absolute IDs (§11.4.4).
+		// First object: deltas carry absolute IDs (§11.4.4.1).
 		d.GroupID = raw.GroupIDDelta
 		d.ObjectID = raw.ObjectIDDelta
 	default:

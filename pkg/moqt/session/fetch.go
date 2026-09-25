@@ -46,6 +46,10 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 				cancelRequest(stream)
 				return nil, err
 			}
+			if err := checkFetchOKEnd(m, ok); err != nil {
+				cancelRequest(stream)
+				return nil, s.closeProtocolViolation(err)
+			}
 			// The responder may send neither REQUEST_UPDATE (it did not
 			// send the request) nor PUBLISH_STATE_NOTIFY (not a
 			// subscription): §10.9, §10.10.
@@ -56,6 +60,41 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 				OK:        ok,
 			}, nil
 		})
+}
+
+// checkFetchOKEnd enforces §10.14: "If End Location is smaller than the Start
+// Location in the corresponding FETCH the receiver MUST close the session with
+// a PROTOCOL_VIOLATION."
+//
+// An absolute Start compares directly. A Start relative to the Largest Object
+// is not known here, but a FETCH without an End Location ends at the Largest
+// Object (§5.1.2), and FETCH_OK's End never goes beyond it (§10.14). The Next
+// Object ({Largest.Group, Largest.Object + 1}) and a relative StartGroup of 0
+// ({Largest.Group + 1, 0}) start past it, so any End precedes them, except an
+// End of {0, 0}: with no content yet both Starts are {0, 0} as well, and the
+// two cases look the same. A relative StartGroup of 1 or more starts at or
+// before the Largest Object, which End cannot precede.
+func checkFetchOKEnd(m *message.Fetch, ok *message.FetchOK) error {
+	// m is our own FETCH, whose filter parses; without one the range starts
+	// at {0, 0}, which no End precedes.
+	f, _ := message.LocationFilterFromParam(m.Parameters)
+	if f == nil {
+		return nil
+	}
+	switch {
+	case f.NextObject(), f.RelativeStart() && f.StartGroup == 0:
+		if ok.EndLocation != (message.Location{}) {
+			return fmt.Errorf("moqt/session: FETCH_OK End Location %v precedes a FETCH that starts "+
+				"after the Largest Object", ok.EndLocation)
+		}
+	case f.RelativeStart():
+	default:
+		if start := f.Start(message.Location{}, false); ok.EndLocation.Less(start) {
+			return fmt.Errorf("moqt/session: FETCH_OK End Location %v precedes the FETCH Start %v",
+				ok.EndLocation, start)
+		}
+	}
+	return nil
 }
 
 // FetchResponder is the publisher side of a FETCH (§10.13) this endpoint
