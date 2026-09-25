@@ -504,12 +504,15 @@ func (e *TrackEntry) RetainRefusals(current []*PublisherEntry, now time.Time) {
 	maps.DeleteFunc(e.refusals, stale)
 }
 
-// HasDownstreamOn reports whether one of the entry's downstream subscriptions
-// is on sess.
+// HasDownstreamOn reports whether one of the entry's live downstream
+// subscriptions is on sess. A terminated one, lingering until its subscriber
+// closes its side, does not count.
 func (e *TrackEntry) HasDownstreamOn(sess *session.Session) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return slices.ContainsFunc(e.Downstream, func(d *DownstreamSub) bool { return d.Session == sess })
+	return slices.ContainsFunc(e.Downstream, func(d *DownstreamSub) bool {
+		return d.Session == sess && !d.IsTerminated()
+	})
 }
 
 // CopyDownstream returns a snapshot of the current downstream slice. See

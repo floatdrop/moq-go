@@ -1,0 +1,123 @@
+package relay
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+
+	"github.com/floatdrop/moq-go/pkg/moqt"
+	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
+)
+
+// forwardTrack is a SUBSCRIBE_TRACKS subscriber's [registry.SubscriberEntry.ForwardTrack]:
+// it sends the subscriber a PUBLISH for te (§6.1: "the publisher sends PUBLISH
+// messages for tracks within matching namespaces") and serves the subscription
+// that opens, on this handler's session. params are the SUBSCRIBE_TRACKS
+// parameters, "the initial Subscription parameters when a PUBLISH is sent as a
+// result of SUBSCRIBE_TRACKS" (§10.20.1).
+//
+// The subscriber gets one forwarded PUBLISH per track, and none for a track it
+// publishes itself or already receives.
+func (h *sessionHandler) forwardTrack(
+	ctx context.Context,
+	params message.Parameters,
+) func(*registry.SubscriberEntry, *registry.TrackEntry) {
+	return func(sub *registry.SubscriberEntry, te *registry.TrackEntry) {
+		fullName := te.FullName
+		if !fullName.Namespace.HasPrefix(sub.Prefix()) {
+			return // a TRACK_NAMESPACE_PREFIX update moved the subscription away
+		}
+		// §5.1.4: "PUBLISH messages which pass the filter will be forwarded
+		// while those which do not pass it will not be forwarded nor will any
+		// Objects."
+		if sub.RangeFilters != nil && !sub.RangeFilters.MatchesTrack(te.GetProperties()) {
+			return
+		}
+		// §6.1: "excluding tracks published by the subscriber".
+		if te.HasUpstreamOn(h.sess) || te.HasDownstreamOn(h.sess) {
+			return
+		}
+		// The check above misses a forward whose downstream is not
+		// registered yet; the claim covers that window, until
+		// serveForwardedPublish registers it.
+		key := fullName.Key()
+		if !sub.ClaimForward(key) {
+			return
+		}
+		fwd := &message.Publish{
+			Namespace: fullName.Namespace,
+			Name:      fullName.Name,
+			// §11.1: aliases are per session; the subscriber's session
+			// allocates the ones the relay publishes on.
+			TrackAlias:      h.sess.AllocOutboundTrackAlias(),
+			Parameters:      publishParamsForSubscriber(params, sub, te),
+			TrackProperties: te.GetProperties(),
+		}
+		// Non-blocking (§6.1): with no bidi-stream credit left the relay
+		// sends PUBLISH_SKIPPED on the SUBSCRIBE_TRACKS stream instead.
+		stream, err := h.sess.OpenPublish(fwd)
+		if err != nil {
+			sub.ReleaseForward(key)
+			if errors.Is(err, session.ErrNoStreamCredit) {
+				h.emitPublishSkipped(ctx, sub, fullName)
+				return
+			}
+			h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH forward failed", slog.String("err", err.Error()))
+			return
+		}
+		h.relayGo(func() {
+			h.serveForwardedPublish(ctx, stream, fwd, params, te, func() { sub.ReleaseForward(key) })
+		})
+	}
+}
+
+// serveForwardedPublish serves the subscription a forwarded PUBLISH opened: a
+// downstream on te like a SUBSCRIBE's, registered before the response arrives,
+// since "If the FORWARD parameter is omitted or equal to 1, the publisher will
+// start transmitting objects immediately, possibly before PUBLISH_OK" (§10.11).
+// A REQUEST_ERROR (e.g. UNINTERESTED) ends it; otherwise the subscriber's
+// REQUEST_UPDATEs are answered (§10.9) until it cancels or the track ends,
+// which sends PUBLISH_DONE (§10.12) through the downstream like any other.
+func (h *sessionHandler) serveForwardedPublish(
+	ctx context.Context,
+	stream session.Stream,
+	fwd *message.Publish,
+	params message.Parameters,
+	te *registry.TrackEntry,
+	registered func(),
+) {
+	fullName := te.FullName
+	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, stream, fwd.TrackAlias)
+	sub.OpenedByPublish()
+	// handleSubscribeTracks refused parameters this would reject. "Delivery
+	// starts at the Next Object relative to the Largest Object" (§10.11) is
+	// the live fanout's default.
+	_ = installSubscribeParams(sub, params)
+	_, largest, has, added := h.tracks.AddDownstreamSnapshotLargest(fullName, sub)
+	registered()
+	if !added {
+		sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "relay: upstream gone")
+		return
+	}
+	sub.SetLargestAtSubscribe(largest, has)
+	defer h.tracks.RemoveDownstream(fullName, sub.ID)
+	ref := h.trackRef(fullName)
+	h.metrics.SubscriptionOpened(ref)
+	defer h.metrics.SubscriptionClosed(ref)
+	// §9.2: a forwarding subscriber resumes a paused upstream.
+	if sub.ForwardState() == 1 {
+		h.propagateForwardUpstream(ctx, fullName)
+	}
+
+	if _, err := h.sess.AwaitPublishOK(ctx, stream); err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "forwarded PUBLISH refused",
+			slog.String("name", string(fullName.Name)), slog.String("err", err.Error()))
+		// The request is over (§3.3.3); end this side too, with no
+		// PUBLISH_DONE after the subscriber's REQUEST_ERROR.
+		sub.EndRefused()
+		return
+	}
+	h.readSubscribeUpdates(ctx, stream, sub, fullName)
+}

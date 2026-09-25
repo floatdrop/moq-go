@@ -342,12 +342,12 @@ type DownstreamSub struct {
 	// write here: the subscriber's request handler (SUBSCRIBE_OK,
 	// REQUEST_OK / REQUEST_ERROR replies — via WriteMessage) and registry
 	// teardown goroutines (PUBLISH_DONE via TerminateWithPublishDone,
-	// triggered by a *publisher* leaving). Same rationale as
-	// SubscriberEntry's writeMu.
+	// triggered by a *publisher* leaving).
 	writeMu sync.Mutex
 
 	// okSent records that the §10.7 SUBSCRIBE_OK response went out on the
-	// stream (guarded by writeMu). A termination racing the subscribe
+	// stream, or that the relay's own PUBLISH opened it (OpenedByPublish);
+	// guarded by writeMu. A termination racing the subscribe
 	// handler consults it to answer the request correctly: the peer must
 	// receive exactly one SUBSCRIBE_OK / REQUEST_ERROR before any
 	// PUBLISH_DONE — a PUBLISH_DONE with no prior response leaves the
@@ -736,6 +736,30 @@ func (d *DownstreamSub) WriteSubscribeOK(msg *message.SubscribeOK) error {
 	}
 	d.okSent = true
 	return nil
+}
+
+// OpenedByPublish records that the relay's own PUBLISH opened this
+// subscription (a PUBLISH forwarded to a SUBSCRIBE_TRACKS holder, §6.1), so,
+// like one answered with SUBSCRIBE_OK, it ends with PUBLISH_DONE (§10.12)
+// rather than REQUEST_ERROR. Call it before registering the subscription.
+func (d *DownstreamSub) OpenedByPublish() {
+	d.writeMu.Lock()
+	d.okSent = true
+	d.writeMu.Unlock()
+}
+
+// EndRefused ends a subscription its subscriber refused (REQUEST_ERROR to the
+// relay's PUBLISH, §10.11): it is terminated without a PUBLISH_DONE, and the
+// stream is closed in both directions, under the same lock as every other
+// write on it.
+func (d *DownstreamSub) EndRefused() {
+	d.writeMu.Lock()
+	defer d.writeMu.Unlock()
+	if !d.Terminate() {
+		return
+	}
+	_ = d.Stream.Close()
+	d.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
 }
 
 // WriteMessage marshals a control message onto the downstream request stream

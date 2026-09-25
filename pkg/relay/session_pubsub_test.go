@@ -1060,24 +1060,16 @@ func TestPublish_SavesLargestObjectFromPublish(t *testing.T) {
 // would advertise {3,4} when the relay has already observed {9,9} — a value below
 // its own maximum, which is exactly what §10.2.17 forbids. With one publisher the
 // two readings coincide and the bug is invisible, which is why this test needs
-// the second one.
+// the second one. The subscriber arrives after both, and gets one PUBLISH for
+// the track.
 func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
 	t.Parallel()
-	subSess, teardown := connectRelay(t, relay.Config{})
+	pubA, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-
-	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
-	})
-	if err != nil {
-		t.Fatalf("SubscribeTracks: %v", err)
-	}
-	defer subStream.Close()
 
 	ns := wire.TrackNamespace{[]byte("video"), []byte("cam7")}
 
 	// First publisher sets the entry's watermark to {9,9}.
-	pubA := dialAnotherClient(t, subSess)
 	pubStreamA, err := pubA.Publish(t.Context(), &message.Publish{
 		Namespace:  ns,
 		Name:       []byte("rtp"),
@@ -1088,12 +1080,9 @@ func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
 		t.Fatalf("Publish A: %v", err)
 	}
 	defer pubStreamA.Close()
-	if _, err := subSess.AcceptRequest(t.Context()); err != nil {
-		t.Fatalf("AcceptRequest (A): %v", err)
-	}
 
 	// Second publisher on the SAME track announces a lower one.
-	pubB := dialAnotherClient(t, subSess)
+	pubB := dialAnotherClient(t, pubA)
 	pubStreamB, err := pubB.Publish(t.Context(), &message.Publish{
 		Namespace:  ns,
 		Name:       []byte("rtp"),
@@ -1105,9 +1094,19 @@ func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
 	}
 	defer pubStreamB.Close()
 
+	// The subscriber gets one PUBLISH for the track (§10.20: existing tracks
+	// are forwarded when the SUBSCRIBE_TRACKS arrives).
+	subSess := dialAnotherClient(t, pubA)
+	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+	})
+	if err != nil {
+		t.Fatalf("SubscribeTracks: %v", err)
+	}
+	defer subStream.Close()
 	req, err := subSess.AcceptRequest(t.Context())
 	if err != nil {
-		t.Fatalf("AcceptRequest (B): %v", err)
+		t.Fatalf("AcceptRequest: %v", err)
 	}
 	pub, ok := req.First.(*message.Publish)
 	if !ok {

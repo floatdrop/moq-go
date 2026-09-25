@@ -109,7 +109,7 @@ By package, bottom-up along the dependency stack:
 | 5.1     | Subscriptions                    | DONE   | Subscribe/Publish/OK/Error state machine in `pubsub.go`. |
 | 5.1.1   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. |
 | 5.1.2   | Location filters                 | DONE   | All 4 types (NextGroupStart, LargestObject, AbsoluteStart, AbsoluteRange) + `Matches`. |
-| 5.1.3   | Range filters                    | DONE    | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; TRACK_PROPERTY_FILTER gates PUBLISH forwarding on SUBSCRIBE_TRACKS; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. Two documented carve-outs (see Known protocol gaps): REQUEST_UPDATE whole-set replace vs per-type merge, and §6.3 object filters on a SUBSCRIBE_TRACKS not yet applied to the resulting subscription's objects. |
+| 5.1.3   | Range filters                    | DONE    | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; TRACK_PROPERTY_FILTER gates PUBLISH forwarding on SUBSCRIBE_TRACKS; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. Object filters on a SUBSCRIBE_TRACKS apply to the subscriptions its forwarded PUBLISHes open. One documented carve-out (see Known protocol gaps): REQUEST_UPDATE whole-set replace vs per-type merge. |
 | 5.1.4   | Combining filters                | DONE    | `ForwardDecision` ANDs Forward + Location + Range filters per object (§5.1.4); Range filters combine SetIDs via AND/OR. |
 | 5.1.5   | Joining an ongoing track         | DONE   | Relative & absolute joining FETCH in `fetch.go`. |
 | 5.1.5.1 | Dynamically starting new groups  | DONE   | Relay forwards a downstream `NEW_GROUP_REQUEST` upstream per §10.2.18: included in the on-demand upstream SUBSCRIBE (no established upstream) or sent as an upstream REQUEST_UPDATE, gated on `DYNAMIC_GROUPS` support, Largest-Group, and outstanding-request bookkeeping. |
@@ -268,13 +268,6 @@ never pulls in its client library.
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
 
-- **Object Range Filters on SUBSCRIBE_TRACKS (§6.3)** — the object filters
-  (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) that ride a SUBSCRIBE_TRACKS are
-  parsed and validated but applied only via TRACK_PROPERTY_FILTER's PUBLISH gate;
-  §6.3 also wants them applied to the objects of the resulting PUBLISH-created
-  subscriptions. Object filtering on a direct SUBSCRIBE/FETCH is unaffected (fully
-  enforced); a SUBSCRIBE_TRACKS subscriber can also restate object filters in its
-  PUBLISH_OK, which the fanout honors.
 - **Range Filter REQUEST_UPDATE semantics (§5.1.3)** — updating a
   subscription's Range Filters mid-stream replaces the *whole* filter set rather
   than the spec's per-parameter-type replace (non-zero Length) / remove
@@ -382,16 +375,6 @@ Found while fixing, left open deliberately:
   forwards the DEFAULT_PRIORITY bit unchanged. A downstream subscriber therefore
   inherits the default from the SUBSCRIBE_OK it was sent, which carries the
   first publisher's properties.
-- **Forwarded PUBLISH is never served (§6.1, §10.11, §3.3.2)** — a PUBLISH
-  forwarded to a SUBSCRIBE_TRACKS holder gets its own alias, but:
-  - no objects flow on it;
-  - its PUBLISH_OK is never read, and a REQUEST_UPDATE on it is never answered;
-  - it ends with a bare FIN, not PUBLISH_DONE.
-
-  When this is served, its data streams must carry the allocated alias. The
-  forwarded PUBLISH also copies the upstream's AUTHORIZATION_TOKEN and EXPIRES
-  parameters, which §10.2 says relays do not forward (a token alias means
-  nothing on another session).
 - **PUBLISH_DONE timing (§10.12)** — two gaps:
   - "A sender MUST NOT send PUBLISH_DONE until it has closed all streams it
     will ever open". The relay can still write it while fanout writers hold
@@ -434,9 +417,7 @@ Validation:
   `Broker()`, by the session's own reads, and by the relay. Handles the
   application reads itself (the namespace handles, `FetchResponder`, or any
   stream read with `message.Parse`) are checked only if it calls
-  `Session.CheckPeerParams`. The relay never reads the stream of a PUBLISH it
-  forwards to a SUBSCRIBE_TRACKS holder (see "Forwarded PUBLISH is never
-  served"), so its PUBLISH_OK and REQUEST_UPDATEs go unchecked.
+  `Session.CheckPeerParams`.
 
 - Object Properties are never validated on receipt: nested Immutable
   Properties, duplicate gap properties, and Mandatory Track Properties used as
@@ -488,9 +469,17 @@ Relay:
   - a subscriber whose stream is blocked by flow control grows its message
     queue without bound; §10.19 lets the relay reset the stream instead.
 - SUBSCRIBE_TRACKS:
-  - tracks that already existed are never announced (§10.20);
-  - the subscriber's own tracks are echoed back to it (§6.1: "excluding tracks
-    published by the subscriber").
+  - FILL_PARAMETERS and NEW_GROUP_REQUEST on a SUBSCRIBE_TRACKS are accepted
+    but do nothing: a forwarded PUBLISH's subscription gets no fill stream
+    (§10.20.1 names FILL_PARAMETERS for joining);
+  - a track that gains an upstream through the relay's own SUBSCRIBE, rather
+    than an inbound PUBLISH, after the SUBSCRIBE_TRACKS arrived is not
+    forwarded to it.
+  - a TRACK_NAMESPACE_PREFIX update forwards nothing for tracks that already
+    exist under the new prefix; only later PUBLISHes are forwarded;
+  - INCLUDE_PROPERTIES=0 is ignored: forwarded PUBLISHes (and SUBSCRIBE_OK)
+    still carry Track Properties (§10.2.21 SHOULD), and a value other than 0
+    or 1 is not refused (§10.2.21 MUST close the session).
 - Fill streams do not inherit the subscription's Range Filters (§5.1.3).
 - Upstream PUBLISH_DONE codes are flattened to TRACK_ENDED; §10.12 asks for "a
   relevant status code".
@@ -502,9 +491,16 @@ Relay:
     initiate new requests".
 
 Test suite: `TestFetch_UpstreamOutcomeDecidesGapOrUnknown` flakes under `-race`
-(about 3 in 30 runs), already at the pre-review base `16d7c22`. Seen once each
-in full-package `-race` runs, never in isolation, cause unknown:
-`TestFetch_StitchedObjectKeepsDatagramForwardingPreference`,
-`TestSessionCleanup_PublisherSessionDeath`, and
-`TestRelay_LatePublishNamespaceJoinsOnDemandSubscription` (the relay reset the
-late publisher's data stream).
+(about 3 in 30 runs), already at the pre-review base `16d7c22`. Seen
+occasionally in full-package runs, never in isolation, cause unknown. They
+first appeared with the §9.5 late-publisher change (`171194a`: 3 in 34 runs,
+against 0 in 26 before it):
+- the stitch tests (`TestFetch_StitchedObjectKeepsDatagramForwardingPreference`,
+  `TestFetch_DescendingCappedUpstreamFallsBackToWholeUnknown`): the relay
+  cancels the upstream's first data stream. An instrumented run found no
+  duplicate upstream SUBSCRIBE;
+- `TestSessionCleanup_PublisherSessionDeath`: "Subscribe succeeded after
+  publisher death". The test fails on a SUBSCRIBE that reaches the relay before
+  it has seen the publisher's close, which is a race in the test itself;
+- `TestRelay_LatePublishNamespaceJoinsOnDemandSubscription`: the relay reset
+  the late publisher's data stream.

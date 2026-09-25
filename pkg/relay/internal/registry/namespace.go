@@ -10,6 +10,7 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
@@ -86,6 +87,17 @@ type SubscriberEntry struct {
 	// not forwarded (§5.1.4). Set once at registration. nil = no restriction.
 	RangeFilters *message.RangeFilterSet
 
+	// ForwardTrack forwards a PUBLISH for a track to a SUBSCRIBE_TRACKS
+	// subscriber (§6.1, §10.20). It is the subscriber's handler's, set at
+	// registration: the forwarded subscription belongs to its session.
+	ForwardTrack func(sub *SubscriberEntry, track *TrackEntry)
+
+	// forwarding holds the tracks with a forwarded PUBLISH in flight, one
+	// per track; see [SubscriberEntry.ClaimForward].
+	fwdMu      sync.Mutex
+	forwarding map[track.Key]struct{}
+	fwdClosed  bool // the entry is unregistered: no more forwards
+
 	// announced counts the sources of each namespace announced to a
 	// SUBSCRIBE_NAMESPACE subscriber, by wire key (see namespace_state.go).
 	// Guarded by the owning registry's mu.
@@ -102,12 +114,44 @@ type SubscriberEntry struct {
 	closeOnce sync.Once
 }
 
+// ClaimForward reserves key while a forwarded PUBLISH for it is being opened
+// and registered, and reports whether it was free; [SubscriberEntry.ReleaseForward]
+// frees it once the subscription is registered. It reports false once the
+// entry is unregistered: §6.1, relays "MUST NOT send any further PUBLISH
+// messages to a client without knowing the client is interested".
+func (e *SubscriberEntry) ClaimForward(key track.Key) bool {
+	e.fwdMu.Lock()
+	defer e.fwdMu.Unlock()
+	if _, busy := e.forwarding[key]; busy || e.fwdClosed {
+		return false
+	}
+	if e.forwarding == nil {
+		e.forwarding = make(map[track.Key]struct{})
+	}
+	e.forwarding[key] = struct{}{}
+	return true
+}
+
+// ReleaseForward frees a key [SubscriberEntry.ClaimForward] reserved.
+func (e *SubscriberEntry) ReleaseForward(key track.Key) {
+	e.fwdMu.Lock()
+	defer e.fwdMu.Unlock()
+	delete(e.forwarding, key)
+}
+
 // Prefix is the namespace prefix the subscriber asked to be notified about. A
 // zero-field prefix means "all namespaces" (§6.1). A TRACK_NAMESPACE_PREFIX
 // update (§10.9.2) changes it.
 func (e *SubscriberEntry) Prefix() wire.TrackNamespace { return *e.prefix.Load() }
 
-func (e *SubscriberEntry) close() { e.closeOnce.Do(func() { close(e.closed) }) }
+func (e *SubscriberEntry) close() {
+	e.closeOnce.Do(func() {
+		close(e.closed)
+		e.fwdMu.Lock()
+		e.fwdClosed = true
+		e.fwdMu.Unlock()
+	})
+}
 
 // write sends one message on the subscriber's request stream. Only
 // [SubscriberEntry.RunWriter] calls it, so writes never interleave.
@@ -285,8 +329,10 @@ func (r *NamespaceRegistry) RegisterSubscriber(
 	forward bool,
 	groupOrder byte,
 	rangeFilters *message.RangeFilterSet,
+	forwardTrack func(*SubscriberEntry, *TrackEntry),
 ) *SubscriberEntry {
 	entry := &SubscriberEntry{
+		ForwardTrack: forwardTrack,
 		Session:      sess,
 		Stream:       stream,
 		WantsTracks:  wantsTracks,
