@@ -81,6 +81,8 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 // A REQUEST_ERROR (e.g. UNINTERESTED) ends it; otherwise the subscriber's
 // REQUEST_UPDATEs are answered (§10.9) until it cancels or the track ends,
 // which sends PUBLISH_DONE (§10.12) through the downstream like any other.
+// FILL_PARAMETERS and NEW_GROUP_REQUEST among params apply to this
+// subscription as they would to a SUBSCRIBE's.
 func (h *sessionHandler) serveForwardedPublish(
 	ctx context.Context,
 	stream session.Stream,
@@ -119,6 +121,23 @@ func (h *sessionHandler) serveForwardedPublish(
 		// PUBLISH_DONE after the subscriber's REQUEST_ERROR.
 		sub.EndRefused()
 		return
+	}
+	// §10.20.1: "To join Tracks initiated via the resulting PUBLISHes, the
+	// subscriber can specify a Location Filter and optionally include
+	// FILL_PARAMETERS". Each forwarded subscription gets its own fill fetch
+	// stream, once the subscriber has accepted the PUBLISH, carrying the
+	// PUBLISH's Request ID: §5.1.3's "the Request ID of the message that
+	// initiated it", and the one ID that names this subscription alone. The
+	// SUBSCRIBE_TRACKS was validated, so a malformed FILL_PARAMETERS cannot
+	// reach here.
+	if err := h.maybeServeFill(ctx, sub, te, fullName, fwd.RequestID, params); err != nil {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
+			slog.String("err", err.Error()))
+	}
+	// §10.2.19: a NEW_GROUP_REQUEST is handled as for a SUBSCRIBE served
+	// from the track's existing upstream.
+	if p, ok := params.Find(message.ParamNewGroupRequest); ok {
+		h.propagateNewGroupUpstream(ctx, fullName, p.Varint)
 	}
 	h.readSubscribeUpdates(ctx, stream, sub, fullName)
 }
