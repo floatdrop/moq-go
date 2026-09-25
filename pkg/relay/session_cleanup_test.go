@@ -42,21 +42,25 @@ func TestSessionCleanup_PublisherSessionDeath(t *testing.T) {
 		t.Fatalf("publisher Close: %v", err)
 	}
 
+	// Close returns before the relay has seen the session end, so a SUBSCRIBE
+	// that gets there first is still served. Only one that keeps succeeding
+	// shows a stale registry entry.
 	subSess := dialAnotherClient(t, pubSess)
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		_, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		sub, err := subSess.Subscribe(t.Context(), &message.Subscribe{
 			Namespace: wire.TrackNamespace{[]byte("video")},
 			Name:      []byte("cam1"),
 		})
 		if err == nil {
-			t.Fatal("Subscribe succeeded after publisher death — stale registry entry")
-		}
-		var rejected *session.RequestRejectedError
-		if errors.As(err, &rejected) && rejected.Code == moqt.RequestDoesNotExist {
+			_ = sub.Close()
+			if time.Now().After(deadline) {
+				t.Fatal("Subscribe still succeeds after publisher death — stale registry entry")
+			}
+		} else if rejected, ok := errors.AsType[*session.RequestRejectedError](err); ok &&
+			rejected.Code == moqt.RequestDoesNotExist {
 			return // expected cleanup happened
-		}
-		if time.Now().After(deadline) {
+		} else if time.Now().After(deadline) {
 			t.Fatalf("publisher session cleanup did not happen within deadline: %v", err)
 		}
 		time.Sleep(20 * time.Millisecond)
