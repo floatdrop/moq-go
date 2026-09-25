@@ -115,3 +115,34 @@ func TestRejectSendsRetryInterval(t *testing.T) {
 		t.Fatalf("rejection = %+v, want EXCESSIVE_LOAD \"busy\" Retry Interval 251", *rej)
 	}
 }
+
+// TestRejectRefusesRedirect: §10.6.2 says the Redirect structure is "Present
+// only when Error Code is REDIRECT", and RequestRejectedError has no way to
+// carry one. A REDIRECT sent without it is malformed, and the peer closes the
+// session over it. Reject refuses without writing, so the request can still
+// be refused another way.
+func TestRejectRefusesRedirect(t *testing.T) {
+	client, server := openPair(t)
+	refused := make(chan error, 1)
+	go func() {
+		r, err := server.AcceptRequest(t.Context())
+		if err != nil {
+			refused <- err
+			return
+		}
+		refused <- r.Reject(&session.RequestRejectedError{Code: moqt.RequestRedirect, Reason: "go elsewhere"})
+		_ = r.RejectError(moqt.RequestDoesNotExist, "no")
+	}()
+	_, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
+	if rej, ok := errors.AsType[*session.RequestRejectedError](err); !ok || rej.Code != moqt.RequestDoesNotExist {
+		t.Fatalf("Subscribe = %v, want the DOES_NOT_EXIST sent after the refused REDIRECT", err)
+	}
+	if err := <-refused; err == nil {
+		t.Fatal("Reject sent a REDIRECT without a Redirect structure")
+	}
+	select {
+	case <-client.Done():
+		t.Fatalf("the peer closed the session: %v", client.Err())
+	case <-time.After(50 * time.Millisecond):
+	}
+}

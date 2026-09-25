@@ -865,13 +865,19 @@ func (r *Request) RejectError(code moqt.RequestErrorCode, reason string) error {
 	return r.Reject(&RequestRejectedError{Code: code, Reason: reason})
 }
 
-// Reject is [Request.RejectError] with the whole REQUEST_ERROR: rej's Code,
-// Reason and RetryInterval (§10.6.2: "If a request is retryable with the same
-// parameters at a later time, the sender of REQUEST_ERROR includes a non-zero
-// Retry Interval in the message"). It is the send-side counterpart of the
-// *[RequestRejectedError] a requester gets back, so a relay can pass an
-// upstream's rejection on as it came.
+// Reject is [Request.RejectError] with rej's Code, Reason and RetryInterval
+// (§10.6.2: "If a request is retryable with the same parameters at a later
+// time, the sender of REQUEST_ERROR includes a non-zero Retry Interval in the
+// message"). It is the send-side counterpart of the *[RequestRejectedError] a
+// requester gets back.
+//
+// REDIRECT is refused with an error and nothing is written: its Redirect
+// structure is "Present only when Error Code is REDIRECT" (§10.6.2), and
+// Reject has none to send.
 func (r *Request) Reject(rej *RequestRejectedError) error {
+	if rej.Code == moqt.RequestRedirect {
+		return errors.New("moqt/session: Reject cannot send REDIRECT: it has no Redirect structure (§10.6.2)")
+	}
 	if err := message.Marshal(r.Stream, &message.RequestError{
 		ErrorCode:     rej.Code,
 		RetryInterval: rej.RetryInterval,
