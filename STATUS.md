@@ -184,7 +184,7 @@ By package, bottom-up along the dependency stack:
 | 10.3.1.1| AUTHORITY option              | 0x05   | PARTIAL| Sent (`WithAuthority`) and carried as a SETUP KV pair, but never validated on receipt: `SessionInvalidAuthority` is unused — see Limitations. |
 | 10.3.1.2| PATH option                   | 0x01   | PARTIAL| Sent (`WithPath`) and carried as a SETUP KV pair, but never validated on receipt: `SessionInvalidPath` is unused — see Limitations. |
 | 10.3.1.3| MAX_AUTH_TOKEN_CACHE_SIZE      | 0x04   | DONE   | Sizes the token cache. |
-| 10.3.1.4| AUTHORIZATION_TOKEN (setup)   | 0x03   | DONE   | |
+| 10.3.1.4| AUTHORIZATION_TOKEN (setup)   | 0x03   | PARTIAL| Received tokens are applied to the token cache as a request's are (REGISTER over the cache size is used as a value; DELETE / USE_ALIAS from a client closes the session) and exposed by `Session.SetupTokens`. Not sendable (see backlog). |
 | 10.3.1.5| MOQT_IMPLEMENTATION           | 0x07   | DONE   | Advisory. |
 | 10.3.1.6| MAX_FILTER_RANGES             | 0x06   | DONE   | `WithMaxFilterRanges` advertises it; relay rejects over-limit/prohibited filters with INVALID_FILTER. The relay advertises `relay.DefaultMaxFilterRanges` (16) rather than inheriting the session default of 0, which would prohibit the Range Filters it fully implements; `relay.Config.MaxFilterRanges` overrides, negative to prohibit. |
 | 10.3.1.7| MAX_REQUEST_UPDATES           | 0x08   | DONE   | `WithMaxRequestUpdates` advertises the per-stream limit; enforced on inbound follow-ups via `RequestUpdateLimiter`, closing with `TOO_MANY_REQUEST_UPDATES` on overflow. |
@@ -409,11 +409,13 @@ Found while fixing, left open deliberately:
 - **REQUEST_OK Track Properties on send (§10.5)** — receipt is enforced.
   `Request.Reply` still sends whatever it is given, so an application can emit a
   non-empty PUBLISH_OK.
-- **AUTHORIZATION TOKEN setup option (§10.3.1.4, §10.2.2)** — not parsed on
-  receive:
-  - a REGISTER in SETUP is never cached;
-  - DELETE / USE_ALIAS from a client in SETUP is not rejected;
-  - the cache-overflow fallback to USE_VALUE is absent.
+- **AUTHORIZATION TOKEN setup option (§10.3.1.4)** — received tokens are
+  applied, but none can be sent: there is no Option for it, and so no purge
+  of a REGISTER the peer's MAX_AUTH_TOKEN_CACHE_SIZE could not hold.
+- **Repeated AUTHORIZATION TOKENs (§10.2.2)** — a message "MAY" repeat the
+  parameter "as long as the combination of Token Type and Token Value are
+  unique after resolving any aliases". Uniqueness is not checked, in SETUP or
+  in requests; the draft names no action for the receiver.
 
 Request lifecycle:
 

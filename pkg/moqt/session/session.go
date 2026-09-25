@@ -8,6 +8,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,10 @@ type Session struct {
 	recvCtrl ReceiveStream
 
 	peerOptions []wire.KVPair
+
+	// setupTokens are the tokens resolved from the peer's SETUP; see
+	// [Session.SetupTokens]. Written once during open.
+	setupTokens []ResolvedToken
 
 	// Outgoing Request ID allocator: client starts at 0 (even), server at 1
 	// (odd); each AllocRequestID advances by 2 (§10.1).
@@ -187,6 +192,11 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 	}
 	if code, err := s.checkPeerSetupOptions(); err != nil {
 		_ = conn.CloseWithError(uint64(code), err.Error())
+		return nil, err
+	}
+	if err := s.processSetupTokens(); err != nil {
+		tce, _ := errors.AsType[*TokenCacheError](err)
+		_ = conn.CloseWithError(uint64(tce.Code), err.Error())
 		return nil, err
 	}
 

@@ -1,6 +1,9 @@
 package session
 
-import "github.com/floatdrop/moq-go/pkg/moqt/message"
+import (
+	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
+)
 
 // SendControl bypasses the SendGoaway "already sent" guard so external tests
 // can drive duplicate-GOAWAY scenarios. Exposed only in the test build.
@@ -27,4 +30,10 @@ var ReservedNamespaceRejection = reservedNamespaceRejection
 // the typed openers deliberately make impossible.
 func OpenRequestForTest(s *Session, first message.Message) (Stream, error) {
 	return s.openRequest(first)
+}
+
+// WithSetupOptionForTest adds a raw SETUP option, so tests can send options
+// no exported Option builds (e.g. an AUTHORIZATION TOKEN, or a malformed one).
+func WithSetupOptionForTest(kv wire.KVPair) Option {
+	return func(c *config) { c.setupOptions = append(c.setupOptions, kv) }
 }

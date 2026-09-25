@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -164,40 +165,47 @@ func (s *Session) processRequestTokens(msg message.Message) ([]ResolvedToken, er
 
 	var resolved []ResolvedToken
 	for i := range tokens {
-		t := &tokens[i]
-		switch t.AliasType {
-		case message.AliasTypeRegister:
-			// §10.2.2: register before any further validation so the
-			// alias persists even if the request is later rejected.
-			if err := s.tokenCache.Register(t.TokenAlias, t.TokenType, t.TokenValue); err != nil {
-				return nil, &TokenCacheError{Code: sessionCodeForCacheErr(err), Err: err}
-			}
-			resolved = append(resolved, ResolvedToken{
-				Type:  t.TokenType,
-				Value: append([]byte(nil), t.TokenValue...),
-			})
-
-		case message.AliasTypeUseAlias:
-			typ, val, err := s.tokenCache.Resolve(t.TokenAlias)
-			if err != nil {
-				return nil, &TokenCacheError{Code: sessionCodeForCacheErr(err), Err: err}
-			}
-			resolved = append(resolved, ResolvedToken{Type: typ, Value: val})
-
-		case message.AliasTypeUseValue:
-			resolved = append(resolved, ResolvedToken{
-				Type:  t.TokenType,
-				Value: append([]byte(nil), t.TokenValue...),
-			})
-
-		case message.AliasTypeDelete:
-			if err := s.tokenCache.Delete(t.TokenAlias); err != nil {
-				return nil, &TokenCacheError{Code: sessionCodeForCacheErr(err), Err: err}
-			}
+		tok, ok, err := s.applyToken(&tokens[i])
+		if err != nil {
+			return nil, err
 		}
-		// No default: Token.Parse rejects any other Alias Type above.
+		if ok {
+			resolved = append(resolved, tok)
+		}
 	}
 	return resolved, nil
+}
+
+// applyToken applies one parsed token to the inbound cache per §10.2.2 and
+// returns what it resolves to; ok is false for a DELETE, which carries no
+// value. A cache failure is a [*TokenCacheError].
+func (s *Session) applyToken(t *message.Token) (tok ResolvedToken, ok bool, err error) {
+	switch t.AliasType {
+	case message.AliasTypeRegister:
+		// §10.2.2: register before any further validation so the alias
+		// persists even if the request is later rejected.
+		if err := s.tokenCache.Register(t.TokenAlias, t.TokenType, t.TokenValue); err != nil {
+			return ResolvedToken{}, false, &TokenCacheError{Code: sessionCodeForCacheErr(err), Err: err}
+		}
+		return ResolvedToken{Type: t.TokenType, Value: bytes.Clone(t.TokenValue)}, true, nil
+
+	case message.AliasTypeUseAlias:
+		typ, val, err := s.tokenCache.Resolve(t.TokenAlias)
+		if err != nil {
+			return ResolvedToken{}, false, &TokenCacheError{Code: sessionCodeForCacheErr(err), Err: err}
+		}
+		return ResolvedToken{Type: typ, Value: val}, true, nil
+
+	case message.AliasTypeUseValue:
+		return ResolvedToken{Type: t.TokenType, Value: bytes.Clone(t.TokenValue)}, true, nil
+
+	case message.AliasTypeDelete:
+		if err := s.tokenCache.Delete(t.TokenAlias); err != nil {
+			return ResolvedToken{}, false, &TokenCacheError{Code: sessionCodeForCacheErr(err), Err: err}
+		}
+	}
+	// No other Alias Type: Token.Parse rejects it.
+	return ResolvedToken{}, false, nil
 }
 
 // VerifyRequestTokens runs the configured [TokenVerifier] over the tokens the
@@ -255,4 +263,66 @@ func sessionCodeForCacheErr(err error) moqt.SessionErrorCode {
 // without parameters (or without token parameters) return (nil, nil).
 func (s *Session) ProcessFollowupTokens(msg message.Message) ([]ResolvedToken, error) {
 	return s.processRequestTokens(msg)
+}
+
+// SetupTokens returns the tokens the peer sent in AUTHORIZATION TOKEN options
+// of its SETUP (§10.3.1.4: tokens "that the peer can use to authorize MOQT
+// session establishment"), resolved as for a request (§10.2.2). The session
+// does not verify them; authorizing the session is the application's call.
+// Each call returns fresh copies.
+func (s *Session) SetupTokens() []ResolvedToken {
+	out := make([]ResolvedToken, len(s.setupTokens))
+	for i, t := range s.setupTokens {
+		out[i] = ResolvedToken{Type: t.Type, Value: bytes.Clone(t.Value)}
+	}
+	return out
+}
+
+// processSetupTokens applies the AUTHORIZATION TOKEN options in the peer's
+// SETUP (§10.3.1.4, "functionally equivalent to the AUTHORIZATION TOKEN
+// message parameter") and keeps the resolved tokens for [Session.SetupTokens].
+// Two rules differ from a request's:
+//   - §10.2.2: "If a server receives Alias Type DELETE (0x0) or USE_ALIAS
+//     (0x2) in a SETUP message, it MUST close the session with a
+//     PROTOCOL_VIOLATION."
+//   - §10.3.1.4: a REGISTER "that exceeds its MAX_AUTH_TOKEN_CACHE_SIZE [...]
+//     MUST NOT fail the session with AUTH_TOKEN_CACHE_OVERFLOW. Instead, it
+//     MUST treat the option as Alias Type USE_VALUE."
+//
+// A REGISTER that both repeats an alias and would overflow the cache closes
+// with DUPLICATE_AUTH_TOKEN_ALIAS: the cache checks the alias first, and the
+// draft does not say which rule wins (an assumption).
+//
+// Every error is a [*TokenCacheError] carrying the code to close with.
+func (s *Session) processSetupTokens() error {
+	for _, opt := range s.peerOptions {
+		if message.SetupOption(opt.Type) != message.SetupOptionAuthorizationToken {
+			continue
+		}
+		var t message.Token
+		if err := t.Parse(opt.ByteVal); err != nil {
+			// §10.2.2: "If the Token structure cannot be decoded, the
+			// receiver MUST close the Session with
+			// KEY_VALUE_FORMATTING_ERROR."
+			return &TokenCacheError{Code: moqt.SessionKeyValueFormattingError,
+				Err: fmt.Errorf("moqt/session: AUTHORIZATION TOKEN setup option: %w", err)}
+		}
+		if s.role == roleServer &&
+			(t.AliasType == message.AliasTypeDelete || t.AliasType == message.AliasTypeUseAlias) {
+			return &TokenCacheError{Code: moqt.SessionProtocolViolation,
+				Err: fmt.Errorf("moqt/session: %s token in the client's SETUP (§10.2.2)", t.AliasType)}
+		}
+		tok, ok, err := s.applyToken(&t)
+		if tce, isTCE := errors.AsType[*TokenCacheError](err); isTCE &&
+			t.AliasType == message.AliasTypeRegister && tce.Code == moqt.SessionAuthTokenCacheOverflow {
+			tok, ok, err = ResolvedToken{Type: t.TokenType, Value: bytes.Clone(t.TokenValue)}, true, nil
+		}
+		if err != nil {
+			return err
+		}
+		if ok {
+			s.setupTokens = append(s.setupTokens, tok)
+		}
+	}
+	return nil
 }
