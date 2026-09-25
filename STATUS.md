@@ -445,6 +445,15 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   reads only the mutable list, so a LOC Timestamp and the like placed inside
   Immutable Properties is not found. Filling the fields from there would make
   `Append` re-emit them in the mutable list, changing what a relay forwards.
+- **Fill streams are not scheduled against their subscription (§7.2 rules 3
+  and 4)** — a subscription-delivered Object should go first when the fill's
+  Group Order differs, and the fill-delivered one first within a Group. The
+  relay writes each stream as it is fed; ordering across them is a scheduler
+  the relay does not have.
+- **Duplicate Objects from redundant upstreams are not compared (§9.1)** —
+  the first copy of each {Group, Object} is forwarded and later ones are
+  dropped unread. Comparing them would detect a malformed track (§2.4.2
+  condition 6), at a cost on every Object.
 
 ### Draft-20 compliance review backlog
 
@@ -497,7 +506,3 @@ Relay:
     its Range Filters (§5.1.4 names TRACK_PROPERTY_FILTER for it) are not
     applied: the filters and forwarded-PUBLISH parameters stay as sent.
 - Fill streams do not inherit the subscription's Range Filters (§5.1.3).
-- Fill streams are not scheduled against their subscription (§7.2 rules 3
-  and 4): a subscription-delivered object should go first when the fill's
-  Group Order differs, and the fill-delivered one first within a group.
-- Duplicate objects from redundant upstreams are not compared (§9.1).
