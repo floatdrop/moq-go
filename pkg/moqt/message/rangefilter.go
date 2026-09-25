@@ -76,7 +76,7 @@ func (f *RangeFilter) Bytes() []byte {
 
 // RangeFilterParam builds the message Parameter (§10.2) carrying f. The value
 // is a length-prefixed blob (KindBytes) for all five filter types — see the
-// paramKinds note in params.go on the §1.4.3-vs-§5.1.4 parity tension.
+// paramKinds note in params.go on why parameter encodings ignore type parity.
 func RangeFilterParam(f *RangeFilter) Parameter {
 	return BytesParam(f.Type, f.Bytes())
 }

@@ -85,7 +85,7 @@ func subscribe(ctx context.Context, addr string) error {
 	// latest gates the display: an object only updates the shown time
 	// when its Location is strictly greater than the last one printed.
 	// This filters the race between the live SUBSCRIBE stream and the
-	// Joining FETCH stream — both can deliver objects at SUBSCRIBE time,
+	// fill fetch stream — both can deliver objects at SUBSCRIBE time,
 	// and without the gate an older cached value could overwrite a newer
 	// live one on the display.
 	var latest latestSeen
@@ -123,8 +123,8 @@ func subscribe(ctx context.Context, addr string) error {
 
 // latestSeen tracks the highest (group, object) the subscriber has
 // printed. Updates only when the new Location is strictly greater than
-// the current one, which prevents an older cached object from a Joining
-// FETCH overwriting a newer one delivered via the live SUBSCRIBE stream
+// the current one, which prevents an older cached object from the fill
+// fetch stream overwriting a newer one delivered via the live SUBSCRIBE stream
 // (or vice versa) when both arrive around the same time at subscribe.
 type latestSeen struct {
 	group, object uint64
@@ -157,8 +157,8 @@ func readSubgroup(s *session.IncomingSubgroupStream, latest *latestSeen) {
 // readFetch drains a FETCH_HEADER stream, letting the session-layer
 // decoder reconstruct absolute (Group, Object) IDs from §11.4.4 deltas
 // and passing each through latest.record before logging. We don't set
-// s.GroupOrder — the joining FETCH defaults to ascending, which matches
-// IncomingFetchStream.ReadDecoded's default.
+// s.GroupOrder — the fill covers a single group, so its order does not
+// matter, and ascending, IncomingFetchStream.ReadDecoded's default, is fine.
 func readFetch(s *session.IncomingFetchStream, latest *latestSeen) {
 	for {
 		obj, err := s.ReadDecoded()

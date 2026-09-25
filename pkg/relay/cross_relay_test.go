@@ -1242,15 +1242,16 @@ func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 	}
 }
 
-// TestCrossRelay_JoiningFetchBackfillsPublishOnceTrack pins §5.1: a relay MUST
-// save the Largest Location an upstream communicated in SUBSCRIBE_OK, because
-// that value is the Joining Location its own downstream subscribers need.
+// TestCrossRelay_FetchBackfillsPublishOnceTrack pins §10.2.17, which §9.4 makes
+// binding on relays: the LARGEST_OBJECT a relay reports includes any value its
+// upstream sent in SUBSCRIBE_OK, because its own downstream subscribers need it
+// to FETCH what was published before they arrived.
 //
 // The track here is published *once* and then goes quiet, which is what makes
 // the omission fatal rather than merely late. A live subscription carries only
 // future objects, so the sole route to content published before the subscriber
 // arrived is a §10.13 FETCH — and that is refused with INVALID_RANGE
-// when the relay has no Joining Location to compute a range from. Before the
+// when the relay knows no Largest Object to compute a range from. Before the
 // fix, relay A learned no watermark from B's SUBSCRIBE_OK, omitted
 // LARGEST_OBJECT from its own SUBSCRIBE_OK (violating §10.2.17), and rejected
 // the backfill; the subscriber never saw the track's contents at all.
@@ -1258,7 +1259,7 @@ func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 // An MSF catalog is exactly this shape — published on join, republished only
 // when a participant's tracks change — so in a conference across two relays the
 // participant behind that catalog stayed invisible for the whole call.
-func TestCrossRelay_JoiningFetchBackfillsPublishOnceTrack(t *testing.T) {
+func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 	t.Parallel()
 
 	store := discovery.NewMemoryStore()

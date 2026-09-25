@@ -24,7 +24,7 @@ func TestRequestRejectedErrorCarriesRetryInterval(t *testing.T) {
 		{0, 0, false},
 		{1, 0, true},
 		{501, 500 * time.Millisecond, true},
-		{1<<62 - 1, time.Duration(math.MaxInt64), true}, // largest varint: clamped
+		{math.MaxUint64, time.Duration(math.MaxInt64), true}, // largest varint (§1.4.1): clamped
 	} {
 		client, server := openTokenPair(t)
 		go func() {

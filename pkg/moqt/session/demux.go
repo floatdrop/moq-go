@@ -18,7 +18,7 @@ import (
 type SubgroupHandler func(*IncomingSubgroupStream)
 
 // FetchHandler handles one inbound FETCH_HEADER stream that a [Demux] routed to
-// it by §11.5 Request ID. Invoked synchronously by [Demux.Run].
+// it by Request ID (§10.1). Invoked synchronously by [Demux.Run].
 type FetchHandler func(*IncomingFetchStream)
 
 // Demux routes the data streams accepted from a [Session] to per-track and

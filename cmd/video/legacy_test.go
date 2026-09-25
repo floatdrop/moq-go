@@ -59,7 +59,7 @@ func legacyObject(ts uint64, au []byte) []byte {
 // TestParseLegacyObjectReadsAQUICVarint is the regression test for reading
 // the timestamp with the wrong varint.
 //
-// MOQT's varint (draft-19 §1.4.1) is a leading-ones encoding and QUIC's is
+// MOQT's varint (§1.4.1) is a leading-ones encoding and QUIC's is
 // a two-bit length prefix. They overlap enough that MOQT's reader accepts
 // these bytes and silently returns a different number — it took the 0xc0
 // below as a three-byte encoding of zero, which stamped every frame 0 and

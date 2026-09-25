@@ -90,7 +90,7 @@ func (s *Session) RegisterInboundTrackAlias(alias uint64, key track.Key) error {
 // publication associated with alias has been fully torn down (e.g. after
 // PUBLISH_DONE or subscription cancellation and a suitable grace period per
 // §11.1: "Subscribers SHOULD retain sufficient state to quickly discard
-// unwanted Objects").
+// these unwanted Objects").
 //
 // Unregistering an alias that was never registered is a no-op.
 func (s *Session) UnregisterInboundTrackAlias(alias uint64) {

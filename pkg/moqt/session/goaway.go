@@ -55,11 +55,11 @@ func (s *Session) OnGoaway(handler func(*message.Goaway)) {
 // to the draining state. newURI may be empty; timeout is the grace period
 // before the local side may forcibly close the session with GOAWAY_TIMEOUT.
 // Returns an error if GOAWAY has already been sent, or if the local role is
-// client and newURI is non-empty (§10.4: "A client MUST NOT include a New
-// Session URI").
+// client and newURI is non-empty (§10.4: "A client MUST send a zero-length
+// New Session URI in any GOAWAY").
 func (s *Session) SendGoaway(timeout time.Duration, newURI string) error {
 	if s.role == roleClient && newURI != "" {
-		return errors.New("moqt/session: client MUST NOT send GOAWAY with New Session URI")
+		return errors.New("moqt/session: client MUST send a zero-length New Session URI in GOAWAY")
 	}
 	s.mu.Lock()
 	if s.goawaySent {

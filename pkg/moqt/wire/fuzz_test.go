@@ -2,11 +2,13 @@ package wire
 
 import (
 	"bytes"
+	"math"
 	"testing"
 )
 
-// maxVarint is the largest value a QUIC varint can encode (2^62 - 1, §1.4.1).
-const maxVarint = uint64(1)<<62 - 1
+// maxVarint is the largest value the MoQT varint encodes: "All 64 bit numbers
+// can be encoded" (§1.4.1).
+const maxVarint = math.MaxUint64
 
 // FuzzVarintRoundTrip asserts that every encodable value survives an
 // encode→decode cycle exactly, with no trailing bytes left over.
@@ -15,9 +17,6 @@ func FuzzVarintRoundTrip(f *testing.F) {
 		f.Add(v)
 	}
 	f.Fuzz(func(t *testing.T, v uint64) {
-		if v > maxVarint {
-			t.Skip() // not representable as a QUIC varint
-		}
 		w := NewWriter(nil)
 		w.Varint(v)
 		r := NewReader(w.Bytes())
@@ -70,7 +69,7 @@ func FuzzFrameRoundTrip(f *testing.F) {
 	f.Add(uint64(0x3), []byte("payload"))
 	f.Add(uint64(0x2F00), []byte{})
 	f.Fuzz(func(t *testing.T, msgType uint64, payload []byte) {
-		if msgType > maxVarint || len(payload) > MaxControlMessagePayload {
+		if len(payload) > MaxControlMessagePayload {
 			t.Skip()
 		}
 		var buf bytes.Buffer

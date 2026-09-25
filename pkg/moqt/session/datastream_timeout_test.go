@@ -77,9 +77,9 @@ func TestObjectDeliveryTimeoutObjectPropertyOverride(t *testing.T) {
 	}
 }
 
-// TestObjectDeliveryTimeoutIsPerObjectNotPerStream pins the §8 clock: "the
-// implementation MUST check the time elapsed since the first byte of the
-// object". Objects that arrive fresh keep passing however long the stream has
+// TestObjectDeliveryTimeoutIsPerObjectNotPerStream pins the §8 clock, which
+// starts at "the last header byte of every object" and is checked "before
+// attempting to pass it to the underlying transport". Objects that arrive fresh keep passing however long the stream has
 // been open — the timeout bounds an object's age, not a stream's lifetime.
 //
 // The distinction is invisible to any test that stalls the sender, because a

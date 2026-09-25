@@ -46,11 +46,11 @@ func makeKVPairs(n int) []KVPair {
 	return pairs
 }
 
-// BenchmarkVarintEncode measures Writer.Varint for a worst-case 8-byte value
+// BenchmarkVarintEncode measures Writer.Varint for a worst-case 9-byte value
 // (the other length classes are strictly cheaper). The writer reuses one
 // backing buffer, so steady state is allocation-free.
 func BenchmarkVarintEncode(b *testing.B) {
-	const val = uint64(0x3FFFFFFFFFFFFFFF) // 8-byte encoding
+	const val = uint64(0x3FFFFFFFFFFFFFFF) // 9-byte encoding (§1.4.1: 57+ bits)
 	buf := make([]byte, 0, 16)
 	w := NewWriter(buf)
 	b.ReportAllocs()

@@ -13,8 +13,7 @@ import (
 // TestReservedNamespaceRejection_Classifier pins the §3.2.1 / §3.2.2 rules
 // across the namespace-bearing request types: only an exact "." and the
 // ".session" first field are rejected; other "."-prefixed namespaces and
-// ordinary namespaces pass through. A Joining FETCH (no namespace) never
-// rejects.
+// ordinary namespaces pass through.
 func TestReservedNamespaceRejection_Classifier(t *testing.T) {
 	t.Parallel()
 

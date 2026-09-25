@@ -75,7 +75,7 @@ func TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 	}
 }
 
-// TestPublishSkipped_NotStickyAcrossRePublish pins the draft-19 §6.1 change:
+// TestPublishSkipped_NotStickyAcrossRePublish pins §6.1 (a draft-19 change):
 // a PUBLISH_SKIPPED prohibition is scoped to the single PUBLISH that could not
 // be forwarded, NOT sticky across re-PUBLISHes. Here the subscriber's bidi
 // credit stays 0, so the first PUBLISH is skipped; after the publisher FINs and
@@ -119,7 +119,7 @@ func TestPublishSkipped_NotStickyAcrossRePublish(t *testing.T) {
 	_ = pubStream1.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	// Second publication of the SAME track. Per draft-19 §6.1 the earlier skip
+	// Second publication of the SAME track. Per §6.1 the earlier skip
 	// does not persist, so the relay re-attempts the forward — still no credit,
 	// so a SECOND PUBLISH_SKIPPED reaches the subscriber's stream.
 	pubStream2 := pub()

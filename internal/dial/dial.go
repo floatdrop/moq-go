@@ -1,6 +1,6 @@
 // Package dial provides the shared raw-QUIC MOQT client dial used by the
 // demo and interop CLIs: one TLS/QUIC configuration, moqt:// URI support
-// with the §3.1.4 AUTHORITY / PATH Setup Options, and the MOQT handshake.
+// with the AUTHORITY / PATH Setup Options (§10.3.1.1, §10.3.1.2), and the MOQT handshake.
 // Keeping it in one place stops the per-binary copies from drifting (the
 // interop client's copy had lost the AUTHORITY/PATH options entirely).
 package dial
@@ -24,8 +24,8 @@ type Options struct {
 	// Implementation is the SETUP IMPLEMENTATION value ("name/version").
 	Implementation string
 	// ALPN is the NextProtos list offered; defaults to ["moqt-20"] (§3.1: the
-	// "moqt-NN" ALPN is the draft-version signal — draft-19 SETUP has no
-	// version field).
+	// "moqt-NN" ALPN is the draft-version signal — SETUP has no version
+	// field, §10.3).
 	ALPN []string
 	// InsecureSkipVerify disables TLS certificate verification (dev/demo
 	// relays with self-signed certificates).

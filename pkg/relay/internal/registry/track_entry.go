@@ -375,7 +375,7 @@ func (e *TrackEntry) ConsiderNewGroupRequest(value uint64, dynamicGroups bool) b
 // Atomic with [TrackRegistry.AddDownstreamSnapshotLargest]: a new sub
 // either snapshots the pre-update LargestObject AND appears in newSubs
 // (delivered live), or snapshots the post-update LargestObject (covered
-// by its Joining FETCH). The lock pair guarantees no in-between.
+// by its fill fetch stream). The lock pair guarantees no in-between.
 // lastGen is the downstreamGen the caller observed on its previous call (or
 // at its initial CopyDownstreamWithGen snapshot). When the generation is
 // unchanged no sub has joined since, so the joiner scan is skipped entirely;

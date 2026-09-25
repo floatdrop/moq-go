@@ -21,9 +21,10 @@ import (
 //     (the §9.4 aggregation path).
 //  3. Otherwise look for a matching local publisher in the
 //     [registry.NamespaceRegistry] (§9.5 prefix matching). If one is found, issue an
-//     upstream SUBSCRIBE on its session with the Largest Object filter
-//     (§9.4 "relays that aggregate upstream subscriptions can subscribe
-//     using the Largest Object filter to avoid churn") and on SUBSCRIBE_OK
+//     upstream SUBSCRIBE on its session with the Next Object filter
+//     (§9.4 lets relays aggregate subscriptions into "a single upstream
+//     subscription for the Track"; that filter keeps the upstream stable as
+//     downstream filters vary) and on SUBSCRIBE_OK
 //     register the resulting registry.UpstreamSub.
 //  4. If no local publisher is available either, reject with
 //     [moqt.RequestDoesNotExist]. Discovery-driven cross-relay lookup
@@ -130,7 +131,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		// pairing closes the race where a publisher write between separate
 		// Add + GetLargest calls would update LargestObject + cache the
 		// object without delivering it to us via live fanout — leaving a
-		// gap that neither live nor Joining FETCH covers.
+		// gap that neither live delivery nor a fill fetch stream covers.
 		entry, snapshotLargest, snapshotHas, added = h.tracks.AddDownstreamSnapshotLargest(fullName, sub)
 		if added {
 			break
@@ -397,9 +398,9 @@ func (h *sessionHandler) propagateNewGroupUpstream(
 // downstream subscription becomes Forward=1 while the upstream subscriptions
 // feeding its track are Forward=0, the relay re-emits REQUEST_UPDATE with
 // Forward=1 on each upstream subscription's stream. The upstream's
-// REQUEST_UPDATE_OK may carry LARGEST_OBJECT (the new Joining Location); we
-// fold it into the track entry's largest watermark so a subsequent Joining
-// FETCH is contiguous.
+// REQUEST_UPDATE_OK may carry LARGEST_OBJECT (§10.2.17); we fold it into the
+// track entry's largest watermark so a subsequent fill fetch stream (§5.1.3)
+// is contiguous.
 func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName track.FullTrackName) {
 	entry, ok := h.tracks.Get(fullName.Key())
 	if !ok {
@@ -432,7 +433,7 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 // (nil, false, err) when every candidate failed with the last a hard error.
 //
 // extra carries parameters folded into each upstream SUBSCRIBE alongside the
-// §9.4 Largest Object filter — currently the NEW_GROUP_REQUEST a downstream
+// Next Object filter (§5.1.2) — currently the NEW_GROUP_REQUEST a downstream
 // SUBSCRIBE arrived with (§10.2.19 rule 1).
 func (h *sessionHandler) subscribeUpstream(
 	ctx context.Context,
@@ -540,7 +541,7 @@ func (h *sessionHandler) subscribeUpstream(
 // is identical, only the source differs.
 //
 // The §9.4 aggregation rule applies: the upstream SUBSCRIBE always uses the
-// Largest Object filter so the upstream subscription's lifetime is decoupled
+// Next Object filter (§5.1.2) so the upstream subscription's lifetime is decoupled
 // from any specific downstream subscriber's filter. The relay can then serve
 // many disparate downstream filters from one upstream stream — the fanout
 // enforces each downstream filter on the wire.
@@ -551,7 +552,7 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	extra message.Parameters,
 	wantForward bool,
 ) (*registry.TrackEntry, *registry.UpstreamSub, error) {
-	// §9.4 Largest Object filter — keeps the upstream subscription stable
+	// Next Object filter (§5.1.2) — keeps the upstream subscription stable
 	// as downstream subscribers come and go with varying filters.
 	filter := &message.LocationFilter{Fields: 2}
 
@@ -787,7 +788,7 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	// set is a §10.6 INVALID_FILTER (request-scoped) — the caller maps
 	// message.ErrInvalidFilter to REQUEST_ERROR INVALID_FILTER.
 	//
-	// LIMITATION (draft-19 §5.1.4 REQUEST_UPDATE semantics not fully done): an
+	// LIMITATION (§5.1.4 REQUEST_UPDATE semantics not fully done): an
 	// update carrying any range-filter param replaces the WHOLE set, rather than
 	// the spec's per-parameter-type replace (non-zero Length) / remove (Length 0)
 	// with untouched types preserved. So a partial update wipes other filter
@@ -834,7 +835,7 @@ func (h *sessionHandler) refuseSubscriptionParams(ctx context.Context, req *sess
 	_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
 }
 
-// paramProtocolViolation marks a parameter value that draft-19 requires the
+// paramProtocolViolation marks a parameter value that the draft requires the
 // receiver answer with a session-level PROTOCOL_VIOLATION — an out-of-range
 // GROUP_ORDER (§10.2.8) or FORWARD (§10.2.18) — as opposed to a request-scoped
 // REQUEST_ERROR. Callers detect it with errors.AsType and close the session

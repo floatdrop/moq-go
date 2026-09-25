@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -305,14 +306,14 @@ type plainReader struct{ r *bytes.Reader }
 func (p *plainReader) Read(b []byte) (int, error) { return p.r.Read(b) }
 
 // TestStreamReaderVarint verifies that StreamReader.Varint decodes the same
-// values as Writer.Varint encodes, for the full range of QUIC varint sizes
-// (1, 2, 4, and 8 byte encodings).
+// values as Writer.Varint encodes, across encoded lengths up to the 9-byte form
+// that carries a full 64-bit value (§1.4.1).
 func TestStreamReaderVarint(t *testing.T) {
-	cases := []uint64{
-		0, 1, 63, // 1-byte encoding
-		64, 16383, // 2-byte encoding
-		16384, 1073741823, // 4-byte encoding
-		1073741824, 4611686018427387903, // 8-byte encoding
+	// Each §1.4.1 length class adds 7 value bits: the first and last value of
+	// every class, 1 through 9 bytes.
+	cases := []uint64{0, math.MaxUint64}
+	for bits := 7; bits <= 56; bits += 7 {
+		cases = append(cases, 1<<bits-1, 1<<bits)
 	}
 	for _, v := range cases {
 		w := NewWriter(nil)

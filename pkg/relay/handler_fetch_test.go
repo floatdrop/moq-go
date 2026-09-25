@@ -327,8 +327,8 @@ func TestFetch_StatusMarkersNotServed(t *testing.T) {
 	}
 }
 
-// TestFetch_WholeGroupEndForm pins the §5.1.2 "EndObject omitted means the
-// entire group" wire form end to end: a mid-group start with End={G,0} is a
+// TestFetch_WholeGroupEndForm pins the §5.1.2 wire form "When EndObject is
+// omitted, the filter includes all objects in the End Group" end to end: a mid-group start with End={G,0} is a
 // valid range (validation used to reject it as end < start), the FETCH_OK
 // EndLocation is capped to the watermark+1 (capping used to echo {G,0}
 // uncapped), and the delivered objects run from the start to the group's
@@ -408,7 +408,7 @@ func TestFetch_FromCacheAscending(t *testing.T) {
 	}
 }
 
-// TestFetch_FromCacheDescending exercises the §5.2 / §11.4.4
+// TestFetch_FromCacheDescending exercises the §10.2.8 / §11.4.4
 // Descending group-order path: groups arrive in reverse order; objects
 // within each group remain ascending (the spec keeps subgroup-internal
 // order ascending regardless of GroupOrder).

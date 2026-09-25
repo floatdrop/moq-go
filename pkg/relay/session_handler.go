@@ -127,28 +127,26 @@ func (h *sessionHandler) trackRef(name track.FullTrackName) TrackRef {
 // the upstream publisher in SUBSCRIBE_OK, PUBLISH or REQUEST_UPDATE_OK, and
 // (2) the largest Location of an Object received on an upstream subscription.
 // §9.4 makes that binding here ("Relays MUST follow the constraints on
-// LARGEST_OBJECT defined in Section 10.2.16"). Only (2) was implemented, so the
+// LARGEST_OBJECT defined in Section 10.2.17"). Only (2) was implemented, so the
 // relay advertised a watermark built purely from objects it had watched arrive.
 //
 // Call this on every path carrying the parameter, unconditionally.
 // [registry.TrackEntry.UpdateLargest] keeps the maximum, which is exactly what
 // §10.2.17 asks for, so a value already overtaken changes nothing.
 //
-// Do NOT narrow this to the Forward-State transition. §5.1 says "A publisher
-// MUST save the Largest Location communicated in SUBSCRIBE_OK, PUBLISH or
-// REQUEST_UPDATE_OK that changes the Forward State from 0 to 1", and that
-// qualifier is about what an endpoint may use as *its own* Joining Location —
-// §10.2.17's relay rule carries no such condition. The distinction is
-// load-bearing: subscribeUpstreamOnSession sends FORWARD=0 whenever no
-// downstream wants forwarding, so on that path §5.1's sentence does not apply
-// at all, and reading it as the authority here reintroduces the bug below.
+// Do NOT narrow this to the Forward-State transition. Draft-19's §5.1 had a
+// publisher save only the Largest Location from a message that changed the
+// Forward State from 0 to 1; draft-20 dropped that requirement (#1872), and
+// §10.2.17's relay rule never had the condition. It matters here:
+// subscribeUpstreamOnSession sends FORWARD=0 whenever no downstream wants
+// forwarding, so gating on the transition would reintroduce the bug below.
 //
 // What that bug was: a relay is the publisher for its own downstream
 // subscribers (§9.4), so a freshly established cross-relay subscription
 // reported no Largest Object until the first object happened to flow. For a
 // track published *once* that never happens — the live subscription carries
-// only future objects, and the §5.1.3 fill fetch stream that exists to backfill
-// the rest is refused with INVALID_RANGE for having no Joining Location. An MSF
+// only future objects, and no §5.1.3 fill fetch stream opens to backfill the
+// rest, since the fill range never extends beyond Largest Object. An MSF
 // catalog is exactly that shape, so across two relays the participant its
 // catalog described stayed invisible for the whole call.
 func saveLargestLocation(entry *registry.TrackEntry, ps message.Parameters) {
@@ -639,12 +637,12 @@ func awaitRequestEnd(ctx context.Context, stream session.Stream) {
 	}
 }
 
-// serveFetchObjects is the shared response tail of the standalone and
-// joining FETCH handlers: open the data stream, stream the stitched range,
+// serveFetchObjects is the response tail of the FETCH handler: open the data
+// stream, stream the stitched range,
 // count the objects actually written (the FetchServed metric), FIN, and
 // park in the §10.9 follow-up loop until the requester resets or FINs the
 // request stream — on a FIN the relay FINs back, completing the request.
-// kind tags log lines with the FETCH flavour ("standalone" / "joining").
+// kind tags log lines with the kind of stream ("fetch").
 func (h *sessionHandler) serveFetchObjects(
 	ctx context.Context,
 	req *session.Request,

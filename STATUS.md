@@ -42,7 +42,7 @@ By package, bottom-up along the dependency stack:
   multiplexing and request-ID allocation, §3.5 Track-Alias management with
   collision detection, the request openers (`Publish`/`Subscribe`/`Fetch`/…) and
   the `AcceptRequest` responder, typed inbound data streams that resolve
-  §11.4.2/§11.4.4 deltas to absolute IDs, GOAWAY, the §10.20 token cache, and
+  §11.4.2/§11.4.4 deltas to absolute IDs, GOAWAY, the §10.2.2 token cache, and
   pluggable transport via the `Conn` interface (`quicconn` + `wtconn` adapters).
 - **`loc`** — `Object.Encode`/`Decode`: typed Timestamp/Timescale/VideoConfig/
   VideoFrameMarking/AudioConfig/AudioLevel properties with `Extras` passthrough
@@ -94,8 +94,9 @@ By package, bottom-up along the dependency stack:
 | 3.2.1   | Reserved namespaces                  | DONE   | `AcceptRequest` rejects an exact `.` first field with DOES_NOT_EXIST; other `.`-prefixed namespaces pass through to the application per spec. |
 | 3.2.2   | Session-level tracks/namespaces      | DONE   | `.session` requests are rejected with DOES_NOT_EXIST before the application/relay sees them (no session-level extensions implemented), so relays never forward them; covers the empty-track-name rule. |
 | 3.3     | Session initialization               | DONE   | Control streams + SETUP exchange; early data-stream buffering. A bidi stream opening with anything but the seven request messages closes the session with PROTOCOL_VIOLATION (`AcceptRequest`). |
-| 3.3.2   | Request cancellation / rejection     | DONE   | STOP_SENDING, stream resets, REQUEST_ERROR in `request.go`. |
-| 3.3.3   | Stream reset error codes             | DONE   | All codes in `errors.go` (`StreamReset*`). |
+| 3.3.2   | Graceful request stream closure      | DONE   | A FIN is not a cancel: the relay keeps a FIN'd request alive until the peer cancels, and FINs back to complete a finished FETCH. |
+| 3.3.3   | Request cancellation / rejection     | DONE   | STOP_SENDING, stream resets, REQUEST_ERROR in `request.go`; `Close()` on request handles cancels. |
+| 3.3.4   | Stream reset error codes             | DONE   | All codes in `errors.go` (`StreamReset*`). |
 | 3.4     | Unidirectional stream types          | DONE   | SUBGROUP / FETCH / PADDING / SETUP type IDs dispatched. |
 | 3.5     | Termination                          | DONE   | Session error codes; `Close()` sends CONNECTION_CLOSE w/ reason. |
 | 3.6     | Migration (GOAWAY)                   | DONE   | `SendGoaway`/`OnGoaway`/`PeerGoaway`, new-session URI (draft-19 removed the Request-ID watermark field). |
@@ -108,12 +109,13 @@ By package, bottom-up along the dependency stack:
 |---------|----------------------------------|--------|-------|
 | 5.1     | Subscriptions                    | DONE   | Subscribe/Publish/OK/Error state machine in `pubsub.go`. |
 | 5.1.1   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. |
-| 5.1.2   | Location filters                 | DONE   | All 4 types (NextGroupStart, LargestObject, AbsoluteStart, AbsoluteRange) + `Matches`. |
-| 5.1.3   | Range filters                    | DONE    | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; TRACK_PROPERTY_FILTER gates PUBLISH forwarding on SUBSCRIBE_TRACKS; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. Object filters on a SUBSCRIBE_TRACKS apply to the subscriptions its forwarded PUBLISHes open. One documented carve-out (see Known protocol gaps): REQUEST_UPDATE whole-set replace vs per-type merge. |
-| 5.1.4   | Combining filters                | DONE    | `ForwardDecision` ANDs Forward + Location + Range filters per object (§5.1.4); Range filters combine SetIDs via AND/OR. |
-| 5.1.5   | Joining an ongoing track         | DONE   | Relative & absolute joining FETCH in `fetch.go`. |
-| 5.1.5.1 | Dynamically starting new groups  | DONE   | Relay forwards a downstream `NEW_GROUP_REQUEST` upstream per §10.2.18: included in the on-demand upstream SUBSCRIBE (no established upstream) or sent as an upstream REQUEST_UPDATE, gated on `DYNAMIC_GROUPS` support, Largest-Group, and outstanding-request bookkeeping. |
-| 5.2     | Fetch state management           | DONE   | Standalone + joining fetch lifecycle. |
+| 5.1.2   | Location filters                 | DONE   | Every start/end form (unfiltered, Next Object, relative and absolute start, absolute range) + `Matches`. |
+| 5.1.3   | Fill semantics                   | PARTIAL | Fill fetch streams from FILL_PARAMETERS on SUBSCRIBE / REQUEST_UPDATE (`handler_fill.go`). Fill streams do not inherit the subscription's Range Filters, and SUBSCRIBE_TRACKS opens none (see backlog). |
+| 5.1.4   | Range filters                    | DONE    | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; TRACK_PROPERTY_FILTER gates PUBLISH forwarding on SUBSCRIBE_TRACKS; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. Object filters on a SUBSCRIBE_TRACKS apply to the subscriptions its forwarded PUBLISHes open. One documented carve-out (see Known protocol gaps): REQUEST_UPDATE whole-set replace vs per-type merge. |
+| 5.1.5   | Combining filters                | DONE    | `ForwardDecision` ANDs Forward + Location + Range filters per object (§5.1.5); Range filters combine SetIDs via AND/OR. |
+| 5.1.6   | Joining an ongoing track         | DONE   | A Location Filter plus FILL_PARAMETERS, served as a fill fetch stream (draft-20 removed the Joining FETCH). |
+| 5.1.6.1 | Dynamically starting new groups  | DONE   | Relay forwards a downstream `NEW_GROUP_REQUEST` upstream per §10.2.19: included in the on-demand upstream SUBSCRIBE (no established upstream) or sent as an upstream REQUEST_UPDATE, gated on `DYNAMIC_GROUPS` support, Largest-Group, and outstanding-request bookkeeping. |
+| 5.2     | Fetch state management           | DONE   | FETCH lifecycle. |
 
 ## §6 Namespace discovery
 
@@ -127,7 +129,7 @@ By package, bottom-up along the dependency stack:
 | §     | Feature                    | Status  | Notes |
 |-------|----------------------------|---------|-------|
 | 7.1   | Definitions                | DONE    | Subscriber/publisher priority + group order modeled. |
-| 7.2   | Scheduling algorithm       | DONE    | `EffectiveStreamPriority` builds the composite `session.StreamPriority` (subscriber→publisher→group-order key→subgroup), covering rules 1–4; FETCH ordering is group-order + Object-ID per §10.12.3. Draft-19's datagram-wins tie-break (rule 4) holds by construction: datagrams bypass this priority key entirely and are sent as soon as ready, never queued behind a subgroup stream's priority. Transport knob is currently a no-op (quic-go exposes no per-stream priority API — [quic-go#437](https://github.com/quic-go/quic-go/issues/437)), so the order is computed and pushed through `session.PrioritizedSendStream` (propagation is test-covered) but not yet enforced on the wire. |
+| 7.2   | Scheduling algorithm       | PARTIAL | `EffectiveStreamPriority` builds the composite `session.StreamPriority` (subscriber→publisher→group-order key→subgroup); FETCH ordering is group-order + Object-ID per §10.13. The fill-vs-subscription ordering of rules 3 and 4 (a subscription-delivered object first when the fill's Group Order differs; the fill-delivered one first within a group) is not implemented: fill streams carry no priority input. The datagram-wins tie-break (rule 4) holds by construction: datagrams bypass this priority key entirely and are sent as soon as ready, never queued behind a subgroup stream's priority. Transport knob is currently a no-op (quic-go exposes no per-stream priority API — [quic-go#437](https://github.com/quic-go/quic-go/issues/437)), so the order is computed and pushed through `session.PrioritizedSendStream` (propagation is test-covered) but not yet enforced on the wire. |
 | 7.3   | Considerations for setting | DONE    | Relay honours subscriber/publisher priority on fanout. |
 
 ## §8 Delivery timeouts and data reliability
@@ -154,9 +156,9 @@ By package, bottom-up along the dependency stack:
 
 | §       | Message / option              | Type   | Status | Notes |
 |---------|-------------------------------|--------|--------|-------|
-| 10.1    | Request-ID parity/monotonicity| —      | DONE   | Enforced in `AcceptRequest` (per-role parity + monotonic). |
-| 10.2    | Message parameters (18 types) | —      | DONE   | All 18 defined with correct kinds and per-message scope; see §10.2.x below. |
-| 10.2.1  | Parameter scope               | —      | DONE   | Per-message scope validation. |
+| 10.1    | Request-ID parity/duplicates  | —      | DONE   | Enforced in `AcceptRequest` and on REQUEST_UPDATE: per-role parity, and duplicate detection that tolerates reordering. |
+| 10.2    | Message parameters (20 types) | —      | DONE   | All 20 defined with correct kinds; unknown and duplicate parameters close the session; see §10.2.x below. |
+| 10.2.1  | Parameter scope               | —      | DONE   | Per-message scope validation at every session receive point and the relay's own readers (`Parameters.CheckScope`). |
 | 10.2.2  | AUTHORIZATION_TOKEN           | 0x03   | DONE   | 4 alias types; session token cache resolves inbound. |
 | 10.2.3  | SUBGROUP_DELIVERY_TIMEOUT     | 0x06   | DONE   | |
 | 10.2.4  | OBJECT_DELIVERY_TIMEOUT       | 0x02   | DONE   | |
@@ -170,11 +172,13 @@ By package, bottom-up along the dependency stack:
 | 10.2.12 | PRIORITY_FILTER               | 0x27   | DONE   | Enforced per object (subgroup priority); >255 rejected INVALID_FILTER. |
 | 10.2.13 | OBJECT_PROPERTY_FILTER        | 0x28   | DONE   | Enforced per object against Object Properties; even property type. |
 | 10.2.14 | TRACK_PROPERTY_FILTER         | 0x29   | DONE   | Gates PUBLISH forwarding on SUBSCRIBE_TRACKS against Track Properties; even property type. |
-| 10.2.15 | EXPIRES                       | 0x08   | DONE   | |
-| 10.2.16 | LARGEST_OBJECT                | 0x09   | DONE   | Monotonic constraint applied. |
-| 10.2.17 | FORWARD                       | 0x10   | DONE   | |
-| 10.2.18 | NEW_GROUP_REQUEST             | 0x32   | DONE   | |
-| 10.2.19 | TRACK_NAMESPACE_PREFIX        | 0x34   | DONE   | |
+| 10.2.15 | FILL_PARAMETERS               | 0x23   | PARTIAL| Inner Table 6 scope and duplicates checked; omitted Range Filters are not inherited from the subscription (see §5.1.3). |
+| 10.2.16 | EXPIRES                       | 0x08   | DONE   | |
+| 10.2.17 | LARGEST_OBJECT                | 0x09   | DONE   | Monotonic constraint applied. |
+| 10.2.18 | FORWARD                       | 0x10   | DONE   | |
+| 10.2.19 | NEW_GROUP_REQUEST             | 0x32   | DONE   | |
+| 10.2.20 | TRACK_NAMESPACE_PREFIX        | 0x34   | DONE   | Applied on REQUEST_UPDATE; SUBSCRIBE_NAMESPACE reconciles its announced set. |
+| 10.2.21 | INCLUDE_PROPERTIES            | 0x35   | PARTIAL| Parsed and scope-checked, not applied (see backlog). |
 | 10.3    | SETUP                         | 0x2F00 | DONE   | Bidirectional handshake; options as KV pairs. |
 | 10.3.1.1| AUTHORITY option              | 0x05   | PARTIAL| Sent (`WithAuthority`) and carried as a SETUP KV pair, but never validated on receipt: `SessionInvalidAuthority` is unused — see Limitations. |
 | 10.3.1.2| PATH option                   | 0x01   | PARTIAL| Sent (`WithPath`) and carried as a SETUP KV pair, but never validated on receipt: `SessionInvalidPath` is unused — see Limitations. |
@@ -189,17 +193,18 @@ By package, bottom-up along the dependency stack:
 | 10.7    | SUBSCRIBE                     | 0x03   | DONE   | |
 | 10.8    | SUBSCRIBE_OK                  | 0x04   | DONE   | Registers inbound track alias. |
 | 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | A REQUEST_UPDATE opening a request stream closes the session with PROTOCOL_VIOLATION (`ErrUnexpectedRequestUpdate`). |
-| 10.10   | PUBLISH                       | 0x1D   | DONE   | |
-| 10.11   | PUBLISH_DONE                  | 0x0B   | DONE   | |
-| 10.12   | FETCH (standalone + joining)  | 0x16   | DONE   | All three fetch types. |
-| 10.13   | FETCH_OK                      | 0x18   | DONE   | |
+| 10.10   | PUBLISH_STATE_NOTIFY          | 0x22   | DONE   | Only the publisher may send it; enforced by brokers and the relay. |
+| 10.11   | PUBLISH                       | 0x1D   | DONE   | |
+| 10.12   | PUBLISH_DONE                  | 0x0B   | DONE   | |
+| 10.13   | FETCH                         | 0x16   | DONE   | Standalone, the only kind in draft-20. |
+| 10.14   | FETCH_OK                      | 0x18   | DONE   | |
 | 10.15   | TRACK_STATUS                  | 0x0D   | DONE   | Reply via REQUEST_OK, then FIN; any follow-up from the requester closes the session. |
-| 10.15   | PUBLISH_NAMESPACE             | 0x06   | DONE   | |
-| 10.16   | NAMESPACE                     | 0x08   | DONE   | |
-| 10.17   | NAMESPACE_DONE                | 0x0E   | DONE   | |
-| 10.18   | SUBSCRIBE_NAMESPACE           | 0x50   | DONE   | |
-| 10.19   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | §10.19.1: FORWARD/GROUP_ORDER are copied onto the PUBLISH messages the subscription triggers; an out-of-range value closes the session (§10.2.8/§10.2.17). |
-| 10.20   | PUBLISH_SKIPPED               | 0x0F   | DONE   | Prohibition scoped to a single PUBLISH (draft-19 §6.1) — not sticky across re-PUBLISHes. |
+| 10.16   | PUBLISH_NAMESPACE             | 0x06   | DONE   | |
+| 10.17   | NAMESPACE                     | 0x08   | DONE   | Per namespace, counted over local and remote sources. |
+| 10.18   | NAMESPACE_DONE                | 0x0E   | DONE   | Never before its NAMESPACE. |
+| 10.19   | SUBSCRIBE_NAMESPACE           | 0x50   | DONE   | |
+| 10.20   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | §10.20.1: its SUBSCRIBE parameters become each forwarded PUBLISH's subscription; an out-of-range value closes the session (§10.2.8/§10.2.18). |
+| 10.21   | PUBLISH_SKIPPED               | 0x0F   | DONE   | Prohibition scoped to a single PUBLISH (§6.1) — not sticky across re-PUBLISHes. |
 
 ## §11 Data streams and datagrams
 
@@ -228,7 +233,7 @@ By package, bottom-up along the dependency stack:
 | 12.3  | MAX_CACHE_DURATION             | 0x04 | DONE   | Lazy age-eviction in cache. |
 | 12.4  | DEFAULT_PUBLISHER_PRIORITY     | 0x0E | DONE   | |
 | 12.5  | DEFAULT_PUBLISHER_GROUP_ORDER  | 0x22 | DONE   | Validated. |
-| 12.6  | DYNAMIC_GROUPS                 | 0x30 | DONE   | Property defined & scope-validated (flow: see §5.1.5.1). |
+| 12.6  | DYNAMIC_GROUPS                 | 0x30 | DONE   | Property defined & scope-validated (flow: see §5.1.6.1). |
 | 12.7  | Immutable properties           | 0x0B | DONE   | Relays cache & forward verbatim, never add. |
 | 12.8  | Prior group ID gap             | 0x3C | DONE   | Object-scope; encoder in `msf/groupid.go`. |
 | 12.9  | Prior object ID gap            | 0x3E | DONE   | Object-scope. |
@@ -243,7 +248,7 @@ policy. This library provides the hooks; enforcement is the operator's.
 | 13.1   | Subscription amplification       | DONE   | `Config.MaxSubscriptionsPerSession` caps concurrent subscriptions per session, rejecting excess with EXCESSIVE_LOAD before state mutation (0 = unlimited). |
 | 13.2   | Communication security           | N/A (transport) | TLS 1.3 via QUIC/WebTransport. |
 | 13.3   | Authorization                    | DONE   | `Authorizer` hook gates every request once before state mutation. |
-| 13.3.1 | Replay attacks                   | PARTIAL| Session-scoped token cache; replay defence delegated to token scheme. |
+| 13.3.2 | Replay attacks                   | PARTIAL| Session-scoped token cache; replay defence delegated to token scheme. |
 | 13.4   | Media security                   | N/A    | Payloads opaque; E2EE (e.g. SFrame) is external. |
 | 13.5   | Resource exhaustion              | DONE   | QUIC flow control + slow-reader reset (`fanout.go`) + per-session subscription/namespace caps; the publisher cancels lowest-priority streams on overload. Global cross-session quotas remain a deployment concern. |
 | 13.6   | Timeouts                         | DONE   | Delivery timeouts enforced (§8). |
@@ -268,7 +273,7 @@ never pulls in its client library.
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
 
-- **Range Filter REQUEST_UPDATE semantics (§5.1.3)** — updating a
+- **Range Filter REQUEST_UPDATE semantics (§5.1.4)** — updating a
   subscription's Range Filters mid-stream replaces the *whole* filter set rather
   than the spec's per-parameter-type replace (non-zero Length) / remove
   (Length 0) with untouched types preserved. So a partial REQUEST_UPDATE wipes
@@ -329,10 +334,8 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   write-then-read, so they never exceed any limit ≥ 1.
 - **Out-of-range GROUP_ORDER on FETCH (§10.2.8)** — the SUBSCRIBE and
   SUBSCRIBE_TRACKS paths now close the session with PROTOCOL_VIOLATION on an
-  out-of-range GROUP_ORDER/FORWARD (§10.2.8/§10.2.17), but the FETCH paths (a
-  FETCH REQUEST_UPDATE, and the initial standalone/joining FETCH) still scope a
-  bad GROUP_ORDER to a REQUEST_ERROR / silent coercion pending the same
-  promotion.
+  out-of-range GROUP_ORDER/FORWARD (§10.2.8/§10.2.18), but the FETCH path
+  still reads a bad GROUP_ORDER as Ascending pending the same promotion.
 - **Late publisher pickup (§9.5)** — multiple publishers per track are merged
   and deduplicated, and a local PUBLISH_NAMESPACE that arrives after a track's
   upstream set is established is SUBSCRIBEd for each matching track. Two
@@ -481,6 +484,9 @@ Relay:
     still carry Track Properties (§10.2.21 SHOULD), and a value other than 0
     or 1 is not refused (§10.2.21 MUST close the session).
 - Fill streams do not inherit the subscription's Range Filters (§5.1.3).
+- Fill streams are not scheduled against their subscription (§7.2 rules 3
+  and 4): a subscription-delivered object should go first when the fill's
+  Group Order differs, and the fill-delivered one first within a group.
 - Upstream PUBLISH_DONE codes are flattened to TRACK_ENDED; §10.12 asks for "a
   relevant status code".
 - Duplicate objects from redundant upstreams are not compared (§9.1).

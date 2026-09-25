@@ -137,8 +137,8 @@ func (s *OutgoingSubgroupStream) WriteObject(obj *message.SubgroupObject) error 
 }
 
 // WriteObjectReceivedAt is [OutgoingSubgroupStream.WriteObject] with the
-// object's §8 receipt time supplied by the caller: "the time at which the first
-// payload byte of every object has been either received from the upstream
+// object's §8 receipt time supplied by the caller: "the time at which the last
+// header byte of every object has been either received from the upstream
 // subscription, or provided by the original publisher application".
 //
 // The clock is per object, not per stream. An object that reaches the transport
@@ -245,11 +245,11 @@ func (s *OutgoingSubgroupStream) Write(p []byte) (int, error) {
 }
 
 // checkObjectTimeout enforces OBJECT_DELIVERY_TIMEOUT against one object's
-// receipt time, per §8: "the implementation MUST check the time elapsed since
-// the first byte of the object before attempting to pass it to the underlying
-// transport for transmission; if the time elapsed exceeds
-// OBJECT_DELIVERY_TIMEOUT, it MUST reset the underlying transport stream with
-// the reset stream code DELIVERY_TIMEOUT".
+// receipt time, per §8: "For subgroups, the implementation MUST check the time
+// elapsed before attempting to pass it to the underlying transport for
+// transmission; if the time elapsed exceeds OBJECT_DELIVERY_TIMEOUT, it MUST
+// reset the underlying transport stream with the reset stream code
+// DELIVERY_TIMEOUT". The clock starts at the object's last header byte.
 func (s *OutgoingSubgroupStream) checkObjectTimeout(receivedAt time.Time) error {
 	if s.objectTimeout <= 0 {
 		return nil

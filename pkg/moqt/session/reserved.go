@@ -16,8 +16,7 @@ var reservedDot = []byte{0x2e}
 var sessionNamespace = []byte(".session")
 
 // requestNamespace returns the Track Namespace carried by a request's first
-// message, or ok=false for first messages that carry none — notably a Joining
-// FETCH, which references a Request ID instead of a namespace.
+// message, or ok=false for a message that is not a request opener.
 func requestNamespace(msg message.Message) (ns wire.TrackNamespace, ok bool) {
 	switch m := msg.(type) {
 	case *message.Subscribe:

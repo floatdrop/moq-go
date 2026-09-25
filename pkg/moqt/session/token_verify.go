@@ -135,8 +135,8 @@ func (s *Session) TokenCache() *TokenCache { return s.tokenCache }
 // (Type, Value) tokens for any REGISTER / USE_ALIAS / USE_VALUE entries.
 //
 // Processing order matters: a REGISTER is committed to the cache immediately,
-// honouring the §10.2.2 MUST that "an Alias which is registered ... MUST be
-// added to the cache even if the message fails for some other reason." Because
+// honouring the §10.2.2 MUST that the receiver "MUST register the Token Alias
+// in the token cache, even if the message fails for other reasons". Because
 // the cache mutation happens here — before the request is validated or
 // authorized — a later rejection of the request does not roll the alias back.
 //
@@ -241,8 +241,9 @@ func sessionCodeForCacheErr(err error) moqt.SessionErrorCode {
 
 // ProcessFollowupTokens resolves the AUTHORIZATION_TOKEN parameters (§10.2.2)
 // of a follow-up message read off an established request stream — §10.2.2
-// explicitly allows tokens on REQUEST_UPDATE, and a REGISTER alias "MUST be
-// added to the cache even if the message fails for some other reason".
+// explicitly allows tokens on REQUEST_UPDATE, and the receiver "MUST register
+// the Token Alias in the token cache, even if the message fails for other
+// reasons".
 // AcceptRequest performs the same processing for a stream's FIRST message;
 // any code that reads follow-ups directly (message.Parse on the stream) MUST
 // route messages carrying parameters through here, or the peer's view of the
