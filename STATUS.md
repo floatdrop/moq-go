@@ -495,8 +495,5 @@ Relay:
   - FILL_PARAMETERS and NEW_GROUP_REQUEST on a SUBSCRIBE_TRACKS are accepted
     but do nothing: a forwarded PUBLISH's subscription gets no fill stream
     (§10.20.1 names FILL_PARAMETERS for joining);
-  - a track that gains an upstream through the relay's own SUBSCRIBE, rather
-    than an inbound PUBLISH, after the SUBSCRIBE_TRACKS arrived is not
-    forwarded to it.
   - INCLUDE_PROPERTIES=0 is ignored: forwarded PUBLISHes (and SUBSCRIBE_OK)
     still carry Track Properties (§10.2.21 SHOULD).
