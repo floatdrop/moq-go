@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 )
@@ -34,6 +35,12 @@ type decodedProperties struct {
 	// property decodes to — so the zero DeliveryTimeouts is the correct
 	// reading of a track that declares neither.
 	deliveryTimeouts message.DeliveryTimeouts
+
+	// maxCacheDuration is MAX_CACHE_DURATION (§12.3); hasMaxCacheDuration
+	// tells a present 0 from an absent property, which §12.3 treats
+	// differently.
+	maxCacheDuration    time.Duration
+	hasMaxCacheDuration bool
 }
 
 // decodeTrackProperties parses the raw Track Properties block once and pulls
@@ -56,6 +63,9 @@ func decodeTrackProperties(raw []byte) decodedProperties {
 			d.deliveryTimeouts.Object = message.MillisecondTimeout(kv.IntVal)
 		case message.PropertySubgroupDeliveryTimeout:
 			d.deliveryTimeouts.Subgroup = message.MillisecondTimeout(kv.IntVal)
+		case message.PropertyMaxCacheDuration:
+			d.maxCacheDuration = message.MillisecondTimeout(kv.IntVal)
+			d.hasMaxCacheDuration = true
 		}
 	}
 	return d
@@ -106,4 +116,20 @@ func (e *TrackEntry) DeliveryTimeouts() message.DeliveryTimeouts {
 		return message.DeliveryTimeouts{}
 	}
 	return e.decoded.deliveryTimeouts
+}
+
+// MaxCacheDuration returns the track's MAX_CACHE_DURATION (§12.3) for the live
+// forwarding path, or zero when the publisher sent none, sent 0, or the
+// Properties block is malformed — a 0 only stops serving from the cache (see
+// [TrackEntry.setPropertiesLocked]), not live forwarding: "the relay
+// MUST NOT start forwarding any individual Object received through this
+// subscription or fetch after the specified number of milliseconds has
+// elapsed since the beginning of the Object was received".
+func (e *TrackEntry) MaxCacheDuration() time.Duration {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.decoded.parseErr != nil {
+		return 0
+	}
+	return e.decoded.maxCacheDuration
 }

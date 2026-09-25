@@ -131,6 +131,8 @@ type ObjectCache struct {
 
 	// maxAge is the read-side TTL filter. Zero disables filtering.
 	maxAge time.Duration
+	// serveNone makes every entry read as expired (MAX_CACHE_DURATION 0).
+	serveNone bool
 }
 
 // effectiveMaxSize returns a non-zero capacity. Callers that pass 0
@@ -236,10 +238,29 @@ func (c *ObjectCache) insertLocked(src *CachedObject) {
 	c.size++
 }
 
+// LimitMaxAge lowers the read-side TTL to d if that is shorter than the one
+// configured (or if none is): an Object received more than d ago is no longer
+// served. A d of 0 stops serving entirely. Used for a track's
+// MAX_CACHE_DURATION (§12.3).
+func (c *ObjectCache) LimitMaxAge(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if d <= 0 {
+		c.serveNone = true
+		return
+	}
+	if c.maxAge <= 0 || d < c.maxAge {
+		c.maxAge = d
+	}
+}
+
 // notExpiredLocked reports whether obj is still within the read-side
 // TTL. With maxAge <= 0, every entry is considered fresh.
 // Caller must hold c.mu.
 func (c *ObjectCache) notExpiredLocked(obj *CachedObject) bool {
+	if c.serveNone {
+		return false
+	}
 	if c.maxAge <= 0 {
 		return true
 	}
