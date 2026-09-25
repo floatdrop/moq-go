@@ -147,8 +147,9 @@ func TestSubgroupObjectWithProperties(t *testing.T) {
 	}
 	obj := &message.SubgroupObject{
 		ObjectIDDelta: 0,
-		Properties:    []byte{0x01, 0x02},
-		Payload:       []byte("data"),
+		// One property: Type 2 (a varint value), value 7.
+		Properties: []byte{0x02, 0x07},
+		Payload:    []byte("data"),
 	}
 
 	writeErr := make(chan error, 1)

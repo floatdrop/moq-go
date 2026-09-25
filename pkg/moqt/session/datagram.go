@@ -19,6 +19,11 @@ const paddingDatagramType uint64 = 0x132B3E29
 //
 // Transport-level errors (session closed, ctx cancelled) are returned
 // unwrapped so the caller can distinguish them from parse failures.
+//
+// An Object whose Properties make its track malformed is returned together
+// with an error wrapping [ErrMalformedTrack], so the caller knows which
+// track (TrackAlias) to cancel; the session stays up and the next call
+// reads on.
 func (s *Session) ReceiveDatagram(ctx context.Context) (*message.ObjectDatagram, error) {
 	for {
 		raw, err := s.conn.ReceiveDatagram(ctx)
@@ -41,6 +46,12 @@ func (s *Session) ReceiveDatagram(ctx context.Context) (*message.ObjectDatagram,
 			if err := obj.Parse(wire.NewReader(raw)); err != nil {
 				return nil, s.closeProtocolViolation(
 					fmt.Errorf("moqt/session: parse OBJECT_DATAGRAM: %w", err))
+			}
+			if len(obj.Properties) > 0 {
+				if err := message.CheckObjectProperties(obj.Properties, obj.GroupID, obj.ObjectID); err != nil {
+					return obj, fmt.Errorf("%w: datagram Group %d Object %d: %w",
+						ErrMalformedTrack, obj.GroupID, obj.ObjectID, err)
+				}
 			}
 			return obj, nil
 

@@ -579,3 +579,40 @@ func TestStreamReaderHugeLengthRejected(t *testing.T) {
 		t.Fatalf("VarintBytes(len=2^63): got %v, want ErrFieldTooLarge", err)
 	}
 }
+
+// TestKVPairView: KVPairView decodes the same pairs as KVPair, but its byte
+// values alias the buffer instead of copying it.
+func TestKVPairView(t *testing.T) {
+	pairs := []KVPair{{Type: 2, IntVal: 7}, {Type: 3, ByteVal: []byte("abc")}, {Type: 5, ByteVal: []byte{}}}
+	var w Writer
+	w.KVPairs(pairs)
+	buf := w.Bytes()
+
+	r := NewReader(buf)
+	var prev uint64
+	for i, want := range pairs {
+		got, next, err := r.KVPairView(prev)
+		if err != nil {
+			t.Fatalf("pair %d: %v", i, err)
+		}
+		if got.Type != want.Type || got.IntVal != want.IntVal || !bytes.Equal(got.ByteVal, want.ByteVal) {
+			t.Fatalf("pair %d = %+v, want %+v", i, got, want)
+		}
+		if len(got.ByteVal) > 0 {
+			got.ByteVal[0] = 'X' // aliases buf
+			if !bytes.Contains(buf, []byte("Xbc")) {
+				t.Fatal("KVPairView copied the byte value; want it to alias the buffer")
+			}
+			if cap(got.ByteVal) != len(got.ByteVal) {
+				t.Error("KVPairView value has spare capacity; an append could overwrite the next pair")
+			}
+		}
+		prev = next
+	}
+	if !r.Empty() {
+		t.Fatalf("%d bytes left", r.Remaining())
+	}
+	if _, _, err := NewReader([]byte{0x03, 0x05, 'a'}).KVPairView(0); err == nil {
+		t.Fatal("KVPairView accepted a byte value longer than the buffer")
+	}
+}
