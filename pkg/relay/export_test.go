@@ -11,3 +11,12 @@ func SetTestHookAfterAliasRegistered(hook func(track.FullTrackName)) (restore fu
 	testHookAfterAliasRegistered.Store(&hook)
 	return func() { testHookAfterAliasRegistered.Store(prev) }
 }
+
+// SetTestHookEarlyStreamWaiting installs hook, to be called as a subgroup
+// stream starts waiting for its Track Alias, and returns a function restoring
+// the previous value. See [testHookEarlyStreamWaiting].
+func SetTestHookEarlyStreamWaiting(hook func(alias uint64)) (restore func()) {
+	prev := testHookEarlyStreamWaiting.Load()
+	testHookEarlyStreamWaiting.Store(&hook)
+	return func() { testHookEarlyStreamWaiting.Store(prev) }
+}

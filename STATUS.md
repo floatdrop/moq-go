@@ -217,7 +217,7 @@ By package, bottom-up along the dependency stack:
 | 11.3     | Object datagram                      | DONE    | Type bit-fields + invalid-combo rejection. |
 | 11.4     | Streams (subgroup / fetch)           | DONE    | Typed in/out subgroup + fetch streams. |
 | 11.4.1   | Stream cancellation                  | DONE    | Bidi request-stream termination ends the request (handlers unregister on stream end); the relay sends PUBLISH_DONE on graceful subscription termination rather than abrupt reset. |
-| 11.4.2   | Subgroup header + delta object IDs   | DONE    | All subgroup-ID modes; `ReadDecoded` resolves deltas. |
+| 11.4.2   | Subgroup header + delta object IDs   | DONE    | All subgroup-ID modes; `ReadDecoded` resolves deltas. A subgroup stream whose Track Alias is not bound yet is held unread (§11.4.2 MAY buffer): `session.Demux` parks it, count-bounded; the relay waits up to 1 s (`IncomingSubgroupStream.AwaitInboundTrack`, at most 32 streams per session, the rest reset with EXCESSIVE_LOAD). The §11.4.2 MUST to give control streams connection flow control first is not met by the bundled transports, so enough early data can delay the SUBSCRIBE_OK until the relay's wait runs out and the streams are reset. |
 | 11.4.3   | Closing subgroup streams             | DONE    | Relay forwards only the next object on a stream (gap → reset+reopen), FINs on clean inbound EOF, resets on inbound reset, resets with MALFORMED_TRACK after a terminal EndOfGroup/EndOfTrack object (§2.4.2), marks reliable boundaries for RESET_STREAM_AT (`SetReliableBoundary`, transport-gated on `EnableStreamResetPartialDelivery`), and resets (not FINs) in-flight subgroups whose group falls out of range after a narrowing REQUEST_UPDATE. |
 | 11.4.4   | Fetch header                         | DONE    | |
 | 11.4.4.1 | Fetch flags                          | DONE    | All subgroup modes + delta/priority/properties/status flags. |
@@ -506,17 +506,7 @@ Relay:
   - it keeps initiating requests on the session, where the recipient "SHOULD NOT
     initiate new requests".
 
-Test suite: `TestFetch_UpstreamOutcomeDecidesGapOrUnknown` flakes under `-race`
-(about 3 in 30 runs), already at the pre-review base `16d7c22`. Seen
-occasionally in full-package runs, never in isolation, cause unknown. They
-first appeared with the §9.5 late-publisher change (`171194a`: 3 in 34 runs,
-against 0 in 26 before it):
-- the stitch tests (`TestFetch_StitchedObjectKeepsDatagramForwardingPreference`,
-  `TestFetch_DescendingCappedUpstreamFallsBackToWholeUnknown`): the relay
-  cancels the upstream's first data stream. An instrumented run found no
-  duplicate upstream SUBSCRIBE;
-- `TestSessionCleanup_PublisherSessionDeath`: "Subscribe succeeded after
-  publisher death". The test fails on a SUBSCRIBE that reaches the relay before
-  it has seen the publisher's close, which is a race in the test itself;
-- `TestRelay_LatePublishNamespaceJoinsOnDemandSubscription`: the relay reset
-  the late publisher's data stream.
+Test suite: `TestSessionCleanup_PublisherSessionDeath` flakes with "Subscribe
+succeeded after publisher death". The test fails on a SUBSCRIBE that reaches
+the relay before it has seen the publisher's close, which is a race in the test
+itself.

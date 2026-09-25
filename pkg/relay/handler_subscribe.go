@@ -584,11 +584,12 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	//
 	// Deliberately before rather than inside the round trip: anything done in
 	// the gap between SUBSCRIBE_OK arriving and the alias being registered
-	// widens a second window in which the same streams are dropped as unknown
-	// aliases instead, and allocating an entry (a 1024-slot cache ring) there
-	// measurably does. Doing it up front costs an entry for a track that may
-	// turn out not to exist; trackKnown in handleFetch is what keeps that from
-	// being visible on the wire.
+	// widens a second window, in which the same streams wait for their alias
+	// (runFanout holds them only briefly; see resolveInboundTrack), and
+	// allocating an entry (a 1024-slot cache ring) there measurably does.
+	// Doing it up front costs an entry for a track that may turn out not to
+	// exist; trackKnown in handleFetch is what keeps that from being visible
+	// on the wire.
 	var entryCreated bool
 	_, entryCreated = h.tracks.GetOrCreateNew(fullName)
 

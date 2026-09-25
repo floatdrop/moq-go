@@ -58,6 +58,10 @@ type sessionHandler struct {
 	// wg tracks per-request goroutines spawned by the dispatch loop.
 	wg sync.WaitGroup
 
+	// earlyStreams counts the subgroup streams waiting for their Track Alias
+	// to be registered; see [sessionHandler.resolveInboundTrack].
+	earlyStreams atomic.Int32
+
 	// relayGo runs fn on a RELAY-scoped goroutine (joined by Relay.Stop,
 	// not by this handler's run). Used for work whose lifetime must outlive
 	// this session — e.g. the reader of an on-demand upstream stream, which
