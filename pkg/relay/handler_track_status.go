@@ -49,14 +49,12 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 			reply.Parameters = append(reply.Parameters,
 				message.LargestObjectParam(largest.Group, largest.Object))
 		}
-		if err := req.Reply(reply); err != nil {
+		// AcceptTrackStatus FINs after the reply (§10.15) and closes the
+		// session on any follow-up from the requester (§10.9).
+		if err := req.AcceptTrackStatus(reply); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "TRACK_STATUS_OK write failed",
 				slog.String("err", err.Error()))
 		}
-		// TRACK_STATUS is a one-shot RPC; the spec does not keep the
-		// stream open for further messages (cf. §10.15). FIN the send
-		// side now.
-		_ = req.Stream.Close()
 		return
 	}
 
@@ -65,11 +63,10 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 	// at least *might* exist, so we reply with an empty Properties block.
 	// No LARGEST_OBJECT either: nothing has been observed.
 	if len(h.names.MatchPublishers(msg.Namespace)) > 0 {
-		if err := req.Reply(&message.TrackStatusOK{}); err != nil {
+		if err := req.AcceptTrackStatus(nil); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "TRACK_STATUS_OK (empty) write failed",
 				slog.String("err", err.Error()))
 		}
-		_ = req.Stream.Close()
 		return
 	}
 

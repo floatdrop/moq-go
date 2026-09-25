@@ -193,7 +193,7 @@ By package, bottom-up along the dependency stack:
 | 10.11   | PUBLISH_DONE                  | 0x0B   | DONE   | |
 | 10.12   | FETCH (standalone + joining)  | 0x16   | DONE   | All three fetch types. |
 | 10.13   | FETCH_OK                      | 0x18   | DONE   | |
-| 10.14   | TRACK_STATUS                  | 0x0D   | DONE   | Reply via REQUEST_OK. |
+| 10.15   | TRACK_STATUS                  | 0x0D   | DONE   | Reply via REQUEST_OK, then FIN; any follow-up from the requester closes the session. |
 | 10.15   | PUBLISH_NAMESPACE             | 0x06   | DONE   | |
 | 10.16   | NAMESPACE                     | 0x08   | DONE   | |
 | 10.17   | NAMESPACE_DONE                | 0x0E   | DONE   | |
@@ -415,8 +415,6 @@ Request lifecycle:
   relay (§10.9.1, §10.2.17).
 - Nothing checks who may send REQUEST_UPDATE or PUBLISH_STATE_NOTIFY on an
   existing stream (§10.9, §10.10).
-- TRACK_STATUS stays open for REQUEST_UPDATE in the session layer (§10.15). A
-  REQUEST_UPDATE there MUST close the session with PROTOCOL_VIOLATION (§10.9).
 
 Validation:
 
