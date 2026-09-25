@@ -77,7 +77,10 @@ var ErrPublicationEnded = errors.New("moqt/session: publication ended (PUBLISH_D
 // initial Forward State in either PUBLISH or SUBSCRIBE" (§5.1) — or 1 when it
 // is omitted (§10.2.18).
 func newPublication(s *Session, stream Stream, requestID, alias uint64, establishing message.Parameters) *Publication {
-	p := &Publication{Stream: stream, s: s, requestID: requestID, alias: alias}
+	// The subscriber may send REQUEST_UPDATE — as the SUBSCRIBE's sender, or
+	// as the subscriber of a PUBLISH (§10.9) — but not PUBLISH_STATE_NOTIFY,
+	// which "is sent only by the publisher" (§10.10).
+	p := &Publication{Stream: stream, s: s, requestID: requestID, peerUpdate: true, alias: alias}
 	if f, ok := establishing.Find(message.ParamForward); ok {
 		p.paused.Store(f.Byte == 0)
 	}

@@ -314,6 +314,9 @@ func (h *sessionHandler) serveNamespaceFollowups(
 ) {
 	updates := h.sess.NewRequestUpdateLimiter()
 	fin := readRequestStream(ctx, stream, func(m message.Message) bool {
+		if h.isPeerStateNotify(m) {
+			return false
+		}
 		upd, ok := m.(*message.RequestUpdate)
 		if !ok {
 			return true

@@ -176,6 +176,9 @@ func (h *sessionHandler) fetchRangeFilters(
 func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Request, out *session.OutgoingFetchStream) {
 	updates := h.sess.NewRequestUpdateLimiter()
 	fin := readRequestStream(ctx, req.Stream, func(m message.Message) bool {
+		if h.isPeerStateNotify(m) {
+			return false
+		}
 		if upd, ok := m.(*message.RequestUpdate); ok {
 			// §10.1: the update consumes a Request ID; a parity or
 			// duplicate violation is session-fatal.

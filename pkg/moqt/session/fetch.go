@@ -46,6 +46,9 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 				cancelRequest(stream)
 				return nil, err
 			}
+			// The responder may send neither REQUEST_UPDATE (it did not
+			// send the request) nor PUBLISH_STATE_NOTIFY (not a
+			// subscription): §10.9, §10.10.
 			return &FetchRequest{
 				Stream:    stream,
 				s:         s,

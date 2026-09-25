@@ -53,11 +53,14 @@ func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscri
 				cancelRequest(stream)
 				return nil, err
 			}
+			// The publisher may send PUBLISH_STATE_NOTIFY (§10.10) but not
+			// REQUEST_UPDATE: it did not send the SUBSCRIBE (§10.9).
 			return &Subscription{
-				Stream:    stream,
-				s:         s,
-				requestID: m.RequestID,
-				OK:        ok,
+				Stream:     stream,
+				s:          s,
+				requestID:  m.RequestID,
+				peerNotify: true,
+				OK:         ok,
 			}, nil
 		})
 }

@@ -282,12 +282,22 @@ func (u *UpstreamSub) CloseOnDemand() {
 // upstream requests never carry FORWARD. Starting at 0 would make the §9.2
 // propagation path emit a spurious REQUEST_UPDATE(Forward=1) on the first
 // downstream resume.
+//
+// peerMayUpdate says whether the upstream publisher may send REQUEST_UPDATE on
+// the stream: §10.9 allows it only from "The sender of a request", so true for
+// an accepted PUBLISH and false for the relay's own SUBSCRIBE. The publisher
+// may always send PUBLISH_STATE_NOTIFY (§10.10). A disallowed follow-up closes
+// the session with PROTOCOL_VIOLATION. It is a parameter, not a later call, so
+// no upstream path can leave the broker permissive by omission.
 func NewUpstreamSub(
 	id uint64,
 	sess *session.Session,
 	stream session.Stream,
 	trackAlias, requestID uint64,
+	peerMayUpdate bool,
 ) *UpstreamSub {
+	broker := sess.NewRequestBroker(stream)
+	broker.PeerMessages(peerMayUpdate, true)
 	return &UpstreamSub{
 		state:        SubEstablished,
 		ID:           id,
@@ -296,7 +306,7 @@ func NewUpstreamSub(
 		Stream:       stream,
 		TrackAlias:   trackAlias,
 		forwardState: 1,
-		Broker:       sess.NewRequestBroker(stream),
+		Broker:       broker,
 	}
 }
 
