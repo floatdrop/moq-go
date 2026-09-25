@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
 // ResolvedToken is a fully-resolved AUTHORIZATION_TOKEN (§10.2.2): the
@@ -325,4 +327,69 @@ func (s *Session) processSetupTokens() error {
 		}
 	}
 	return nil
+}
+
+// SetupTokenAliases returns the aliases of the REGISTER tokens this endpoint
+// sent in SETUP ([WithSetupToken]) that the peer holds, in the order sent.
+// §10.3.1.4: a REGISTER exceeding the peer's MAX_AUTH_TOKEN_CACHE_SIZE is
+// treated by it as USE_VALUE, and "the sender MUST handle registration
+// failures of this kind by purging any Token Aliases that failed to register
+// based on the peer's MAX_AUTH_TOKEN_CACHE_SIZE option in SETUP (or the
+// default value of 0)". Only the aliases returned here may be referenced with
+// USE_ALIAS.
+func (s *Session) SetupTokenAliases() []uint64 { return slices.Clone(s.setupTokenAliases) }
+
+// checkOutboundSetupTokens refuses setup tokens the peer would have to close
+// the session over: DELETE or USE_ALIAS (§10.2.2: "If a server receives Alias
+// Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP message, it MUST close the
+// session with a PROTOCOL_VIOLATION"; a client has nothing registered for
+// either to name), and an alias REGISTERed twice (DUPLICATE_AUTH_TOKEN_ALIAS).
+func checkOutboundSetupTokens(toks []message.Token) error {
+	var registered []uint64
+	for _, t := range toks {
+		switch t.AliasType {
+		case message.AliasTypeRegister:
+			if slices.Contains(registered, t.TokenAlias) {
+				return fmt.Errorf("moqt/session: AUTHORIZATION TOKEN setup option registers alias %d twice (§10.2.2)",
+					t.TokenAlias)
+			}
+			registered = append(registered, t.TokenAlias)
+		case message.AliasTypeUseValue:
+		case message.AliasTypeDelete, message.AliasTypeUseAlias:
+			return fmt.Errorf("moqt/session: AUTHORIZATION TOKEN setup option with %s (§10.2.2)", t.AliasType)
+		default:
+			return fmt.Errorf("moqt/session: AUTHORIZATION TOKEN setup option with %s", t.AliasType)
+		}
+	}
+	return nil
+}
+
+// heldSetupAliases replays, against the peer's MAX_AUTH_TOKEN_CACHE_SIZE
+// (§10.3.1.3; 0 when the peer sent none), the cache accounting the peer
+// applies to toks in order ([TokenCache.Register]: 16 bytes plus the value
+// each), and returns the aliases of the REGISTERs that fit. The peer treats
+// the others as USE_VALUE (§10.3.1.4).
+func heldSetupAliases(toks []message.Token, peerOptions []wire.KVPair) []uint64 {
+	var limit uint64
+	for _, opt := range peerOptions {
+		if message.SetupOption(opt.Type) == message.SetupOptionMaxAuthTokenCache {
+			limit = opt.IntVal
+		}
+	}
+	var (
+		used uint64
+		held []uint64
+	)
+	for _, t := range toks {
+		if t.AliasType != message.AliasTypeRegister {
+			continue
+		}
+		size := uint64(16) + uint64(len(t.TokenValue))
+		if used+size > limit {
+			continue
+		}
+		used += size
+		held = append(held, t.TokenAlias)
+	}
+	return held
 }

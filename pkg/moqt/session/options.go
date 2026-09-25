@@ -38,11 +38,35 @@ type config struct {
 	// prohibits Range Filters entirely.
 	maxFilterRanges uint64
 
+	// setupTokens are the tokens WithSetupToken added to SETUP, in order, for
+	// the checks before the handshake and the purge after it (§10.3.1.4).
+	setupTokens []message.Token
+
 	// tokenVerifier is the optional application policy that turns a resolved
 	// (Type, Value) authorization token into an allow/deny decision. nil
 	// disables verification (all tokens are accepted by the transport; the
 	// application is responsible for any out-of-band checks).
 	tokenVerifier TokenVerifier
+}
+
+// WithSetupToken adds an AUTHORIZATION TOKEN setup option (§10.3.1.4): a
+// token "that the peer can use to authorize MOQT session establishment".
+// Repeat it for several tokens; they are sent in order.
+//
+// Only REGISTER and USE_VALUE make sense in SETUP: a server receiving DELETE
+// or USE_ALIAS "MUST close the session with a PROTOCOL_VIOLATION" (§10.2.2),
+// and a repeated REGISTER alias would close it with
+// DUPLICATE_AUTH_TOKEN_ALIAS, so opening the session fails on any of those.
+// A REGISTER that does not fit the peer's MAX_AUTH_TOKEN_CACHE_SIZE is used
+// once by the peer and not held; [Session.SetupTokenAliases] reports the
+// aliases the peer does hold.
+func WithSetupToken(t message.Token) Option {
+	return func(c *config) {
+		c.setupTokens = append(c.setupTokens, t)
+		c.setupOptions = append(c.setupOptions, wire.KVPair{
+			Type: uint64(message.SetupOptionAuthorizationToken), ByteVal: t.Bytes(),
+		})
+	}
 }
 
 // WithImplementation sets the MOQT_IMPLEMENTATION SETUP option — a
