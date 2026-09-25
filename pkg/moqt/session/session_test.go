@@ -648,3 +648,71 @@ func TestGreaseRoundTrip(t *testing.T) {
 	assertHasGrease("server saw client GREASE", bSess.PeerOptions())
 	assertHasGrease("client saw server GREASE", aSess.PeerOptions())
 }
+
+// closeRecordingConn records the code the session closes its conn with.
+type closeRecordingConn struct {
+	session.Conn
+
+	code chan uint64
+}
+
+func (c closeRecordingConn) CloseWithError(code uint64, reason string) error {
+	select {
+	case c.code <- code:
+	default:
+	}
+	return c.Conn.CloseWithError(code, reason)
+}
+
+// TestServerClosesMalformedPathOrAuthority covers the syntax rule of
+// §10.3.1.1/§10.3.1.2: "If an AUTHORITY option does not conform to these
+// rules, the session MUST be closed with MALFORMED_AUTHORITY", and likewise
+// PATH with MALFORMED_PATH. A well-formed pair still opens.
+func TestServerClosesMalformedPathOrAuthority(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		opts []session.Option
+		want moqt.SessionErrorCode // SessionNoError: the session opens
+	}{
+		{"well-formed", []session.Option{
+			session.WithAuthority("relay.example:4433"), session.WithPath("/relay?room=1"),
+		}, moqt.SessionNoError},
+		{"AUTHORITY", []session.Option{session.WithAuthority("relay example")}, moqt.SessionMalformedAuthority},
+		{"AUTHORITY empty host", []session.Option{session.WithAuthority(":4433")}, moqt.SessionMalformedAuthority},
+		{"PATH", []session.Option{session.WithPath("relay")}, moqt.SessionMalformedPath},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			t.Cleanup(cancel)
+			clientConn, serverConn := sessiontest.NewConnPair()
+			rec := closeRecordingConn{Conn: serverConn, code: make(chan uint64, 1)}
+
+			go func() {
+				if c, err := session.Client(ctx, clientConn, tc.opts...); err == nil {
+					<-ctx.Done()
+					_ = c.Close(moqt.SessionNoError, "test cleanup")
+				}
+			}()
+			sess, err := session.Server(ctx, rec)
+			if tc.want == moqt.SessionNoError {
+				if err != nil {
+					t.Fatalf("server refused well-formed PATH/AUTHORITY: %v", err)
+				}
+				_ = sess.Close(moqt.SessionNoError, "test cleanup")
+				return
+			}
+			if err == nil {
+				_ = sess.Close(moqt.SessionNoError, "test cleanup")
+				t.Fatalf("server accepted a malformed %s", tc.name)
+			}
+			select {
+			case code := <-rec.code:
+				if code != uint64(tc.want) {
+					t.Fatalf("closed with %#x, want %#x", code, uint64(tc.want))
+				}
+			default:
+				t.Fatalf("server returned %v without closing the conn", err)
+			}
+		})
+	}
+}

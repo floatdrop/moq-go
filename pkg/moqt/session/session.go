@@ -15,6 +15,7 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/uri"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
@@ -290,7 +291,7 @@ func checkOutboundSetupOptions(r role, conn Conn, opts []wire.KVPair) error {
 func (s *Session) checkPeerSetupOptions() (moqt.SessionErrorCode, error) {
 	overWT := overWebTransport(s.conn)
 	if s.role != roleClient && !overWT {
-		return moqt.SessionNoError, nil
+		return checkPathAndAuthoritySyntax(s.peerOptions)
 	}
 	violation := func(name string) error {
 		if overWT {
@@ -315,6 +316,33 @@ func (s *Session) checkPeerSetupOptions() (moqt.SessionErrorCode, error) {
 			// linter until someone decides whether a server may send it.
 		default:
 			// §10.3 requires a receiver ignore options it does not recognize.
+		}
+	}
+	return moqt.SessionNoError, nil
+}
+
+// checkPathAndAuthoritySyntax enforces the syntax rule of PATH (§10.3.1.2)
+// and AUTHORITY (§10.3.1.1) on a server over native QUIC, where receiving
+// them is legal: each "follows the URI formatting rules [RFC3986]", and "If
+// an AUTHORITY option does not conform to these rules, the session MUST be
+// closed with MALFORMED_AUTHORITY" — likewise PATH with MALFORMED_PATH.
+func checkPathAndAuthoritySyntax(opts []wire.KVPair) (moqt.SessionErrorCode, error) {
+	for _, opt := range opts {
+		switch message.SetupOption(opt.Type) {
+		case message.SetupOptionPath:
+			if err := uri.CheckPathAndQuery(string(opt.ByteVal)); err != nil {
+				return moqt.SessionMalformedPath, fmt.Errorf("malformed PATH setup option: %w", err)
+			}
+		case message.SetupOptionAuthority:
+			if err := uri.CheckAuthority(string(opt.ByteVal)); err != nil {
+				return moqt.SessionMalformedAuthority, fmt.Errorf("malformed AUTHORITY setup option: %w", err)
+			}
+		case message.SetupOptionAuthorizationToken,
+			message.SetupOptionMaxAuthTokenCache,
+			message.SetupOptionMaxFilterRanges,
+			message.SetupOptionMOQTImplementation,
+			message.SetupOptionMaxRequestUpdates:
+		default:
 		}
 	}
 	return moqt.SessionNoError, nil
