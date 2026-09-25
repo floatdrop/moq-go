@@ -360,3 +360,114 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   a selector needs is surfaced (AltGroup, Width/Height, Bitrate, RenderGroup,
   Depends, TemporalID, SpatialID), but variant-selection policy is the
   application's job.
+
+### Draft-20 compliance review backlog
+
+A full review against draft-ietf-moq-transport-20 (dated August 2026) found
+the gaps below, which are still open. Items are grouped by area; each names the
+rule it misses.
+
+Found while fixing, left open deliberately:
+
+- **Multi-publisher default priority downstream (§11.4.2, §12.4)** — the relay
+  resolves each upstream's inherited DEFAULT_PUBLISHER_PRIORITY per alias, but
+  forwards the DEFAULT_PRIORITY bit unchanged. A downstream subscriber therefore
+  inherits the default from the SUBSCRIBE_OK it was sent, which carries the
+  first publisher's properties.
+- **Forwarded PUBLISH is never served (§6.1, §10.11, §3.3.2)** — a PUBLISH
+  forwarded to a SUBSCRIBE_TRACKS holder gets its own alias, but:
+  - no objects flow on it;
+  - its PUBLISH_OK is never read, and a REQUEST_UPDATE on it is never answered;
+  - it ends with a bare FIN, not PUBLISH_DONE.
+
+  When this is served, its data streams must carry the allocated alias.
+- **PUBLISH_DONE timing (§10.12)** — two gaps:
+  - "A sender MUST NOT send PUBLISH_DONE until it has closed all streams it
+    will ever open". The relay can still write it while fanout writers hold
+    streams open. No stream opens after it, and an open in flight reports
+    Stream Count 2^64-1.
+  - PUBLISH_DONE goes to subscribers one at a time, so one that isn't reading
+    its request stream can delay the rest.
+- **TRACK_NAMESPACE_PREFIX encoding (§10.2.20)** — encoded length-prefixed, as
+  moxygen, moqtail and libquicr do. The draft text reads as a bare Track
+  Namespace. Open WG issue: moq-wg/moq-transport#1942.
+- **REQUEST_OK Track Properties on send (§10.5)** — receipt is enforced.
+  `Request.Reply` still sends whatever it is given, so an application can emit a
+  non-empty PUBLISH_OK.
+- **Malformed first message of a known type (§10)** — only that stream is
+  reset. A length that does not match the message body MUST close the session
+  with PROTOCOL_VIOLATION (§10). The opening message *type* (§3.3) is enforced.
+- **AUTHORIZATION TOKEN setup option (§10.3.1.4, §10.2.2)** — not parsed on
+  receive:
+  - a REGISTER in SETUP is never cached;
+  - DELETE / USE_ALIAS from a client in SETUP is not rejected;
+  - the cache-overflow fallback to USE_VALUE is absent.
+
+Request lifecycle:
+
+- A requester's FIN is treated as a cancellation, which tears down a FIN'd
+  SUBSCRIBE or PUBLISH_NAMESPACE (§3.3.2: "it is not a request cancellation").
+- A subscriber ends a subscription with FIN rather than STOP_SENDING (§3.3.2,
+  §5.1).
+- The session broker answers every REQUEST_UPDATE with an empty REQUEST_OK, and
+  applies none of its parameters: FORWARD=0 does not stop objects (§5.1).
+- REQUEST_UPDATE_OK never carries LARGEST_OBJECT, in the session broker or the
+  relay (§10.9.1, §10.2.17).
+- Nothing checks who may send REQUEST_UPDATE or PUBLISH_STATE_NOTIFY on an
+  existing stream (§10.9, §10.10).
+- TRACK_STATUS stays open for REQUEST_UPDATE in the session layer (§10.15). A
+  REQUEST_UPDATE there MUST close the session with PROTOCOL_VIOLATION (§10.9).
+
+Validation:
+
+- Message Parameter scope is not enforced: a parameter in a message it is not
+  defined for MUST close the session (§10.2.1).
+- Object Properties are never validated on receipt: nested Immutable
+  Properties, duplicate gap properties, and Mandatory Track Properties used as
+  Object Properties (§12.7–§12.9, §2.5.1).
+- OBJECT/SUBGROUP_DELIVERY_TIMEOUT inside Immutable Properties is ignored
+  (§12.7).
+- AUTHORITY / PATH are not validated against RFC 3986 (MALFORMED_AUTHORITY /
+  MALFORMED_PATH, §10.3.1.1–2). The existing PATH / AUTHORITY bullet above
+  covers part of this.
+- A zero-length Range Filter is rejected everywhere, including the initial
+  SUBSCRIBE and FETCH, although §5.1.4 defines it as "no filter". The Range
+  Filter REQUEST_UPDATE bullet above covers the update case.
+- A data stream that arrives before the control streams fails the handshake
+  (§3.3 SHOULD buffer).
+- A FETCH first object that references a prior object, and a FETCH_OK End
+  Location before its Start, do not close the session (§11.4.4.1, §10.14).
+
+Relay:
+
+- A PUBLISH that arrives with FORWARD=0 is not switched to Forward=1 when at
+  least one downstream subscriber has Forward State 1 (§9.5, §9.2).
+- A new PUBLISH_NAMESPACE does not trigger SUBSCRIBEs for existing
+  subscriptions: "it MUST send a SUBSCRIBE to the publisher that sent the
+  PUBLISH_NAMESPACE for each matching subscription" (§9.5). This is the "Late
+  publisher pickup" bullet above.
+- The MAX_CACHE_DURATION Track Property is ignored (§12.3).
+- Mandatory Track Properties are not enforced (§2.5.1).
+- Namespace subscriptions:
+  - PREFIX_OVERLAP is never sent (§10.19, §10.20);
+  - a TRACK_NAMESPACE_PREFIX REQUEST_UPDATE is acknowledged but not applied
+    (§10.9.2, §10.2.20);
+  - NAMESPACE_DONE is tracked per publisher, not per namespace, with race
+    windows that can send it before NAMESPACE (§10.19: "MUST NOT send
+    NAMESPACE_DONE ... before the corresponding NAMESPACE").
+- SUBSCRIBE_TRACKS:
+  - tracks that already existed are never announced (§10.20);
+  - the subscriber's own tracks are echoed back to it (§6.1: "excluding tracks
+    published by the subscriber").
+- Fill streams do not inherit the subscription's Range Filters (§5.1.3).
+- Upstream PUBLISH_DONE codes are flattened to TRACK_ENDED; §10.12 asks for "a
+  relevant status code".
+- Duplicate objects from redundant upstreams are not compared (§9.1).
+- Inbound GOAWAY handling does not match §10.4:
+  - the relay, as recipient, force-closes with GOAWAY_TIMEOUT, a code for the
+    sender to use once its own timeout expires;
+  - it keeps initiating requests on the session, where the recipient "SHOULD NOT
+    initiate new requests".
+
+Test suite: `TestFetch_UpstreamOutcomeDecidesGapOrUnknown` flakes under `-race`
+(about 3 in 30 runs), already at the pre-review base `16d7c22`.
