@@ -411,6 +411,22 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   SUBSCRIBEs themselves are deduplicated). §5.1 allows it; it costs a second
   upstream subscription. A Track Alias the publisher shares between them stays
   routed until both end.
+- **A rebuilt subgroup fanout forgets omissions (§11.4.3)** — when a
+  subgroup's fanout state is torn down and rebuilt (the last inbound
+  contributor left, then a replay or redundant upstream brings it back), its
+  writers start afresh, so an omission recorded before the rebuild is
+  forgotten and the rebuilt stream may FIN.
+- **A refused upstream FETCH_OK ends only that fetch (§2.5.1)** — the relay
+  answers FETCH_OK before stitching, so it resets the downstream fetch or fill
+  stream and never takes the REQUEST_ERROR UNSUPPORTED_EXTENSION branch. The
+  track's live subscription and cache-only FETCHes carry on, where §2.5.1's
+  lead says the relay "MUST NOT process or forward that track".
+- **Inbound GOAWAY, as the subscriber (§10.4, §9.4.1, §3.6)** — the relay
+  stops initiating requests to that peer but neither unsubscribes ("A
+  subscriber SHOULD individually unsubscribe from each existing
+  subscription"), nor migrates to the New Session URI, nor closes the session
+  once no subscriptions remain (§3.6 RECOMMENDED). It waits for the sender to
+  close.
 
 ### Draft-20 compliance review backlog
 
@@ -483,18 +499,3 @@ Relay:
   and 4): a subscription-delivered object should go first when the fill's
   Group Order differs, and the fill-delivered one first within a group.
 - Duplicate objects from redundant upstreams are not compared (§9.1).
-- A subgroup whose fanout state is torn down and rebuilt (the last inbound
-  contributor left, then a replay or redundant upstream brings it back) starts
-  its writers afresh, so an omission recorded before the rebuild is forgotten
-  and the rebuilt stream may FIN (§11.4.3).
-- An upstream FETCH_OK the relay refuses over its Track Properties (§2.5.1)
-  resets the downstream fetch or fill stream: the relay answers FETCH_OK
-  before stitching, so the REQUEST_ERROR UNSUPPORTED_EXTENSION branch is never
-  taken. The refusal ends that fetch only; the track's live subscription and
-  cache-only FETCHes carry on, where §2.5.1's lead says the relay "MUST NOT
-  process or forward that track".
-- After an inbound GOAWAY the relay stops initiating requests to that peer
-  (§10.4) but, as its subscriber, neither unsubscribes ("A subscriber SHOULD
-  individually unsubscribe from each existing subscription"), nor migrates to
-  the New Session URI (§9.4.1), nor closes the session once no subscriptions
-  remain (§3.6 RECOMMENDED). It waits for the sender to close.
