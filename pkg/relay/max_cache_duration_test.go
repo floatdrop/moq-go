@@ -2,6 +2,8 @@ package relay_test
 
 import (
 	"context"
+	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -124,7 +126,15 @@ func TestRelay_MaxCacheDurationSkippedHeadClearsFirstObject(t *testing.T) {
 		if !in.Header.ReplayingSubgroup {
 			t.Fatal("stream starting after a skipped head claims FIRST_OBJECT")
 		}
-		return
+		// §11.4.3: the expired head is missing, so no FIN.
+		for {
+			if _, err := in.ReadObject(); err != nil {
+				if errors.Is(err, io.EOF) {
+					t.Fatal("the stream after an expired head ended with a FIN; want a reset")
+				}
+				return
+			}
+		}
 	}
 }
 
