@@ -878,7 +878,8 @@ func upstreamFailureCode(err error) moqt.RequestErrorCode {
 }
 
 // isTrackPropertiesErr reports whether err is a Track Properties validation
-// failure from [session.Session.Subscribe].
+// failure from [session.Session.Subscribe] or [session.Session.Fetch]: an
+// unknown Mandatory Track Property, or Track Properties that do not parse.
 func isTrackPropertiesErr(err error) bool {
 	_, ok := errors.AsType[*session.ErrUnsupportedMandatoryTrackProperty](err)
 	return ok || errors.Is(err, session.ErrMalformedTrackProperties)

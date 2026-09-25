@@ -280,6 +280,10 @@ func capFetchEndLocation(filter *message.LocationFilter, largest message.Locatio
 // assert non-existence (§11.4.4). Upstream-fetched objects are NOT cached
 // back: the FIFO ring is keyed by arrival, so old backfill would evict live
 // objects.
+//
+// refusal is non-nil when the upstream's FETCH_OK carried Track Properties
+// this relay cannot accept (§2.5.1); the track must not be forwarded, and no
+// objects are returned.
 func (h *sessionHandler) stitchedFetchObjects(
 	ctx context.Context,
 	entry *registry.TrackEntry,
@@ -288,7 +292,7 @@ func (h *sessionHandler) stitchedFetchObjects(
 	requestEndIncl message.Location,
 	order message.GroupOrder,
 	fillTimeout time.Duration,
-) []*cache.CachedObject {
+) (objs []*cache.CachedObject, refusal error) {
 	cacheObjs := entry.Cache.GetRange(requestStart, requestEndIncl, order)
 
 	// Determine the inclusive upper bound of the below-floor sub-range the
@@ -297,14 +301,14 @@ func (h *sessionHandler) stitchedFetchObjects(
 	if floor, hasFloor := entry.Cache.OldestRetained(); hasFloor {
 		pred, ok := fetchPredecessor(floor)
 		if !ok {
-			return cacheObjs // floor == {0,0}: nothing exists below it
+			return cacheObjs, nil // floor == {0,0}: nothing exists below it
 		}
 		if pred.Less(upEndIncl) {
 			upEndIncl = pred
 		}
 	}
 	if upEndIncl.Less(requestStart) {
-		return cacheObjs // the request starts at/above the floor — no gap
+		return cacheObjs, nil // the request starts at/above the floor — no gap
 	}
 
 	// GetRange and OldestRetained are two separate cache reads: an eviction
@@ -326,20 +330,23 @@ func (h *sessionHandler) stitchedFetchObjects(
 		// is the unknown-status case, not the §10.2.5 budget case — nothing
 		// timed out, we simply have no source to ask.
 		return mergeFetchObjects(order,
-			unknownWholeRange(requestStart, upEndIncl, order), cacheObjs)
+			unknownWholeRange(requestStart, upEndIncl, order), cacheObjs), nil
 	}
 
-	upstreamObjs := h.fetchUpstreamRange(
+	upstreamObjs, refusal := h.fetchUpstreamRange(
 		ctx, up, fullName, requestStart, upEndIncl, order, fillTimeout,
 	)
+	if refusal != nil {
+		return nil, refusal
+	}
 	if len(upstreamObjs) == 0 {
 		// A clean-FIN, uncapped, empty upstream response: the upstream
 		// authoritatively asserted the whole sub-range non-existent, which
 		// a plain gap encodes exactly. (Every unknown outcome returns at
 		// least a marker element.)
-		return cacheObjs
+		return cacheObjs, nil
 	}
-	return mergeFetchObjects(order, upstreamObjs, cacheObjs)
+	return mergeFetchObjects(order, upstreamObjs, cacheObjs), nil
 }
 
 // pickFetchUpstream returns an Established, fetch-capable upstream on a
@@ -383,6 +390,11 @@ func (h *sessionHandler) pickFetchUpstream(entry *registry.TrackEntry) *registry
 //     "whole sub-range unknown": exact per-gap markers are inexpressible in
 //     §11.4.4's delta encoding wherever the element after a marker would be
 //     a same-group, lower-Object-ID transition.
+//
+// The one exception is a FETCH_OK whose Track Properties this relay cannot
+// accept — an unknown Mandatory Track Property, or ones that do not parse
+// (§2.5.1): Session.Fetch has cancelled that fetch, and it is returned as a
+// refusal instead, since the track MUST NOT be forwarded at all.
 func (h *sessionHandler) fetchUpstreamRange(
 	ctx context.Context,
 	up *registry.UpstreamSub,
@@ -390,7 +402,7 @@ func (h *sessionHandler) fetchUpstreamRange(
 	start, endIncl message.Location,
 	order message.GroupOrder,
 	fillTimeout time.Duration,
-) []*cache.CachedObject {
+) (objs []*cache.CachedObject, refusal error) {
 	unknownWhole := unknownWholeRange(start, endIncl, order)
 	timedOutWhole := timedOutWholeRange(start, endIncl, order)
 
@@ -399,7 +411,7 @@ func (h *sessionHandler) fetchUpstreamRange(
 	// fillTimeout arrives already resolved (see [resolveFillBudget]), so a zero
 	// here is the subscriber's explicit 0, not an absent parameter.
 	if fillTimeout == 0 {
-		return timedOutWhole
+		return timedOutWhole, nil
 	}
 
 	params := message.Parameters{}
@@ -427,10 +439,17 @@ func (h *sessionHandler) fetchUpstreamRange(
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH failed",
 			slog.String("err", err.Error()))
-		if fctx.Err() != nil {
-			return timedOutWhole
+		// §2.5.1: a FETCH_OK carrying a Mandatory Track Property this
+		// relay does not understand (Session.Fetch has cancelled that
+		// fetch) means the track MUST NOT be forwarded; the caller resets
+		// the downstream stream.
+		if isTrackPropertiesErr(err) {
+			return nil, err
 		}
-		return unknownWhole
+		if fctx.Err() != nil {
+			return timedOutWhole, nil
+		}
+		return unknownWhole, nil
 	}
 	defer fr.Close()
 
@@ -446,10 +465,10 @@ func (h *sessionHandler) fetchUpstreamRange(
 	case fs = <-ch:
 	case <-fctx.Done():
 		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH response timed out")
-		return timedOutWhole
+		return timedOutWhole, nil
 	}
 	if fs == nil {
-		return unknownWhole
+		return unknownWhole, nil
 	}
 	// ReadDecoded needs the response's group order to resolve cross-group
 	// deltas (§11.4.4.1); the upstream serves in the order our FETCH asked
@@ -473,7 +492,7 @@ func (h *sessionHandler) fetchUpstreamRange(
 			// non-existence.
 			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH stream failed mid-read",
 				slog.String("err", err.Error()))
-			return unknownWhole
+			return unknownWhole, nil
 		}
 		if obj.EndOfNonExistentRange {
 			// Dropped: a plain gap in our FIN-terminated response is the
@@ -485,7 +504,7 @@ func (h *sessionHandler) fetchUpstreamRange(
 			obj.EndOfUnknownRange || obj.EndOfTimedOutRange) {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH element out of range or order",
 				slog.Uint64("group", loc.Group), slog.Uint64("object", loc.Object))
-			return unknownWhole
+			return unknownWhole, nil
 		}
 		prevLoc, havePrev = loc, true
 		if obj.EndOfUnknownRange {
@@ -525,11 +544,11 @@ func (h *sessionHandler) fetchUpstreamRange(
 			// stream order, and a leading marker cannot in general be
 			// followed by a same-group object with a lower ID (see the
 			// doc comment) — fall back to whole-sub-range unknown.
-			return unknownWhole
+			return unknownWhole, nil
 		}
 		out = append(out, unknownRangeMarker(endIncl))
 	}
-	return out
+	return out, nil
 }
 
 // upstreamFetchElemOK validates one kept element of an upstream FETCH
