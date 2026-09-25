@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
@@ -64,11 +65,22 @@ func TestRelay_ParamScopeFetchUpdate(t *testing.T) {
 	publishSubgroupObject(t, pubSess, alias, 3, -1)
 	fetchSess := dialAnotherClient(t, pubSess)
 	go drainAll(t.Context(), fetchSess) // the relay reads updates once the data is written
-	fr, err := fetchSess.Fetch(t.Context(), &message.Fetch{
-		Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"),
-	})
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
+	// The Object reaches the relay's cache asynchronously; until it does the
+	// FETCH is refused, so retry.
+	var fr *session.FetchRequest
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var err error
+		fr, err = fetchSess.Fetch(t.Context(), &message.Fetch{
+			Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"),
+		})
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Fetch: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	// LOCATION_FILTER may appear in a REQUEST_UPDATE for a subscription
 	// (§10.2.9), not for a FETCH.
