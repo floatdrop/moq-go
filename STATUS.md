@@ -184,7 +184,7 @@ By package, bottom-up along the dependency stack:
 | 10.3.1.1| AUTHORITY option              | 0x05   | PARTIAL| Sent (`WithAuthority`); refused from a server or over WebTransport (INVALID_AUTHORITY) and when not RFC 3986 syntax (MALFORMED_AUTHORITY, `uri.CheckAuthority`). Whether the server serves it is not checked — see Limitations. |
 | 10.3.1.2| PATH option                   | 0x01   | PARTIAL| Sent (`WithPath`); refused from a server or over WebTransport (INVALID_PATH) and when not RFC 3986 syntax (MALFORMED_PATH, `uri.CheckPathAndQuery`). Whether the server serves it is not checked — see Limitations. |
 | 10.3.1.3| MAX_AUTH_TOKEN_CACHE_SIZE      | 0x04   | DONE   | Sizes the token cache. |
-| 10.3.1.4| AUTHORIZATION_TOKEN (setup)   | 0x03   | PARTIAL| Received tokens are applied to the token cache as a request's are (REGISTER over the cache size is used as a value; DELETE / USE_ALIAS from a client closes the session) and exposed by `Session.SetupTokens`. Not sendable (see backlog). |
+| 10.3.1.4| AUTHORIZATION_TOKEN (setup)   | 0x03   | DONE   | Received tokens are applied to the token cache as a request's are (REGISTER over the cache size is used as a value; DELETE / USE_ALIAS from a client closes the session) and exposed by `Session.SetupTokens`. Sent with `WithSetupToken` (REGISTER / USE_VALUE only); `Session.SetupTokenAliases` reports the REGISTERs the peer's MAX_AUTH_TOKEN_CACHE_SIZE held, the rest purged. |
 | 10.3.1.5| MOQT_IMPLEMENTATION           | 0x07   | DONE   | Advisory. |
 | 10.3.1.6| MAX_FILTER_RANGES             | 0x06   | DONE   | `WithMaxFilterRanges` advertises it; relay rejects over-limit/prohibited filters with INVALID_FILTER. The relay advertises `relay.DefaultMaxFilterRanges` (16) rather than inheriting the session default of 0, which would prohibit the Range Filters it fully implements; `relay.Config.MaxFilterRanges` overrides, negative to prohibit. |
 | 10.3.1.7| MAX_REQUEST_UPDATES           | 0x08   | DONE   | `WithMaxRequestUpdates` advertises the per-stream limit; enforced on inbound follow-ups via `RequestUpdateLimiter`, closing with `TOO_MANY_REQUEST_UPDATES` on overflow. |
@@ -460,12 +460,6 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
 A full review against draft-ietf-moq-transport-20 (dated August 2026) found
 the gaps below, which are still open. Items are grouped by area; each names the
 rule it misses.
-
-Found while fixing:
-
-- **AUTHORIZATION TOKEN setup option (§10.3.1.4)** — received tokens are
-  applied, but none can be sent: there is no Option for it, and so no purge
-  of a REGISTER the peer's MAX_AUTH_TOKEN_CACHE_SIZE could not hold.
 
 Validation:
 

@@ -43,6 +43,10 @@ type Session struct {
 
 	peerOptions []wire.KVPair
 
+	// setupTokenAliases are the aliases this endpoint REGISTERed in its SETUP
+	// that the peer holds; see [Session.SetupTokenAliases].
+	setupTokenAliases []uint64
+
 	// setupTokens are the tokens resolved from the peer's SETUP; see
 	// [Session.SetupTokens]. Written once during open.
 	setupTokens []ResolvedToken
@@ -192,6 +196,9 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 	if err := checkOutboundSetupOptions(r, conn, cfg.setupOptions); err != nil {
 		return nil, err
 	}
+	if err := checkOutboundSetupTokens(cfg.setupTokens); err != nil {
+		return nil, err
+	}
 	if err := s.handshake(ctx, cfg.setupOptions); err != nil {
 		_ = conn.CloseWithError(uint64(moqt.SessionProtocolViolation), err.Error())
 		return nil, err
@@ -205,6 +212,7 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 		_ = conn.CloseWithError(uint64(tce.Code), err.Error())
 		return nil, err
 	}
+	s.setupTokenAliases = heldSetupAliases(cfg.setupTokens, s.peerOptions)
 
 	go s.controlSendLoop()
 	go s.controlRecvLoop()
