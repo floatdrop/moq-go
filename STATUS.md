@@ -481,11 +481,12 @@ Relay:
   - A live writer opened before the track's Properties arrive (the #85
     window) does not enforce it.
 - Namespace subscriptions:
-  - a TRACK_NAMESPACE_PREFIX REQUEST_UPDATE is acknowledged but not applied
-    (§10.9.2, §10.2.20);
-  - NAMESPACE_DONE is tracked per publisher, not per namespace, with race
-    windows that can send it before NAMESPACE (§10.19: "MUST NOT send
-    NAMESPACE_DONE ... before the corresponding NAMESPACE").
+  - a Discovery event the store drops (MemoryStore does, for a slow consumer)
+    is not recovered until the watch restarts, so a remote namespace can be
+    missing or linger; a restart sends NAMESPACE_DONE then NAMESPACE for every
+    remote namespace still advertised;
+  - a subscriber whose stream is blocked by flow control grows its message
+    queue without bound; §10.19 lets the relay reset the stream instead.
 - SUBSCRIBE_TRACKS:
   - tracks that already existed are never announced (§10.20);
   - the subscriber's own tracks are echoed back to it (§6.1: "excluding tracks
@@ -501,4 +502,9 @@ Relay:
     initiate new requests".
 
 Test suite: `TestFetch_UpstreamOutcomeDecidesGapOrUnknown` flakes under `-race`
-(about 3 in 30 runs), already at the pre-review base `16d7c22`.
+(about 3 in 30 runs), already at the pre-review base `16d7c22`. Seen once each
+in full-package `-race` runs, never in isolation, cause unknown:
+`TestFetch_StitchedObjectKeepsDatagramForwardingPreference`,
+`TestSessionCleanup_PublisherSessionDeath`, and
+`TestRelay_LatePublishNamespaceJoinsOnDemandSubscription` (the relay reset the
+late publisher's data stream).

@@ -163,8 +163,9 @@ type DiscoveryStore interface {
 	// prefix. A query for ["a"] matches advertised prefixes ["a"], ["a","b"],
 	// and ["a","b","c"]; ["x"] does NOT match. A zero-length prefix matches
 	// every advertisement. It answers "which namespaces advertised across the
-	// deployment fall under this SUBSCRIBE_NAMESPACE prefix?", used to seed a
-	// new namespace subscriber with state advertised before it registered.
+	// deployment fall under this SUBSCRIBE_NAMESPACE prefix?". The relay no
+	// longer calls it (its namespace registry is seeded from WatchNamespaces);
+	// it stays for other consumers of the interface.
 	FindNamespacesUnder(ctx context.Context, prefix wire.TrackNamespace) ([]NamespaceInfo, error)
 
 	// WatchTracks returns a channel that first delivers the current set of

@@ -11,7 +11,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
@@ -270,23 +269,16 @@ func publishParamsForSubscriber(
 // track is a fresh forwarding attempt — so nothing is recorded here.
 //
 // Per §10.21 the message carries only the namespace suffix beyond the
-// subscriber's SUBSCRIBE_TRACKS prefix; we strip the prefix the same way
-// [namespaceMessageFor] does.
+// subscriber's SUBSCRIBE_TRACKS prefix; [registry.NamespaceRegistry.PublishSkipped]
+// strips the prefix in force at that point of the stream.
 func (h *sessionHandler) emitPublishSkipped(
 	ctx context.Context,
 	sub *registry.SubscriberEntry,
 	fullName track.FullTrackName,
 ) {
-	suffix := fullName.Namespace[len(sub.Prefix):]
-	skipped := &message.PublishSkipped{
-		TrackNamespaceSuffix: append(wire.TrackNamespace(nil), suffix...),
-		TrackName:            fullName.Name,
+	if !h.names.PublishSkipped(sub, fullName.Namespace, fullName.Name) {
+		return // a TRACK_NAMESPACE_PREFIX update moved the subscription away
 	}
-	if err := sub.WriteMessage(skipped); err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH_SKIPPED write failed",
-			slog.String("err", err.Error()))
-		return
-	}
-	h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH_SKIPPED sent",
+	h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH_SKIPPED queued",
 		slog.String("name", string(fullName.Name)))
 }

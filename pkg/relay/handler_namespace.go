@@ -22,8 +22,9 @@ import (
 //  1. Authorize.
 //  2. Register the namespace in [registry.NamespaceRegistry].
 //  3. Reply REQUEST_OK on the request stream.
-//  4. Forward to every matching downstream SUBSCRIBE_NAMESPACE holder as a
-//     NAMESPACE message (§9.5).
+//  4. Announce the namespace to matching SUBSCRIBE_NAMESPACE holders
+//     ([registry.NamespaceRegistry.AnnouncePublisher]); unregistration
+//     withdraws it.
 //  5. SUBSCRIBE the publisher for every existing track the namespace covers
 //     (§9.5; see [sessionHandler.subscribeExistingTracks]). Tracks skipped
 //     for lack of a subscriber, and tracks subscribed later, reach it from
@@ -31,8 +32,7 @@ import (
 //  6. Block reading the request stream until the publisher cancels it
 //     (RESET_STREAM, or STOP_SENDING after a FIN — §6.2 "withdrawn by
 //     cancelling the request", §3.3.3; a FIN alone is not a withdrawal,
-//     §3.3.2). On exit, unregister from the registry.NamespaceRegistry and
-//     emit NAMESPACE_DONE to the same subscribers.
+//     §3.3.2). On exit, unregister from the registry.NamespaceRegistry.
 func (h *sessionHandler) handlePublishNamespace(
 	ctx context.Context,
 	req *session.Request,
@@ -51,26 +51,7 @@ func (h *sessionHandler) handlePublishNamespace(
 			slog.String("err", err.Error()))
 		return
 	}
-
-	// Forward to every matching downstream SUBSCRIBE_NAMESPACE holder.
-	// Per §6.2 the relay MUST send NAMESPACE to subscribers whose
-	// prefix matches OR is a prefix of the advertised namespace.
-	subscribers := h.names.MatchSubscribers(msg.Namespace)
-	notified := make([]*registry.SubscriberEntry, 0, len(subscribers))
-	for _, sub := range subscribers {
-		if sub.WantsTracks {
-			// SUBSCRIBE_TRACKS holders get PUBLISH messages, not
-			// NAMESPACE messages. They're tracked but not notified
-			// here; handlePublish handles their PUBLISH forwarding.
-			continue
-		}
-		if err := sub.WriteMessage(namespaceMessageFor(msg.Namespace, sub.Prefix)); err != nil {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "NAMESPACE forward failed",
-				slog.String("err", err.Error()))
-			continue
-		}
-		notified = append(notified, sub)
-	}
+	h.names.AnnouncePublisher(entry)
 
 	// Scoped to this PUBLISH_NAMESPACE: once the publisher withdraws it (§9.5)
 	// no further SUBSCRIBEs go out for it.
@@ -88,26 +69,7 @@ func (h *sessionHandler) handlePublishNamespace(
 	// acks write directly.
 	h.serveNamespaceFollowups(ctx, req, func(m message.Message) error {
 		return message.Marshal(req.Stream, m)
-	})
-
-	// Emit NAMESPACE_DONE to every subscriber we previously notified.
-	// Use the registry's CopySubscribers to refilter (handles subscribers
-	// that unregistered while we were running), then intersect with
-	// `notified` so we don't notify subscribers that never saw the
-	// initial NAMESPACE.
-	stillAlive := make(map[*registry.SubscriberEntry]struct{})
-	for _, s := range h.names.CopySubscribers() {
-		stillAlive[s] = struct{}{}
-	}
-	for _, sub := range notified {
-		if _, ok := stillAlive[sub]; !ok {
-			continue
-		}
-		if err := sub.WriteMessage(namespaceDoneMessageFor(msg.Namespace, sub.Prefix)); err != nil {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "NAMESPACE_DONE forward failed",
-				slog.String("err", err.Error()))
-		}
-	}
+	}, nil)
 }
 
 // subscribeExistingTracks is §9.5: "When a relay receives an authorized
@@ -220,16 +182,14 @@ func (h *sessionHandler) subscribeLatePublisher(
 
 // handleSubscribeNamespace implements SUBSCRIBE_NAMESPACE (§6.1, §10.19):
 //
-//  1. Authorize.
-//  2. Register in [registry.NamespaceRegistry] with WantsTracks=false.
-//  3. Reply REQUEST_OK.
-//  4. Emit one NAMESPACE for every currently-known publisher whose
-//     advertised namespace extends our prefix (§6.1: the publisher MUST send
-//     NAMESPACE for namespaces already known to it that match the prefix).
-//  5. Block reading the request stream until the subscriber cancels it.
-//
-// New publisher arrivals during the subscription's lifetime are handled by
-// the publisher's `handlePublishNamespace` (which fans out NAMESPACE).
+//  1. Authorize and reserve the prefix (PREFIX_OVERLAP).
+//  2. Reply REQUEST_OK.
+//  3. Register in [registry.NamespaceRegistry] with WantsTracks=false. The
+//     registry queues a NAMESPACE for every namespace already known under
+//     the prefix (§6.1) and, from then on, NAMESPACE / NAMESPACE_DONE as
+//     namespaces come and go; the entry's writer sends them in order.
+//  4. Serve REQUEST_UPDATEs, including TRACK_NAMESPACE_PREFIX (§10.9.2),
+//     until the subscriber cancels.
 func (h *sessionHandler) handleSubscribeNamespace(
 	ctx context.Context,
 	req *session.Request,
@@ -245,14 +205,13 @@ func (h *sessionHandler) handleSubscribeNamespace(
 			"prefix overlaps an established SUBSCRIBE_NAMESPACE in this session")
 		return
 	}
-	defer h.nsPrefixes.release(msg.TrackNamespacePrefix)
+	// prefix follows TRACK_NAMESPACE_PREFIX updates (§10.9.2), so the
+	// reservation released is the current one.
+	prefix := msg.TrackNamespacePrefix
+	defer func() { h.nsPrefixes.release(prefix) }()
 
-	// Reply REQUEST_OK before registering. Registration makes the entry
-	// visible to MatchSubscribers, after which a concurrent publisher's
-	// PUBLISH_NAMESPACE handler (or the Discovery watcher) may write NAMESPACE
-	// to this stream; sending the OK first keeps it from racing those writes
-	// (and §6.1 requires the OK to precede any NAMESPACE). The backlog scan
-	// below still runs after registration, so no advertisement is missed.
+	// Reply REQUEST_OK before registering: registration queues NAMESPACE
+	// messages, and §6.1 requires the OK first.
 	if err := req.Reply(&message.RequestOK{}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "SubscribeNamespace REQUEST_OK write failed",
 			slog.String("err", err.Error()))
@@ -272,57 +231,14 @@ func (h *sessionHandler) handleSubscribeNamespace(
 	)
 	defer h.names.UnregisterSubscriber(entry)
 
-	// Seed the subscriber with every namespace already known under this prefix,
-	// each announced once. Local PUBLISH_NAMESPACE publishers first (snapshotted
-	// so we don't hold the registry lock across stream writes); then, if
-	// Discovery is configured, namespaces advertised by OTHER relays — so a
-	// subscriber learns cross-relay namespaces advertised before it registered,
-	// not only those that change afterwards. Own-relay Discovery entries are
-	// skipped: the local pass already covered them. Writes go through
-	// entry.WriteMessage so they serialise with concurrent forwards. New
-	// arrivals during the subscription are handled live by handlePublishNamespace
-	// and the Discovery watcher.
-	seeded := make(map[string]struct{})
-	emit := func(ns wire.TrackNamespace) error {
-		k := namespaceKey(ns)
-		if _, dup := seeded[k]; dup {
-			return nil
-		}
-		seeded[k] = struct{}{}
-		return entry.WriteMessage(namespaceMessageFor(ns, msg.TrackNamespacePrefix))
-	}
-	for _, pub := range h.names.CopyPublishers() {
-		if !pub.Namespace.HasPrefix(msg.TrackNamespacePrefix) {
-			continue
-		}
-		if err := emit(pub.Namespace); err != nil {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "initial NAMESPACE write failed",
-				slog.String("err", err.Error()))
-			return
-		}
-	}
-	if h.discovery != nil {
-		infos, err := h.discovery.FindNamespacesUnder(ctx, msg.TrackNamespacePrefix)
-		if err != nil {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "discovery namespace seed failed",
-				slog.String("err", err.Error()))
-		}
-		for _, info := range infos {
-			if info.RelayAddr == h.relayAddr {
-				continue // our own advertisement — already seeded from local publishers
-			}
-			if err := emit(info.Prefix); err != nil {
-				h.log.LogAttrs(ctx, slog.LevelDebug, "initial remote NAMESPACE write failed",
-					slog.String("err", err.Error()))
-				return
-			}
-		}
-	}
+	// Registration queued a NAMESPACE for every namespace already known under
+	// the prefix (§6.1); the writer sends those and every later change, in
+	// the order the registry made them.
+	h.spawn(entry.RunWriter)
 
-	// REQUEST_OK acks go through entry.WriteMessage so they serialise with
-	// the NAMESPACE / NAMESPACE_DONE notifications concurrent publisher
-	// handlers write to this stream.
-	h.serveNamespaceFollowups(ctx, req, entry.WriteMessage)
+	// REQUEST_UPDATE replies are queued behind the NAMESPACE /
+	// NAMESPACE_DONE messages already queued, so they keep their order.
+	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.prefixUpdater(entry, &h.nsPrefixes, &prefix))
 }
 
 // handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.20):
@@ -378,7 +294,8 @@ func (h *sessionHandler) handleSubscribeTracks(
 			"prefix overlaps an established SUBSCRIBE_TRACKS in this session")
 		return
 	}
-	defer h.trackPrefixes.release(msg.TrackNamespacePrefix)
+	prefix := msg.TrackNamespacePrefix
+	defer func() { h.trackPrefixes.release(prefix) }()
 
 	// Reply REQUEST_OK before registering, so the OK cannot race a
 	// PUBLISH_SKIPPED that a concurrent publisher's PUBLISH handler
@@ -400,10 +317,11 @@ func (h *sessionHandler) handleSubscribeTracks(
 	)
 	defer h.names.UnregisterSubscriber(entry)
 
-	// REQUEST_OK acks go through entry.WriteMessage so they serialise with
-	// the PUBLISH_SKIPPED notifications concurrent PUBLISH handlers write
-	// to this stream (emitPublishSkipped).
-	h.serveNamespaceFollowups(ctx, req, entry.WriteMessage)
+	h.spawn(entry.RunWriter)
+	// REQUEST_UPDATE replies share the entry's queue with a prefix update's
+	// REQUEST_OK and PUBLISH_SKIPPED (emitPublishSkipped), so each
+	// PUBLISH_SKIPPED suffix matches the prefix the subscriber last saw.
+	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.prefixUpdater(entry, &h.trackPrefixes, &prefix))
 }
 
 // subscribeTracksForwarding resolves the FORWARD (§10.2.18) and GROUP_ORDER
@@ -434,16 +352,18 @@ func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder 
 // §6.2 keepalive previously provided by session.DrainAndWait) while actually
 // parsing the follow-ups: a peer REQUEST_UPDATE consumes a §10.1 Request ID
 // (validated; violations are session-fatal), may carry §10.2.2 token
-// parameters, and must be answered with the single REQUEST_OK §10.9 mandates
-// — the relay keeps no mutable per-namespace-request parameters, so the
-// update is acknowledged without further action. write supplies the
-// stream's serialized writer (namespace streams are also written by
-// concurrent notification fanouts). Other follow-ups (NAMESPACE,
-// NAMESPACE_DONE, …) need no response and are ignored here.
+// parameters, and must be answered with the single REQUEST_OK or REQUEST_ERROR
+// §10.9 mandates. A TRACK_NAMESPACE_PREFIX goes to updatePrefix (nil for a
+// PUBLISH_NAMESPACE, where the parameter is out of scope), which replies; any
+// other update is acknowledged without further action. write sends a reply:
+// directly for a PUBLISH_NAMESPACE, through the subscriber entry's queue for
+// the two subscriptions. Other follow-ups (NAMESPACE, NAMESPACE_DONE, …) need
+// no response and are ignored here.
 func (h *sessionHandler) serveNamespaceFollowups(
 	ctx context.Context,
 	req *session.Request,
 	write func(message.Message) error,
+	updatePrefix func(wire.TrackNamespace),
 ) {
 	stream := req.Stream
 	scope := message.ScopeOfUpdate(req.First.Type())
@@ -471,14 +391,25 @@ func (h *sessionHandler) serveNamespaceFollowups(
 		if !h.handleFollowupTokens(ctx, upd) {
 			return false
 		}
+		// §10.2.20: TRACK_NAMESPACE_PREFIX is in scope only for the two
+		// subscription requests, which supply updatePrefix; it replies.
+		if p, found := upd.Parameters.Find(message.ParamTrackNamespacePrefix); found && updatePrefix != nil {
+			prefix, err := message.TrackNamespacePrefixFromParam(p)
+			if err != nil {
+				_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+				return false
+			}
+			updatePrefix(prefix)
+			updates.Responded()
+			return true
+		}
 		if err := write(&message.RequestOK{}); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "namespace REQUEST_UPDATE_OK write failed",
 				slog.String("err", err.Error()))
-			// The handler unregisters the namespace state when this loop
-			// returns; reset the read side so the peer learns reads
-			// stopped rather than writing follow-ups into a void. (The
-			// send side is left to the stream's owner — closing it here
-			// could race a concurrent notification fanout write.)
+			// Only a PUBLISH_NAMESPACE's direct write can fail here. The
+			// handler unregisters when this loop returns; reset the read
+			// side so the peer learns reads stopped rather than writing
+			// follow-ups into a void.
 			stream.CancelRead(uint64(moqt.StreamResetInternalError))
 			return false
 		}
@@ -494,32 +425,37 @@ func (h *sessionHandler) serveNamespaceFollowups(
 	}
 }
 
-// namespaceKey returns a canonical map key for a namespace tuple (its wire
-// encoding), so the SUBSCRIBE_NAMESPACE seed can announce each namespace once
-// across its local-publisher and Discovery passes.
-func namespaceKey(ns wire.TrackNamespace) string {
-	w := wire.NewWriter(nil)
-	w.TrackNamespace(ns)
-	return string(w.Bytes())
+// enqueueReply writes a namespace subscription's REQUEST_UPDATE replies
+// through its queue, behind the NAMESPACE / NAMESPACE_DONE already queued.
+func enqueueReply(e *registry.SubscriberEntry) func(message.Message) error {
+	return func(m message.Message) error {
+		e.Enqueue(m)
+		return nil
+	}
 }
 
-// namespaceMessageFor constructs a NAMESPACE wire message announcing the
-// publisher's namespace under the subscriber's prefix. §10.17 carries only
-// the suffix (the bytes beyond the prefix), so the relay strips the prefix
-// portion before emitting.
-//
-// Example: publisher PUBLISH_NAMESPACE ("video", "cam1") + subscriber
-// SUBSCRIBE_NAMESPACE ("video",) → NAMESPACE suffix ("cam1",).
-func namespaceMessageFor(publisherNS, subscriberPrefix wire.TrackNamespace) *message.Namespace {
-	suffix := publisherNS[len(subscriberPrefix):]
-	return &message.Namespace{TrackNamespaceSuffix: append(wire.TrackNamespace(nil), suffix...)}
-}
-
-// namespaceDoneMessageFor constructs the NAMESPACE_DONE counterpart of
-// [namespaceMessageFor]. Same suffix-stripping rule.
-func namespaceDoneMessageFor(publisherNS, subscriberPrefix wire.TrackNamespace) *message.NamespaceDone {
-	suffix := publisherNS[len(subscriberPrefix):]
-	return &message.NamespaceDone{TrackNamespaceSuffix: append(wire.TrackNamespace(nil), suffix...)}
+// prefixUpdater applies a TRACK_NAMESPACE_PREFIX update (§10.9.2) to e and
+// replies. A new prefix that "would share a common prefix with another active
+// subscription of the same type in the same session" is refused with
+// PREFIX_OVERLAP (§10.2.20), checked against reserved excluding the request's
+// own current prefix, *cur. A failed update ends the request: "the responder
+// MUST close the bidi stream" (§10.9.1).
+func (h *sessionHandler) prefixUpdater(
+	e *registry.SubscriberEntry,
+	reserved *prefixSet,
+	cur *wire.TrackNamespace,
+) func(wire.TrackNamespace) {
+	return func(prefix wire.TrackNamespace) {
+		if !reserved.replace(*cur, prefix) {
+			e.Finish(&message.RequestError{
+				ErrorCode:   moqt.RequestPrefixOverlap,
+				ErrorReason: "updated prefix overlaps another subscription in this session",
+			})
+			return
+		}
+		*cur = prefix
+		h.names.UpdatePrefix(e, prefix, &message.RequestOK{})
+	}
 }
 
 // prefixSet holds one session's established namespace-subscription prefixes
@@ -543,6 +479,24 @@ func (p *prefixSet) reserve(prefix wire.TrackNamespace) bool {
 		return false
 	}
 	p.prefixes = append(p.prefixes, prefix)
+	return true
+}
+
+// replace swaps the reservation of old for prefix and reports true, or reports
+// false — changing nothing — when prefix overlaps a reservation other than
+// old (§10.9.2).
+func (p *prefixSet) replace(old, prefix wire.TrackNamespace) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	i := slices.IndexFunc(p.prefixes, func(have wire.TrackNamespace) bool {
+		return slices.EqualFunc(have, old, bytes.Equal)
+	})
+	for j, have := range p.prefixes {
+		if j != i && (have.HasPrefix(prefix) || prefix.HasPrefix(have)) {
+			return false
+		}
+	}
+	p.prefixes[i] = prefix // old is the caller's own reservation
 	return true
 }
 

@@ -826,8 +826,8 @@ func TestCrossRelay_WatchNamespacesSkipsTrackSubscribers(t *testing.T) {
 // TestCrossRelay_SubscribeNamespaceSeedsRemote pins the seed side of
 // cross-relay namespace discovery: a SUBSCRIBE_NAMESPACE holder is told about a
 // namespace a *remote* relay advertised BEFORE the subscriber (and before this
-// relay) existed. Unlike the WatchNamespaces path, the seed reads
-// FindNamespacesUnder at subscribe time, so one pre-advertise suffices — no
+// relay) existed. The watch's initial snapshot records it in the namespace
+// registry, which seeds the subscriber, so one pre-advertise suffices — no
 // re-advertise ticker needed.
 func TestCrossRelay_SubscribeNamespaceSeedsRemote(t *testing.T) {
 	t.Parallel()
