@@ -556,10 +556,11 @@ func (h *sessionHandler) handleFollowupTokens(ctx context.Context, msg message.M
 // parses follow-up messages off the stream and dispatches each to onMsg
 // until the peer ends its side (FIN or reset), onMsg returns false,
 // or ctx is cancelled (the read side is then reset with
-// StreamResetSessionClosed to unblock the parse). A malformed follow-up —
-// any non-EOF parse error — resets the read side with
+// StreamResetSessionClosed to unblock the parse). A follow-up that cannot be
+// read — any non-EOF error — resets the read side with
 // StreamResetInternalError so the peer learns reads stopped instead of
-// filling flow control into a void.
+// filling flow control into a void; a malformed one also closes the session
+// with PROTOCOL_VIOLATION (§10).
 //
 // This is the single scaffolding under readSubscribeUpdates,
 // readFetchUpdates — the responder-side follow-up loops, which differ only
@@ -590,9 +591,10 @@ func readRequestStream(
 				if !eof {
 					stream.CancelRead(uint64(moqt.StreamResetInternalError))
 				}
-				// §10.2: "An endpoint that receives an unknown Message
-				// Parameter MUST close the session with PROTOCOL_VIOLATION."
-				if errors.Is(err, message.ErrUnknownParameter) {
+				// §10: an unknown type, or a body that does not match its
+				// Length, "MUST close the session"; §10.2 says the same of an
+				// unknown Message Parameter, which fails the body.
+				if errors.Is(err, message.ErrMalformedMessage) {
 					_ = sess.Close(moqt.SessionProtocolViolation, err.Error())
 				}
 				done <- eof
