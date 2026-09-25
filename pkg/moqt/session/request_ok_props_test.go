@@ -73,10 +73,21 @@ type updater interface {
 	Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error)
 }
 
+// streamUpdater updates a request whose handle has no Update method.
+type streamUpdater struct {
+	s      *session.Session
+	stream session.Stream
+}
+
+func (u streamUpdater) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
+	return u.s.UpdateRequest(ctx, u.stream, params)
+}
+
 // TestReplyRefusesUpdateOKTrackProperties: on a SUBSCRIBE or FETCH stream the
 // first answer is SUBSCRIBE_OK or FETCH_OK, so a REQUEST_OK written with
 // Reply there is a REQUEST_UPDATE_OK, and §10.5 says its Track Properties are
-// empty too.
+// empty too. On a SUBSCRIBE_TRACKS stream so is every REQUEST_OK after the
+// first.
 func TestReplyRefusesUpdateOKTrackProperties(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -90,6 +101,22 @@ func TestReplyRefusesUpdateOKTrackProperties(t *testing.T) {
 			func(r *session.Request) error { return r.Reply(&message.SubscribeOK{TrackAlias: 1}) },
 			func(ctx context.Context, c *session.Session) (updater, error) {
 				return c.Subscribe(ctx, &message.Subscribe{Name: []byte("t")})
+			},
+		},
+		{
+			// §10.5 does not name the SUBSCRIBE_TRACKS OK, so its first
+			// REQUEST_OK may carry Track Properties; the ones after it answer
+			// REQUEST_UPDATEs.
+			"SUBSCRIBE_TRACKS",
+			func(r *session.Request) error { return r.Reply(&message.RequestOK{TrackProperties: trackProps}) },
+			func(ctx context.Context, c *session.Session) (updater, error) {
+				ts, err := c.SubscribeTracks(ctx, &message.SubscribeTracks{
+					TrackNamespacePrefix: wire.TrackNamespace{[]byte("ns")},
+				})
+				if err != nil {
+					return nil, err
+				}
+				return streamUpdater{c, ts.Stream}, nil
 			},
 		},
 		{

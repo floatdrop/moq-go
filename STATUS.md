@@ -189,7 +189,7 @@ By package, bottom-up along the dependency stack:
 | 10.3.1.6| MAX_FILTER_RANGES             | 0x06   | DONE   | `WithMaxFilterRanges` advertises it; relay rejects over-limit/prohibited filters with INVALID_FILTER. The relay advertises `relay.DefaultMaxFilterRanges` (16) rather than inheriting the session default of 0, which would prohibit the Range Filters it fully implements; `relay.Config.MaxFilterRanges` overrides, negative to prohibit. |
 | 10.3.1.7| MAX_REQUEST_UPDATES           | 0x08   | DONE   | `WithMaxRequestUpdates` advertises the per-stream limit; enforced on inbound follow-ups via `RequestUpdateLimiter`, closing with `TOO_MANY_REQUEST_UPDATES` on overflow. |
 | 10.4    | GOAWAY                        | 0x10   | DONE   | Same encoding on control and request streams (draft-19 dropped the Request ID field); callback. As recipient the relay initiates no new SUBSCRIBE, FETCH or PUBLISH to the peer and leaves closing the session to the sender. |
-| 10.5    | REQUEST_OK                    | 0x07   | DONE   | Shared OK for PUBLISH/UPDATE/TRACK_STATUS/namespace reqs. Track Properties where they must be empty close the session on receipt and are refused on send (`ErrTrackPropertiesNotAllowed`), except a REQUEST_UPDATE_OK written with `Reply` on a SUBSCRIBE_TRACKS stream — see Limitations. |
+| 10.5    | REQUEST_OK                    | 0x07   | DONE   | Shared OK for PUBLISH/UPDATE/TRACK_STATUS/namespace reqs. Track Properties where they must be empty close the session on receipt and are refused on send (`ErrTrackPropertiesNotAllowed`). |
 | 10.6    | REQUEST_ERROR (+ Redirect)    | 0x05   | DONE   | Redirect required only when code==REDIRECT. `Request.Reject` sends a Retry Interval; the relay invites a jittered ~1 s retry on EXCESSIVE_LOAD and passes an upstream SUBSCRIBE rejection on by meaning, Retry Interval kept. |
 | 10.7    | SUBSCRIBE                     | 0x03   | DONE   | |
 | 10.8    | SUBSCRIBE_OK                  | 0x04   | DONE   | Registers inbound track alias. |
@@ -484,10 +484,6 @@ Relay:
   - a REQUEST_UPDATE on a SUBSCRIBE_TRACKS request is answered REQUEST_OK but
     its Range Filters (§5.1.4 names TRACK_PROPERTY_FILTER for it) are not
     applied: the filters and forwarded-PUBLISH parameters stay as sent.
-- `Request.Reply` does not refuse Track Properties in a REQUEST_UPDATE_OK on
-  a SUBSCRIBE_TRACKS stream (§10.5): it cannot tell that REQUEST_OK from the
-  stream's first one, which may carry them. Updates answered through a
-  `RequestBroker`'s update handler are checked.
 - Fill streams do not inherit the subscription's Range Filters (§5.1.3).
 - Fill streams are not scheduled against their subscription (§7.2 rules 3
   and 4): a subscription-delivered object should go first when the fill's
