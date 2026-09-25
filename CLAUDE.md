@@ -20,7 +20,8 @@ assumption is invisible once it's written as code.
 Ask before writing code when:
 
 - **The request is ambiguous about scope** and the readings differ in what
-  ships. "Fix the FETCH path" — the joining FETCH, the standalone one, or both?
+  ships. "Fix the FETCH path" — the FETCH request, the fill fetch streams
+  FILL_PARAMETERS opens on a subscription, or both?
 - **The draft is ambiguous**, or it says MAY/SHOULD and the choice is observable
   on the wire or to a peer implementation.
 - **The change touches a contract**: an exported API in `pkg/`, an error or
@@ -129,10 +130,10 @@ which returns a typed `IncomingSubgroupStream` / `IncomingFetchStream` whose
 `ReadDecoded` resolves the deltas back to absolute IDs.
 
 **The relay** (`pkg/relay`) wires many sessions together: a track registry routes
-objects, a per-track FIFO ring cache with read-side TTL serves joining FETCHes, an `Authorizer`
-hook gates each request once before state mutation, and a `DiscoveryStore`
-triggers on-demand upstream SUBSCRIBE. `session_handler.go` is the per-session
-dispatch hub.
+objects, a per-track FIFO ring cache with read-side TTL serves FETCHes and fill
+fetch streams, an `Authorizer` hook gates each request once before state
+mutation, and a `DiscoveryStore` triggers on-demand upstream SUBSCRIBE.
+`session_handler.go` is the per-session dispatch hub.
 
 ## Reference Documents
 
