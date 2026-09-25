@@ -226,3 +226,44 @@ func TestTrackStatusMalformedFollowupClosesSession(t *testing.T) {
 	go func() { _ = wire.WriteFrame(stream, 0x3F00, nil) }() // unassigned type
 	requireClosedProtocolViolation(t, server)
 }
+
+// TestAcceptPublishTrackPropertiesRejected pins §2.5.1 for the session's
+// PUBLISH receiver: "For PUBLISH messages: the subscriber MUST respond with
+// REQUEST_ERROR with error code UNSUPPORTED_EXTENSION" when the Track
+// Properties carry a Mandatory Track Property it does not understand. Track
+// Properties that do not parse are refused as MALFORMED_TRACK.
+func TestAcceptPublishTrackPropertiesRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		props []byte
+		want  moqt.RequestErrorCode
+	}{
+		{"unknown mandatory", message.AppendTrackProperties([]wire.KVPair{
+			{Type: message.MandatoryTrackPropertyMin, IntVal: 1},
+		}), moqt.RequestUnsupportedExtension},
+		{"malformed", []byte{0x01}, moqt.RequestMalformedTrack},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := openTokenPair(t,
+				session.WithKnownMandatoryTrackProperties(map[message.PropertyType]struct{}{}))
+			accepted := make(chan error, 1)
+			go func() {
+				r, err := server.AcceptRequest(t.Context())
+				if err != nil {
+					accepted <- err
+					return
+				}
+				_, err = r.AcceptPublish()
+				accepted <- err
+			}()
+			_, err := client.Publish(t.Context(), &message.Publish{Name: []byte("t"), TrackProperties: tc.props})
+			rej, ok := errors.AsType[*session.RequestRejectedError](err)
+			if !ok || rej.Code != tc.want {
+				t.Fatalf("Publish = %v, want REQUEST_ERROR %v", err, tc.want)
+			}
+			if err := <-accepted; err == nil {
+				t.Error("AcceptPublish accepted the track")
+			}
+		})
+	}
+}

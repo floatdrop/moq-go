@@ -212,7 +212,7 @@ func TestSubscriptionAggregation(t *testing.T) {
 			// transitions to Established.
 			if err := req.Reply(&message.SubscribeOK{
 				TrackAlias:      42,
-				TrackProperties: []byte("rtp"),
+				TrackProperties: opaqueProps("rtp"),
 			}); err != nil {
 				t.Errorf("upstream Reply: %v", err)
 				return

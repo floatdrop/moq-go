@@ -51,6 +51,16 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		return
 	}
 
+	// §2.5.1: a track carrying a Mandatory Track Property the relay does not
+	// understand MUST NOT be forwarded; for PUBLISH the answer is
+	// UNSUPPORTED_EXTENSION. Unparseable Track Properties are refused with
+	// MALFORMED_TRACK; the draft does not cover them, so that code is this
+	// repo's choice.
+	if err := h.sess.CheckTrackProperties(msg.TrackProperties, "PUBLISH"); err != nil {
+		_ = req.RejectError(session.TrackPropertiesRejectCode(err), err.Error())
+		return
+	}
+
 	if err := h.auth.AuthorizePublish(ctx, h.sess, msg); err != nil {
 		h.rejectAuth(ctx, req, "Publish", err)
 		return

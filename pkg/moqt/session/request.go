@@ -796,6 +796,12 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 // *message.Publish. The objects arrive on subgroup uni-streams via
 // [Session.AcceptDataStream].
 //
+// When the session enforces Mandatory Track Properties (see
+// [WithKnownMandatoryTrackProperties]), a PUBLISH carrying one it does not
+// understand is refused with REQUEST_ERROR UNSUPPORTED_EXTENSION (§2.5.1) and
+// Track Properties that do not parse with MALFORMED_TRACK; the validation
+// error is returned.
+//
 // If the alias collides with a different already-registered track,
 // *ErrDuplicateTrackAlias is returned WITHOUT replying OK; the caller MUST close
 // the session with [moqt.SessionDuplicateTrackAlias] (§11.1).
@@ -803,6 +809,10 @@ func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 	pub, isPub := r.First.(*message.Publish)
 	if !isPub {
 		return nil, fmt.Errorf("moqt/session: AcceptPublish on a %s request", r.First.Type())
+	}
+	if err := r.s.validateTrackProperties(pub.TrackProperties, "PUBLISH"); err != nil {
+		_ = r.RejectError(TrackPropertiesRejectCode(err), err.Error())
+		return nil, err
 	}
 	key := track.NewKey(pub.Namespace, pub.Name)
 	if err := r.s.RegisterInboundTrack(pub.TrackAlias, key, pub.TrackProperties); err != nil {

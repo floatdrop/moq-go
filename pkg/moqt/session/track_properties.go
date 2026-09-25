@@ -1,8 +1,10 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 
+	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
@@ -14,9 +16,9 @@ import (
 // process or forward the track.
 //
 // For outbound requests (Subscribe, Fetch, TrackStatus) the session layer
-// returns this error directly. For inbound PUBLISH the caller should use
-// ValidateTrackProperties and, on error, reply with REQUEST_ERROR /
-// UNSUPPORTED_EXTENSION via Request.RejectError.
+// returns this error directly, and [Request.AcceptPublish] replies
+// REQUEST_ERROR UNSUPPORTED_EXTENSION before returning it. A caller that
+// handles an inbound PUBLISH itself checks with [Session.CheckTrackProperties].
 type ErrUnsupportedMandatoryTrackProperty struct {
 	// PropertyType is the first unrecognised mandatory property type found.
 	PropertyType message.PropertyType
@@ -31,6 +33,15 @@ func (e *ErrUnsupportedMandatoryTrackProperty) Error() string {
 		e.PropertyType, e.Context,
 	)
 }
+
+// ErrMalformedTrackProperties is wrapped by the error [ValidateTrackProperties]
+// returns when raw Track Properties do not parse as a sequence of Properties
+// (§2.5). A receiver that cannot parse them cannot rule out an unknown
+// Mandatory Track Property either, so it treats the track as malformed:
+// [Request.AcceptPublish] refuses such a PUBLISH with MALFORMED_TRACK. The
+// draft does not cover unparseable Track Properties, and §10.6 defines
+// MALFORMED_TRACK only for FETCH, so that code is this package's choice.
+var ErrMalformedTrackProperties = errors.New("moqt/session: malformed track properties")
 
 // ValidateTrackProperties parses raw Track Properties bytes and checks for
 // unknown Mandatory Track Properties (range 0x4000–0x7FFF per §2.5.1).
@@ -50,7 +61,7 @@ func ValidateTrackProperties(
 ) ([]wire.KVPair, error) {
 	pairs, err := message.ParseTrackProperties(raw)
 	if err != nil {
-		return nil, fmt.Errorf("moqt/session: parsing track properties in %s: %w", context, err)
+		return nil, fmt.Errorf("%w in %s: %w", ErrMalformedTrackProperties, context, err)
 	}
 	if typ, unknown := message.FirstUnknownMandatoryTrackProperty(pairs, knownMandatory); unknown {
 		return nil, &ErrUnsupportedMandatoryTrackProperty{
@@ -61,19 +72,45 @@ func ValidateTrackProperties(
 	return pairs, nil
 }
 
+// CheckTrackProperties reports whether raw Track Properties (from a PUBLISH,
+// SUBSCRIBE_OK, FETCH_OK, or TRACK_STATUS_OK) carry a Mandatory Track Property
+// this session was not configured to understand via
+// [WithKnownMandatoryTrackProperties], returning
+// *ErrUnsupportedMandatoryTrackProperty if so, or an error wrapping
+// [ErrMalformedTrackProperties] if they do not parse; [TrackPropertiesRejectCode]
+// maps either to its REQUEST_ERROR code. §2.5.1: such a track MUST NOT be
+// processed or forwarded. It is for callers that handle a request themselves
+// rather than through [Request.AcceptPublish] or the outbound openers, which
+// already check.
+//
+// If WithKnownMandatoryTrackProperties was never called (the map is nil), the
+// check is skipped and nil is returned.
+func (s *Session) CheckTrackProperties(raw []byte, context string) error {
+	return s.validateTrackProperties(raw, context)
+}
+
 // validateTrackProperties is a session-level convenience that uses the
 // session's configured set of known mandatory track property types.
 //
 // If WithKnownMandatoryTrackProperties was never called (the map is nil),
-// the check is skipped entirely — this is the default for relays and other
-// forwarding endpoints that pass Track Properties through opaquely. End
-// subscribers that need to interpret track data should call
-// WithKnownMandatoryTrackProperties (even with an empty map) to opt in to
-// enforcement.
+// the check is skipped entirely, for endpoints that pass Track Properties
+// through without acting on them. Pass an empty (non-nil) map to opt in to
+// enforcement with no types known.
 func (s *Session) validateTrackProperties(raw []byte, context string) error {
 	if s.knownMandatoryTrackProperties == nil {
 		return nil // not configured — skip enforcement
 	}
 	_, err := ValidateTrackProperties(raw, s.knownMandatoryTrackProperties, context)
 	return err
+}
+
+// TrackPropertiesRejectCode is the REQUEST_ERROR code for a Track Properties
+// validation error: UNSUPPORTED_EXTENSION for an unknown Mandatory Track
+// Property (§2.5.1), MALFORMED_TRACK for Track Properties that do not parse
+// (see [ErrMalformedTrackProperties]).
+func TrackPropertiesRejectCode(err error) moqt.RequestErrorCode {
+	if _, ok := errors.AsType[*ErrUnsupportedMandatoryTrackProperty](err); ok {
+		return moqt.RequestUnsupportedExtension
+	}
+	return moqt.RequestMalformedTrack
 }
