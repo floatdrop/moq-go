@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
@@ -201,15 +202,49 @@ type filterKey struct {
 // validates each, rejects a duplicate (Type, SetID, Property Type) combination
 // (§5.1.4), and groups them by SetID. Returns (nil, nil) when ps carries no
 // range filters — the "no filter" default, matching [LocationFilterFromParam].
-// The MAX_FILTER_RANGES limit needs the negotiated cap and is enforced
-// separately by [RangeFilterSet.Validate].
+// A zero-length parameter is no filter (§5.1.4: "When Length is 0, there is no
+// filter and no further fields are present"). The MAX_FILTER_RANGES limit
+// needs the negotiated cap and is enforced separately by
+// [RangeFilterSet.Validate].
 func RangeFiltersFromParams(ps Parameters) (*RangeFilterSet, error) {
-	var set *RangeFilterSet
-	seen := make(map[filterKey]struct{})
-	groupIdx := make(map[uint8]int)
+	filters, err := parseRangeFilters(ps)
+	if err != nil {
+		return nil, err
+	}
+	return buildRangeFilterSet(filters)
+}
 
+// Update applies a REQUEST_UPDATE's Range Filter parameters to s (§5.1.4): "In
+// REQUEST_UPDATE, Length of 0 removes the filter; non-zero replaces it
+// entirely. If a filter parameter is omitted from REQUEST_UPDATE, it is
+// unchanged." A zero-length parameter carries no SetID, so a filter is named
+// by its Parameter Type: every existing filter of a type the update carries is
+// dropped, and the update's non-empty filters of that type take their place.
+// Returns nil when no filter remains. s may be nil (no filters yet).
+func (s *RangeFilterSet) Update(ps Parameters) (*RangeFilterSet, error) {
+	added, err := parseRangeFilters(ps)
+	if err != nil {
+		return nil, err
+	}
+	var kept []RangeFilter
+	if s != nil {
+		for _, g := range s.groups {
+			for _, f := range g.filters {
+				if !slices.ContainsFunc(ps, func(p Parameter) bool { return p.Type == f.Type }) {
+					kept = append(kept, f)
+				}
+			}
+		}
+	}
+	return buildRangeFilterSet(append(kept, added...))
+}
+
+// parseRangeFilters parses and validates the non-empty Range Filter
+// parameters of ps, in order.
+func parseRangeFilters(ps Parameters) ([]RangeFilter, error) {
+	var out []RangeFilter
 	for _, p := range ps {
-		if !IsRangeFilterParam(p.Type) {
+		if !IsRangeFilterParam(p.Type) || len(p.Bytes) == 0 {
 			continue
 		}
 		f, err := ParseRangeFilter(p.Type, p.Bytes)
@@ -219,22 +254,33 @@ func RangeFiltersFromParams(ps Parameters) (*RangeFilterSet, error) {
 		if err := f.Validate(); err != nil {
 			return nil, err
 		}
-		key := filterKey{typ: p.Type, setID: f.SetID, propTy: f.PropertyType}
+		out = append(out, *f)
+	}
+	return out, nil
+}
+
+// buildRangeFilterSet rejects a duplicate (Type, SetID, Property Type)
+// combination (§5.1.4) and groups filters by SetID; nil for no filters.
+func buildRangeFilterSet(filters []RangeFilter) (*RangeFilterSet, error) {
+	if len(filters) == 0 {
+		return nil, nil //nolint:nilnil // no filters: (nil set, nil error) is the documented contract.
+	}
+	set := &RangeFilterSet{}
+	seen := make(map[filterKey]struct{}, len(filters))
+	groupIdx := make(map[uint8]int)
+	for _, f := range filters {
+		key := filterKey{typ: f.Type, setID: f.SetID, propTy: f.PropertyType}
 		if _, dup := seen[key]; dup {
 			return nil, fmt.Errorf("%w: duplicate filter (type=%s setID=%d propertyType=0x%X)",
-				ErrInvalidFilter, p.Type, f.SetID, f.PropertyType)
+				ErrInvalidFilter, f.Type, f.SetID, f.PropertyType)
 		}
 		seen[key] = struct{}{}
-
-		if set == nil {
-			set = &RangeFilterSet{}
-		}
 		set.totalRanges += len(f.Ranges)
 		// SUBGROUP/OBJECTID/PRIORITY carry no property blob; only these two do.
-		if p.Type == ParamObjectPropertyFilter {
+		if f.Type == ParamObjectPropertyFilter {
 			set.hasObjectProperty = true
 		}
-		if p.Type == ParamTrackPropertyFilter {
+		if f.Type == ParamTrackPropertyFilter {
 			set.hasTrackProperty = true
 		}
 		gi, ok := groupIdx[f.SetID]
@@ -243,7 +289,7 @@ func RangeFiltersFromParams(ps Parameters) (*RangeFilterSet, error) {
 			set.groups = append(set.groups, rangeGroup{setID: f.SetID})
 			groupIdx[f.SetID] = gi
 		}
-		set.groups[gi].filters = append(set.groups[gi].filters, *f)
+		set.groups[gi].filters = append(set.groups[gi].filters, f)
 	}
 	return set, nil
 }

@@ -775,28 +775,23 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	}
 	sub.SetDeliveryTimeouts(timeouts)
 
-	// §5.1.4 Range Filters. They are installed only when present, so an update
-	// carrying none leaves the existing set unchanged. A malformed/over-limit
-	// set is a §10.6 INVALID_FILTER (request-scoped) — the caller maps
-	// message.ErrInvalidFilter to REQUEST_ERROR INVALID_FILTER.
-	//
-	// LIMITATION (§5.1.4 REQUEST_UPDATE semantics not fully done): an
-	// update carrying any range-filter param replaces the WHOLE set, rather than
-	// the spec's per-parameter-type replace (non-zero Length) / remove (Length 0)
-	// with untouched types preserved. So a partial update wipes other filter
-	// types, and a Length-0 "remove" param is rejected as INVALID_FILTER instead
-	// of removing that type. Initial SUBSCRIBE and add-on-update work correctly;
-	// see the tracked follow-up for the per-type merge.
-	rf, err := message.RangeFiltersFromParams(ps)
+	// §5.1.4 Range Filters, merged into the subscription's current ones: a
+	// type the parameters name is replaced (removed by a zero-length one), the
+	// others are unchanged. A new subscription has none, so this is simply
+	// its filters. A malformed/over-limit set is a §10.6 INVALID_FILTER
+	// (request-scoped) — the caller maps message.ErrInvalidFilter to
+	// REQUEST_ERROR INVALID_FILTER.
+	if !slices.ContainsFunc(ps, func(p message.Parameter) bool { return message.IsRangeFilterParam(p.Type) }) {
+		return nil
+	}
+	rf, err := sub.RangeFilterSet().Update(ps)
 	if err != nil {
 		return err
 	}
-	if rf != nil {
-		if err := rf.Validate(sub.Session.MaxFilterRanges()); err != nil {
-			return err
-		}
-		sub.SetRangeFilters(rf)
+	if err := rf.Validate(sub.Session.MaxFilterRanges()); err != nil {
+		return err
 	}
+	sub.SetRangeFilters(rf)
 	return nil
 }
 
