@@ -54,7 +54,9 @@ func TestSubscribe_RangeFilterProhibitedWhenConfiguredOff(t *testing.T) {
 
 // TestFanout_ObjectIDRangeFilter pins §5.1.4 object filtering on live fanout: an
 // OBJECTID_FILTER selecting [1,2] drops object 0 and 3, so the subscriber sees
-// only IDs 1 and 2 (with deltas re-encoded against the forwarded IDs).
+// only IDs 1 and 2 (with deltas re-encoded against the forwarded IDs). The
+// stream then ends with a reset, not a FIN: §11.4.3 allows a FIN only after
+// every Object of the Subgroup (bar those before the Start Location).
 func TestFanout_ObjectIDRangeFilter(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, filterRelayConfig())
@@ -143,8 +145,8 @@ func TestFanout_ObjectIDRangeFilter(t *testing.T) {
 
 	select {
 	case res := <-resCh:
-		if !errors.Is(res.err, io.EOF) {
-			t.Fatalf("subscriber read ended with %v, want io.EOF", res.err)
+		if res.err == nil || errors.Is(res.err, io.EOF) {
+			t.Fatalf("subscriber read ended with %v, want a reset (objects 0 and 3 were filtered out)", res.err)
 		}
 		if want := []uint64{1, 2}; !reflect.DeepEqual(res.ids, want) {
 			t.Fatalf("subscriber saw object IDs %v, want %v (OBJECTID_FILTER [1,2])", res.ids, want)
