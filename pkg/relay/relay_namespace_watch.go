@@ -31,7 +31,7 @@ import (
 // An event the store drops (MemoryStore does, for a slow consumer) is not
 // recovered until the next restart.
 func (r *Relay) runNamespaceWatch(ctx context.Context) {
-	backoff := namespaceWatchRetryMin
+	backoff := namespaceWatchBackoffInitial
 	for first := true; ; first = false {
 		if ctx.Err() != nil {
 			return // shutting down: the watch closing is not a failure
@@ -48,10 +48,10 @@ func (r *Relay) runNamespaceWatch(ctx context.Context) {
 				return
 			case <-time.After(backoff):
 			}
-			backoff = min(2*backoff, namespaceWatchRetryMax)
+			backoff = min(2*backoff, namespaceWatchBackoffCap)
 			continue
 		}
-		backoff = namespaceWatchRetryMin
+		backoff = namespaceWatchBackoffInitial
 		if !first {
 			// A restarted watch begins with a fresh snapshot; drop what the
 			// old one reported so namespaces withdrawn in between do not
@@ -84,8 +84,8 @@ func (r *Relay) consumeNamespaceWatch(ctx context.Context, ch <-chan discovery.N
 
 // The watch restarts after these delays, doubling, when it fails to start.
 const (
-	namespaceWatchRetryMin = 100 * time.Millisecond
-	namespaceWatchRetryMax = 10 * time.Second
+	namespaceWatchBackoffInitial = 100 * time.Millisecond
+	namespaceWatchBackoffCap     = 10 * time.Second
 )
 
 // forwardNamespaceEvent records one remote namespace event in the namespace
