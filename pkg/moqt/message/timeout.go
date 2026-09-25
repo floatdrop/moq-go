@@ -1,6 +1,9 @@
 package message
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // DeliveryTimeouts holds the effective delivery timeout pair for one
 // subscription per §8. Zero values mean "no timeout".
@@ -107,16 +110,17 @@ func (d DeliveryTimeouts) Effective(sub DeliveryTimeouts) DeliveryTimeouts {
 // Track-level value for that subgroup; on any other object they are ignored, so
 // callers must invoke this only for the first object). A property present with
 // value 0 overrides to "disabled"; an absent property leaves d's dimension
-// unchanged. Malformed props leave d unchanged.
+// unchanged. Malformed props leave d unchanged. Per §12.7 the contents of
+// Immutable Properties are searched too, the mutable list winning.
 func (d DeliveryTimeouts) ApplyObjectProperties(rawProps []byte) DeliveryTimeouts {
 	if len(rawProps) == 0 {
 		return d
 	}
-	pairs, err := ParseTrackProperties(rawProps) // generic KV-pair decode; scope is the caller's
+	pairs, err := parseSearchable(rawProps) // generic KV-pair decode; scope is the caller's
 	if err != nil {
 		return d
 	}
-	for _, kv := range pairs {
+	for _, kv := range slices.Backward(pairs) { // the mutable value wins (§12.7)
 		switch kv.Type {
 		case PropertyObjectDeliveryTimeout:
 			d.Object = MillisecondTimeout(kv.IntVal)

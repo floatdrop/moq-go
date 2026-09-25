@@ -235,7 +235,7 @@ By package, bottom-up along the dependency stack:
 | 12.4  | DEFAULT_PUBLISHER_PRIORITY     | 0x0E | DONE   | |
 | 12.5  | DEFAULT_PUBLISHER_GROUP_ORDER  | 0x22 | DONE   | Validated. |
 | 12.6  | DYNAMIC_GROUPS                 | 0x30 | DONE   | Property defined & scope-validated (flow: see §5.1.6.1). |
-| 12.7  | Immutable properties           | 0x0B | DONE   | Relays cache & forward verbatim, never add. |
+| 12.7  | Immutable properties           | 0x0B | DONE   | Relays cache & forward verbatim, never add. Property lookups search its contents too (`message.ExpandImmutable`), the mutable value winning: delivery timeouts, MAX_CACHE_DURATION, DYNAMIC_GROUPS, Mandatory Track Property screening, and property Range Filters. |
 | 12.8  | Prior group ID gap             | 0x3C | DONE   | Object-scope; encoder in `msf/groupid.go`. |
 | 12.9  | Prior object ID gap            | 0x3E | DONE   | Object-scope. |
 
@@ -446,8 +446,6 @@ Validation:
 - Object Properties are never validated on receipt: nested Immutable
   Properties, duplicate gap properties, and Mandatory Track Properties used as
   Object Properties (§12.7–§12.9, §2.5.1).
-- OBJECT/SUBGROUP_DELIVERY_TIMEOUT inside Immutable Properties is ignored
-  (§12.7).
 - A data stream that arrives before the control streams fails the handshake
   (§3.3 SHOULD buffer).
 

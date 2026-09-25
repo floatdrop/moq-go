@@ -313,7 +313,9 @@ func (s *RangeFilterSet) Validate(maxFilterRanges uint64) error {
 	return nil
 }
 
-// propertyValue extracts property t's value from a decoded property KV set.
+// propertyValue extracts property t's value from a decoded property KV set —
+// the first one, so the mutable value when [ExpandImmutable] also found one
+// inside Immutable Properties (§12.7).
 // Even property types carry a varint value (in wire.KVPair.IntVal); Range
 // Filters require an even Property Type (enforced by Validate), so an odd type
 // never reaches here.
@@ -404,7 +406,7 @@ func (s *RangeFilterSet) MatchesObjectInSets(
 	}
 	var props []wire.KVPair
 	if s.hasObjectProperty {
-		props, _ = ParseTrackProperties(objProps) // malformed → nil → property filters miss
+		props, _ = parseSearchable(objProps) // malformed → nil → property filters miss
 	}
 	for i := range s.groups {
 		if trackPass != nil && !trackPass[i] {
@@ -428,7 +430,7 @@ func (s *RangeFilterSet) TrackPassPerGroup(trackProps []byte) []bool {
 	}
 	var props []wire.KVPair
 	if s.hasTrackProperty {
-		props, _ = ParseTrackProperties(trackProps)
+		props, _ = parseSearchable(trackProps)
 	}
 	pass := make([]bool, len(s.groups))
 	for i := range s.groups {
@@ -448,7 +450,7 @@ func (s *RangeFilterSet) MatchesTrack(trackProps []byte) bool {
 	}
 	var props []wire.KVPair
 	if s.hasTrackProperty {
-		props, _ = ParseTrackProperties(trackProps)
+		props, _ = parseSearchable(trackProps)
 	}
 	for i := range s.groups {
 		if s.groups[i].matchTrack(props) {

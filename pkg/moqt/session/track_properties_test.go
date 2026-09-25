@@ -137,6 +137,33 @@ func TestValidateTrackProperties_MalformedBytes(t *testing.T) {
 	}
 }
 
+// TestValidateTrackProperties_InsideImmutable: §12.7 "When looking for the
+// value of a property, processors MUST search both the mutable properties and
+// the contents of Immutable Properties", so a Mandatory Track Property there
+// is screened like one in the mutable list (§2.5.1), and Immutable
+// Properties whose contents do not parse make the Track Properties malformed
+// ("A Key-Value-Pair cannot be parsed").
+func TestValidateTrackProperties_InsideImmutable(t *testing.T) {
+	wrap := func(nested []byte) []byte {
+		return message.AppendTrackProperties([]wire.KVPair{
+			{Type: message.PropertyImmutableProperties, ByteVal: nested},
+		})
+	}
+	_, err := session.ValidateTrackProperties(wrap(mandatoryTrackProps(0x5000, 1)), nil, "TEST")
+	if u, ok := errors.AsType[*session.ErrUnsupportedMandatoryTrackProperty](err); !ok || u.PropertyType != 0x5000 {
+		t.Errorf("mandatory 0x5000 inside Immutable Properties: error = %v, "+
+			"want *ErrUnsupportedMandatoryTrackProperty for 0x5000", err)
+	}
+	known := map[message.PropertyType]struct{}{0x5000: {}}
+	if _, err := session.ValidateTrackProperties(wrap(mandatoryTrackProps(0x5000, 1)), known, "TEST"); err != nil {
+		t.Errorf("known mandatory inside Immutable Properties: %v", err)
+	}
+	if _, err := session.ValidateTrackProperties(wrap([]byte{0x02}), nil, "TEST"); !errors.Is(
+		err, session.ErrMalformedTrackProperties) {
+		t.Errorf("unparseable Immutable Properties: error = %v, want ErrMalformedTrackProperties", err)
+	}
+}
+
 // TestErrUnsupportedMandatoryTrackPropertyError pins the rendered message of
 // the exported error, which nothing else formats — the other tests all match it
 // by type, so the string itself went unchecked despite being public and
