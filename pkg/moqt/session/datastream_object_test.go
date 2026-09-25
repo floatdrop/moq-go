@@ -826,9 +826,12 @@ func TestIncomingFetchStream_ReadDecoded_EndOfRange(t *testing.T) {
 	}
 }
 
-// TestIncomingFetchStream_ReadDecoded_FirstObjectViolations verifies §11.4.4:
-// the first object on a FETCH stream MUST carry both a Group ID Delta and an
-// Object ID Delta, and MUST NOT use flags that reference the prior object.
+// TestIncomingFetchStream_ReadDecoded_FirstObjectViolations verifies
+// §11.4.4.1: "The first Object MUST include a Group ID Delta and Object ID
+// Delta [...]. If the first Object in the FETCH response uses a flag that
+// references fields in the prior Object, the Subscriber MUST close the session
+// with a PROTOCOL_VIOLATION." Each field that can reference the prior Object
+// is covered.
 func TestIncomingFetchStream_ReadDecoded_FirstObjectViolations(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -850,6 +853,30 @@ func TestIncomingFetchStream_ReadDecoded_FirstObjectViolations(t *testing.T) {
 				SerializationFlags: message.FetchFlagObjectIDDelta |
 					uint64(message.FetchSubgroupIDZero),
 				ObjectIDDelta: 3,
+				ObjectPayload: []byte("x"),
+			},
+		},
+		{
+			// Group ID Delta present but Object ID Delta missing.
+			name: "missing object id delta",
+			first: &message.FetchObject{
+				SerializationFlags: message.FetchFlagGroupIDDelta |
+					message.FetchFlagPriority |
+					uint64(message.FetchSubgroupIDZero),
+				GroupIDDelta:  5,
+				ObjectPayload: []byte("x"),
+			},
+		},
+		{
+			// Both deltas present, but no Priority: it would be the prior
+			// object's.
+			name: "references prior priority",
+			first: &message.FetchObject{
+				SerializationFlags: message.FetchFlagGroupIDDelta |
+					message.FetchFlagObjectIDDelta |
+					uint64(message.FetchSubgroupIDZero),
+				GroupIDDelta:  5,
+				ObjectIDDelta: 2,
 				ObjectPayload: []byte("x"),
 			},
 		},
@@ -900,6 +927,7 @@ func TestIncomingFetchStream_ReadDecoded_FirstObjectViolations(t *testing.T) {
 			if _, err := in.ReadDecoded(); err == nil {
 				t.Errorf("ReadDecoded: expected PROTOCOL_VIOLATION error, got nil")
 			}
+			requireClosedProtocolViolation(t, srv)
 			if err := <-writeErr; err != nil {
 				t.Errorf("writer: %v", err)
 			}
@@ -913,7 +941,7 @@ func TestIncomingFetchStream_ReadDecoded_FirstObjectViolations(t *testing.T) {
 // deltas — but with no prior ACTUAL object it must not reference the prior
 // Subgroup ID or Priority.
 func TestIncomingFetchStream_ReadDecoded_MarkerFirst(t *testing.T) {
-	write := func(t *testing.T, objs []*message.FetchObject) *session.IncomingFetchStream {
+	write := func(t *testing.T, objs []*message.FetchObject) (*session.IncomingFetchStream, *session.Session) {
 		t.Helper()
 		cli, srv := openPair(t)
 		writeErr := make(chan error, 1)
@@ -940,7 +968,7 @@ func TestIncomingFetchStream_ReadDecoded_MarkerFirst(t *testing.T) {
 				t.Errorf("writer: %v", err)
 			}
 		})
-		return ds.(*session.IncomingFetchStream)
+		return ds.(*session.IncomingFetchStream), srv
 	}
 
 	marker := &message.FetchObject{
@@ -950,7 +978,7 @@ func TestIncomingFetchStream_ReadDecoded_MarkerFirst(t *testing.T) {
 	}
 
 	t.Run("object after leading marker uses it as prior", func(t *testing.T) {
-		in := write(t, []*message.FetchObject{marker, {
+		in, _ := write(t, []*message.FetchObject{marker, {
 			// No deltas: prior = the marker → {3, 7}. Subgroup and
 			// priority are spelled out (no prior actual object exists).
 			SerializationFlags: message.FetchFlagPriority |
@@ -973,7 +1001,7 @@ func TestIncomingFetchStream_ReadDecoded_MarkerFirst(t *testing.T) {
 	})
 
 	t.Run("prior-subgroup mode with no prior object is a violation", func(t *testing.T) {
-		in := write(t, []*message.FetchObject{marker, {
+		in, srv := write(t, []*message.FetchObject{marker, {
 			SerializationFlags: message.FetchFlagPriority |
 				uint64(message.FetchSubgroupIDPrior),
 			PublisherPriority: 5,
@@ -985,10 +1013,11 @@ func TestIncomingFetchStream_ReadDecoded_MarkerFirst(t *testing.T) {
 		if _, err := in.ReadDecoded(); err == nil {
 			t.Error("expected prior-subgroup violation, got nil")
 		}
+		requireClosedProtocolViolation(t, srv)
 	})
 
 	t.Run("absent priority with no prior object is a violation", func(t *testing.T) {
-		in := write(t, []*message.FetchObject{marker, {
+		in, srv := write(t, []*message.FetchObject{marker, {
 			SerializationFlags: uint64(message.FetchSubgroupIDZero),
 			ObjectPayload:      []byte("bad"),
 		}})
@@ -998,5 +1027,6 @@ func TestIncomingFetchStream_ReadDecoded_MarkerFirst(t *testing.T) {
 		if _, err := in.ReadDecoded(); err == nil {
 			t.Error("expected prior-priority violation, got nil")
 		}
+		requireClosedProtocolViolation(t, srv)
 	})
 }

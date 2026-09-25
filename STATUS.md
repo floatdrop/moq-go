@@ -198,7 +198,7 @@ By package, bottom-up along the dependency stack:
 | 10.11   | PUBLISH                       | 0x1D   | DONE   | |
 | 10.12   | PUBLISH_DONE                  | 0x0B   | DONE   | |
 | 10.13   | FETCH                         | 0x16   | DONE   | Standalone, the only kind in draft-20. |
-| 10.14   | FETCH_OK                      | 0x18   | DONE   | |
+| 10.14   | FETCH_OK                      | 0x18   | DONE   | An End Location before the FETCH's Start closes the session. A Start relative to the Largest Object is compared through End ≤ Largest; an End of {0,0} is let through, as it cannot be told apart from "no content yet". |
 | 10.15   | TRACK_STATUS                  | 0x0D   | DONE   | Reply via REQUEST_OK, then FIN; any follow-up from the requester closes the session. |
 | 10.16   | PUBLISH_NAMESPACE             | 0x06   | DONE   | |
 | 10.17   | NAMESPACE                     | 0x08   | DONE   | Per namespace, counted over local and remote sources. |
@@ -220,9 +220,9 @@ By package, bottom-up along the dependency stack:
 | 11.4.1   | Stream cancellation                  | DONE    | Bidi request-stream termination ends the request (handlers unregister on stream end); the relay sends PUBLISH_DONE on graceful subscription termination rather than abrupt reset. |
 | 11.4.2   | Subgroup header + delta object IDs   | DONE    | All subgroup-ID modes; `ReadDecoded` resolves deltas. A subgroup stream whose Track Alias is not bound yet is held unread (§11.4.2 MAY buffer): `session.Demux` parks it, count-bounded; the relay waits up to 1 s (`IncomingSubgroupStream.AwaitInboundTrack`, at most 32 streams per session, the rest reset with EXCESSIVE_LOAD). The §11.4.2 MUST to give control streams connection flow control first is not met by the bundled transports, so enough early data can delay the SUBSCRIBE_OK until the relay's wait runs out and the streams are reset. |
 | 11.4.3   | Closing subgroup streams             | DONE    | Relay forwards only the next object on a stream (gap → reset+reopen), FINs on clean inbound EOF, resets on inbound reset, resets with MALFORMED_TRACK after a terminal EndOfGroup/EndOfTrack object (§2.4.2), marks reliable boundaries for RESET_STREAM_AT (`SetReliableBoundary`, transport-gated on `EnableStreamResetPartialDelivery`), and resets (not FINs) in-flight subgroups whose group falls out of range after a narrowing REQUEST_UPDATE. |
-| 11.4.4   | Fetch header                         | DONE    | |
-| 11.4.4.1 | Fetch flags                          | DONE    | All subgroup modes + delta/priority/properties/status flags. |
-| 11.4.4.2 | End of range                         | DONE    | Non-existent (0x8C) / unknown (0x10C) handled. |
+| 11.4.4   | Fetch header                         | DONE    | Serialization Flags of 128 or more that are not an End of Range close the session. |
+| 11.4.4.1 | Fetch flags                          | DONE    | All subgroup modes + delta/priority/properties/status flags. A first Object that references a prior Object's fields closes the session. |
+| 11.4.4.2 | End of range                         | DONE    | Non-existent (0x8C) / unknown (0x10C) handled. An Object after a leading marker that references a prior Subgroup ID or Priority closes the session. |
 | 11.5     | Padding streams & datagrams          | DONE    | Recognised type IDs silently discarded. |
 
 ## §12 MOQT properties
@@ -445,8 +445,6 @@ Validation:
   Filter REQUEST_UPDATE bullet above covers the update case.
 - A data stream that arrives before the control streams fails the handshake
   (§3.3 SHOULD buffer).
-- A FETCH first object that references a prior object, and a FETCH_OK End
-  Location before its Start, do not close the session (§11.4.4.1, §10.14).
 
 Relay:
 
