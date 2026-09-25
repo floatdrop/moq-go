@@ -492,8 +492,5 @@ Relay:
   - a subscriber whose stream is blocked by flow control grows its message
     queue without bound; §10.19 lets the relay reset the stream instead.
 - SUBSCRIBE_TRACKS:
-  - FILL_PARAMETERS and NEW_GROUP_REQUEST on a SUBSCRIBE_TRACKS are accepted
-    but do nothing: a forwarded PUBLISH's subscription gets no fill stream
-    (§10.20.1 names FILL_PARAMETERS for joining);
   - INCLUDE_PROPERTIES=0 is ignored: forwarded PUBLISHes (and SUBSCRIBE_OK)
     still carry Track Properties (§10.2.21 SHOULD).
