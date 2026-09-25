@@ -336,6 +336,9 @@ func (h *sessionHandler) stitchedFetchObjects(
 	upstreamObjs, refusal := h.fetchUpstreamRange(
 		ctx, up, fullName, requestStart, upEndIncl, order, fillTimeout,
 	)
+	if errors.Is(refusal, session.ErrMalformedTrack) {
+		h.endMalformedTrack(ctx, entry, up.Session, refusal)
+	}
 	if refusal != nil {
 		return nil, refusal
 	}
@@ -394,7 +397,9 @@ func (h *sessionHandler) pickFetchUpstream(entry *registry.TrackEntry) *registry
 // The one exception is a FETCH_OK whose Track Properties this relay cannot
 // accept — an unknown Mandatory Track Property, or ones that do not parse
 // (§2.5.1): Session.Fetch has cancelled that fetch, and it is returned as a
-// refusal instead, since the track MUST NOT be forwarded at all.
+// refusal instead, since the track MUST NOT be forwarded at all — as is a
+// response Object that makes the track malformed (§2.4.2), wrapping
+// [session.ErrMalformedTrack].
 func (h *sessionHandler) fetchUpstreamRange(
 	ctx context.Context,
 	up *registry.UpstreamSub,
@@ -484,6 +489,12 @@ func (h *sessionHandler) fetchUpstreamRange(
 		obj, err := fs.ReadDecoded()
 		if errors.Is(err, io.EOF) {
 			break // clean FIN: the upstream's gaps are authoritative (§11.4.4)
+		}
+		if errors.Is(err, session.ErrMalformedTrack) {
+			// §2.4.2: cancel the fetch (fr.Close, deferred) and stop the
+			// response stream; the caller resets the downstream one.
+			fs.Cancel(moqt.StreamResetMalformedTrack)
+			return nil, err
 		}
 		if err != nil {
 			// No FIN (or a FIN mid-object), so the gaps in what arrived

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
@@ -28,9 +29,21 @@ import (
 //     the loop and propagate to [sessionHandler.run]'s aggregator.
 //   - Per-datagram lookup misses (unknown Track Alias, evicted track entry)
 //     drop the datagram silently — §11.3 explicitly permits this.
+//   - A datagram that makes its track malformed ends that track (§2.4.2,
+//     see [sessionHandler.endMalformedTrack]) and is not forwarded or cached;
+//     the loop reads on.
 func (h *sessionHandler) runDatagramLoop(ctx context.Context) error {
 	for {
 		d, err := h.sess.ReceiveDatagram(ctx)
+		if errors.Is(err, session.ErrMalformedTrack) {
+			// Per-track, not per-session: end that track and read on.
+			if in, ok := h.sess.LookupInboundTrack(d.TrackAlias); ok {
+				if entry, ok := h.tracks.Get(in.Key); ok {
+					h.endMalformedTrack(ctx, entry, h.sess, err)
+				}
+			}
+			continue
+		}
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				return ctx.Err()

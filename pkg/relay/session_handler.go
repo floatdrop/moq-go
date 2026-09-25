@@ -737,12 +737,14 @@ func (h *sessionHandler) streamFetchRange(
 		// SUBSCRIBE_OK) went out and this stream's FETCH_HEADER is open, but
 		// no Object: between the two cases, and only the reset is left
 		// (an interpretation). Track Properties that do not parse get the
-		// same, with MALFORMED_TRACK (§3.3.4).
+		// same, with MALFORMED_TRACK (§3.3.4), as does a malformed Object in
+		// the upstream's response: §2.4.2 "reset any fetch streams with
+		// Status Code MALFORMED_TRACK".
 		code := moqt.StreamResetInternalError
-		if errors.Is(refusal, session.ErrMalformedTrackProperties) {
+		if errors.Is(refusal, session.ErrMalformedTrackProperties) || errors.Is(refusal, session.ErrMalformedTrack) {
 			code = moqt.StreamResetMalformedTrack
 		}
-		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH_OK Track Properties refused",
+		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH refused",
 			slog.String("kind", kind), slog.String("err", refusal.Error()))
 		out.Cancel(code)
 		return false

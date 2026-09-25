@@ -3,6 +3,7 @@ package relay
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"sync"
@@ -75,9 +76,10 @@ type subgroupWriterSet struct {
 // ok=false means the stream ended before its identity resolved — an empty
 // 0b01 stream (clean EOF) has nothing to forward, and a read error means the
 // stream died; there is no subgroup state to join or tear down yet, so the
-// caller just returns.
+// caller just returns. A malformed first Object ends the track (§2.4.2).
 func (h *sessionHandler) resolveImplicitSubgroupID(
 	ctx context.Context,
+	entry *registry.TrackEntry,
 	stream *session.IncomingSubgroupStream,
 	hdr *message.SubgroupHeader,
 ) (pending *message.SubgroupObject, ok bool) {
@@ -96,7 +98,12 @@ func (h *sessionHandler) resolveImplicitSubgroupID(
 	}
 	obj, err := stream.ReadObject()
 	if err != nil {
-		if !errors.Is(err, io.EOF) {
+		switch {
+		case errors.Is(err, io.EOF):
+		case errors.Is(err, session.ErrMalformedTrack):
+			stream.Cancel(moqt.StreamResetMalformedTrack)
+			h.endMalformedTrack(ctx, entry, h.sess, err)
+		default:
 			h.log.LogAttrs(ctx, slog.LevelDebug,
 				"fanout: inbound stream ended before first-object Subgroup ID resolved",
 				slog.String("err", err.Error()))
@@ -231,7 +238,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	// shared-subgroup key, the cache (and thus FETCH responses), and the
 	// outbound header template — so resolve it before touching any of that.
 	// The pre-read object is fed through the normal loop below.
-	pending, ok := h.resolveImplicitSubgroupID(ctx, stream, &hdr)
+	pending, ok := h.resolveImplicitSubgroupID(ctx, entry, stream, &hdr)
 	if !ok {
 		return
 	}
@@ -349,9 +356,16 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 				inboundReset = true
 				return
 			}
+			if errors.Is(err, session.ErrMalformedTrack) {
+				stream.Cancel(moqt.StreamResetMalformedTrack)
+				inboundReset = true
+				inboundResetCode = moqt.StreamResetMalformedTrack
+				h.endMalformedTrack(ctx, entry, h.sess, err)
+				return
+			}
 			h.log.LogAttrs(ctx, slog.LevelDebug, "fanout: inbound ReadObject failed",
 				slog.String("err", err.Error()))
-			// A malformed object (not a transport reset) leaves the
+			// An unparseable object (not a transport reset) leaves the
 			// publisher still writing; stop it. On an already-reset
 			// stream the STOP_SENDING is a transport no-op.
 			stream.Cancel(moqt.StreamResetInternalError)
@@ -360,8 +374,9 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		}
 
 		// §11.4.3 / §2.4.2: an object after a terminal-status object on the
-		// same Subgroup stream is a protocol violation. Reset the inbound and
-		// (if last) outbound streams with MALFORMED_TRACK rather than forwarding.
+		// same Subgroup stream makes the track malformed. Reset the inbound and
+		// (if last) outbound streams with MALFORMED_TRACK rather than
+		// forwarding, and end the track.
 		if terminalSeen {
 			h.log.LogAttrs(ctx, slog.LevelDebug,
 				"fanout: object after EndOfGroup/EndOfTrack — malformed track",
@@ -369,6 +384,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			stream.Cancel(moqt.StreamResetMalformedTrack)
 			inboundReset = true
 			inboundResetCode = moqt.StreamResetMalformedTrack
+			h.endMalformedTrack(ctx, entry, h.sess,
+				fmt.Errorf("object after END_OF_GROUP / END_OF_TRACK in Group %d", hdr.GroupID))
 			return
 		}
 

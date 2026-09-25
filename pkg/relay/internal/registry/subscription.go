@@ -304,11 +304,20 @@ func (u *UpstreamSub) WriteMessage(msg message.Message) error {
 // the reset and exits, and the publisher stops streaming into a void.
 // Idempotent; must be called without registry locks held (stream I/O).
 func (u *UpstreamSub) CloseOnDemand() {
+	u.Cancel(moqt.StreamResetCancelled)
+}
+
+// Cancel ends the relay's subscription to this upstream — an on-demand
+// SUBSCRIBE or an accepted PUBLISH — by resetting both directions of its
+// request stream with code (§3.3.3); the broker's Serve loop then exits and
+// its owner unregisters the upstream. Idempotent; must be called without
+// registry locks held (stream I/O).
+func (u *UpstreamSub) Cancel(code moqt.StreamResetCode) {
 	u.Terminate()
 	if u.Broker == nil {
 		return
 	}
-	u.Broker.Close(moqt.StreamResetCancelled)
+	u.Broker.Close(code)
 }
 
 // NewUpstreamSub constructs an UpstreamSub in [SubEstablished] with the given
