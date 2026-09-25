@@ -130,10 +130,11 @@ func (h *sessionHandler) serveForwardedPublish(
 	// subscriber can specify a Location Filter and optionally include
 	// FILL_PARAMETERS". Each forwarded subscription gets its own fill fetch
 	// stream, once the subscriber has accepted the PUBLISH, carrying the
-	// PUBLISH's Request ID: §5.1.3's "the Request ID of the message that
-	// initiated it", and the one ID that names this subscription alone. The
-	// SUBSCRIBE_TRACKS was validated, so a malformed FILL_PARAMETERS cannot
-	// reach here.
+	// PUBLISH's Request ID — §10.1: "fetch streams reference the Request ID
+	// of a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE" — the one ID that
+	// names this subscription alone. (§5.1.3 names only the SUBSCRIBE and
+	// REQUEST_UPDATE cases.) The SUBSCRIBE_TRACKS was validated, so a
+	// malformed FILL_PARAMETERS cannot reach here.
 	if err := h.maybeServeFill(ctx, sub, te, fullName, fwd.RequestID, params); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
 			slog.String("err", err.Error()))

@@ -41,4 +41,19 @@ func TestMergeTracksUpdate(t *testing.T) {
 	if len(stored) != 3 || stored[0].Byte != 1 {
 		t.Fatalf("merge modified the stored parameters: %+v", stored)
 	}
+
+	// A filter type named in the update replaces every SetID of it.
+	trackProp := func(set uint8, v uint64) message.Parameter {
+		return message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamTrackPropertyFilter, SetID: set, PropertyType: 0x40,
+			Ranges: []message.Range{{Start: v, End: v}},
+		})
+	}
+	got = mergeTracksUpdate(message.Parameters{trackProp(0, 1), trackProp(1, 2)},
+		message.Parameters{trackProp(2, 3)})
+	set, err := message.RangeFiltersFromParams(got)
+	if err != nil || len(got) != 1 || !set.MatchesTrack(message.AppendTrackProperties(
+		[]wire.KVPair{{Type: 0x40, IntVal: 3}})) {
+		t.Fatalf("merged filters = %+v (%v), want only SetID 2's", got, err)
+	}
 }

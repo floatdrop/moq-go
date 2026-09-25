@@ -118,12 +118,15 @@ type SubscriberEntry struct {
 	// outbox holds the messages queued for [SubscriberEntry.RunWriter], in
 	// order; outReady wakes it, and closed stops it once the entry is
 	// unregistered.
-	outMu     sync.Mutex
-	outbox    []message.Message
-	stopped   bool
-	outReady  chan struct{}
-	closed    chan struct{}
-	closeOnce sync.Once
+	outMu    sync.Mutex
+	outbox   []message.Message
+	stopped  bool
+	outReady chan struct{}
+	// writerDone is closed when RunWriter returns; see
+	// [SubscriberEntry.WriterDone].
+	writerDone chan struct{}
+	closed     chan struct{}
+	closeOnce  sync.Once
 }
 
 // ClaimForward reserves key while a forwarded PUBLISH for it is being opened
@@ -359,6 +362,7 @@ func (r *NamespaceRegistry) RegisterSubscriber(
 		WantsTracks:  wantsTracks,
 		outReady:     make(chan struct{}, 1),
 		closed:       make(chan struct{}),
+		writerDone:   make(chan struct{}),
 	}
 	entry.prefix.Store(&prefix)
 	entry.SetTracksParams(params)

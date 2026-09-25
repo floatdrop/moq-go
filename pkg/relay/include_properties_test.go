@@ -145,3 +145,23 @@ func TestIncludeProperties_SubscribeTracks(t *testing.T) {
 			h.InlinePriority, h.PublisherPriority, trackDefaultPriority)
 	}
 }
+
+// TestIncludeProperties_TrackStatusStillAnswers: INCLUDE_PROPERTIES only
+// empties the Track Properties; it does not change whether the track is known.
+// A PUBLISHed track with properties and no Objects yet is answered
+// TRACK_STATUS_OK either way.
+func TestIncludeProperties_TrackStatusStillAnswers(t *testing.T) {
+	t.Parallel()
+	pubSess, _ := publishWithTrackProps(t, priorityTrackProps())
+	c := dialAnotherClient(t, pubSess)
+	ts, err := c.TrackStatus(t.Context(), &message.TrackStatus{
+		Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"),
+		Parameters: message.Parameters{noProps()},
+	})
+	if err != nil {
+		t.Fatalf("TRACK_STATUS with INCLUDE_PROPERTIES=0 on a known track: %v", err)
+	}
+	if len(ts.OK.TrackProperties) != 0 {
+		t.Fatalf("TRACK_STATUS_OK Track Properties %x, want empty", ts.OK.TrackProperties)
+	}
+}
