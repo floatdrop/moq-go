@@ -89,3 +89,19 @@ func TestRelay_ParamScopeFetchUpdate(t *testing.T) {
 	})
 	requireSessionClosed(t, fetchSess, "LOCATION_FILTER in a FETCH update")
 }
+
+// TestRelay_MalformedUpdateClosesSession: §10 "If the length does not match
+// the length of the Message Body, the receiver MUST close the session with a
+// PROTOCOL_VIOLATION", on the follow-ups the relay reads itself.
+func TestRelay_MalformedUpdateClosesSession(t *testing.T) {
+	t.Parallel()
+	pubSess, _ := publishWithTrackProps(t, nil)
+	subSess := dialAnotherClient(t, pubSess)
+	sub := subscribeCam1Req(t, subSess)
+	enc := wire.NewWriter(nil)
+	(&message.RequestUpdate{RequestID: subSess.AllocRequestID()}).Append(enc)
+	go func() {
+		_ = wire.WriteFrame(sub.Stream, uint64(message.TypeRequestUpdate), append(enc.Bytes(), 0x00))
+	}()
+	requireSessionClosed(t, subSess, "a REQUEST_UPDATE whose Length exceeds its body")
+}

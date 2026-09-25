@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -30,8 +31,10 @@ func (p *NamespacePublication) Close() error {
 
 // NamespaceSubscription is an established SUBSCRIBE_NAMESPACE request (§10.19).
 // It embeds the still-open request stream and carries the peer's REQUEST_OK;
-// NAMESPACE / NAMESPACE_DONE notifications arrive by reading the embedded stream
-// (e.g. via message.Parse).
+// NAMESPACE / NAMESPACE_DONE notifications arrive by reading the embedded
+// stream. Read it with [Session.NewRequestBroker] and [RequestBroker.Serve],
+// which enforce the session-level rules on what arrives (§10, §10.2.1); a
+// caller that reads it with message.Parse must apply them itself.
 type NamespaceSubscription struct {
 	// Stream is the SUBSCRIBE_NAMESPACE request stream, still open to receive
 	// NAMESPACE / NAMESPACE_DONE notifications. [NamespaceSubscription.Close]
@@ -62,6 +65,8 @@ type TrackSubscription struct {
 
 	// OK is the REQUEST_OK the peer replied with.
 	OK *message.RequestOK
+
+	s *Session
 }
 
 // Close ends the subscription by cancelling the request (§6.1, §3.3.3); a FIN
@@ -115,15 +120,17 @@ func (s *Session) SubscribeNamespace(
 func (s *Session) SubscribeTracks(ctx context.Context, m *message.SubscribeTracks) (*TrackSubscription, error) {
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.RequestOK) (*TrackSubscription, error) {
-			return &TrackSubscription{Stream: stream, OK: ok}, nil
+			return &TrackSubscription{Stream: stream, OK: ok, s: s}, nil
 		})
 }
 
 // IncomingNamespacePublication is an accepted inbound PUBLISH_NAMESPACE (§10.16)
 // — the receiving side of [Session.PublishNamespace]'s [NamespacePublication],
 // returned by [Request.AcceptPublishNamespace]. REQUEST_OK has been sent; the
-// announcer's NAMESPACE / NAMESPACE_DONE follow-ups arrive by reading the
-// embedded stream (e.g. via message.Parse). Close it to end the publication.
+// announcer's follow-ups arrive by reading the embedded stream, best with
+// [Session.NewRequestBroker] and [RequestBroker.Serve], which enforce the
+// session-level rules on what arrives (§10, §10.2.1). Close it to end the
+// publication.
 type IncomingNamespacePublication struct {
 	// Stream is the PUBLISH_NAMESPACE request stream, still open to receive
 	// NAMESPACE / NAMESPACE_DONE notifications. Close it to end the publication.
@@ -224,6 +231,9 @@ func (r *Request) AcceptSubscribeTracks() (*IncomingTrackSubscription, error) {
 // io.EOF when the publisher FINs the SUBSCRIBE_TRACKS stream).
 func (t *TrackSubscription) ReadPublishSkipped() (*message.PublishSkipped, error) {
 	m, err := message.Parse(t.Stream)
+	if errors.Is(err, message.ErrMalformedMessage) {
+		return nil, t.s.closeProtocolViolation(fmt.Errorf("moqt/session: read SUBSCRIBE_TRACKS follow-up: %w", err))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("moqt/session: read SUBSCRIBE_TRACKS follow-up: %w", err)
 	}

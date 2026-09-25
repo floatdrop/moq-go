@@ -244,8 +244,11 @@ type Request struct {
 // unknown type, a response, REQUEST_UPDATE or PUBLISH_STATE_NOTIFY — makes
 // AcceptRequest close the session with PROTOCOL_VIOLATION itself and return
 // *ErrUnexpectedRequestOpener, *ErrUnexpectedRequestUpdate or
-// ErrUnexpectedPublishStateNotify. Any other failure to read the first message
-// (truncation, reset, a malformed known type) only resets that stream.
+// ErrUnexpectedPublishStateNotify. A first message whose body does not match
+// its Length or fails validation also closes the session with
+// PROTOCOL_VIOLATION (§10; the error wraps [message.ErrMalformedMessage]).
+// A stream that ends or is reset before its first message is complete only
+// resets that stream.
 func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 	for {
 		stream, err := s.conn.AcceptStream(ctx)
@@ -262,6 +265,8 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 				return nil, ctx.Err()
 			}
 			// §3.3: an unknown type cannot be one of the seven openers.
+			// readResponse has already closed the session (§10); this only
+			// shapes the error returned.
 			if typ, ok := errors.AsType[message.ErrUnknownType](err); ok {
 				return nil, s.closeProtocolViolation(&ErrUnexpectedRequestOpener{Type: message.Type(typ)})
 			}
@@ -635,8 +640,10 @@ func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Mess
 	if err != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if errors.Is(err, message.ErrUnknownParameter) {
-		return nil, s.closeProtocolViolation(err) // §10.2
+	// §10: an unknown type or a body that does not match its Length closes
+	// the session; so does an unknown parameter (§10.2), which fails the body.
+	if errors.Is(err, message.ErrMalformedMessage) {
+		return nil, s.closeProtocolViolation(err)
 	}
 	return msg, err
 }

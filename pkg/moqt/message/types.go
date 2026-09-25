@@ -8,6 +8,7 @@
 package message
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -74,7 +75,8 @@ func Marshal(dst io.Writer, m Message) error {
 }
 
 // Parse reads a single control-message frame from src and returns a typed
-// Message. Unknown message types are returned as ErrUnknownType.
+// Message. Once the frame is read whole, every error wraps
+// [ErrMalformedMessage]; an unknown type also wraps ErrUnknownType.
 func Parse(src io.Reader) (Message, error) {
 	t, payload, err := wire.ReadFrame(src)
 	if err != nil {
@@ -83,23 +85,34 @@ func Parse(src io.Reader) (Message, error) {
 	return ParsePayload(Type(t), payload)
 }
 
+// ErrMalformedMessage is wrapped by every error [ParsePayload] returns, and so
+// by every error [Parse] returns once it has read a whole frame: an unknown
+// type, a Message Body that does not match its Length, or a field that fails
+// validation. Each is session-fatal — §10: "An endpoint that receives an
+// unknown message type MUST close the session", and "If the length does not
+// match the length of the Message Body, the receiver MUST close the session
+// with a PROTOCOL_VIOLATION". A frame that could not be read whole (the stream
+// ended or was reset mid-frame) does not wrap it.
+var ErrMalformedMessage = errors.New("moqt/message: malformed message")
+
 // ParsePayload constructs a Message of the given Type and parses payload into
-// it. Use when the caller has already read the frame header.
+// it. Use when the caller has already read the frame header. Every error it
+// returns wraps [ErrMalformedMessage].
 func ParsePayload(t Type, payload []byte) (Message, error) {
 	m, err := newMessage(t)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrMalformedMessage, err)
 	}
 	r := wire.NewReader(payload)
 	if err := m.Parse(r); err != nil {
-		return nil, fmt.Errorf("moqt/message: parsing %s: %w", t, err)
+		return nil, fmt.Errorf("%w: parsing %s: %w", ErrMalformedMessage, t, err)
 	}
 	if !r.Empty() {
-		return nil, fmt.Errorf("moqt/message: %s has %d trailing bytes", t, r.Remaining())
+		return nil, fmt.Errorf("%w: %s has %d trailing bytes", ErrMalformedMessage, t, r.Remaining())
 	}
 	if v, ok := m.(validator); ok {
 		if err := v.Validate(); err != nil {
-			return nil, fmt.Errorf("moqt/message: validating %s: %w", t, err)
+			return nil, fmt.Errorf("%w: validating %s: %w", ErrMalformedMessage, t, err)
 		}
 	}
 	return m, nil

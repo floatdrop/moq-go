@@ -156,6 +156,7 @@ By package, bottom-up along the dependency stack:
 
 | §       | Message / option              | Type   | Status | Notes |
 |---------|-------------------------------|--------|--------|-------|
+| 10      | Message framing               | —      | DONE   | An unknown type, or a body that does not match its Length or fails validation, closes the session with PROTOCOL_VIOLATION (`message.ErrMalformedMessage`) wherever the session or the relay reads: the control stream, request openers, responses, follow-ups read by `RequestBroker.Serve` or `ReadPublishSkipped`, and the relay's own readers. A frame cut short by FIN or reset only ends its stream. A handle the application reads with `message.Parse` itself is checked only if it applies the rule (see Validation). |
 | 10.1    | Request-ID parity/duplicates  | —      | DONE   | Enforced in `AcceptRequest` and on REQUEST_UPDATE: per-role parity, and duplicate detection that tolerates reordering. |
 | 10.2    | Message parameters (20 types) | —      | DONE   | All 20 defined with correct kinds; unknown and duplicate parameters close the session; see §10.2.x below. |
 | 10.2.1  | Parameter scope               | —      | DONE   | Per-message scope validation at every session receive point and the relay's own readers (`Parameters.CheckScope`). |
@@ -408,9 +409,6 @@ Found while fixing, left open deliberately:
 - **REQUEST_OK Track Properties on send (§10.5)** — receipt is enforced.
   `Request.Reply` still sends whatever it is given, so an application can emit a
   non-empty PUBLISH_OK.
-- **Malformed first message of a known type (§10)** — only that stream is
-  reset. A length that does not match the message body MUST close the session
-  with PROTOCOL_VIOLATION (§10). The opening message *type* (§3.3) is enforced.
 - **AUTHORIZATION TOKEN setup option (§10.3.1.4, §10.2.2)** — not parsed on
   receive:
   - a REGISTER in SETUP is never cached;
@@ -430,7 +428,9 @@ Validation:
   `Broker()`, by the session's own reads, and by the relay. Handles the
   application reads itself (the namespace handles, `FetchResponder`, or any
   stream read with `message.Parse`) are checked only if it calls
-  `Session.CheckPeerParams`.
+  `Session.CheckPeerParams`. Likewise for §10 framing: such a reader must close
+  the session itself on an error wrapping `message.ErrMalformedMessage`, or read
+  through `Session.NewRequestBroker(stream).Serve`, which does.
 
 - Object Properties are never validated on receipt: nested Immutable
   Properties, duplicate gap properties, and Mandatory Track Properties used as

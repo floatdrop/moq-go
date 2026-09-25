@@ -360,10 +360,12 @@ func (b *RequestBroker) Close(code moqt.StreamResetCode) {
 // REQUEST_UPDATE and any unsolicited response — is passed to onMsg (nil means
 // "discard"); return false from onMsg to stop serving.
 //
-// A malformed follow-up (any non-EOF parse error) resets the read side with
-// INTERNAL_ERROR so the peer learns reads stopped instead of filling flow
-// control into a void. Serve returns nil on a clean FIN or an onMsg stop,
-// ctx.Err() on cancellation, and the read/token error otherwise.
+// A follow-up that cannot be read (any non-EOF error) resets the read side
+// with INTERNAL_ERROR so the peer learns reads stopped instead of filling flow
+// control into a void; one that is malformed (an unknown type, or a body that
+// does not match its Length) also closes the session with PROTOCOL_VIOLATION
+// (§10). Serve returns nil on a clean FIN or an onMsg stop, ctx.Err() on
+// cancellation, and the read/token error otherwise.
 func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) bool) error {
 	defer b.closeUpdates()
 	stop := context.AfterFunc(ctx, func() {
@@ -383,9 +385,10 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 				return ctx.Err()
 			case errors.Is(err, io.EOF):
 				return nil
-			case errors.Is(err, message.ErrUnknownParameter):
+			case errors.Is(err, message.ErrMalformedMessage):
+				// §10, and §10.2 for an unknown parameter.
 				b.stream.CancelRead(uint64(moqt.StreamResetInternalError))
-				return b.sess.closeProtocolViolation(err) // §10.2
+				return b.sess.closeProtocolViolation(err)
 			default:
 				// Covers peer resets too (a STOP_SENDING on an
 				// already-reset stream is a transport no-op).
