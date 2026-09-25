@@ -6,6 +6,7 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
 // FetchRequest is a live FETCH operation. It owns the request stream
@@ -76,11 +77,15 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 // before the Largest Object, which End cannot precede.
 func checkFetchOKEnd(m *message.Fetch, ok *message.FetchOK) error {
 	// m is our own FETCH, whose filter parses; without one the range starts
-	// at {0, 0}, which no End precedes.
-	f, _ := message.LocationFilterFromParam(m.Parameters)
-	if f == nil {
+	// at {0, 0}, which no End precedes. Parsed into a local value: this runs
+	// for every FETCH, and a *LocationFilter would be one more allocation.
+	p, found := m.Parameters.Find(message.ParamLocationFilter)
+	if !found {
 		return nil
 	}
+	var filter message.LocationFilter
+	_ = filter.Parse(wire.NewReader(p.Bytes))
+	f := &filter
 	switch {
 	case f.NextObject(), f.RelativeStart() && f.StartGroup == 0:
 		if ok.EndLocation != (message.Location{}) {
