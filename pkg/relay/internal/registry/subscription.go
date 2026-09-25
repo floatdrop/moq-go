@@ -156,7 +156,7 @@ func (s *Subscription) IsTerminated() bool {
 }
 
 // SetForwardState updates the §9.2 Forward flag. The relay does not validate
-// the value here — §10.7's Forward field is canonically 0 or 1, but allowing
+// the value here — §10.2.18's FORWARD is canonically 0 or 1, but allowing
 // any int keeps the door open for future extensions (e.g. priority-banded
 // forwarding) without an API change.
 func (s *Subscription) SetForwardState(v int) {
