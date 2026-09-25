@@ -230,8 +230,9 @@ func (e *ParamScopeError) Error() string {
 // CheckScope reports the first parameter of ps that may not appear in a
 // message of the given scope, or that repeats where its definition does not
 // allow it (see [Parameters.firstDuplicate]). A FILL_PARAMETERS value is a
-// scope of its own (§10.2.15) and is checked against its table too. Every
-// error is a session-level PROTOCOL_VIOLATION.
+// scope of its own (§10.2.15) and is checked against its table too, and an
+// INCLUDE_PROPERTIES value must be 0 or 1 (§10.2.21). Every error is a
+// session-level PROTOCOL_VIOLATION.
 func (ps Parameters) CheckScope(scope ParamScope) error {
 	for _, p := range ps {
 		allowed := paramScopes[p.Type]
@@ -249,6 +250,9 @@ func (ps Parameters) CheckScope(scope ParamScope) error {
 		return &ParamScopeError{Type: t, Scope: scope, Duplicate: true}
 	}
 	if _, _, err := FillParametersFromParam(ps); err != nil {
+		return err
+	}
+	if _, err := IncludePropertiesFromParam(ps); err != nil {
 		return err
 	}
 	return nil

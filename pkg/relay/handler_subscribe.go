@@ -739,18 +739,6 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 		sub.SetFilter(filter)
 	}
 
-	// §10.2.15: a parameter inside FILL_PARAMETERS that is not in Table 6 is a
-	// session-level PROTOCOL_VIOLATION. Parse it here so a malformed fill is
-	// rejected before the subscription is answered; the stream itself is opened
-	// after SUBSCRIBE_OK.
-	if _, _, err := message.FillParametersFromParam(ps); err != nil {
-		return &paramProtocolViolation{err.Error()}
-	}
-	// §10.2.21: INCLUDE_PROPERTIES outside {0,1} is likewise a violation.
-	if _, err := message.IncludePropertiesFromParam(ps); err != nil {
-		return &paramProtocolViolation{err.Error()}
-	}
-
 	if err := checkForwardParam(ps); err != nil {
 		return err
 	}
