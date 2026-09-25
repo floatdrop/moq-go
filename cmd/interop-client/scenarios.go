@@ -57,9 +57,9 @@ func testAnnounceOnly(ctx context.Context, h *harness) error {
 	return nil
 }
 
-// testPublishNamespaceDone announces, gets REQUEST_OK, then unpublishes by
-// finishing the request stream (§6.2: the bidi stream is the advertisement's
-// keepalive; closing it withdraws the namespace).
+// testPublishNamespaceDone announces, gets REQUEST_OK, then withdraws the
+// namespace by cancelling the request (§6.2: a PUBLISH_NAMESPACE "is withdrawn
+// by cancelling the request"), which is what NamespacePublication.Close does.
 func testPublishNamespaceDone(ctx context.Context, h *harness) error {
 	sess, err := h.connect(ctx)
 	if err != nil {
@@ -71,9 +71,7 @@ func testPublishNamespaceDone(ctx context.Context, h *harness) error {
 	if err != nil {
 		return fmt.Errorf("PUBLISH_NAMESPACE: %w", err)
 	}
-	if err := stream.Close(); err != nil {
-		return fmt.Errorf("close namespace stream: %w", err)
-	}
+	_ = stream.Close()
 	// Give the withdrawal a moment to propagate before the session closes.
 	time.Sleep(200 * time.Millisecond)
 	return nil

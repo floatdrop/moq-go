@@ -227,10 +227,10 @@ func (b *RequestBroker) closeUpdates() {
 	}
 }
 
-// Close tears the request stream down: pending and future Updates fail with
-// [ErrRequestStreamClosed], the read side is reset with code (unblocking a
-// running Serve), and the send side is FIN'd — closing the request stream is
-// how a requester ends the request (§10.7). Serialized against in-flight
+// Close cancels the request (§3.3.3): pending and future Updates fail with
+// [ErrRequestStreamClosed], and both directions are reset with code — STOP_SENDING
+// on the read side (unblocking a running Serve) and RESET_STREAM on the send
+// side. A FIN would not end the request (§3.3.2). Serialized against in-flight
 // writes; idempotent. Must not be called with locks that Serve's callback
 // might need held.
 func (b *RequestBroker) Close(code moqt.StreamResetCode) {
@@ -242,7 +242,7 @@ func (b *RequestBroker) Close(code moqt.StreamResetCode) {
 	}
 	b.streamClosed = true
 	b.stream.CancelRead(uint64(code))
-	_ = b.stream.Close()
+	b.stream.CancelWrite(uint64(code))
 }
 
 // Serve owns every read on the request stream until the peer tears it down

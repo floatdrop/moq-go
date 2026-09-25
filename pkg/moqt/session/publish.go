@@ -19,8 +19,9 @@ import (
 // sending objects.
 type Publication struct {
 	// requestHandle carries the request stream — still open for follow-up
-	// traffic: PUBLISH_DONE, REQUEST_UPDATE, etc.; Close it to FIN the
-	// publication — and provides Update and Broker. Serving subscriber
+	// traffic: PUBLISH_DONE, REQUEST_UPDATE, etc. — and provides Update,
+	// Broker and Close. [Publication.Done] ends the publication gracefully
+	// (PUBLISH_DONE, then FIN); Close cancels it. Serving subscriber
 	// REQUEST_UPDATEs on a long-lived publication is what
 	// [requestHandle.Broker] + [RequestBroker.Serve] are for.
 	//

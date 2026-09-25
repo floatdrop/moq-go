@@ -13,11 +13,19 @@ import (
 // by writing NAMESPACE / NAMESPACE_DONE follow-ups to the embedded stream.
 type NamespacePublication struct {
 	// Stream is the PUBLISH_NAMESPACE request stream, still open for
-	// NAMESPACE / NAMESPACE_DONE follow-ups. Close it to end the publication.
+	// NAMESPACE / NAMESPACE_DONE follow-ups. [NamespacePublication.Close]
+	// withdraws the publication.
 	Stream
 
 	// OK is the REQUEST_OK the peer replied with.
 	OK *message.RequestOK
+}
+
+// Close withdraws the namespace. §6.2: a PUBLISH_NAMESPACE "is withdrawn by
+// cancelling the request" — a FIN alone would not (§3.3.2).
+func (p *NamespacePublication) Close() error {
+	cancelRequest(p.Stream)
+	return nil
 }
 
 // NamespaceSubscription is an established SUBSCRIBE_NAMESPACE request (§10.19).
@@ -26,11 +34,20 @@ type NamespacePublication struct {
 // (e.g. via message.Parse).
 type NamespaceSubscription struct {
 	// Stream is the SUBSCRIBE_NAMESPACE request stream, still open to receive
-	// NAMESPACE / NAMESPACE_DONE notifications. Close it to end the subscription.
+	// NAMESPACE / NAMESPACE_DONE notifications. [NamespaceSubscription.Close]
+	// ends the subscription.
 	Stream
 
 	// OK is the REQUEST_OK the peer replied with.
 	OK *message.RequestOK
+}
+
+// Close ends the subscription. §6.1: "A SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS
+// is cancelled as described in Section 3.3.3, by resetting or sending
+// STOP_SENDING on the stream"; a FIN alone would not (§3.3.2).
+func (n *NamespaceSubscription) Close() error {
+	cancelRequest(n.Stream)
+	return nil
 }
 
 // TrackSubscription is an established SUBSCRIBE_TRACKS request (§10.20). It
@@ -39,11 +56,19 @@ type NamespaceSubscription struct {
 // [TrackSubscription.ReadPublishSkipped].
 type TrackSubscription struct {
 	// Stream is the SUBSCRIBE_TRACKS request stream, still open to receive
-	// PUBLISH_SKIPPED follow-ups. Close it to end the subscription.
+	// PUBLISH_SKIPPED follow-ups. [TrackSubscription.Close] ends the
+	// subscription.
 	Stream
 
 	// OK is the REQUEST_OK the peer replied with.
 	OK *message.RequestOK
+}
+
+// Close ends the subscription by cancelling the request (§6.1, §3.3.3); a FIN
+// alone would not (§3.3.2).
+func (t *TrackSubscription) Close() error {
+	cancelRequest(t.Stream)
+	return nil
 }
 
 // PublishNamespace opens a PUBLISH_NAMESPACE request stream (§10.16) and

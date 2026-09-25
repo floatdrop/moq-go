@@ -256,9 +256,9 @@ func (u *UpstreamSub) WriteMessage(msg message.Message) error {
 }
 
 // CloseOnDemand tears down an on-demand upstream subscription after its
-// last downstream left: pending updates fail fast, the read side is reset,
-// and the send side is FIN'd — closing the request stream is how a
-// subscriber ends a subscription (§10.7). The broker's Serve loop observes
+// last downstream left by cancelling the request: pending updates fail fast
+// and both directions are reset — §5.1: "The subscriber terminates a
+// subscription ... by sending STOP_SENDING". The broker's Serve loop observes
 // the reset and exits, and the publisher stops streaming into a void.
 // Idempotent; must be called without registry locks held (stream I/O).
 func (u *UpstreamSub) CloseOnDemand() {
