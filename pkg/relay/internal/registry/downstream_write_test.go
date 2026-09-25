@@ -3,10 +3,10 @@ package registry_test
 import (
 	"bytes"
 	"context"
-	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -59,10 +59,28 @@ func TestDownstreamSub_WritesSerialized(t *testing.T) {
 }
 
 // recordingStream buffers every write so a test can decode the exact
-// control-message sequence the relay emitted on the request stream.
+// control-message sequence the relay emitted on the request stream. The
+// termination's answer is written on its own goroutine and ends with Close,
+// which closed signals.
 type recordingStream struct {
-	mu  sync.Mutex
-	buf []byte
+	mu        sync.Mutex
+	buf       []byte
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func newRecordingStream() *recordingStream {
+	return &recordingStream{closed: make(chan struct{})}
+}
+
+// awaitClosed waits for the termination's answer to be written.
+func (s *recordingStream) awaitClosed(t *testing.T) {
+	t.Helper()
+	select {
+	case <-s.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the termination's answer was never written")
+	}
 }
 
 func (s *recordingStream) Write(p []byte) (int, error) {
@@ -71,7 +89,10 @@ func (s *recordingStream) Write(p []byte) (int, error) {
 	s.mu.Unlock()
 	return len(p), nil
 }
-func (s *recordingStream) Close() error             { return nil }
+func (s *recordingStream) Close() error {
+	s.closeOnce.Do(func() { close(s.closed) })
+	return nil
+}
 func (s *recordingStream) CancelWrite(uint64)       {}
 func (s *recordingStream) Read([]byte) (int, error) { return 0, nil }
 func (s *recordingStream) CancelRead(uint64)        {}
@@ -104,7 +125,7 @@ func (s *recordingStream) messages(t *testing.T) []message.Message {
 func TestDownstreamSub_TerminateBeforeOKAnswersWithRequestError(t *testing.T) {
 	t.Parallel()
 
-	stream := &recordingStream{}
+	stream := newRecordingStream()
 	sub := registry.NewDownstreamSub(1, nil, stream, 7)
 
 	sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone")
@@ -112,6 +133,7 @@ func TestDownstreamSub_TerminateBeforeOKAnswersWithRequestError(t *testing.T) {
 		t.Fatal("WriteSubscribeOK after termination must be refused")
 	}
 
+	stream.awaitClosed(t)
 	msgs := stream.messages(t)
 	if len(msgs) != 1 {
 		t.Fatalf("wrote %d messages, want exactly 1 (REQUEST_ERROR): %v", len(msgs), msgs)
@@ -131,7 +153,7 @@ func TestDownstreamSub_TerminateBeforeOKAnswersWithRequestError(t *testing.T) {
 func TestDownstreamSub_TerminateAfterOKSendsPublishDone(t *testing.T) {
 	t.Parallel()
 
-	stream := &recordingStream{}
+	stream := newRecordingStream()
 	sub := registry.NewDownstreamSub(1, nil, stream, 7)
 
 	if err := sub.WriteSubscribeOK(&message.SubscribeOK{TrackAlias: 7}); err != nil {
@@ -139,6 +161,7 @@ func TestDownstreamSub_TerminateAfterOKSendsPublishDone(t *testing.T) {
 	}
 	sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone")
 
+	stream.awaitClosed(t)
 	msgs := stream.messages(t)
 	if len(msgs) != 2 {
 		t.Fatalf("wrote %d messages, want SUBSCRIBE_OK + PUBLISH_DONE: %v", len(msgs), msgs)
@@ -161,7 +184,7 @@ func TestDownstreamSub_SubscribeOKTerminateRace(t *testing.T) {
 
 	const rounds = 200
 	for range rounds {
-		stream := &recordingStream{}
+		stream := newRecordingStream()
 		sub := registry.NewDownstreamSub(1, nil, stream, 7)
 
 		var wg sync.WaitGroup
@@ -173,6 +196,7 @@ func TestDownstreamSub_SubscribeOKTerminateRace(t *testing.T) {
 		})
 		wg.Wait()
 
+		stream.awaitClosed(t)
 		msgs := stream.messages(t)
 		switch {
 		case len(msgs) == 2:
@@ -191,10 +215,10 @@ func TestDownstreamSub_SubscribeOKTerminateRace(t *testing.T) {
 	}
 }
 
-// TestDownstreamSub_PublishDoneStreamCount pins the §10.12 Stream Count the
-// relay reports on the paths the relay-level tests cannot reach
-// deterministically: an open still in flight at termination makes the count
-// inexact, which MUST be sent as 2^64-1, and no stream may begin afterwards.
+// TestDownstreamSub_PublishDoneStreamCount pins the §10.12 Stream Count: the
+// number of streams opened for the subscription, exact even when an open is
+// in flight at termination, since the PUBLISH_DONE waits for it to finish
+// (and for the stream to close); no stream may begin after termination.
 func TestDownstreamSub_PublishDoneStreamCount(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -207,11 +231,11 @@ func TestDownstreamSub_PublishDoneStreamCount(t *testing.T) {
 		{"none opened", 0, 0, false, 0},
 		{"exact", 2, 0, false, 2},
 		{"failed opens are not counted", 1, 2, false, 1},
-		{"open in flight", 2, 0, true, math.MaxUint64},
+		{"open in flight", 2, 0, true, 3},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			stream := &recordingStream{}
+			stream := newRecordingStream()
 			sub := registry.NewDownstreamSub(1, nil, stream, 7)
 			if err := sub.WriteSubscribeOK(&message.SubscribeOK{TrackAlias: 7}); err != nil {
 				t.Fatalf("WriteSubscribeOK: %v", err)
@@ -219,6 +243,7 @@ func TestDownstreamSub_PublishDoneStreamCount(t *testing.T) {
 			for range tc.opened {
 				sub.BeginStream()
 				sub.EndStream(true)
+				sub.StreamClosed()
 			}
 			for range tc.failed {
 				sub.BeginStream()
@@ -231,7 +256,12 @@ func TestDownstreamSub_PublishDoneStreamCount(t *testing.T) {
 			if sub.BeginStream() {
 				t.Error("BeginStream after termination = true, want false")
 			}
+			if tc.inFlight {
+				sub.EndStream(true)
+				sub.StreamClosed()
+			}
 
+			stream.awaitClosed(t)
 			msgs := stream.messages(t)
 			pd, ok := msgs[len(msgs)-1].(*message.PublishDone)
 			if !ok {
@@ -241,5 +271,81 @@ func TestDownstreamSub_PublishDoneStreamCount(t *testing.T) {
 				t.Errorf("StreamCount = %d, want %d", pd.StreamCount, tc.want)
 			}
 		})
+	}
+}
+
+// TestDownstreamSub_PublishDoneWaitsForOpenStreams pins §10.12: "A sender MUST
+// NOT send PUBLISH_DONE until it has closed all streams it will ever open".
+// Terminated with a stream still open, the subscription answers only once
+// that stream is reported closed.
+func TestDownstreamSub_PublishDoneWaitsForOpenStreams(t *testing.T) {
+	t.Parallel()
+	stream := newRecordingStream()
+	sub := registry.NewDownstreamSub(1, nil, stream, 7)
+	if err := sub.WriteSubscribeOK(&message.SubscribeOK{TrackAlias: 7}); err != nil {
+		t.Fatalf("WriteSubscribeOK: %v", err)
+	}
+	sub.BeginStream()
+	sub.EndStream(true)
+
+	sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone")
+	select {
+	case <-stream.closed:
+		t.Fatal("PUBLISH_DONE went out while a stream of the subscription was open")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	sub.StreamClosed()
+	stream.awaitClosed(t)
+	msgs := stream.messages(t)
+	if pd, ok := msgs[len(msgs)-1].(*message.PublishDone); !ok || pd.StreamCount != 1 {
+		t.Fatalf("last message = %+v, want PUBLISH_DONE with Stream Count 1", msgs[len(msgs)-1])
+	}
+}
+
+// TestDownstreamSub_PublishDoneWaitsForDatagramSend pins the datagram half of
+// §10.12: PUBLISH_DONE goes out only once the sender "has no further datagrams
+// to send". A send in progress holds it, and none starts after termination.
+func TestDownstreamSub_PublishDoneWaitsForDatagramSend(t *testing.T) {
+	t.Parallel()
+	stream := newRecordingStream()
+	sub := registry.NewDownstreamSub(1, nil, stream, 7)
+	if err := sub.WriteSubscribeOK(&message.SubscribeOK{TrackAlias: 7}); err != nil {
+		t.Fatalf("WriteSubscribeOK: %v", err)
+	}
+	if !sub.BeginDatagram() {
+		t.Fatal("BeginDatagram on a live subscription = false")
+	}
+	sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone")
+	if sub.BeginDatagram() {
+		t.Error("BeginDatagram after termination = true, want false")
+	}
+	select {
+	case <-stream.closed:
+		t.Fatal("PUBLISH_DONE went out while a datagram was being sent")
+	case <-time.After(50 * time.Millisecond):
+	}
+	sub.EndDatagram()
+	stream.awaitClosed(t)
+}
+
+// TestDownstreamSub_RefusalCancelsPendingPublishDone: a forwarded PUBLISH the
+// subscriber refuses after a termination began waiting on its streams gets
+// no PUBLISH_DONE after the refusal.
+func TestDownstreamSub_RefusalCancelsPendingPublishDone(t *testing.T) {
+	t.Parallel()
+	stream := newRecordingStream()
+	sub := registry.NewDownstreamSub(1, nil, stream, 7)
+	sub.OpenedByPublish()
+	sub.BeginStream()
+	sub.EndStream(true)
+	sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone") // waits on the stream
+
+	sub.EndRefused()
+	stream.awaitClosed(t)
+	sub.StreamClosed() // the stream closing afterwards must not release it
+	time.Sleep(50 * time.Millisecond)
+	if msgs := stream.messages(t); len(msgs) != 0 {
+		t.Fatalf("wrote %v after the subscriber refused, want nothing", msgs)
 	}
 }

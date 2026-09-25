@@ -196,7 +196,7 @@ By package, bottom-up along the dependency stack:
 | 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | A REQUEST_UPDATE opening a request stream closes the session with PROTOCOL_VIOLATION (`ErrUnexpectedRequestUpdate`). |
 | 10.10   | PUBLISH_STATE_NOTIFY          | 0x22   | DONE   | Only the publisher may send it; enforced by brokers and the relay. |
 | 10.11   | PUBLISH                       | 0x1D   | DONE   | |
-| 10.12   | PUBLISH_DONE                  | 0x0B   | DONE   | |
+| 10.12   | PUBLISH_DONE                  | 0x0B   | DONE   | Sent once every stream of the subscription has closed and no datagram send is in progress, with the exact Stream Count; written on its own goroutine, so subscribers do not wait on each other. |
 | 10.13   | FETCH                         | 0x16   | DONE   | Standalone, the only kind in draft-20. |
 | 10.14   | FETCH_OK                      | 0x18   | DONE   | An End Location before the FETCH's Start closes the session. A Start relative to the Largest Object is compared through End ≤ Largest; an End of {0,0} is let through, as it cannot be told apart from "no content yet". |
 | 10.15   | TRACK_STATUS                  | 0x0D   | DONE   | Reply via REQUEST_OK, then FIN; any follow-up from the requester closes the session. |
@@ -386,13 +386,16 @@ Found while fixing, left open deliberately:
   forwards the DEFAULT_PRIORITY bit unchanged. A downstream subscriber therefore
   inherits the default from the SUBSCRIBE_OK it was sent, which carries the
   first publisher's properties.
-- **PUBLISH_DONE timing (§10.12)** — two gaps:
-  - "A sender MUST NOT send PUBLISH_DONE until it has closed all streams it
-    will ever open". The relay can still write it while fanout writers hold
-    streams open. No stream opens after it, and an open in flight reports
-    Stream Count 2^64-1.
-  - PUBLISH_DONE goes to subscribers one at a time, so one that isn't reading
-    its request stream can delay the rest.
+- **PUBLISH_DONE waits on the subscription's streams (§10.12)** — so it is as
+  late as the slowest of them to close. A terminated subscription takes no new
+  Object: its stream is reset at the next one, so while its upstream is live
+  it waits at most for that. A publisher that ends a track but leaves a
+  subgroup stream open, and sends nothing more on it, holds the relay's
+  PUBLISH_DONE until that stream ends or its session does. A subscriber not
+  reading its data streams holds its own: subgroup streams until the fanout
+  writer's drain limit resets them, a fill fetch stream until the session
+  ends (fill writes have no deadline). The goroutine that writes PUBLISH_DONE
+  is not joined by `Relay.Stop`; it ends when its session does.
 - **SUBGROUP_DELIVERY_TIMEOUT is not enforced on quic-go / WebTransport (§8)**
   — the reset needs to know when the peer has acknowledged the whole stream
   ("all data committed"). quic-go tracks that internally but exposes no API for

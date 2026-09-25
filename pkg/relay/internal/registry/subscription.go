@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"sync"
 	"time"
 
@@ -403,11 +402,24 @@ type DownstreamSub struct {
 
 	// streamsOpened counts the data streams opened for this subscription —
 	// subgroup streams and fill fetch streams — for the §10.12 PUBLISH_DONE
-	// Stream Count; streamsOpening counts opens in flight. Guarded by mu,
-	// the same lock as the lifecycle state, so no stream is counted after
-	// termination. See [DownstreamSub.BeginStream].
+	// Stream Count; streamsOpening counts opens in flight, and streamsOpen the
+	// opened streams not yet closed. pendingDone is a PUBLISH_DONE waiting for
+	// them. Guarded by mu, the same lock as the lifecycle state, so no stream
+	// is counted after termination. See [DownstreamSub.BeginStream].
 	streamsOpened  uint64
 	streamsOpening int
+	streamsOpen    int
+	// datagramsSending counts datagram sends in flight; see
+	// [DownstreamSub.BeginDatagram].
+	datagramsSending int
+	pendingDone      *pendingPublishDone
+}
+
+// pendingPublishDone is a termination's PUBLISH_DONE, held until the last of
+// the subscription's streams closes.
+type pendingPublishDone struct {
+	code   moqt.PublishDoneCode
+	reason string
 }
 
 // BeginStream reserves the open of one data stream for this subscription so
@@ -425,32 +437,65 @@ func (d *DownstreamSub) BeginStream() bool {
 }
 
 // EndStream completes a [DownstreamSub.BeginStream], counting the stream if
-// it was opened.
+// it was opened. An opened stream must later be reported to
+// [DownstreamSub.StreamClosed].
 func (d *DownstreamSub) EndStream(opened bool) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	d.streamsOpening--
 	if opened {
 		d.streamsOpened++
+		d.streamsOpen++
 	}
+	done, count := d.takeReadyDoneLocked()
+	d.mu.Unlock()
+	d.sendPublishDone(done, count)
 }
 
-// terminateCountingStreams is [Subscription.Terminate] plus the §10.12 Stream
-// Count, taken under the same lock so no stream can be opened in between. An
-// open still in flight makes the count inexact, and "If the publisher is
-// unable to set Stream Count to the exact number of streams opened for the
-// subscription, it MUST set Stream Count to 2^64 - 1", which it reports.
-func (d *DownstreamSub) terminateCountingStreams() (terminated bool, streamCount uint64) {
+// StreamClosed reports that one of the subscription's opened data streams has
+// been closed (FIN) or reset. A PUBLISH_DONE waiting for it goes out once it
+// is the last (§10.12).
+func (d *DownstreamSub) StreamClosed() {
+	d.mu.Lock()
+	d.streamsOpen--
+	done, count := d.takeReadyDoneLocked()
+	d.mu.Unlock()
+	d.sendPublishDone(done, count)
+}
+
+// BeginDatagram reserves one datagram send for this subscription: §10.12's
+// PUBLISH_DONE may go out only once the sender "has no further datagrams to
+// send". It returns false once the subscription is terminated, and the caller
+// must not send. Each true must be paired with one [DownstreamSub.EndDatagram].
+func (d *DownstreamSub) BeginDatagram() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.state == SubTerminated {
-		return false, 0
+		return false
 	}
-	d.state = SubTerminated
-	if d.streamsOpening > 0 {
-		return true, math.MaxUint64
+	d.datagramsSending++
+	return true
+}
+
+// EndDatagram completes a [DownstreamSub.BeginDatagram].
+func (d *DownstreamSub) EndDatagram() {
+	d.mu.Lock()
+	d.datagramsSending--
+	done, count := d.takeReadyDoneLocked()
+	d.mu.Unlock()
+	d.sendPublishDone(done, count)
+}
+
+// takeReadyDoneLocked returns the pending PUBLISH_DONE and its Stream Count
+// once no stream of the subscription is open or opening and no datagram is
+// being sent, clearing it; nil otherwise. With no open in flight the count is
+// exact. The caller holds mu.
+func (d *DownstreamSub) takeReadyDoneLocked() (*pendingPublishDone, uint64) {
+	if d.pendingDone == nil || d.streamsOpen > 0 || d.streamsOpening > 0 || d.datagramsSending > 0 {
+		return nil, 0
 	}
-	return true, d.streamsOpened
+	done := d.pendingDone
+	d.pendingDone = nil
+	return done, d.streamsOpened
 }
 
 // NewDownstreamSub constructs a DownstreamSub in [SubEstablished]: the relay
@@ -682,50 +727,72 @@ func GroupOutOfRange(group uint64, f *message.LocationFilter) bool {
 // to send the stale OK afterwards.
 //
 // The Terminate latch prevents double-termination: the first caller
-// flips the state and writes the message; subsequent calls return
-// without I/O. Safe to call concurrently from any goroutine.
+// flips the state; subsequent calls do nothing. Safe to call concurrently
+// from any goroutine, and it does no I/O itself: the answer is written on
+// its own goroutine (see [DownstreamSub.sendPublishDone]).
 //
-// The §10.12 Stream Count is the number of data streams opened for this
-// subscription, as tracked by [DownstreamSub.BeginStream].
+// "A sender MUST NOT send PUBLISH_DONE until it has closed all streams it
+// will ever open" (§10.12): the latch stops new streams, and the answer
+// waits until every stream already opened or opening has closed, reported
+// through [DownstreamSub.StreamClosed]. Its Stream Count is then exact: the
+// number of data streams opened for this subscription, as tracked by
+// [DownstreamSub.BeginStream].
 //
 // Used by [TrackRegistry] when the last upstream feeding a track
 // disappears, so dependent subscribers stop waiting silently.
 func (d *DownstreamSub) TerminateWithPublishDone(code moqt.PublishDoneCode, reason string) {
-	terminated, streamCount := d.terminateCountingStreams()
-	if !terminated {
+	d.mu.Lock()
+	if d.state == SubTerminated {
+		d.mu.Unlock()
 		return // already terminated
 	}
-	if d.Stream == nil {
+	d.state = SubTerminated
+	d.pendingDone = &pendingPublishDone{code: code, reason: reason}
+	done, count := d.takeReadyDoneLocked()
+	d.mu.Unlock()
+	d.sendPublishDone(done, count)
+}
+
+// sendPublishDone answers the terminated request on its own goroutine, so a
+// subscriber that does not read its request stream delays only its own
+// answer, not the callers terminating many subscriptions in a row. Before
+// SUBSCRIBE_OK the answer is REQUEST_ERROR (DOES_NOT_EXIST: the track's source
+// vanished first) instead of PUBLISH_DONE. A nil done is a no-op.
+func (d *DownstreamSub) sendPublishDone(done *pendingPublishDone, streamCount uint64) {
+	if done == nil || d.Stream == nil {
 		return
 	}
-	d.writeMu.Lock()
-	defer d.writeMu.Unlock()
-	if !d.okSent {
-		_ = message.Marshal(d.Stream, &message.RequestError{
-			ErrorCode:   moqt.RequestDoesNotExist,
-			ErrorReason: reason,
-		})
-		// Mirror [session.Request.RejectError]: the losing subscribe
-		// handler returns without ever entering its follow-up read loop,
-		// so cancel the read side too — otherwise bytes the peer sends
-		// before seeing the rejection queue in the transport forever.
-		d.Stream.CancelRead(uint64(moqt.StreamResetInternalError))
-	} else {
-		_ = message.Marshal(d.Stream, &message.PublishDone{
-			StatusCode:  code,
-			StreamCount: streamCount,
-			ErrorReason: reason,
-		})
-	}
-	_ = d.Stream.Close()
+	go func() {
+		d.writeMu.Lock()
+		defer d.writeMu.Unlock()
+		if !d.okSent {
+			_ = message.Marshal(d.Stream, &message.RequestError{
+				ErrorCode:   moqt.RequestDoesNotExist,
+				ErrorReason: done.reason,
+			})
+			// Mirror [session.Request.RejectError]: the losing subscribe
+			// handler returns without ever entering its follow-up read
+			// loop, so cancel the read side too — otherwise bytes the peer
+			// sends before seeing the rejection queue in the transport
+			// forever.
+			d.Stream.CancelRead(uint64(moqt.StreamResetInternalError))
+		} else {
+			_ = message.Marshal(d.Stream, &message.PublishDone{
+				StatusCode:  done.code,
+				StreamCount: streamCount,
+				ErrorReason: done.reason,
+			})
+		}
+		_ = d.Stream.Close()
+	}()
 }
 
 // WriteSubscribeOK writes the §10.8 SUBSCRIBE_OK response under the write
 // lock and records that the request now has its response, so a later
 // termination emits PUBLISH_DONE (§10.12) rather than a second response.
 // If a termination won the race first, it returns
-// [ErrSubscriptionTerminated] without writing — the terminator already
-// answered the request with REQUEST_ERROR.
+// [ErrSubscriptionTerminated] without writing — the termination answers the
+// request with REQUEST_ERROR instead.
 func (d *DownstreamSub) WriteSubscribeOK(msg *message.SubscribeOK) error {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
@@ -752,13 +819,20 @@ func (d *DownstreamSub) OpenedByPublish() {
 // EndRefused ends a subscription its subscriber refused (REQUEST_ERROR to the
 // relay's PUBLISH, §10.11): it is terminated without a PUBLISH_DONE, and the
 // stream is closed in both directions, under the same lock as every other
-// write on it.
+// write on it. A termination already waiting on the subscription's streams
+// (see [DownstreamSub.TerminateWithPublishDone]) is cancelled: the refusal
+// ended the request first as far as the subscriber is concerned.
 func (d *DownstreamSub) EndRefused() {
+	d.mu.Lock()
+	ended := d.state != SubTerminated || d.pendingDone != nil
+	d.state = SubTerminated
+	d.pendingDone = nil
+	d.mu.Unlock()
+	if !ended {
+		return // already answered
+	}
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
-	if !d.Terminate() {
-		return
-	}
 	_ = d.Stream.Close()
 	d.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
 }
@@ -769,10 +843,9 @@ func (d *DownstreamSub) EndRefused() {
 // registration makes the sub reachable by registry teardown goroutines, so
 // even the SUBSCRIBE_OK reply can otherwise interleave with a PUBLISH_DONE.
 //
-// A write after termination fails with ErrSubscriptionTerminated on every
-// transport: PUBLISH_DONE + FIN already went out under this same lock, so
-// the message could only land after the FIN (real QUIC rejects that; the
-// in-process test transport would silently deliver it).
+// A write after termination fails with ErrSubscriptionTerminated: the
+// termination's PUBLISH_DONE + FIN is the last thing on this stream, whether
+// it has gone out yet or is waiting on the subscription's data streams.
 func (d *DownstreamSub) WriteMessage(msg message.Message) error {
 	d.writeMu.Lock()
 	defer d.writeMu.Unlock()
@@ -783,5 +856,6 @@ func (d *DownstreamSub) WriteMessage(msg message.Message) error {
 }
 
 // ErrSubscriptionTerminated is returned by [DownstreamSub.WriteMessage] when
-// the subscription was already ended with PUBLISH_DONE (its stream is FIN'd).
+// the subscription has been terminated; its PUBLISH_DONE has gone out or will
+// once its streams close.
 var ErrSubscriptionTerminated = errors.New("registry: subscription terminated")

@@ -559,9 +559,8 @@ func (r *TrackRegistry) RemoveUpstream(
 		return false, upstreamEmpty, false
 	}
 	// Snapshot the downstream subs while we still hold the entry lock,
-	// so we can notify them outside the registry locks. Writing the
-	// PUBLISH_DONE message involves stream I/O; holding r.mu across it
-	// would freeze every other track for that duration.
+	// so we can notify them outside the registry locks: termination takes
+	// each subscription's own locks, which must not nest inside r.mu.
 	var notifyDownstreams []*DownstreamSub
 	if upstreamEmpty && len(entry.Downstream) > 0 {
 		notifyDownstreams = append([]*DownstreamSub(nil), entry.Downstream...)
@@ -688,7 +687,8 @@ func (r *TrackRegistry) RemoveSession(sess *session.Session) (upstreamRemoved, d
 
 	// Collect entries whose upstream slice transitions to empty so we
 	// can notify their dependent downstream subscribers after releasing
-	// the locks — PUBLISH_DONE stream writes must not run under r.mu.
+	// the locks — termination takes each subscription's own locks, which
+	// must not nest inside r.mu.
 	// Their Discovery unpublish, by contrast, happens before r.mu is
 	// released: see [TrackRegistry.unpublishTrackFromDiscovery].
 	type orphaned struct {
