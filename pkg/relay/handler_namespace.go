@@ -218,15 +218,11 @@ func (h *sessionHandler) handleSubscribeNamespace(
 		return
 	}
 
-	// forward/groupOrder/rangeFilters are ignored for a SUBSCRIBE_NAMESPACE
-	// (WantsTracks false), which never triggers PUBLISH — pass the defaults.
 	entry := h.names.RegisterSubscriber(
 		msg.TrackNamespacePrefix,
 		h.sess,
 		req.Stream,
 		false, /* wantsTracks */
-		true,
-		0,
 		nil,
 		nil,
 	)
@@ -239,7 +235,7 @@ func (h *sessionHandler) handleSubscribeNamespace(
 
 	// REQUEST_UPDATE replies are queued behind the NAMESPACE /
 	// NAMESPACE_DONE messages already queued, so they keep their order.
-	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.prefixUpdater(entry, &h.nsPrefixes, &prefix))
+	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.namespaceUpdate(entry, &prefix))
 }
 
 // handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.20):
@@ -264,36 +260,11 @@ func (h *sessionHandler) handleSubscribeTracks(
 		return
 	}
 
-	// §10.20.1: FORWARD/GROUP_ORDER on the SUBSCRIBE_TRACKS become the
-	// defaults copied onto every PUBLISH this subscription triggers. Resolve
-	// (and validate) before acking. An out-of-range value is a §10.2.8 /
-	// §10.2.18 session-level PROTOCOL_VIOLATION.
-	forward, groupOrder, err := subscribeTracksForwarding(msg.Parameters)
+	// §10.20.1: the parameters become each forwarded PUBLISH's subscription,
+	// so they are refused on the same terms as a SUBSCRIBE's; the Range
+	// Filters also gate which PUBLISHes are forwarded (§5.1.4).
+	params, err := h.resolveTracksParams(msg.Parameters)
 	if err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "SubscribeTracks parameter protocol violation",
-			slog.String("err", err.Error()))
-		_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
-		return
-	}
-
-	// §5.1.4: TRACK_PROPERTY_FILTER (and any other Range Filters) on the
-	// SUBSCRIBE_TRACKS gate which PUBLISH messages are forwarded. Parse and
-	// validate against MAX_FILTER_RANGES; a bad/over-limit set is a §10.6
-	// INVALID_FILTER (request-scoped).
-	rangeFilters, err := message.RangeFiltersFromParams(msg.Parameters)
-	if err == nil && rangeFilters != nil {
-		err = rangeFilters.Validate(h.sess.MaxFilterRanges())
-	}
-	if err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "SubscribeTracks range filter rejected",
-			slog.String("err", err.Error()))
-		_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
-		return
-	}
-
-	// §10.20.1: its SUBSCRIBE parameters become each forwarded PUBLISH's
-	// subscription, so they are refused on the same terms as a SUBSCRIBE's.
-	if err := installSubscribeParams(registry.NewDownstreamSub(0, h.sess, nil, 0), msg.Parameters); err != nil {
 		h.refuseSubscriptionParams(ctx, req, err)
 		return
 	}
@@ -320,10 +291,8 @@ func (h *sessionHandler) handleSubscribeTracks(
 		h.sess,
 		req.Stream,
 		true, /* wantsTracks */
-		forward,
-		groupOrder,
-		rangeFilters,
-		h.forwardTrack(ctx, msg.Parameters),
+		params,
+		h.forwardTrack(ctx),
 	)
 	defer h.names.UnregisterSubscriber(entry)
 
@@ -338,7 +307,7 @@ func (h *sessionHandler) handleSubscribeTracks(
 	// REQUEST_UPDATE replies share the entry's queue with a prefix update's
 	// REQUEST_OK and PUBLISH_SKIPPED (emitPublishSkipped), so each
 	// PUBLISH_SKIPPED suffix matches the prefix the subscriber last saw.
-	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.prefixUpdater(entry, &h.trackPrefixes, &prefix))
+	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.tracksUpdate(entry, &prefix))
 }
 
 // subscribeTracksForwarding resolves the FORWARD (§10.2.18) and GROUP_ORDER
@@ -370,9 +339,9 @@ func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder 
 // parsing the follow-ups: a peer REQUEST_UPDATE consumes a §10.1 Request ID
 // (validated; violations are session-fatal), may carry §10.2.2 token
 // parameters, and must be answered with the single REQUEST_OK or REQUEST_ERROR
-// §10.9 mandates. A TRACK_NAMESPACE_PREFIX goes to updatePrefix (nil for a
-// PUBLISH_NAMESPACE, where the parameter is out of scope), which replies; any
-// other update is acknowledged without further action. write sends a reply:
+// §10.9 mandates. The two subscriptions pass update, which applies it and
+// replies; for a PUBLISH_NAMESPACE (update nil) it is acknowledged without
+// further action. write sends a reply:
 // directly for a PUBLISH_NAMESPACE, through the subscriber entry's queue for
 // the two subscriptions. Other follow-ups (NAMESPACE, NAMESPACE_DONE, …) need
 // no response and are ignored here.
@@ -380,7 +349,7 @@ func (h *sessionHandler) serveNamespaceFollowups(
 	ctx context.Context,
 	req *session.Request,
 	write func(message.Message) error,
-	updatePrefix func(wire.TrackNamespace),
+	update func(*message.RequestUpdate) bool,
 ) {
 	stream := req.Stream
 	scope := message.ScopeOfUpdate(req.First.Type())
@@ -408,15 +377,12 @@ func (h *sessionHandler) serveNamespaceFollowups(
 		if !h.handleFollowupTokens(ctx, upd) {
 			return false
 		}
-		// §10.2.20: TRACK_NAMESPACE_PREFIX is in scope only for the two
-		// subscription requests, which supply updatePrefix; it replies.
-		if p, found := upd.Parameters.Find(message.ParamTrackNamespacePrefix); found && updatePrefix != nil {
-			prefix, err := message.TrackNamespacePrefixFromParam(p)
-			if err != nil {
-				_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+		// The two subscription requests supply update, which applies the
+		// REQUEST_UPDATE and replies; false means the session is closing.
+		if update != nil {
+			if !update(upd) {
 				return false
 			}
-			updatePrefix(prefix)
 			updates.Responded()
 			return true
 		}
@@ -449,6 +415,152 @@ func enqueueReply(e *registry.SubscriberEntry) func(message.Message) error {
 		e.Enqueue(m)
 		return nil
 	}
+}
+
+// updatePrefixParam reads a REQUEST_UPDATE's TRACK_NAMESPACE_PREFIX
+// (§10.2.20), if any. ok is false when it is malformed: the session is then
+// closed with PROTOCOL_VIOLATION.
+func (h *sessionHandler) updatePrefixParam(upd *message.RequestUpdate) (prefix wire.TrackNamespace, found, ok bool) {
+	p, found := upd.Parameters.Find(message.ParamTrackNamespacePrefix)
+	if !found {
+		return nil, false, true
+	}
+	prefix, err := message.TrackNamespacePrefixFromParam(p)
+	if err != nil {
+		_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+		return nil, false, false
+	}
+	return prefix, true, true
+}
+
+// namespaceUpdate answers a REQUEST_UPDATE on a SUBSCRIBE_NAMESPACE: a
+// TRACK_NAMESPACE_PREFIX is applied (§10.9.2); anything else is acknowledged.
+func (h *sessionHandler) namespaceUpdate(
+	e *registry.SubscriberEntry,
+	cur *wire.TrackNamespace,
+) func(*message.RequestUpdate) bool {
+	updatePrefix := h.prefixUpdater(e, &h.nsPrefixes, cur)
+	return func(upd *message.RequestUpdate) bool {
+		prefix, found, ok := h.updatePrefixParam(upd)
+		if !ok {
+			return false
+		}
+		if found {
+			updatePrefix(prefix)
+		} else {
+			e.Enqueue(&message.RequestOK{})
+		}
+		return true
+	}
+}
+
+// tracksUpdate answers a REQUEST_UPDATE on a SUBSCRIBE_TRACKS. Its parameters
+// are merged into the subscription's (see [mergeTracksUpdate]) and, like a
+// FORWARD, apply "on future subscriptions that match the prefix. Existing
+// subscriptions are unaffected" (§10.2.18); so does a TRACK_NAMESPACE_PREFIX
+// (§10.9.2). The merged parameters are refused on the SUBSCRIBE_TRACKS's own
+// terms; a refused update ends the request, since "the responder MUST close
+// the bidi stream" (§10.9.1), and changes nothing.
+//
+// Tracks that exist and did not match before the update but do now, by prefix
+// or by Range Filter, are forwarded then: SUBSCRIBE_TRACKS asks for "all
+// tracks within matching namespaces" (§10.20). A track that matched before is
+// not offered again, even if the subscriber refused it.
+func (h *sessionHandler) tracksUpdate(
+	e *registry.SubscriberEntry,
+	cur *wire.TrackNamespace,
+) func(*message.RequestUpdate) bool {
+	return func(upd *message.RequestUpdate) bool {
+		prefix, hasPrefix, ok := h.updatePrefixParam(upd)
+		if !ok {
+			return false
+		}
+		before := e.TracksParams()
+		params, err := h.resolveTracksParams(mergeTracksUpdate(before.Params, upd.Parameters))
+		if err != nil {
+			if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
+				_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+				return false
+			}
+			code := moqt.RequestMalformedTrack
+			if errors.Is(err, message.ErrInvalidFilter) {
+				code = moqt.RequestInvalidFilter
+			}
+			e.Finish(&message.RequestError{ErrorCode: code, ErrorReason: err.Error()})
+			return true
+		}
+		oldPrefix := *cur
+		if hasPrefix {
+			if !h.trackPrefixes.replace(*cur, prefix) {
+				e.Finish(&message.RequestError{
+					ErrorCode:   moqt.RequestPrefixOverlap,
+					ErrorReason: "updated prefix overlaps another subscription in this session",
+				})
+				return true
+			}
+			*cur = prefix
+		}
+		e.SetTracksParams(params)
+		if hasPrefix {
+			h.names.UpdatePrefix(e, prefix, &message.RequestOK{})
+		} else {
+			e.Enqueue(&message.RequestOK{})
+		}
+		for _, te := range h.tracks.MatchNamespace(*cur) {
+			matchedBefore := te.FullName.Namespace.HasPrefix(oldPrefix) &&
+				before.RangeFilters.MatchesTrack(te.GetProperties())
+			if !matchedBefore && hasEstablishedUpstream(te) {
+				e.ForwardTrack(e, te)
+			}
+		}
+		return true
+	}
+}
+
+// mergeTracksUpdate applies a REQUEST_UPDATE's parameters to a
+// SUBSCRIBE_TRACKS's: a parameter type present in upd replaces every stored
+// parameter of that type, and types upd omits are unchanged (§10.9). For a
+// Range Filter that is §5.1.4's rule — "Length of 0 removes the filter;
+// non-zero replaces it entirely" — per filter type, so a zero-length one is
+// not kept. TRACK_NAMESPACE_PREFIX and AUTHORIZATION_TOKEN belong to the
+// update itself, not to the subscriptions it shapes, and are not kept.
+func mergeTracksUpdate(stored, upd message.Parameters) message.Parameters {
+	out := slices.DeleteFunc(slices.Clone(stored), func(p message.Parameter) bool {
+		return slices.ContainsFunc(upd, func(u message.Parameter) bool { return u.Type == p.Type })
+	})
+	for _, p := range upd {
+		switch {
+		case p.Type == message.ParamTrackNamespacePrefix, p.Type == message.ParamAuthorizationToken:
+		case message.IsRangeFilterParam(p.Type) && len(p.Bytes) == 0:
+		default:
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// resolveTracksParams validates a SUBSCRIBE_TRACKS's parameters, as sent or
+// merged with an update, and resolves what forwarding needs. §10.20.1: they
+// become each forwarded PUBLISH's subscription, so they are refused on a
+// SUBSCRIBE's terms (see [sessionHandler.refuseSubscriptionParams] for the
+// error classes); the Range Filters are also checked against
+// MAX_FILTER_RANGES (§5.1.4).
+func (h *sessionHandler) resolveTracksParams(ps message.Parameters) (*registry.TracksParams, error) {
+	forward, groupOrder, err := subscribeTracksForwarding(ps)
+	if err != nil {
+		return nil, err
+	}
+	rangeFilters, err := message.RangeFiltersFromParams(ps)
+	if err == nil && rangeFilters != nil {
+		err = rangeFilters.Validate(h.sess.MaxFilterRanges())
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := installSubscribeParams(registry.NewDownstreamSub(0, h.sess, nil, 0), ps); err != nil {
+		return nil, err
+	}
+	return &registry.TracksParams{Params: ps, Forward: forward, GroupOrder: groupOrder, RangeFilters: rangeFilters}, nil
 }
 
 // prefixUpdater applies a TRACK_NAMESPACE_PREFIX update (§10.9.2) to e and

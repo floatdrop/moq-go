@@ -187,13 +187,9 @@ var notEchoedInPublish = []message.ParamID{
 //   - LARGEST_OBJECT is the relay's own watermark for the track (§10.2.17
 //     requires the largest of every value observed; omitted when there is
 //     none).
-func publishParamsForSubscriber(
-	subscribeTracks message.Parameters,
-	sub *registry.SubscriberEntry,
-	entry *registry.TrackEntry,
-) message.Parameters {
+func publishParamsForSubscriber(tp *registry.TracksParams, entry *registry.TrackEntry) message.Parameters {
 	var out message.Parameters
-	for _, p := range subscribeTracks {
+	for _, p := range tp.Params {
 		if slices.Contains(notEchoedInPublish, p.Type) {
 			continue
 		}
@@ -201,11 +197,11 @@ func publishParamsForSubscriber(
 			out = append(out, p)
 		}
 	}
-	if !sub.Forward {
+	if !tp.Forward {
 		out = append(out, message.ForwardParam(false))
 	}
-	if sub.GroupOrder != 0 {
-		out = append(out, message.GroupOrderParam(message.GroupOrder(sub.GroupOrder)))
+	if tp.GroupOrder != 0 {
+		out = append(out, message.GroupOrderParam(message.GroupOrder(tp.GroupOrder)))
 	}
 	if largest, ok := entry.GetLargest(); ok {
 		out = append(out, message.LargestObjectParam(largest.Group, largest.Object))

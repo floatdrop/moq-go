@@ -14,16 +14,13 @@ import (
 // forwardTrack is a SUBSCRIBE_TRACKS subscriber's [registry.SubscriberEntry.ForwardTrack]:
 // it sends the subscriber a PUBLISH for te (§6.1: "the publisher sends PUBLISH
 // messages for tracks within matching namespaces") and serves the subscription
-// that opens, on this handler's session. params are the SUBSCRIBE_TRACKS
-// parameters, "the initial Subscription parameters when a PUBLISH is sent as a
-// result of SUBSCRIBE_TRACKS" (§10.20.1).
+// that opens, on this handler's session. The SUBSCRIBE_TRACKS parameters in
+// effect now are "the initial Subscription parameters when a PUBLISH is sent as
+// a result of SUBSCRIBE_TRACKS" (§10.20.1); see [registry.TracksParams].
 //
 // The subscriber gets one forwarded PUBLISH per track, and none for a track it
 // publishes itself or already receives.
-func (h *sessionHandler) forwardTrack(
-	ctx context.Context,
-	params message.Parameters,
-) func(*registry.SubscriberEntry, *registry.TrackEntry) {
+func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.SubscriberEntry, *registry.TrackEntry) {
 	return func(sub *registry.SubscriberEntry, te *registry.TrackEntry) {
 		if peerSentGoaway(h.sess) {
 			return // §10.4: no new PUBLISH to a peer that sent GOAWAY
@@ -35,7 +32,8 @@ func (h *sessionHandler) forwardTrack(
 		// §5.1.4: "PUBLISH messages which pass the filter will be forwarded
 		// while those which do not pass it will not be forwarded nor will any
 		// Objects."
-		if sub.RangeFilters != nil && !sub.RangeFilters.MatchesTrack(te.GetProperties()) {
+		tp := sub.TracksParams()
+		if !tp.RangeFilters.MatchesTrack(te.GetProperties()) {
 			return
 		}
 		// §6.1: "excluding tracks published by the subscriber".
@@ -55,7 +53,7 @@ func (h *sessionHandler) forwardTrack(
 			// §11.1: aliases are per session; the subscriber's session
 			// allocates the ones the relay publishes on.
 			TrackAlias:      h.sess.AllocOutboundTrackAlias(),
-			Parameters:      publishParamsForSubscriber(params, sub, te),
+			Parameters:      publishParamsForSubscriber(tp, te),
 			TrackProperties: te.GetProperties(),
 		}
 		// Non-blocking (§6.1): with no bidi-stream credit left the relay
@@ -71,7 +69,7 @@ func (h *sessionHandler) forwardTrack(
 			return
 		}
 		h.relayGo(func() {
-			h.serveForwardedPublish(ctx, stream, fwd, params, te, func() { sub.ReleaseForward(key) })
+			h.serveForwardedPublish(ctx, stream, fwd, tp.Params, te, func() { sub.ReleaseForward(key) })
 		})
 	}
 }
