@@ -219,7 +219,7 @@ By package, bottom-up along the dependency stack:
 | 11.4     | Streams (subgroup / fetch)           | DONE    | Typed in/out subgroup + fetch streams. |
 | 11.4.1   | Stream cancellation                  | DONE    | Bidi request-stream termination ends the request (handlers unregister on stream end); the relay sends PUBLISH_DONE on graceful subscription termination rather than abrupt reset. |
 | 11.4.2   | Subgroup header + delta object IDs   | DONE    | All subgroup-ID modes; `ReadDecoded` resolves deltas. A subgroup stream whose Track Alias is not bound yet is held unread (§11.4.2 MAY buffer): `session.Demux` parks it, count-bounded; the relay waits up to 1 s (`IncomingSubgroupStream.AwaitInboundTrack`, at most 32 streams per session, the rest reset with EXCESSIVE_LOAD). The §11.4.2 MUST to give control streams connection flow control first is not met by the bundled transports, so enough early data can delay the SUBSCRIBE_OK until the relay's wait runs out and the streams are reset. |
-| 11.4.3   | Closing subgroup streams             | DONE    | Relay forwards only the next object on a stream (gap → reset+reopen), FINs on clean inbound EOF, resets on inbound reset, resets with MALFORMED_TRACK after a terminal EndOfGroup/EndOfTrack object (§2.4.2), marks reliable boundaries for RESET_STREAM_AT (`SetReliableBoundary`, transport-gated on `EnableStreamResetPartialDelivery`), and resets (not FINs) in-flight subgroups whose group falls out of range after a narrowing REQUEST_UPDATE. |
+| 11.4.3   | Closing subgroup streams             | DONE    | Relay forwards only the next object on a stream (gap → reset+reopen), FINs on clean inbound EOF, resets on inbound reset, resets with MALFORMED_TRACK after a terminal EndOfGroup/EndOfTrack object (§2.4.2), marks reliable boundaries for RESET_STREAM_AT (`SetReliableBoundary`, transport-gated on `EnableStreamResetPartialDelivery`), and resets (not FINs) in-flight subgroups whose group falls out of range after a narrowing REQUEST_UPDATE. A subscription that skipped any Object of the Subgroup other than one before its Start Location (a filter, Forward State 0, an inbox overflow, an expiry) gets resets, never a FIN, on that Subgroup's streams. |
 | 11.4.4   | Fetch header                         | DONE    | Serialization Flags of 128 or more that are not an End of Range close the session. |
 | 11.4.4.1 | Fetch flags                          | DONE    | All subgroup modes + delta/priority/properties/status flags. A first Object that references a prior Object's fields closes the session. |
 | 11.4.4.2 | End of range                         | DONE    | Non-existent (0x8C) / unknown (0x10C) handled. An Object after a leading marker that references a prior Subgroup ID or Priority closes the session. |
@@ -503,10 +503,6 @@ Relay:
 - Upstream PUBLISH_DONE codes are flattened to TRACK_ENDED; §10.12 asks for "a
   relevant status code".
 - Duplicate objects from redundant upstreams are not compared (§9.1).
-- A subgroup stream from which Objects were omitted because the subscription
-  was paused (Forward State 0) ends with a FIN when the inbound subgroup does,
-  where §11.4.3 lists "Omitting a Subgroup Object due to the subscriber's
-  Forward State" among the cases that MUST reset the stream.
 - After an inbound GOAWAY the relay stops initiating requests to that peer
   (§10.4) but, as its subscriber, neither unsubscribes ("A subscriber SHOULD
   individually unsubscribe from each existing subscription"), nor migrates to

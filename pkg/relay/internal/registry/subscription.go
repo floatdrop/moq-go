@@ -639,29 +639,54 @@ func (d *DownstreamSub) EffectiveStreamPriority(
 	}
 }
 
-// ForwardDecision folds the §9.2 Forward-State gate and the §5.1.2 filter
-// test the fanout applies to every object into a single lock acquisition.
-// The per-object × per-subscriber loop would otherwise take three RLock
-// round-trips on the same mutex per object per subscriber.
+// ForwardVerdict is [DownstreamSub.ForwardDecision]'s answer for one Object.
+// §11.4.3 lets a subgroup stream end with a FIN only when it carried every
+// Object of the Subgroup "except any Objects with Locations smaller than the
+// subscription's Start Location"; every other skip leaves the Subgroup
+// incomplete for this subscription, so its stream must end with a reset.
+type ForwardVerdict uint8
+
+const (
+	// Forward: enqueue the Object.
+	Forward ForwardVerdict = iota
+	// SkipBeforeStart: the Object lies before the subscription's Start
+	// Location — the one omission §11.4.3 still allows a FIN after.
+	SkipBeforeStart
+	// SkipObject: a filter drops this Object only (a Range Filter, or the
+	// Location filter past its End); a later one in the group may still
+	// pass. The Subgroup is incomplete for this subscription.
+	SkipObject
+	// SkipPaused: Forward State 0 omits the Object (§5.1: the publisher does
+	// not send Objects while it is 0; §5.1.5 treats Forward as a filter).
+	// The Subgroup is incomplete for this subscription (§11.4.3: "Omitting a
+	// Subgroup Object due to the subscriber's Forward State").
+	SkipPaused
+	// SkipGroup: the Location filter has narrowed so this whole group is
+	// permanently out of range (§11.4.3); the stream can be reset promptly.
+	SkipGroup
+	// SkipEnded: the subscription is terminated and takes no new Object
+	// (§10.12).
+	SkipEnded
+)
+
+// ForwardDecision decides whether an Object goes to this subscription, under
+// one lock acquisition — the fanout asks it for every Object and every
+// subscriber. It ANDs the Forward State, the §5.1.2 Location filter, and the
+// §5.1.4 Range Filters (subgroupID/object/priority/objProps) — §5.1.5 "Pass =
+// Forward AND Location AND Range" — after the lifecycle state. A Range-filter
+// miss drops only the Object, so it is SkipObject; only the Location filter
+// can make it SkipGroup or SkipBeforeStart.
 //
-// The §5.1.2 filter is evaluated against the subscribe-time LargestObject
+// The Location filter is evaluated against the subscribe-time LargestObject
 // snapshot, *not* the live TrackEntry watermark. Re-evaluating against the
 // live watermark would let a subscription's effective start location drift
 // forward as objects arrive, silently dropping the very objects the
 // subscriber asked to receive.
-//
-// forward is true when the object should be enqueued. It ANDs the §9.2 Forward
-// State, the §5.1.2 Location filter, and the §5.1.4 Range Filters
-// (subgroupID/object/priority/objProps) — §5.1.5 "Pass = Forward AND Location
-// AND Range". When forward is false, groupExhausted reports whether the
-// Location filter has narrowed so this whole group is permanently out of range
-// (§11.4.3), so the caller can reset the stream promptly. A Range-filter miss
-// drops only the object (a later object in the group may still match), so it
-// never reports groupExhausted; a paused subscription never does either.
 func (d *DownstreamSub) ForwardDecision(
 	group, object, subgroupID uint64, priority uint8, objProps []byte,
-) (forward, groupExhausted bool) {
+) ForwardVerdict {
 	d.mu.RLock()
+	ended := d.state == SubTerminated
 	paused := d.forwardState == 0
 	f := d.Filter
 	rf := d.rangeFilters
@@ -669,18 +694,28 @@ func (d *DownstreamSub) ForwardDecision(
 	has := d.HasLargestAtSubscribe
 	d.mu.RUnlock()
 
-	if paused {
-		return false, false
+	switch {
+	case ended:
+		return SkipEnded
+	case paused:
+		return SkipPaused
 	}
 	// Location filter first, so its group-exhaustion signal (§11.4.3) governs.
-	if f != nil && !f.Matches(message.Location{Group: group, Object: object}, largest, has) {
-		return false, GroupOutOfRange(group, f)
+	loc := message.Location{Group: group, Object: object}
+	if f != nil && !f.Matches(loc, largest, has) {
+		switch {
+		case loc.Less(f.Start(largest, has)):
+			return SkipBeforeStart
+		case GroupOutOfRange(group, f):
+			return SkipGroup
+		}
+		return SkipObject
 	}
 	// Range Filters (§5.1.4): per-object AND; a miss drops the object only.
 	if rf != nil && !rf.MatchesObject(subgroupID, object, priority, objProps) {
-		return false, false
+		return SkipObject
 	}
-	return true, false
+	return Forward
 }
 
 // GroupOutOfRange reports whether a Subgroup belonging to group is entirely

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
 // runDatagramLoop is the datagram fanout entry point. It pulls
@@ -90,15 +91,12 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 
 	downstream := entry.CopyDownstream()
 	for _, sub := range downstream {
-		// One lock acquisition folds the §9.2 Forward-State gate and the
-		// §5.1.2 filter test, exactly like the subgroup fanout: a paused
-		// subscription (Forward State 0) receives no datagrams. There is
-		// no per-datagram stream to reset, so the groupExhausted signal
-		// is irrelevant here.
+		// The same decision as the subgroup fanout: a paused subscription
+		// (Forward State 0) receives no datagrams. With no stream to end,
+		// only whether to send matters; the skip kinds do not.
 		// Datagrams have no subgroup; §5.1.4 SUBGROUP_FILTER treats them as
 		// subgroup 0. Object ID / Priority / Properties feed the other filters.
-		forward, _ := sub.ForwardDecision(d.GroupID, d.ObjectID, 0, d.PublisherPriority, d.Properties)
-		if !forward {
+		if sub.ForwardDecision(d.GroupID, d.ObjectID, 0, d.PublisherPriority, d.Properties) != registry.Forward {
 			continue
 		}
 		// Re-encode the datagram with the subscriber's outbound
