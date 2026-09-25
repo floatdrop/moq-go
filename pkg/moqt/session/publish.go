@@ -2,7 +2,10 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"sync/atomic"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -37,6 +40,134 @@ type Publication struct {
 	// subgroupCount counts subgroup streams opened via OpenSubgroup, used as
 	// the §10.12 Stream Count when Done sends PUBLISH_DONE.
 	subgroupCount atomic.Uint64
+
+	// paused is the inverse of the §5.1 Forward State: "The publisher does
+	// not send Objects if the Forward State is 0". Set from the establishing
+	// messages and from accepted REQUEST_UPDATEs.
+	paused atomic.Bool
+
+	// largest is the largest Location written through this publication's
+	// subgroup streams, reported as LARGEST_OBJECT in REQUEST_UPDATE_OK
+	// (§10.9.1). Guarded by largestMu.
+	largestMu  sync.Mutex
+	largest    message.Location
+	hasLargest bool
+
+	// ended is latched by the first Done, including the one a declined
+	// REQUEST_UPDATE triggers: no PUBLISH_DONE twice, no stream after it.
+	ended atomic.Bool
+
+	brokerInit sync.Once
+}
+
+// ErrForwardPaused is returned while the subscription's Forward State is 0:
+// "The publisher does not send Objects if the Forward State is 0" (§5.1).
+// [Publication.OpenSubgroup] opens nothing; a write to a subgroup already open
+// resets that stream first (§11.4.3: "Omitting a Subgroup Object due to the
+// subscriber's Forward State"). A REQUEST_UPDATE with FORWARD=1 resumes.
+var ErrForwardPaused = errors.New("moqt/session: Forward State is 0; not sending objects")
+
+// ErrPublicationEnded is returned by [Publication.OpenSubgroup] once the
+// publication has sent PUBLISH_DONE — by [Publication.Done], or automatically
+// after a declined REQUEST_UPDATE (§10.9.1).
+var ErrPublicationEnded = errors.New("moqt/session: publication ended (PUBLISH_DONE sent)")
+
+// newPublication builds a Publication whose initial Forward State is the
+// establishing message's FORWARD — "The initiator of the subscription sets the
+// initial Forward State in either PUBLISH or SUBSCRIBE" (§5.1) — or 1 when it
+// is omitted (§10.2.18).
+func newPublication(s *Session, stream Stream, requestID, alias uint64, establishing message.Parameters) *Publication {
+	p := &Publication{Stream: stream, s: s, requestID: requestID, alias: alias}
+	if f, ok := establishing.Find(message.ParamForward); ok {
+		p.paused.Store(f.Byte == 0)
+	}
+	return p
+}
+
+// Broker returns the publication's [RequestBroker] (see [requestHandle.Broker])
+// with its REQUEST_UPDATE handling installed on first call: [Publication.ApplyUpdate]
+// decides each update, and a declined one ends the subscription with
+// PUBLISH_DONE UPDATE_FAILED, as §10.9.1 requires ("the publisher MUST also
+// terminate the subscription"). Replace the handling with
+// [RequestBroker.HandleUpdates] to support more parameters.
+func (p *Publication) Broker() *RequestBroker {
+	b := p.requestHandle.Broker()
+	p.brokerInit.Do(func() {
+		b.HandleUpdates(p.ApplyUpdate)
+		b.onUpdateFailed = func() {
+			_ = p.Done(moqt.PublishDoneUpdateFailed, "REQUEST_UPDATE declined")
+		}
+	})
+	return b
+}
+
+// ApplyUpdate is the publication's built-in REQUEST_UPDATE handling (§10.9).
+// It accepts an update only when it understands every parameter in it, and
+// then applies all of them:
+//   - FORWARD (§10.2.18) sets the Forward State; [Publication.OpenSubgroup]
+//     returns [ErrForwardPaused] while it is 0.
+//   - SUBSCRIBER_PRIORITY (§10.2.7) is accepted; per-stream priority is the
+//     application's to apply.
+//   - NEW_GROUP_REQUEST (§10.2.19) is accepted. A publisher that advertises
+//     DYNAMIC_GROUPS should install its own handler to act on it.
+//   - AUTHORIZATION_TOKEN (§10.2.2) was already processed by the session.
+//
+// The Serve callback still sees every update, so an application can act on
+// SUBSCRIBER_PRIORITY or NEW_GROUP_REQUEST there.
+//
+// Any other parameter declines the whole update with NOT_SUPPORTED, applying
+// none of it. The REQUEST_UPDATE_OK carries LARGEST_OBJECT once objects have
+// been published (§10.9.1, §10.2.17) — counting objects written through
+// [Publication.OpenSubgroup] streams only; datagrams and subgroups opened on
+// the Session directly are not seen.
+func (p *Publication) ApplyUpdate(upd *message.RequestUpdate) (*message.RequestOK, error) {
+	forward, setForward := false, false
+	for _, prm := range upd.Parameters {
+		if prm.Type == message.ParamForward {
+			// §10.2.18: a value other than 0 or 1 "MUST close the session
+			// with PROTOCOL_VIOLATION".
+			if prm.Byte > 1 {
+				return nil, p.s.closeProtocolViolation(
+					fmt.Errorf("moqt/session: FORWARD value %d in REQUEST_UPDATE", prm.Byte))
+			}
+			forward, setForward = prm.Byte == 1, true
+			continue
+		}
+		if !slices.Contains(acceptedUpdateParams, prm.Type) {
+			return nil, &RequestRejectedError{
+				Code:   moqt.RequestNotSupported,
+				Reason: fmt.Sprintf("REQUEST_UPDATE parameter %#x not supported", uint64(prm.Type)),
+			}
+		}
+	}
+	if setForward {
+		p.paused.Store(!forward)
+	}
+	ok := &message.RequestOK{}
+	p.largestMu.Lock()
+	if p.hasLargest {
+		ok.Parameters = message.Parameters{message.LargestObjectParam(p.largest.Group, p.largest.Object)}
+	}
+	p.largestMu.Unlock()
+	return ok, nil
+}
+
+// acceptedUpdateParams are the parameters, besides FORWARD, that
+// [Publication.ApplyUpdate] accepts without further action.
+var acceptedUpdateParams = []message.ParamID{
+	message.ParamSubscriberPriority,
+	message.ParamNewGroupRequest,
+	message.ParamAuthorizationToken,
+}
+
+// noteObject records a written object for LARGEST_OBJECT.
+func (p *Publication) noteObject(group, object uint64) {
+	loc := message.Location{Group: group, Object: object}
+	p.largestMu.Lock()
+	if !p.hasLargest || p.largest.Less(loc) {
+		p.largest, p.hasLargest = loc, true
+	}
+	p.largestMu.Unlock()
 }
 
 // TrackAlias reports the §11.1 Track Alias bound to this publication — the
@@ -52,12 +183,20 @@ func (p *Publication) TrackAlias() uint64 { return p.alias }
 // [Session.OpenSubgroup]: the caller MUST Close the returned stream to FIN it
 // once all objects are written, or Cancel to reset.
 func (p *Publication) OpenSubgroup(h message.SubgroupHeader) (*OutgoingSubgroupStream, error) {
+	if p.ended.Load() {
+		return nil, ErrPublicationEnded
+	}
+	if p.paused.Load() {
+		return nil, ErrForwardPaused
+	}
 	h.TrackAlias = p.alias
 	sg, err := p.s.OpenSubgroup(h)
 	if err != nil {
 		return nil, err
 	}
 	p.subgroupCount.Add(1)
+	sg.onObject = p.noteObject
+	sg.paused = p.paused.Load
 	return sg, nil
 }
 
@@ -68,7 +207,13 @@ func (p *Publication) OpenSubgroup(h message.SubgroupHeader) (*OutgoingSubgroupS
 // every subgroup was opened through this handle (subgroups opened via
 // [Session.OpenSubgroup] directly are not counted — send PUBLISH_DONE yourself
 // via message.Marshal if you need a different count).
+//
+// Only the first call sends: a later one, e.g. after a declined REQUEST_UPDATE
+// already ended the publication (§10.9.1), returns nil.
 func (p *Publication) Done(code moqt.PublishDoneCode, reason string) error {
+	if !p.ended.CompareAndSwap(false, true) {
+		return nil
+	}
 	if err := p.writeThenClose(&message.PublishDone{
 		StatusCode:  code,
 		StreamCount: p.subgroupCount.Load(),
@@ -121,12 +266,9 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 	}
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, _ *message.RequestOK) (*Publication, error) {
-			return &Publication{
-				Stream:    stream,
-				s:         s,
-				requestID: m.RequestID,
-				alias:     m.TrackAlias,
-			}, nil
+			// The PUBLISH sets the initial Forward State (§5.1); draft-20
+			// carries no subscription parameters in PUBLISH_OK (#1790).
+			return newPublication(s, stream, m.RequestID, m.TrackAlias, m.Parameters), nil
 		})
 }
 

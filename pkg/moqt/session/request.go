@@ -759,8 +759,16 @@ func (r *Request) RejectError(code moqt.RequestErrorCode, reason string) error {
 // [Publication.OpenSubgroup] is pre-bound to the alias and whose
 // [Publication.Done] ends the subscription with PUBLISH_DONE.
 func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error) {
-	if _, isSub := r.First.(*message.Subscribe); !isSub {
+	sub, isSub := r.First.(*message.Subscribe)
+	if !isSub {
 		return nil, fmt.Errorf("moqt/session: AcceptSubscribe on a %s request", r.First.Type())
+	}
+	// §10.2.18: FORWARD other than 0 or 1 "MUST close the session with
+	// PROTOCOL_VIOLATION".
+	if f, found := sub.Parameters.Find(message.ParamForward); found && f.Byte > 1 {
+		resetStream(r.Stream)
+		return nil, r.s.closeProtocolViolation(
+			fmt.Errorf("moqt/session: FORWARD value %d in SUBSCRIBE", f.Byte))
 	}
 	if ok == nil {
 		ok = &message.SubscribeOK{}
@@ -771,13 +779,7 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 	if err := message.Marshal(r.Stream, ok); err != nil {
 		return nil, fmt.Errorf("moqt/session: write SUBSCRIBE_OK: %w", err)
 	}
-	sub, _ := r.First.(*message.Subscribe) // checked above
-	return &Publication{
-		Stream:    r.Stream,
-		s:         r.s,
-		requestID: sub.RequestID,
-		alias:     ok.TrackAlias,
-	}, nil
+	return newPublication(r.s, r.Stream, sub.RequestID, ok.TrackAlias, sub.Parameters), nil
 }
 
 // AcceptPublish accepts an inbound PUBLISH (§10.11): it registers the

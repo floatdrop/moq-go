@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -152,17 +153,22 @@ func stream(ctx context.Context, media *session.Publication, src *source, opts p
 
 		var open *session.OutgoingSubgroupStream
 		var openGroup uint64
+		var skipping bool // the current Group is skipped: Forward State was 0
 		for i := range src.Chunks {
 			c := &src.Chunks[i]
 			if err := pace(ctx, start, passOffset, c, src.Timescale, opts.Rate); err != nil {
 				cancelSubgroup(open)
 				return err
 			}
+			if skipping && c.Group == openGroup {
+				continue
+			}
 
 			if open == nil || c.Group != openGroup {
 				if err := closeSubgroup(open); err != nil {
 					return err
 				}
+				open, skipping = nil, false
 				group := groupBase + c.Group
 				sg, err := media.OpenSubgroup(message.SubgroupHeader{
 					Properties:     true,
@@ -172,6 +178,12 @@ func stream(ctx context.Context, media *session.Publication, src *source, opts p
 					// Object and a subscriber can retire the Group on its FIN.
 					EndOfGroup: true,
 				})
+				if errors.Is(err, session.ErrForwardPaused) {
+					// §5.1: no objects while Forward State is 0. The timeline
+					// keeps running; this Group is skipped whole.
+					openGroup, skipping = c.Group, true
+					continue
+				}
 				if err != nil {
 					return fmt.Errorf("video: open subgroup for group %d: %w", group, err)
 				}
@@ -183,6 +195,12 @@ func stream(ctx context.Context, media *session.Publication, src *source, opts p
 				return err
 			}
 			if err := writeChunk(open, c, payload); err != nil {
+				if errors.Is(err, session.ErrForwardPaused) {
+					// Paused mid-Group; the stream was already reset, and the
+					// rest of this Group is skipped.
+					open, skipping = nil, true
+					continue
+				}
 				cancelSubgroup(open)
 				return err
 			}
