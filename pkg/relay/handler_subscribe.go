@@ -257,11 +257,16 @@ func (h *sessionHandler) readSubscribeUpdates(
 	fullName track.FullTrackName,
 ) {
 	updates := h.sess.NewRequestUpdateLimiter()
-	fin := readRequestStream(ctx, req.Stream, func(m message.Message) bool {
+	fin := readRequestStream(ctx, h.sess, req.Stream, func(m message.Message) bool {
 		if h.isPeerStateNotify(m) {
 			return false
 		}
 		if upd, ok := m.(*message.RequestUpdate); ok {
+			// §10.2.1: parameters outside the scope of a subscriber's
+			// update are session-fatal.
+			if h.sess.CheckPeerParams(message.ScopeUpdateFromSubscriber, upd) != nil {
+				return false
+			}
 			// §10.1: the update consumes a Request ID; a parity or
 			// duplicate violation is session-fatal.
 			if !h.handleFollowupRequestID(ctx, upd) {

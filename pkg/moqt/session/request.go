@@ -297,6 +297,13 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 			return nil, s.closeProtocolViolation(&ErrUnexpectedRequestOpener{Type: msg.Type()})
 		}
 
+		// §10.2.1 / §10.2: a parameter outside the opener's scope, or a
+		// repeated one, closes the session.
+		if err := s.CheckPeerParams(message.ScopeOfRequest(msg.Type()), msg); err != nil {
+			resetStream(stream)
+			return nil, err
+		}
+
 		// §10.1 parity + duplicate enforcement, shared with the follow-up
 		// REQUEST_UPDATE path — see [Session.CheckPeerRequestID].
 		if m, ok := msg.(message.WithRequestID); ok {
@@ -473,8 +480,10 @@ type requestHandle struct {
 	finished atomic.Bool
 
 	// peerUpdate / peerNotify are the follow-ups the peer may send on this
-	// stream (§10.9 / §10.10), applied to the broker on creation.
+	// stream (§10.9 / §10.10), and updateScope the §10.2.1 scope of the
+	// peer's REQUEST_UPDATEs, applied to the broker on creation.
 	peerUpdate, peerNotify bool
+	updateScope            message.ParamScope
 }
 
 // Close ends the request by cancelling it (§3.3.3): "abruptly terminating any
@@ -514,6 +523,7 @@ func (h *requestHandle) Broker() *RequestBroker {
 	h.brokerOnce.Do(func() {
 		b := h.s.NewRequestBroker(h.Stream)
 		b.PeerMessages(h.peerUpdate, h.peerNotify)
+		b.UpdateScope(h.updateScope)
 		h.broker.Store(b)
 	})
 	return h.broker.Load()
@@ -625,6 +635,9 @@ func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Mess
 	if err != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
+	if errors.Is(err, message.ErrUnknownParameter) {
+		return nil, s.closeProtocolViolation(err) // §10.2
+	}
 	return msg, err
 }
 
@@ -666,7 +679,18 @@ func awaitRequestResponse[OK message.Message, R any](
 			_ = stream.Close()
 			return zero, err
 		}
-		return onOK(stream, ok)
+		r, err := onOK(stream, ok)
+		if err != nil {
+			return r, err
+		}
+		// §10.2.1, checked after onOK: for a SUBSCRIBE it registers the Track
+		// Alias, and the publisher may already be sending on it, so nothing
+		// may delay that (#85). A violation closes the session, handle and
+		// all.
+		if err := s.CheckPeerParams(message.ScopeOfResponse(m.Type()), resp); err != nil {
+			return zero, err
+		}
+		return r, nil
 	}
 	_ = stream.Close()
 	if rerr, isErr := resp.(*message.RequestError); isErr {
@@ -716,6 +740,27 @@ func (s *Session) UpdateRequest(
 		return nil, fmt.Errorf("moqt/session: read REQUEST_UPDATE response: %w", err)
 	}
 	return s.mapUpdateResponse(resp)
+}
+
+// CheckPeerParams checks the Message Parameters of m, received from the peer
+// as a message of the given scope, against §10.2.1 ("If it appears in some
+// other type of message, the receiving endpoint MUST close the connection with
+// a PROTOCOL_VIOLATION") and §10.2's duplicate rule. On a violation it closes
+// the session with PROTOCOL_VIOLATION and returns the error. A message without
+// parameters passes.
+//
+// The session checks every message it reads itself. Callers that read a
+// request stream with [message.Parse] — REQUEST_UPDATEs on a request they
+// answer, for instance — call it for what they read.
+func (s *Session) CheckPeerParams(scope message.ParamScope, m message.Message) error {
+	params, ok := message.ParamsOf(m)
+	if !ok {
+		return nil
+	}
+	if err := params.CheckScope(scope); err != nil {
+		return s.closeProtocolViolation(err)
+	}
+	return nil
 }
 
 // checkRequestOKTrackProperties enforces §10.5 on the REQUEST_OK answering
@@ -848,11 +893,12 @@ func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 	// The publisher sent the PUBLISH, so it may send REQUEST_UPDATE
 	// (§10.9) as well as PUBLISH_STATE_NOTIFY (§10.10).
 	return &IncomingPublication{
-		Stream:     r.Stream,
-		s:          r.s,
-		requestID:  pub.RequestID,
-		peerUpdate: true,
-		peerNotify: true,
-		alias:      pub.TrackAlias,
+		Stream:      r.Stream,
+		s:           r.s,
+		requestID:   pub.RequestID,
+		peerUpdate:  true,
+		peerNotify:  true,
+		updateScope: message.ScopeUpdateFromPublisher,
+		alias:       pub.TrackAlias,
 	}, nil
 }

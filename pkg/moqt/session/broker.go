@@ -64,6 +64,10 @@ type RequestBroker struct {
 	onUpdate       UpdateHandler
 	onUpdateFailed func()
 
+	// updateScope is the §10.2.1 scope peer REQUEST_UPDATEs are checked
+	// against; 0 skips the check. See [RequestBroker.UpdateScope].
+	updateScope message.ParamScope
+
 	// noPeerUpdate / noPeerNotify record that the peer may not send
 	// REQUEST_UPDATE / PUBLISH_STATE_NOTIFY on this stream; see
 	// [RequestBroker.PeerMessages].
@@ -82,6 +86,15 @@ type RequestBroker struct {
 func (b *RequestBroker) PeerMessages(requestUpdate, publishStateNotify bool) {
 	b.noPeerUpdate, b.noPeerNotify = !requestUpdate, !publishStateNotify
 }
+
+// UpdateScope sets the §10.2.1 parameter scope of the peer's REQUEST_UPDATEs
+// on this stream — [message.ScopeOfUpdate] of the request, or
+// [message.ScopeUpdateFromSubscriber] for the subscriber of a PUBLISH — so one
+// carrying a parameter outside it closes the session with PROTOCOL_VIOLATION.
+// The typed handles' brokers have it set; a broker made with
+// [Session.NewRequestBroker] checks nothing until told. Call it before
+// [RequestBroker.Serve].
+func (b *RequestBroker) UpdateScope(s message.ParamScope) { b.updateScope = s }
 
 // UpdateHandler decides a peer's REQUEST_UPDATE (§10.9). It returns the
 // REQUEST_OK to send, or an error: a *[RequestRejectedError] is sent as
@@ -168,6 +181,9 @@ func (s *Session) mapUpdateResponse(msg message.Message) (*message.RequestOK, er
 	switch m := msg.(type) {
 	case *message.RequestOK:
 		if err := s.checkRequestOKTrackProperties(nil, m); err != nil {
+			return nil, err
+		}
+		if err := s.CheckPeerParams(message.ScopeRequestUpdateOK, m); err != nil {
 			return nil, err
 		}
 		return m, nil
@@ -367,6 +383,9 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 				return ctx.Err()
 			case errors.Is(err, io.EOF):
 				return nil
+			case errors.Is(err, message.ErrUnknownParameter):
+				b.stream.CancelRead(uint64(moqt.StreamResetInternalError))
+				return b.sess.closeProtocolViolation(err) // §10.2
 			default:
 				// Covers peer resets too (a STOP_SENDING on an
 				// already-reset stream is a transport no-op).
@@ -394,6 +413,9 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 			if err := b.sess.checkRequestOKTrackProperties(nil, m); err != nil {
 				return err
 			}
+			if err := b.sess.CheckPeerParams(message.ScopeRequestUpdateOK, m); err != nil {
+				return err
+			}
 			if b.route(msg) {
 				continue
 			}
@@ -403,10 +425,18 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 				return b.sess.closeProtocolViolation(errors.New(
 					"moqt/session: PUBLISH_STATE_NOTIFY from a peer that may not send one"))
 			}
+			if err := b.sess.CheckPeerParams(message.ScopePublishStateNotify, m); err != nil {
+				return err
+			}
 		case *message.RequestUpdate:
 			if b.noPeerUpdate {
 				return b.sess.closeProtocolViolation(errors.New(
 					"moqt/session: REQUEST_UPDATE from a peer that may not send one"))
+			}
+			if b.updateScope != 0 {
+				if err := b.sess.CheckPeerParams(b.updateScope, m); err != nil {
+					return err
+				}
 			}
 			// §10.1: a REQUEST_UPDATE consumes a Request ID from the
 			// sender's space; a wrong-parity or duplicate ID is

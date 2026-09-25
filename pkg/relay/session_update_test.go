@@ -341,61 +341,13 @@ func TestRequestUpdate_FetchValidUpdateReturnsOK(t *testing.T) {
 	// REQUEST_UPDATE reuses the FETCH's Request ID (assigned by the session
 	// inside Fetch) and rides the original bidi request stream.
 	ok, err := fetchSess.UpdateRequest(t.Context(), reqStream,
-		message.Parameters{message.GroupOrderParam(message.GroupOrderDescending)})
+		message.Parameters{message.SubscriberPriorityParam(7)})
 	if err != nil {
 		t.Fatalf("UpdateRequest: %v", err)
 	}
 	if ok == nil {
 		t.Fatal("REQUEST_OK is nil")
 	}
-}
-
-// TestRequestUpdate_FetchMalformedRejected pins the §10.9 FETCH failure path:
-// a REQUEST_UPDATE whose parameters are malformed (an out-of-range GROUP_ORDER,
-// a §10.2.8 protocol violation) is answered with REQUEST_ERROR carrying
-// MALFORMED_TRACK. Unlike a SUBSCRIBE update there is no PUBLISH_DONE for a
-// FETCH — the relay resets the FETCH data stream instead — so this test
-// asserts only the control-plane REQUEST_ERROR (the data-stream reset is
-// best-effort: the relay FINs the snapshot before the update can arrive).
-func TestRequestUpdate_FetchMalformedRejected(t *testing.T) {
-	t.Parallel()
-	pubSess, _, publisherAlias := publishAndCache(t)
-
-	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, 3 /*count*/)
-	time.Sleep(50 * time.Millisecond)
-
-	fetchSess := dialAnotherClient(t, pubSess)
-	fetchMsg := &message.Fetch{
-		Namespace: wire.TrackNamespace{[]byte("video")},
-		Name:      []byte("cam1"),
-		Parameters: message.Parameters{
-			message.GroupOrderParam(message.GroupOrderAscending),
-			fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: 2}),
-		},
-	}
-	reqStream, err := fetchSess.Fetch(t.Context(), fetchMsg)
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
-	defer reqStream.Close()
-
-	// Drain the FETCH data stream to FIN so the relay reaches its follow-up
-	// loop before the malformed update arrives.
-	ds, err := fetchSess.AcceptDataStream(t.Context())
-	if err != nil {
-		t.Fatalf("AcceptDataStream: %v", err)
-	}
-	fs, isFetch := ds.(*session.IncomingFetchStream)
-	if !isFetch {
-		t.Fatalf("got %T, want *IncomingFetchStream", ds)
-	}
-	decodeFetchStream(t, fs, message.GroupOrderAscending)
-
-	// 0x05 is neither Ascending (0x1) nor Descending (0x2):
-	// validateFetchUpdateParams rejects it, so the relay answers REQUEST_ERROR.
-	_, err = fetchSess.UpdateRequest(t.Context(), reqStream,
-		message.Parameters{message.ByteParam(message.ParamGroupOrder, 0x05)})
-	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
 }
 
 // TestRequestUpdate_InvalidRequestIDClosesSession pins the §10.1 receiver

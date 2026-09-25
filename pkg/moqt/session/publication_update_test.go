@@ -102,7 +102,7 @@ func TestPublicationDeclinesUnsupportedUpdate(t *testing.T) {
 
 	_, err := sub.Update(t.Context(), message.Parameters{
 		message.ForwardParam(false),
-		message.GroupOrderParam(message.GroupOrderDescending),
+		message.SubgroupDeliveryTimeoutParam(time.Second),
 	})
 	rej, ok := errors.AsType[*session.RequestRejectedError](err)
 	if !ok || rej.Code != moqt.RequestNotSupported {
@@ -142,7 +142,7 @@ func TestPublicationCustomUpdateHandler(t *testing.T) {
 		kept := upd.Parameters[:0:0]
 		for _, p := range upd.Parameters {
 			seen = append(seen, p.Type)
-			if p.Type != message.ParamGroupOrder { // this app accepts GROUP_ORDER itself
+			if p.Type != message.ParamSubgroupDeliveryTimeout { // this app accepts it itself
 				kept = append(kept, p)
 			}
 		}
@@ -152,7 +152,7 @@ func TestPublicationCustomUpdateHandler(t *testing.T) {
 
 	if _, err := sub.Update(t.Context(), message.Parameters{
 		message.ForwardParam(false),
-		message.GroupOrderParam(message.GroupOrderDescending),
+		message.SubgroupDeliveryTimeoutParam(time.Second),
 	}); err != nil {
 		t.Fatalf("Update through the custom handler: %v", err)
 	}
@@ -210,13 +210,12 @@ func drainOneSubgroup(t *testing.T, client *session.Session) {
 	}
 }
 
-// TestPublishOKForwardIsIgnored: draft-20 moved subscription parameters out of
-// PUBLISH_OK ("Subscription parameters appear in REQUEST_UPDATE, not
-// PUBLISH_OK", #1790); FORWARD may appear in PUBLISH, not PUBLISH_OK
-// (§10.2.18), and "The initiator of the subscription sets the initial Forward
-// State in either PUBLISH or SUBSCRIBE" (§5.1). A FORWARD=0 in PUBLISH_OK must
-// not pause the publisher.
-func TestPublishOKForwardIsIgnored(t *testing.T) {
+// TestPublishOKForwardClosesSession: draft-20 moved subscription parameters
+// out of PUBLISH_OK ("Subscription parameters appear in REQUEST_UPDATE, not
+// PUBLISH_OK", #1790). FORWARD may appear in PUBLISH, not PUBLISH_OK
+// (§10.2.18), so one there is a parameter outside its scope: "the receiving
+// endpoint MUST close the connection with a PROTOCOL_VIOLATION" (§10.2.1).
+func TestPublishOKForwardClosesSession(t *testing.T) {
 	client, server := openPair(t)
 	go func() {
 		r, err := server.AcceptRequest(t.Context())
@@ -225,14 +224,10 @@ func TestPublishOKForwardIsIgnored(t *testing.T) {
 		}
 		_ = r.Reply(&message.RequestOK{Parameters: message.Parameters{message.ForwardParam(false)}})
 	}()
-	pub, err := client.Publish(t.Context(), &message.Publish{Name: []byte("t")})
-	must(t, err)
-	go func() { _, _ = server.AcceptDataStream(t.Context()) }()
-	sg, err := pub.OpenSubgroup(message.SubgroupHeader{GroupID: 1})
-	if err != nil {
-		t.Fatalf("OpenSubgroup after a PUBLISH_OK with FORWARD=0: %v", err)
+	if _, err := client.Publish(t.Context(), &message.Publish{Name: []byte("t")}); err == nil {
+		t.Fatal("Publish succeeded on a PUBLISH_OK carrying FORWARD")
 	}
-	_ = sg.Close()
+	requireClosedProtocolViolation(t, client)
 }
 
 // TestForwardPauseResetsOpenSubgroup: FORWARD=0 stops objects on subgroups
@@ -274,7 +269,7 @@ func TestForwardPauseResetsOpenSubgroup(t *testing.T) {
 // application's own Done is a no-op rather than a failed write.
 func TestDeclinedUpdateEndsPublication(t *testing.T) {
 	client, sub, pub := servedPublication(t)
-	_, _ = sub.Update(t.Context(), message.Parameters{message.GroupOrderParam(message.GroupOrderDescending)})
+	_, _ = sub.Update(t.Context(), message.Parameters{message.SubgroupDeliveryTimeoutParam(time.Second)})
 	if _, err := readWithin(sub.Stream, time.Second); err != nil { // PUBLISH_DONE
 		t.Fatalf("read PUBLISH_DONE: %v", err)
 	}

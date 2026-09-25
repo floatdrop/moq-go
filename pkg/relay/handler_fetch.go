@@ -173,13 +173,18 @@ func (h *sessionHandler) fetchRangeFilters(
 // other follow-up is ignored. A requester FIN means no more updates; the
 // response is already complete, so the relay FINs back (§3.3.2). Scaffolding
 // lives in [readRequestStream].
-func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Request, out *session.OutgoingFetchStream) {
+func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Request) {
 	updates := h.sess.NewRequestUpdateLimiter()
-	fin := readRequestStream(ctx, req.Stream, func(m message.Message) bool {
+	fin := readRequestStream(ctx, h.sess, req.Stream, func(m message.Message) bool {
 		if h.isPeerStateNotify(m) {
 			return false
 		}
 		if upd, ok := m.(*message.RequestUpdate); ok {
+			// §10.2.1: parameters outside a FETCH update's scope are
+			// session-fatal.
+			if h.sess.CheckPeerParams(message.ScopeUpdateFetch, upd) != nil {
+				return false
+			}
 			// §10.1: the update consumes a Request ID; a parity or
 			// duplicate violation is session-fatal.
 			if !h.handleFollowupRequestID(ctx, upd) {
@@ -194,7 +199,7 @@ func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Requ
 			if !h.handleFollowupTokens(ctx, upd) {
 				return false
 			}
-			h.handleFetchUpdate(ctx, req, out, upd)
+			h.handleFetchUpdate(ctx, req)
 			updates.Responded()
 		}
 		return true
@@ -206,56 +211,25 @@ func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Requ
 	}
 }
 
-// handleFetchUpdate applies a REQUEST_UPDATE (§10.9) to an in-flight FETCH.
+// handleFetchUpdate answers a REQUEST_UPDATE (§10.9) to an in-flight FETCH.
 // A FETCH response is a finished snapshot by the time the data stream is
-// FIN'd, so the relay has no live parameters to mutate — but it must still
-// validate the update and answer with the single mandated REQUEST_OK /
-// REQUEST_ERROR. Per §10.9, a FETCH whose REQUEST_UPDATE fails differs from
-// a SUBSCRIBE: there is no PUBLISH_DONE for a FETCH, so the relay resets the
-// FETCH data stream instead.
-func (h *sessionHandler) handleFetchUpdate(
-	ctx context.Context,
-	req *session.Request,
-	out *session.OutgoingFetchStream,
-	upd *message.RequestUpdate,
-) {
-	if err := validateFetchUpdateParams(upd.Parameters); err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH REQUEST_UPDATE parameter parse failed",
-			slog.String("err", err.Error()))
-		_ = req.Reply(&message.RequestError{
-			ErrorCode:   moqt.RequestMalformedTrack,
-			ErrorReason: err.Error(),
-		})
-		// §10.9: a failed FETCH update resets the FETCH data stream.
-		out.Cancel(moqt.StreamResetInternalError)
-		return
-	}
+// FIN'd, so the relay has no live parameters to mutate, but it must still
+// answer with the single mandated REQUEST_OK. Parameters outside a FETCH
+// update's scope (§10.2.1) closed the session before this runs; the ones left
+// in scope (SUBSCRIBER_PRIORITY, the delivery timeouts, AUTHORIZATION_TOKEN)
+// have nothing to change on a finished snapshot.
+func (h *sessionHandler) handleFetchUpdate(ctx context.Context, req *session.Request) {
 	if err := req.Reply(&message.RequestOK{}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH REQUEST_UPDATE_OK write failed",
 			slog.String("err", err.Error()))
 	}
 }
 
-// validateFetchUpdateParams checks the parameters of a FETCH REQUEST_UPDATE.
-// FETCH does not carry a Forward State (its response is a finished snapshot),
-// so the only thing the relay validates here is the GROUP_ORDER enum (§10.2.8).
+// TODO(draft-19): §10.2.8 says an out-of-range GROUP_ORDER "MUST close the
+// session with PROTOCOL_VIOLATION". The SUBSCRIBE / SUBSCRIBE_TRACKS paths do
+// (see [checkGroupOrderParam]); the standalone and joining FETCH paths still
+// read an invalid value here as Ascending.
 //
-// TODO(draft-19): §10.2.8 mandates a session-level PROTOCOL_VIOLATION for an
-// out-of-range GROUP_ORDER; the SUBSCRIBE / SUBSCRIBE_TRACKS paths were
-// promoted to close the session (see [checkGroupOrderParam]), but the FETCH
-// paths (this one and the initial standalone/joining FETCH) still scope it to
-// a REQUEST_ERROR pending the same promotion.
-func validateFetchUpdateParams(ps message.Parameters) error {
-	if p, ok := ps.Find(message.ParamGroupOrder); ok {
-		switch message.GroupOrder(p.Byte) {
-		case message.GroupOrderAscending, message.GroupOrderDescending:
-		default:
-			return fmt.Errorf("invalid GROUP_ORDER value 0x%X (§10.2.8)", p.Byte)
-		}
-	}
-	return nil
-}
-
 // fetchGroupOrder pulls the GROUP_ORDER parameter (§10.2.8) out of a
 // FETCH's Parameters list. Defaults to ascending when omitted; the
 // FETCH responder uses this to choose between ascending and descending
