@@ -79,7 +79,8 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	// A later upstream REQUEST_UPDATE rides this PUBLISH stream (§10.9),
 	// consuming a fresh Request ID from the relay's own space (§10.1);
 	// the PUBLISH's ID is recorded for identity/diagnostics.
-	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias, msg.RequestID)
+	// The publisher sent the PUBLISH, so it may send REQUEST_UPDATE (§10.9).
+	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias, msg.RequestID, true)
 
 	// Register the upstream and reply REQUEST_OK atomically under the
 	// stream's broker write lock. Both orderings matter:

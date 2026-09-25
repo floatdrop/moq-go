@@ -451,6 +451,10 @@ type requestHandle struct {
 	// finished records that writeThenClose delivered this side's final
 	// message and FIN, so Close must not reset what it sent.
 	finished atomic.Bool
+
+	// peerUpdate / peerNotify are the follow-ups the peer may send on this
+	// stream (§10.9 / §10.10), applied to the broker on creation.
+	peerUpdate, peerNotify bool
 }
 
 // Close ends the request by cancelling it (§3.3.3): "abruptly terminating any
@@ -488,7 +492,9 @@ func cancelRequest(s Stream) {
 // through the broker automatically, so they stay safe alongside Serve.
 func (h *requestHandle) Broker() *RequestBroker {
 	h.brokerOnce.Do(func() {
-		h.broker.Store(h.s.NewRequestBroker(h.Stream))
+		b := h.s.NewRequestBroker(h.Stream)
+		b.PeerMessages(h.peerUpdate, h.peerNotify)
+		h.broker.Store(b)
 	})
 	return h.broker.Load()
 }
@@ -805,10 +811,14 @@ func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
 		return nil, fmt.Errorf("moqt/session: write PUBLISH REQUEST_OK: %w", err)
 	}
+	// The publisher sent the PUBLISH, so it may send REQUEST_UPDATE
+	// (§10.9) as well as PUBLISH_STATE_NOTIFY (§10.10).
 	return &IncomingPublication{
-		Stream:    r.Stream,
-		s:         r.s,
-		requestID: pub.RequestID,
-		alias:     pub.TrackAlias,
+		Stream:     r.Stream,
+		s:          r.s,
+		requestID:  pub.RequestID,
+		peerUpdate: true,
+		peerNotify: true,
+		alias:      pub.TrackAlias,
 	}, nil
 }

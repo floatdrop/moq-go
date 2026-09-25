@@ -415,12 +415,13 @@ Request lifecycle:
 - The relay's REQUEST_UPDATE_OK to a downstream subscriber never carries
   LARGEST_OBJECT (§10.9.1, §10.2.17). The session's `Publication` handling
   does.
-- Nothing checks who may send REQUEST_UPDATE or PUBLISH_STATE_NOTIFY on an
-  existing stream (§10.9, §10.10). Note for the fix: on an accepted PUBLISH the
-  publisher, as the request's sender, MAY send REQUEST_UPDATE; the relay's
-  upstream broker currently declines it with NOT_SUPPORTED.
 
 Validation:
+
+- REQUEST_UPDATE / PUBLISH_STATE_NOTIFY roles (§10.9, §10.10) are enforced by
+  brokers from typed handles' `Broker()` and by the relay. Handles the
+  application reads itself (the namespace handles, `FetchResponder`, or any
+  stream read with `message.Parse`) get no enforcement.
 
 - Message Parameter scope is not enforced: a parameter in a message it is not
   defined for MUST close the session (§10.2.1).

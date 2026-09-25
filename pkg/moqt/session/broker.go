@@ -63,6 +63,24 @@ type RequestBroker struct {
 	// before Serve runs.
 	onUpdate       UpdateHandler
 	onUpdateFailed func()
+
+	// noPeerUpdate / noPeerNotify record that the peer may not send
+	// REQUEST_UPDATE / PUBLISH_STATE_NOTIFY on this stream; see
+	// [RequestBroker.PeerMessages].
+	noPeerUpdate bool
+	noPeerNotify bool
+}
+
+// PeerMessages declares which follow-ups the peer may send on this stream.
+// §10.9: REQUEST_UPDATE comes only from "The sender of a request" or from "A
+// subscriber ... of a subscription established with PUBLISH". §10.10:
+// PUBLISH_STATE_NOTIFY "applies only to subscriptions, and is sent only by the
+// publisher". A disallowed one closes the session with PROTOCOL_VIOLATION, as
+// both sections require. Typed handles' Broker methods set this; a broker from
+// [Session.NewRequestBroker] allows both until told otherwise. Call it before
+// [RequestBroker.Serve].
+func (b *RequestBroker) PeerMessages(requestUpdate, publishStateNotify bool) {
+	b.noPeerUpdate, b.noPeerNotify = !requestUpdate, !publishStateNotify
 }
 
 // UpdateHandler decides a peer's REQUEST_UPDATE (§10.9). It returns the
@@ -375,7 +393,16 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 				continue
 			}
 			// Unsolicited response — surface via onMsg below.
+		case *message.PublishStateNotify:
+			if b.noPeerNotify {
+				return b.sess.closeProtocolViolation(errors.New(
+					"moqt/session: PUBLISH_STATE_NOTIFY from a peer that may not send one"))
+			}
 		case *message.RequestUpdate:
+			if b.noPeerUpdate {
+				return b.sess.closeProtocolViolation(errors.New(
+					"moqt/session: REQUEST_UPDATE from a peer that may not send one"))
+			}
 			// §10.1: a REQUEST_UPDATE consumes a Request ID from the
 			// sender's space; a wrong-parity or duplicate ID is
 			// session-fatal.

@@ -253,6 +253,9 @@ func (h *sessionHandler) readSubscribeUpdates(
 ) {
 	updates := h.sess.NewRequestUpdateLimiter()
 	fin := readRequestStream(ctx, req.Stream, func(m message.Message) bool {
+		if h.isPeerStateNotify(m) {
+			return false
+		}
 		if upd, ok := m.(*message.RequestUpdate); ok {
 			// §10.1: the update consumes a Request ID; a parity or
 			// duplicate violation is session-fatal.
@@ -608,8 +611,10 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// The SUBSCRIBE's Request ID (assigned inside sess.Subscribe) is recorded
 	// for identity; a later upstream REQUEST_UPDATE rides this stream but
 	// consumes its own fresh ID (§10.1).
+	// On its own SUBSCRIBE the relay is the requester, so the publisher may
+	// not send REQUEST_UPDATE (§10.9).
 	upstreamSub := registry.NewUpstreamSub(
-		h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias, subMsg.RequestID)
+		h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias, subMsg.RequestID, false)
 	upstreamSub.SetFilter(filter)
 	if !wantForward {
 		// Match the local ForwardState to the Forward=0 we sent upstream, so a
@@ -655,8 +660,10 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 // serveUpstreamStream owns ALL reads on an upstream request stream (the
 // relay's on-demand SUBSCRIBE to a publisher, or an accepted PUBLISH) via
 // the sub's [session.RequestBroker]: §10.9 responses route to in-flight
-// [registry.UpstreamSub.Update] calls, peer REQUEST_UPDATEs are declined
-// (NOT_SUPPORTED — the relay installs no update handler here), and
+// [registry.UpstreamSub.Update] calls; a peer REQUEST_UPDATE closes the
+// session with PROTOCOL_VIOLATION on the relay's own SUBSCRIBE (§10.9: the
+// publisher did not send the request) and is declined with NOT_SUPPORTED on an
+// accepted PUBLISH (the relay installs no update handler); and
 // AUTHORIZATION_TOKEN parameters
 // go through the session token cache (§10.2.2) — all inside Serve. Other
 // follow-ups need no action (PUBLISH_DONE precedes the FIN that ends the

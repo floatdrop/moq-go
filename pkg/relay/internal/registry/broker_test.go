@@ -28,7 +28,7 @@ func (stubStream) Context() context.Context    { return context.Background() }
 // themselves are pinned in the session package's broker tests.
 func TestUpstreamSub_UpdateDelegatesToBroker(t *testing.T) {
 	t.Parallel()
-	sub := registry.NewUpstreamSub(1, nil, stubStream{}, 0, 7)
+	sub := registry.NewUpstreamSub(1, nil, stubStream{}, 0, 7, false)
 
 	sub.CloseOnDemand()
 	if !sub.IsTerminated() {

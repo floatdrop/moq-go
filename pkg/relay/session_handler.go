@@ -597,6 +597,20 @@ func readRequestStream(ctx context.Context, stream session.Stream, onMsg func(me
 	}
 }
 
+// isPeerStateNotify reports a PUBLISH_STATE_NOTIFY arriving on a request the
+// relay is answering, and closes the session for it. The peer there is the
+// requester, and PUBLISH_STATE_NOTIFY "is sent only by the publisher" of a
+// subscription; one "for any other request type, or from the subscriber, MUST
+// close the session with a PROTOCOL_VIOLATION" (§10.10).
+func (h *sessionHandler) isPeerStateNotify(m message.Message) bool {
+	if _, ok := m.(*message.PublishStateNotify); !ok {
+		return false
+	}
+	_ = h.sess.Close(moqt.SessionProtocolViolation,
+		"PUBLISH_STATE_NOTIFY from the requester")
+	return true
+}
+
 // awaitRequestEnd keeps a request whose requester FINned its side alive until
 // it really ends. §3.3.2: a FIN "is not a request cancellation"; §3.3.3: a
 // requester that has FINned "and subsequently wishes to cancel sends
