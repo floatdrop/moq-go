@@ -840,10 +840,24 @@ func (r *Request) Reply(msg message.Message) error {
 // or choose not to respond" — and a failed write has taken neither until the
 // reset lands. Returning early without it leaves the requester waiting on a
 // response that can never arrive, for as long as the session lives.
+//
+// RejectError sends Retry Interval 0: the request "SHOULD NOT be retried"
+// (§10.6.2). Use [Request.Reject] to invite a retry.
 func (r *Request) RejectError(code moqt.RequestErrorCode, reason string) error {
+	return r.Reject(&RequestRejectedError{Code: code, Reason: reason})
+}
+
+// Reject is [Request.RejectError] with the whole REQUEST_ERROR: rej's Code,
+// Reason and RetryInterval (§10.6.2: "If a request is retryable with the same
+// parameters at a later time, the sender of REQUEST_ERROR includes a non-zero
+// Retry Interval in the message"). It is the send-side counterpart of the
+// *[RequestRejectedError] a requester gets back, so a relay can pass an
+// upstream's rejection on as it came.
+func (r *Request) Reject(rej *RequestRejectedError) error {
 	if err := message.Marshal(r.Stream, &message.RequestError{
-		ErrorCode:   code,
-		ErrorReason: reason,
+		ErrorCode:     rej.Code,
+		RetryInterval: rej.RetryInterval,
+		ErrorReason:   rej.Reason,
 	}); err != nil {
 		resetStream(r.Stream)
 		return err

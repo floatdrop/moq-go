@@ -1,10 +1,13 @@
 package relay_test
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
@@ -46,6 +49,21 @@ func TestRelay_SubscriptionLimit(t *testing.T) {
 	// Second concurrent subscription exceeds the cap.
 	_, err = subSess.Subscribe(t.Context(), newSub())
 	requireRejectedWithCode(t, err, moqt.RequestExcessiveLoad)
+	requireRetryInvited(t, err)
+}
+
+// requireRetryInvited: §10.6.2 "EXCESSIVE_LOAD: The responder is overloaded
+// and cannot process the request at this time. The sender SHOULD use the
+// Retry Interval to indicate when the request can be retried." A per-session
+// cap frees up when an earlier request ends, so the relay invites a retry
+// after about a second, jittered against synchronized retries.
+func requireRetryInvited(t *testing.T, err error) {
+	t.Helper()
+	rej, _ := errors.AsType[*session.RequestRejectedError](err)
+	after, retry := rej.RetryAfter()
+	if !retry || after < time.Second || after >= 1500*time.Millisecond {
+		t.Fatalf("EXCESSIVE_LOAD RetryAfter() = (%v, %v), want a retry in [1s, 1.5s)", after, retry)
+	}
 }
 
 // TestRelay_NamespaceRequestLimit pins §13.7.1: with
@@ -70,4 +88,5 @@ func TestRelay_NamespaceRequestLimit(t *testing.T) {
 		Namespace: wire.TrackNamespace{[]byte("audio")},
 	})
 	requireRejectedWithCode(t, err, moqt.RequestExcessiveLoad)
+	requireRetryInvited(t, err)
 }
