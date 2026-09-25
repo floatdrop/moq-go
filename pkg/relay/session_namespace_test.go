@@ -29,8 +29,8 @@ func TestPublishNamespace_AcceptedAndRegistered(t *testing.T) {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 
-	// Close the request stream; the relay's handler should observe the FIN
-	// and unregister cleanly. The session itself remains alive.
+	// Close cancels the request (§6.2 withdrawal); the relay's handler should
+	// unregister cleanly. The session itself remains alive.
 	if err := stream.Close(); err != nil {
 		t.Fatalf("stream.Close: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestSubscribeTracks_AcceptedWithoutForwarding(t *testing.T) {
 		t.Fatalf("SubscribeTracks: %v", err)
 	}
 
-	// Closing the subscriber stream must let the handler exit cleanly.
+	// Close cancels the subscription (§6.1); the handler must exit cleanly.
 	if err := subStream.Close(); err != nil {
 		t.Fatalf("subStream.Close: %v", err)
 	}
