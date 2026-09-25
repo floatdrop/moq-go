@@ -88,6 +88,11 @@ type Session struct {
 	// a DUPLICATE_TRACK_ALIAS session error.
 	inboundAliases map[uint64]InboundTrack
 
+	// aliasRegistered is closed, and replaced, each time RegisterInboundTrack
+	// binds a new alias, waking [IncomingSubgroupStream.AwaitInboundTrack].
+	// Protected by mu.
+	aliasRegistered chan struct{}
+
 	// knownMandatoryTrackProperties is the set of Mandatory Track Property
 	// types (range 0x4000–0x7FFF) this endpoint supports. Configured via
 	// WithKnownMandatoryTrackProperties. nil means none are known.
@@ -157,6 +162,7 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 		goawayCh:                      make(chan struct{}),
 		done:                          make(chan struct{}),
 		inboundAliases:                make(map[uint64]InboundTrack),
+		aliasRegistered:               make(chan struct{}),
 		knownMandatoryTrackProperties: cfg.knownMandatoryTrackProperties,
 		tokenCache:                    NewTokenCache(cfg.maxAuthTokenCacheSize),
 		tokenVerifier:                 cfg.tokenVerifier,

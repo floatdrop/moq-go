@@ -93,6 +93,24 @@ func (s *IncomingSubgroupStream) InboundTrack() (InboundTrack, bool) {
 	return s.sess.LookupInboundTrack(s.Header.TrackAlias)
 }
 
+// AwaitInboundTrack is [IncomingSubgroupStream.InboundTrack] that waits for
+// the stream's Track Alias to be registered, until ctx ends or the session
+// closes. A publisher may open a track's subgroup streams as soon as it
+// accepts the SUBSCRIBE, so they can arrive before the SUBSCRIBE_OK that binds
+// their alias; §11.4.2 lets the receiver "buffer it for a brief period to
+// handle reordering with the control message that establishes the Track
+// Alias". The caller bounds the period with ctx.
+//
+// The stream is left unread meanwhile, so its bytes hold connection flow
+// control. §11.4.2 requires endpoints to "allocate connection flow control to
+// the control streams before allocating it to any data streams", which the
+// bundled transports do not do: enough early data can stall the very
+// SUBSCRIBE_OK being waited for, until ctx ends and the caller resets the
+// stream. Keep the bound short.
+func (s *IncomingSubgroupStream) AwaitInboundTrack(ctx context.Context) (InboundTrack, bool) {
+	return s.sess.awaitInboundTrack(ctx, s.Header.TrackAlias)
+}
+
 func (s *IncomingSubgroupStream) isDataStream() {}
 
 // Read returns body bytes that follow the parsed header. Prefer ReadObject

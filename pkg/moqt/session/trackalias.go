@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -76,6 +77,8 @@ func (s *Session) RegisterInboundTrack(alias uint64, key track.Key, trackPropert
 		return nil // idempotent
 	}
 	s.inboundAliases[alias] = in
+	close(s.aliasRegistered)
+	s.aliasRegistered = make(chan struct{})
 	return nil
 }
 
@@ -112,6 +115,28 @@ func (s *Session) LookupInboundTrack(alias uint64) (InboundTrack, bool) {
 	defer s.mu.Unlock()
 	in, ok := s.inboundAliases[alias]
 	return in, ok
+}
+
+// awaitInboundTrack is [Session.LookupInboundTrack] that waits for alias to be
+// registered, until ctx ends or the session closes. See
+// [IncomingSubgroupStream.AwaitInboundTrack].
+func (s *Session) awaitInboundTrack(ctx context.Context, alias uint64) (InboundTrack, bool) {
+	for {
+		s.mu.Lock()
+		in, ok := s.inboundAliases[alias]
+		registered := s.aliasRegistered
+		s.mu.Unlock()
+		if ok {
+			return in, true
+		}
+		select {
+		case <-registered:
+		case <-ctx.Done():
+			return InboundTrack{}, false
+		case <-s.done:
+			return InboundTrack{}, false
+		}
+	}
 }
 
 // LookupInboundTrackAlias is [Session.LookupInboundTrack] reduced to the

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -111,6 +112,66 @@ func (h *sessionHandler) resolveImplicitSubgroupID(
 	return obj, true
 }
 
+// A subgroup stream can reach the relay before the SUBSCRIBE_OK that binds its
+// Track Alias: the publisher may start sending as soon as it accepts the
+// SUBSCRIBE (§11.1: "Objects can be sent before the Subscriber knows the Track
+// Alias"). §11.4.2 lets the receiver "abandon the stream, or choose to buffer it
+// for a brief period to handle reordering with the control message that
+// establishes the Track Alias". The relay leaves such a stream unread for up
+// to earlyAliasWait, then abandons it.
+//
+// The wait is also what breaks a flow-control deadlock. §11.4.2 requires
+// endpoints to "allocate connection flow control to the control streams before
+// allocating it to any data streams", which the bundled transports do not do,
+// so enough unread early data can hold back the SUBSCRIBE_OK itself; resetting
+// the streams at the deadline releases it. maxEarlyStreams caps how many
+// streams per session wait at once; past it they are abandoned at once, so a
+// peer's aliases that never resolve hold at most that many streams, each for
+// at most earlyAliasWait.
+const (
+	earlyAliasWait  = time.Second
+	maxEarlyStreams = 32
+)
+
+// testHookEarlyStreamWaiting, when set, runs as a subgroup stream starts
+// waiting for its Track Alias, so a test can send the SUBSCRIBE_OK only once
+// the stream is known to have arrived first.
+var testHookEarlyStreamWaiting atomic.Pointer[func(alias uint64)]
+
+// resolveInboundTrack returns what stream's Track Alias is bound to, waiting
+// for the binding within the bounds above when it is not registered yet. When
+// the alias stays unknown it abandons the stream and reports false: with
+// EXCESSIVE_LOAD when maxEarlyStreams streams were already waiting (§3.3.4:
+// "The endpoint is overloaded and is resetting this stream"), otherwise with
+// INTERNAL_ERROR.
+func (h *sessionHandler) resolveInboundTrack(
+	ctx context.Context,
+	stream *session.IncomingSubgroupStream,
+) (session.InboundTrack, bool) {
+	if in, ok := stream.InboundTrack(); ok {
+		return in, true
+	}
+	defer h.earlyStreams.Add(-1)
+	if h.earlyStreams.Add(1) > maxEarlyStreams {
+		h.log.LogAttrs(ctx, slog.LevelWarn, "fanout: too many streams waiting for their Track Alias",
+			slog.Uint64("alias", stream.Header.TrackAlias))
+		stream.Cancel(moqt.StreamResetExcessiveLoad)
+		return session.InboundTrack{}, false
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, earlyAliasWait)
+	defer cancel()
+	if hook := testHookEarlyStreamWaiting.Load(); hook != nil {
+		(*hook)(stream.Header.TrackAlias)
+	}
+	in, ok := stream.AwaitInboundTrack(waitCtx)
+	if !ok {
+		h.log.LogAttrs(ctx, slog.LevelWarn, "fanout: Track Alias still unknown, abandoning stream",
+			slog.Uint64("alias", stream.Header.TrackAlias))
+		stream.Cancel(moqt.StreamResetInternalError)
+	}
+	return in, ok
+}
+
 // runFanout is the subgroup-stream fanout entry point. One inbound
 // SUBGROUP_HEADER stream produces one or more outbound SUBGROUP_HEADER
 // streams per downstream subscriber, with the publisher's Track Alias
@@ -132,18 +193,11 @@ func (h *sessionHandler) resolveImplicitSubgroupID(
 func (h *sessionHandler) runFanout(ctx context.Context, stream *session.IncomingSubgroupStream) {
 	hdr := stream.Header
 
-	in, ok := stream.InboundTrack()
-	key := in.Key
+	in, ok := h.resolveInboundTrack(ctx, stream)
 	if !ok {
-		// Per §11.1, a Track Alias on a data stream must have been
-		// previously registered (via SUBSCRIBE_OK or PUBLISH). An
-		// unknown alias is a publisher protocol error scoped to this
-		// stream — reset the stream but keep the session alive.
-		h.log.LogAttrs(ctx, slog.LevelWarn, "fanout: unknown inbound Track Alias",
-			slog.Uint64("alias", hdr.TrackAlias))
-		stream.Cancel(moqt.StreamResetInternalError)
-		return
+		return // abandoned: the stream is reset, the session stays up
 	}
+	key := in.Key
 
 	entry, ok := h.tracks.Get(key)
 	if !ok {
