@@ -678,8 +678,9 @@ func (h *sessionHandler) serveFetchObjects(
 // and in what happens afterwards — a FETCH parks in the §10.9 follow-up loop,
 // a fill is simply done.
 //
-// It reports false when the stream could not be opened or the write failed;
-// the stream is already reset in the latter case, and closed (FIN) otherwise.
+// It reports false when the stream could not be opened, the write failed, or
+// the upstream refused the track's Track Properties (§2.5.1); the stream is
+// already reset in the latter two cases, and closed (FIN) otherwise.
 func (h *sessionHandler) streamFetchRange(
 	ctx context.Context,
 	kind string,
@@ -706,7 +707,25 @@ func (h *sessionHandler) streamFetchRange(
 
 	// Gather cached objects, stitching the below-floor portion from upstream
 	// when the cache doesn't cover the whole range (§9.4).
-	objs := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
+	objs, refusal := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
+	if refusal != nil {
+		// §2.5.1, for a FETCH_OK with a Mandatory Track Property the relay
+		// does not understand: REQUEST_ERROR UNSUPPORTED_EXTENSION if nothing
+		// was sent downstream yet, a reset "If the relay has already
+		// forwarded data on a fetch stream". Here FETCH_OK (or, for a fill,
+		// SUBSCRIBE_OK) went out and this stream's FETCH_HEADER is open, but
+		// no Object: between the two cases, and only the reset is left
+		// (an interpretation). Track Properties that do not parse get the
+		// same, with MALFORMED_TRACK (§3.3.4).
+		code := moqt.StreamResetInternalError
+		if errors.Is(refusal, session.ErrMalformedTrackProperties) {
+			code = moqt.StreamResetMalformedTrack
+		}
+		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH_OK Track Properties refused",
+			slog.String("kind", kind), slog.String("err", refusal.Error()))
+		out.Cancel(code)
+		return false
+	}
 
 	// §5.1.4: drop objects that fail the request's Range Filters. §11.4.4.2
 	// end-of-range markers are not objects and are always kept — they carry no

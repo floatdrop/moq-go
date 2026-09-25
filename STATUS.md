@@ -463,10 +463,6 @@ Relay:
   retried", §10.6.2). So the relay turns an upstream's "retry in N ms" into a
   permanent refusal when it passes the rejection downstream, and its
   EXCESSIVE_LOAD limit rejections never invite a retry.
-- Mandatory Track Properties (§2.5.1) are enforced on PUBLISH and upstream
-  SUBSCRIBE_OK (`Config.KnownMandatoryTrackProperties`), but not on an
-  upstream FETCH_OK. There the MUST is unmet: the FETCH fails the way any failed
-  upstream FETCH does (an unknown range), not with UNSUPPORTED_EXTENSION.
 - MAX_CACHE_DURATION (§12.3) is enforced on cache reads and the live path, but:
   - FETCH and fill write their cache snapshot without re-checking age, so a
     blocked write can start sending an expired Object; a drop there needs an
@@ -506,6 +502,12 @@ Relay:
   contributor left, then a replay or redundant upstream brings it back) starts
   its writers afresh, so an omission recorded before the rebuild is forgotten
   and the rebuilt stream may FIN (§11.4.3).
+- An upstream FETCH_OK the relay refuses over its Track Properties (§2.5.1)
+  resets the downstream fetch or fill stream: the relay answers FETCH_OK
+  before stitching, so the REQUEST_ERROR UNSUPPORTED_EXTENSION branch is never
+  taken. The refusal ends that fetch only; the track's live subscription and
+  cache-only FETCHes carry on, where §2.5.1's lead says the relay "MUST NOT
+  process or forward that track".
 - After an inbound GOAWAY the relay stops initiating requests to that peer
   (§10.4) but, as its subscriber, neither unsubscribes ("A subscriber SHOULD
   individually unsubscribe from each existing subscription"), nor migrates to
