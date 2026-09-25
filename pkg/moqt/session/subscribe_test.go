@@ -235,8 +235,10 @@ func TestSubscribe_ContextCancelUnblocksResponseWait(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestRegisterInboundTrackAlias verifies the Session.RegisterInboundTrackAlias
-// method directly: same alias + same track is idempotent; same alias +
-// different track returns *ErrDuplicateTrackAlias.
+// method directly: same alias + same track is counted (§5.1 lets concurrent
+// subscriptions to one Track share an alias), and stays registered until each
+// registration is released; same alias + different track returns
+// *ErrDuplicateTrackAlias.
 func TestRegisterInboundTrackAlias(t *testing.T) {
 	cli, _ := openPair(t)
 
@@ -248,9 +250,9 @@ func TestRegisterInboundTrackAlias(t *testing.T) {
 		t.Fatalf("first register: %v", err)
 	}
 
-	// Idempotent re-registration with the same key succeeds.
+	// A second registration with the same key succeeds, and is counted.
 	if err := cli.RegisterInboundTrackAlias(42, keyA); err != nil {
-		t.Fatalf("idempotent register: %v", err)
+		t.Fatalf("second register: %v", err)
 	}
 
 	// Same alias, different track → ErrDuplicateTrackAlias.
@@ -268,8 +270,16 @@ func TestRegisterInboundTrackAlias(t *testing.T) {
 		t.Fatalf("different alias same track: %v", err)
 	}
 
-	// Unregister alias 42, then re-register with a different track → succeeds.
+	// Releasing one of the two registrations keeps alias 42 bound to keyA...
 	cli.UnregisterInboundTrackAlias(42)
+	if key, ok := cli.LookupInboundTrackAlias(42); !ok || key != keyA {
+		t.Fatalf("after one of two releases: Lookup(42) = (%v, %v), want keyA", key, ok)
+	}
+	// ...and releasing the other frees it for a different track.
+	cli.UnregisterInboundTrackAlias(42)
+	if _, ok := cli.LookupInboundTrackAlias(42); ok {
+		t.Fatal("alias 42 still registered after both releases")
+	}
 	if err := cli.RegisterInboundTrackAlias(42, keyB); err != nil {
 		t.Fatalf("register after unregister: %v", err)
 	}
@@ -336,9 +346,10 @@ func TestSubscribeDuplicateTrackAlias(t *testing.T) {
 	}
 }
 
-// TestSubscribeSameTrackAliasIdempotent verifies that subscribing to the same
-// track twice with the same alias succeeds (idempotent registration).
-func TestSubscribeSameTrackAliasIdempotent(t *testing.T) {
+// TestSubscribeSameTrackAliasShared verifies that subscribing to the same
+// track twice with the same alias succeeds: §5.1 lets concurrent
+// subscriptions to one Track share an alias.
+func TestSubscribeSameTrackAliasShared(t *testing.T) {
 	cli, srv := openPair(t)
 	ctx := t.Context()
 
@@ -631,4 +642,27 @@ func TestIncomingSubgroupStreamTrackKey(t *testing.T) {
 		}
 		wg.Wait()
 	})
+}
+
+// TestSharedTrackAliasTakesLatestProperties: when a second subscription shares
+// an alias (§5.1), its Track Properties replace the first's (§2.5: "the most
+// recent set SHOULD replace any cached values"), so its DEFAULT_PUBLISHER_PRIORITY
+// is what inheriting subgroups get.
+func TestSharedTrackAliasTakesLatestProperties(t *testing.T) {
+	cli, _ := openPair(t)
+	key := track.NewKey(wire.TrackNamespace{[]byte("ns")}, []byte("t"))
+	props := func(prio uint64) []byte {
+		return message.AppendTrackProperties([]wire.KVPair{
+			{Type: message.PropertyDefaultPublisherPriority, IntVal: prio},
+		})
+	}
+	if err := cli.RegisterInboundTrack(42, key, props(10)); err != nil {
+		t.Fatalf("first register: %v", err)
+	}
+	if err := cli.RegisterInboundTrack(42, key, props(200)); err != nil {
+		t.Fatalf("second register: %v", err)
+	}
+	if in, ok := cli.LookupInboundTrack(42); !ok || in.DefaultPublisherPriority != 200 {
+		t.Fatalf("LookupInboundTrack(42) = (%+v, %v), want the latest priority 200", in, ok)
+	}
 }

@@ -59,10 +59,17 @@ type InboundTrack struct {
 // (whose TrackAlias field is the alias) and by the server when it receives a
 // PUBLISH (whose TrackAlias field is the alias).
 //
-// If alias is already registered for the same track (idempotent re-registration),
-// nil is returned and the first registration is kept. If alias is already
-// registered for a different track, *ErrDuplicateTrackAlias is returned and the
-// caller MUST close the session with SessionDuplicateTrackAlias (§11.1).
+// If alias is already registered for the same track, the registration is
+// counted and nil returned. §5.1: "An endpoint MAY have multiple concurrent
+// subscriptions to the same Track [...]. A publisher MAY assign the same or
+// different Track Aliases to these subscriptions." The alias stays registered
+// until each registration is released by [Session.UnregisterInboundTrackAlias].
+// The latest registration's Track Properties replace the earlier ones (§2.5:
+// "the most recent set SHOULD replace any cached values"); the draft does not
+// say which a shared alias should carry, and the session cannot tell which
+// registration a release ends. If alias is already registered for a different
+// track, *ErrDuplicateTrackAlias is returned and the caller MUST close the
+// session with SessionDuplicateTrackAlias (§11.1).
 func (s *Session) RegisterInboundTrack(alias uint64, key track.Key, trackProperties []byte) error {
 	in := InboundTrack{
 		Key:                      key,
@@ -74,9 +81,12 @@ func (s *Session) RegisterInboundTrack(alias uint64, key track.Key, trackPropert
 		if existing.Key != key {
 			return &ErrDuplicateTrackAlias{Alias: alias, Existing: existing.Key, New: key}
 		}
-		return nil // idempotent
+		s.inboundAliases[alias] = in
+		s.inboundAliasRefs[alias]++
+		return nil
 	}
 	s.inboundAliases[alias] = in
+	s.inboundAliasRefs[alias] = 1
 	close(s.aliasRegistered)
 	s.aliasRegistered = make(chan struct{})
 	return nil
@@ -88,8 +98,9 @@ func (s *Session) RegisterInboundTrackAlias(alias uint64, key track.Key) error {
 	return s.RegisterInboundTrack(alias, key, nil)
 }
 
-// UnregisterInboundTrackAlias removes a previously registered alias, freeing
-// it for potential reuse. Callers should invoke this when the subscription or
+// UnregisterInboundTrackAlias releases one registration of alias (see
+// [Session.RegisterInboundTrack]); the alias is removed, and free for reuse,
+// with the last. Callers should invoke this when the subscription or
 // publication associated with alias has been fully torn down (e.g. after
 // PUBLISH_DONE or subscription cancellation and a suitable grace period per
 // §11.1: "Subscribers SHOULD retain sufficient state to quickly discard
@@ -99,7 +110,12 @@ func (s *Session) RegisterInboundTrackAlias(alias uint64, key track.Key) error {
 func (s *Session) UnregisterInboundTrackAlias(alias uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.inboundAliasRefs[alias] > 1 {
+		s.inboundAliasRefs[alias]--
+		return
+	}
 	delete(s.inboundAliases, alias)
+	delete(s.inboundAliasRefs, alias)
 }
 
 // LookupInboundTrack returns what alias was bound to by an earlier

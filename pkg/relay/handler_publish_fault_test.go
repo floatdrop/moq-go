@@ -27,8 +27,9 @@ import (
 //     subscribers are accepted onto a track that will never produce an object.
 //
 // Probing them takes some care. Re-offering the SAME track under the same
-// alias proves nothing, because RegisterInboundTrackAlias is idempotent when
-// the alias still maps to the same track key — an earlier version of this test
+// alias proves nothing, because RegisterInboundTrackAlias accepts (and counts)
+// a registration whose alias still maps to the same track key — an earlier
+// version of this test
 // did exactly that and stayed green with both rollback lines deleted.
 func TestPublish_FailedRequestOKRollsBackRegistration(t *testing.T) {
 	t.Parallel()
