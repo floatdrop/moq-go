@@ -505,8 +505,3 @@ Relay:
     sender to use once its own timeout expires;
   - it keeps initiating requests on the session, where the recipient "SHOULD NOT
     initiate new requests".
-
-Test suite: `TestSessionCleanup_PublisherSessionDeath` flakes with "Subscribe
-succeeded after publisher death". The test fails on a SUBSCRIBE that reaches
-the relay before it has seen the publisher's close, which is a race in the test
-itself.
