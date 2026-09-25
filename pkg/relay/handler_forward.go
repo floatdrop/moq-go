@@ -47,6 +47,10 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 		if !sub.ClaimForward(key) {
 			return
 		}
+		var properties []byte
+		if includeProperties(tp.Params) { // §10.2.21
+			properties = te.GetProperties()
+		}
 		fwd := &message.Publish{
 			Namespace: fullName.Namespace,
 			Name:      fullName.Name,
@@ -54,7 +58,7 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 			// allocates the ones the relay publishes on.
 			TrackAlias:      h.sess.AllocOutboundTrackAlias(),
 			Parameters:      publishParamsForSubscriber(tp, te),
-			TrackProperties: te.GetProperties(),
+			TrackProperties: properties,
 		}
 		// Non-blocking (§6.1): with no bidi-stream credit left the relay
 		// sends PUBLISH_SKIPPED on the SUBSCRIBE_TRACKS stream instead.

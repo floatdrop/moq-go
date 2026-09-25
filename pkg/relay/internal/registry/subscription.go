@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -452,6 +453,10 @@ type DownstreamSub struct {
 	// Ascending.
 	GroupOrder uint8
 
+	// omitProperties records INCLUDE_PROPERTIES=0; see
+	// [DownstreamSub.IncludesProperties].
+	omitProperties atomic.Bool
+
 	// streamsOpened counts the data streams opened for this subscription —
 	// subgroup streams and fill fetch streams — for the §10.12 PUBLISH_DONE
 	// Stream Count; streamsOpening counts opens in flight, and streamsOpen the
@@ -630,6 +635,16 @@ func (d *DownstreamSub) SetPriority(p uint8) {
 	d.Priority = p
 	d.mu.Unlock()
 }
+
+// SetIncludeProperties records INCLUDE_PROPERTIES (§10.2.21), set once from
+// the SUBSCRIBE or SUBSCRIBE_TRACKS.
+func (d *DownstreamSub) SetIncludeProperties(include bool) { d.omitProperties.Store(!include) }
+
+// IncludesProperties reports whether the subscriber wants Track Properties
+// (INCLUDE_PROPERTIES omitted or 1). One that does not also lacks the track's
+// DEFAULT_PUBLISHER_PRIORITY (§12.4), so its subgroups and datagrams carry the
+// priority inline.
+func (d *DownstreamSub) IncludesProperties() bool { return !d.omitProperties.Load() }
 
 // SetGroupOrder records the Group Order (§10.2.8), set once from the SUBSCRIBE:
 // "The group order of an existing subscription cannot be changed" (§7.1), and

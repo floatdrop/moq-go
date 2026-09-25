@@ -179,7 +179,7 @@ By package, bottom-up along the dependency stack:
 | 10.2.18 | FORWARD                       | 0x10   | DONE   | |
 | 10.2.19 | NEW_GROUP_REQUEST             | 0x32   | DONE   | |
 | 10.2.20 | TRACK_NAMESPACE_PREFIX        | 0x34   | DONE   | Applied on REQUEST_UPDATE; SUBSCRIBE_NAMESPACE reconciles its announced set. |
-| 10.2.21 | INCLUDE_PROPERTIES            | 0x35   | PARTIAL| Parsed and scope-checked; a value other than 0 or 1 closes the session. Not applied (see backlog). |
+| 10.2.21 | INCLUDE_PROPERTIES            | 0x35   | DONE   | A value other than 0 or 1 closes the session. With 0 the relay sends empty Track Properties in SUBSCRIBE_OK, FETCH_OK, TRACK_STATUS_OK and forwarded PUBLISH, and writes the priority inline on that subscription's subgroups and datagrams, since the subscriber cannot inherit DEFAULT_PUBLISHER_PRIORITY. |
 | 10.3    | SETUP                         | 0x2F00 | DONE   | Bidirectional handshake; options as KV pairs. |
 | 10.3.1.1| AUTHORITY option              | 0x05   | PARTIAL| Sent (`WithAuthority`); refused from a server or over WebTransport (INVALID_AUTHORITY) and when not RFC 3986 syntax (MALFORMED_AUTHORITY, `uri.CheckAuthority`). Whether the server serves it is not checked — see Limitations. |
 | 10.3.1.2| PATH option                   | 0x01   | PARTIAL| Sent (`WithPath`); refused from a server or over WebTransport (INVALID_PATH) and when not RFC 3986 syntax (MALFORMED_PATH, `uri.CheckPathAndQuery`). Whether the server serves it is not checked — see Limitations. |
@@ -491,6 +491,3 @@ Relay:
     remote namespace still advertised;
   - a subscriber whose stream is blocked by flow control grows its message
     queue without bound; §10.19 lets the relay reset the stream instead.
-- SUBSCRIBE_TRACKS:
-  - INCLUDE_PROPERTIES=0 is ignored: forwarded PUBLISHes (and SUBSCRIBE_OK)
-    still carry Track Properties (§10.2.21 SHOULD).

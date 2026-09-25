@@ -114,10 +114,16 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		}
 		// Re-encode the datagram with the subscriber's outbound
 		// Track Alias. Per §9.7 the relay does not modify any other
-		// object fields — Type, Group ID, Object ID, Priority,
-		// Properties, Status, Payload all forward verbatim.
+		// object fields — Group ID, Object ID, Priority, Properties,
+		// Status, Payload all forward verbatim, and so does Type, but
+		// for the one exception below.
 		out := *d
 		out.TrackAlias = sub.TrackAlias
+		// A subscriber without Track Properties (§10.2.21) cannot inherit
+		// the DEFAULT_PUBLISHER_PRIORITY resolved above, so it is written out.
+		if !sub.IncludesProperties() {
+			out.Type &^= message.DatagramDefaultPriorityBit
+		}
 		// §10.12: PUBLISH_DONE waits for a send in progress, and none starts
 		// after it.
 		if !sub.BeginDatagram() {

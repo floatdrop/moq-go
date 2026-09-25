@@ -37,7 +37,8 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 	if known {
 		largest, hasLargest = entry.GetLargest()
 	}
-	hasProperties := known && len(entry.GetProperties()) > 0
+	// §10.2.21: INCLUDE_PROPERTIES=0 asks for empty Track Properties.
+	hasProperties := known && len(entry.GetProperties()) > 0 && includeProperties(msg.Parameters)
 	if known && (hasProperties || hasLargest) {
 		reply := &message.TrackStatusOK{}
 		if hasProperties {
