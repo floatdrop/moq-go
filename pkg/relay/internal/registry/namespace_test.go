@@ -269,7 +269,7 @@ func formatSubscribers(s []*registry.SubscriberEntry) string {
 		if i > 0 {
 			out.WriteString(", ")
 		}
-		out.WriteString(relaytest.FormatNamespace(e.Prefix))
+		out.WriteString(relaytest.FormatNamespace(e.Prefix()))
 	}
 	return out.String() + "]"
 }

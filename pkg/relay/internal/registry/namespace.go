@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
@@ -30,6 +31,11 @@ type PublisherEntry struct {
 	// the owner that closes/cancels it on teardown.
 	Stream session.Stream
 
+	// announced is set by [NamespaceRegistry.AnnouncePublisher]: from then
+	// on the entry is a source of its namespace for SUBSCRIBE_NAMESPACE
+	// subscribers. Guarded by the registry's mu.
+	announced bool
+
 	// Seq orders registrations: each RegisterPublisher assigns the next
 	// value, so Seq > [NamespaceRegistry.Seq] read earlier means the
 	// publisher registered since.
@@ -42,30 +48,20 @@ type PublisherEntry struct {
 // matching PUBLISH_NAMESPACE / PUBLISH back to the subscriber as long as the
 // subscription is alive.
 type SubscriberEntry struct {
-	// Prefix is the namespace prefix the subscriber asked to be notified
-	// about. A zero-field prefix means "all namespaces" (§6.1).
-	Prefix wire.TrackNamespace
+	// prefix is the namespace prefix the subscriber asked to be notified
+	// about; see [SubscriberEntry.Prefix]. Stored only under the registry
+	// lock, by registration and [NamespaceRegistry.UpdatePrefix].
+	prefix atomic.Pointer[wire.TrackNamespace]
 
 	// Session is the MOQT session that owns the SUBSCRIBE_NAMESPACE /
 	// SUBSCRIBE_TRACKS.
 	Session *session.Session
 
-	// Stream is the bidi request stream the subscription arrived on. The
-	// session handler writes NAMESPACE / NAMESPACE_DONE / PUBLISH
-	// messages back through this stream when matching publishers appear
-	// or vanish. All such writes MUST go through [SubscriberEntry.WriteMessage]
-	// (guarded by writeMu) — the stream is written from several goroutines
-	// (every publisher's PUBLISH_NAMESPACE / PUBLISH handler and the
-	// relay-level Discovery namespace watcher), and the underlying
-	// session.Stream does not serialise concurrent Writes.
+	// Stream is the bidi request stream the subscription arrived on. After
+	// the REQUEST_OK, every message the relay sends on it — NAMESPACE,
+	// NAMESPACE_DONE, PUBLISH_SKIPPED, replies to REQUEST_UPDATE — is queued
+	// through the entry and written by [SubscriberEntry.RunWriter], in order.
 	Stream session.Stream
-
-	// writeMu serialises concurrent control-message writes to Stream. A
-	// single control message is several stream Writes (frame header + body),
-	// so without this two interleaving Marshal calls would corrupt the wire
-	// framing (and race the underlying QUIC stream). It guards only writes —
-	// it is independent of the owning [NamespaceRegistry]'s mutex.
-	writeMu sync.Mutex
 
 	// WantsTracks distinguishes SUBSCRIBE_TRACKS (true: forward PUBLISH
 	// messages for matching tracks) from SUBSCRIBE_NAMESPACE (false: only
@@ -89,17 +85,33 @@ type SubscriberEntry struct {
 	// each PUBLISH's Track Properties via MatchesTrack; a PUBLISH that fails is
 	// not forwarded (§5.1.4). Set once at registration. nil = no restriction.
 	RangeFilters *message.RangeFilterSet
+
+	// announced counts the sources of each namespace announced to a
+	// SUBSCRIBE_NAMESPACE subscriber, by wire key (see namespace_state.go).
+	// Guarded by the owning registry's mu.
+	announced map[string]int
+
+	// outbox holds the messages queued for [SubscriberEntry.RunWriter], in
+	// order; outReady wakes it, and closed stops it once the entry is
+	// unregistered.
+	outMu     sync.Mutex
+	outbox    []message.Message
+	stopped   bool
+	outReady  chan struct{}
+	closed    chan struct{}
+	closeOnce sync.Once
 }
 
-// WriteMessage serialises one control message onto the subscriber's request
-// stream. NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED are written to a single
-// SubscriberEntry from multiple goroutines — the subscriber's own session
-// handler, every publisher's PUBLISH_NAMESPACE / PUBLISH handler, and the
-// relay-level Discovery namespace watcher — so the write is taken under writeMu
-// to keep one message's frames contiguous on the wire.
-func (e *SubscriberEntry) WriteMessage(m message.Message) error {
-	e.writeMu.Lock()
-	defer e.writeMu.Unlock()
+// Prefix is the namespace prefix the subscriber asked to be notified about. A
+// zero-field prefix means "all namespaces" (§6.1). A TRACK_NAMESPACE_PREFIX
+// update (§10.9.2) changes it.
+func (e *SubscriberEntry) Prefix() wire.TrackNamespace { return *e.prefix.Load() }
+
+func (e *SubscriberEntry) close() { e.closeOnce.Do(func() { close(e.closed) }) }
+
+// write sends one message on the subscriber's request stream. Only
+// [SubscriberEntry.RunWriter] calls it, so writes never interleave.
+func (e *SubscriberEntry) write(m message.Message) error {
 	return message.Marshal(e.Stream, m)
 }
 
@@ -138,6 +150,10 @@ type NamespaceRegistry struct {
 	// seq is the Seq of the last registered publisher. Guarded by mu.
 	seq uint64
 
+	// remote is the namespaces Discovery reports other relays advertise, by
+	// wire key; see [NamespaceRegistry.RemoteNamespace]. Guarded by mu.
+	remote map[string]*remoteNamespace
+
 	// discovery / relayAddr / log mirror [TrackRegistry] — see those
 	// docs. nil discovery means "do not advertise"; failures log at
 	// Warn and are not propagated.
@@ -169,6 +185,7 @@ func WithNamespaceRegistryLogger(l *slog.Logger) NamespaceRegistryOption {
 func NewNamespaceRegistry(opts ...NamespaceRegistryOption) *NamespaceRegistry {
 	r := &NamespaceRegistry{
 		pubCount: make(map[string]int),
+		remote:   make(map[string]*remoteNamespace),
 		log:      slog.Default(),
 	}
 	for _, opt := range opts {
@@ -208,6 +225,22 @@ func (r *NamespaceRegistry) RegisterPublisher(
 	return entry
 }
 
+// AnnouncePublisher makes entry a source of its namespace for
+// SUBSCRIBE_NAMESPACE subscribers, announcing the namespace to those that had
+// no source for it. It is separate from registration, which already makes the
+// publisher routable for SUBSCRIBEs: the relay announces only once the
+// publisher has its REQUEST_OK, since one that never got it does not believe
+// it is publishing.
+func (r *NamespaceRegistry) AnnouncePublisher(entry *PublisherEntry) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !slices.Contains(r.publishers, entry) {
+		return // RemoveSession got there first
+	}
+	entry.announced = true
+	r.addSourceLocked(entry.Namespace)
+}
+
 // UnregisterPublisher removes a previously registered publisher entry. The
 // caller passes the exact pointer that RegisterPublisher returned — this
 // avoids any ambiguity when the same (session, namespace) pair has multiple
@@ -222,6 +255,9 @@ func (r *NamespaceRegistry) UnregisterPublisher(entry *PublisherEntry) bool {
 	})
 	removed := len(r.publishers) < before
 	if removed {
+		if entry.announced {
+			r.removeSourceLocked(entry.Namespace)
+		}
 		key := namespaceWireKey(entry.Namespace)
 		r.pubCount[key]--
 		if r.pubCount[key] <= 0 {
@@ -251,17 +287,37 @@ func (r *NamespaceRegistry) RegisterSubscriber(
 	rangeFilters *message.RangeFilterSet,
 ) *SubscriberEntry {
 	entry := &SubscriberEntry{
-		Prefix:       prefix,
 		Session:      sess,
 		Stream:       stream,
 		WantsTracks:  wantsTracks,
 		Forward:      forward,
 		GroupOrder:   groupOrder,
 		RangeFilters: rangeFilters,
+		outReady:     make(chan struct{}, 1),
+		closed:       make(chan struct{}),
 	}
+	entry.prefix.Store(&prefix)
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.subscribers = append(r.subscribers, entry)
-	r.mu.Unlock()
+	if !wantsTracks {
+		// §6.1: announce every namespace already known under the prefix,
+		// under the same lock that orders later changes to them.
+		counts, names := r.namespaceSources(prefix)
+		entry.announced = counts
+		// Local publishers first, in registration order, then namespaces
+		// only other relays advertise.
+		for _, p := range r.publishers {
+			k := namespaceWireKey(p.Namespace)
+			if _, pending := names[k]; pending && p.announced {
+				entry.enqueue(namespaceMessage(p.Namespace, prefix))
+				delete(names, k)
+			}
+		}
+		for _, ns := range names {
+			entry.enqueue(namespaceMessage(ns, prefix))
+		}
+	}
 	return entry
 }
 
@@ -274,6 +330,7 @@ func (r *NamespaceRegistry) UnregisterSubscriber(entry *SubscriberEntry) bool {
 	r.subscribers = slices.DeleteFunc(r.subscribers, func(e *SubscriberEntry) bool {
 		return e == entry
 	})
+	entry.close()
 	return len(r.subscribers) < before
 }
 
@@ -298,6 +355,9 @@ func (r *NamespaceRegistry) RemoveSession(sess *session.Session) (publishers, su
 			continue
 		}
 		key := namespaceWireKey(e.Namespace)
+		if e.announced {
+			r.removeSourceLocked(e.Namespace)
+		}
 		r.pubCount[key]--
 		if r.pubCount[key] <= 0 {
 			delete(r.pubCount, key)
@@ -310,7 +370,11 @@ func (r *NamespaceRegistry) RemoveSession(sess *session.Session) (publishers, su
 
 	beforeS := len(r.subscribers)
 	r.subscribers = slices.DeleteFunc(r.subscribers, func(e *SubscriberEntry) bool {
-		return e.Session == sess
+		if e.Session == sess {
+			e.close()
+			return true
+		}
+		return false
 	})
 
 	// Capture the final lengths under the lock; reading them after
@@ -434,17 +498,15 @@ func (r *NamespaceRegistry) MatchSubscribers(ns wire.TrackNamespace) []*Subscrib
 	defer r.mu.RUnlock()
 	var out []*SubscriberEntry
 	for _, e := range r.subscribers {
-		if ns.HasPrefix(e.Prefix) {
+		if ns.HasPrefix(e.Prefix()) {
 			out = append(out, e)
 		}
 	}
 	return out
 }
 
-// CopyPublishers returns a snapshot of all publisher entries. Intended for
-// tests, metrics, and the Stop path (where the registry is being drained
-// and the caller wants to iterate without holding the lock across slow
-// per-entry work).
+// CopyPublishers returns a snapshot of all publisher entries, for callers that
+// iterate without holding the registry lock (tests, metrics).
 func (r *NamespaceRegistry) CopyPublishers() []*PublisherEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

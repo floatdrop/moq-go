@@ -296,6 +296,20 @@ func TrackNamespacePrefixParam(prefix wire.TrackNamespace) Parameter {
 	return BytesParam(ParamTrackNamespacePrefix, w.Bytes())
 }
 
+// TrackNamespacePrefixFromParam decodes a TRACK_NAMESPACE_PREFIX value
+// (§10.2.20). A value that is not exactly one Track Namespace is an error.
+func TrackNamespacePrefixFromParam(p Parameter) (wire.TrackNamespace, error) {
+	r := wire.NewReader(p.Bytes)
+	prefix, err := r.TrackNamespace()
+	if err != nil {
+		return nil, fmt.Errorf("moqt/message: TRACK_NAMESPACE_PREFIX: %w", err)
+	}
+	if !r.Empty() {
+		return nil, fmt.Errorf("moqt/message: TRACK_NAMESPACE_PREFIX: %d trailing bytes", r.Remaining())
+	}
+	return prefix, nil
+}
+
 // Parameters is a list of message parameters.
 //
 //nolint:recvcheck // value receivers for reads, pointer receiver for in-place mutation — intentional.

@@ -2,7 +2,9 @@ package relay
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
@@ -22,69 +24,85 @@ import (
 //
 // The watch yields an initial snapshot before following live changes (see
 // [discovery.DiscoveryStore.WatchNamespaces]), so this goroutine observes
-// namespaces advertised before it started, not just later ones. The remaining
-// limitation is downstream of here: it starts once in [Relay.Start] and
-// reflects each event only to the SUBSCRIBE_NAMESPACE holders registered at the
-// moment it arrives, so a subscriber that registers later is not back-filled
-// with already-advertised namespaces. That subscriber still discovers them on
-// demand — its SUBSCRIBE resolves via FindNamespace — so this is a
-// reflection-latency gap, not a correctness one.
+// namespaces advertised before it started, not just later ones. Each event is
+// recorded in the namespace registry, which also seeds a SUBSCRIBE_NAMESPACE
+// holder that registers later. A watch that fails to start is retried, and one
+// whose channel closes is restarted, its snapshot replacing the remote state.
+// An event the store drops (MemoryStore does, for a slow consumer) is not
+// recovered until the next restart.
 func (r *Relay) runNamespaceWatch(ctx context.Context) {
-	ch, err := r.cfg.Discovery.WatchNamespaces(ctx)
-	if err != nil {
-		r.log.LogAttrs(ctx, slog.LevelWarn, "discovery: WatchNamespaces failed",
-			slog.String("err", err.Error()))
-		return
+	backoff := namespaceWatchRetryMin
+	for first := true; ; first = false {
+		if ctx.Err() != nil {
+			return // shutting down: the watch closing is not a failure
+		}
+		ch, err := r.cfg.Discovery.WatchNamespaces(ctx)
+		if errors.Is(err, discovery.ErrClosed) {
+			return // "After Close all methods return ErrClosed"
+		}
+		if err != nil {
+			r.log.LogAttrs(ctx, slog.LevelWarn, "discovery: WatchNamespaces failed",
+				slog.String("err", err.Error()), slog.Duration("retry_in", backoff))
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+			}
+			backoff = min(2*backoff, namespaceWatchRetryMax)
+			continue
+		}
+		backoff = namespaceWatchRetryMin
+		if !first {
+			// A restarted watch begins with a fresh snapshot; drop what the
+			// old one reported so namespaces withdrawn in between do not
+			// linger. Subscribers see NAMESPACE_DONE then NAMESPACE again
+			// for every remote namespace that still exists.
+			r.names.ResetRemote()
+		}
+		r.log.LogAttrs(ctx, slog.LevelDebug, "discovery namespace watch started")
+		if !r.consumeNamespaceWatch(ctx, ch) {
+			return
+		}
 	}
-	r.log.LogAttrs(ctx, slog.LevelDebug, "discovery namespace watch started")
+}
+
+// consumeNamespaceWatch forwards events from ch until it closes, reporting
+// true, or ctx is cancelled, reporting false.
+func (r *Relay) consumeNamespaceWatch(ctx context.Context, ch <-chan discovery.NamespaceEvent) bool {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return false
 		case ev, ok := <-ch:
 			if !ok {
-				return
+				return true
 			}
 			r.forwardNamespaceEvent(ctx, ev)
 		}
 	}
 }
 
-// forwardNamespaceEvent reflects one remote namespace event to local
-// SUBSCRIBE_NAMESPACE holders whose prefix matches.
+// The watch restarts after these delays, doubling, when it fails to start.
+const (
+	namespaceWatchRetryMin = 100 * time.Millisecond
+	namespaceWatchRetryMax = 10 * time.Second
+)
+
+// forwardNamespaceEvent records one remote namespace event in the namespace
+// registry, which announces it to local SUBSCRIBE_NAMESPACE holders whose
+// prefix matches, counted together with local publishers of the same
+// namespace (§10.18: NAMESPACE_DONE is per namespace).
 //
-// Own-relay events are skipped: [sessionHandler.handlePublishNamespace] already
-// forwards a local PUBLISH_NAMESPACE to matching subscribers, so re-forwarding
-// the same advertisement from the watch would duplicate the NAMESPACE message.
-// SUBSCRIBE_TRACKS holders (WantsTracks) are skipped too — they receive
-// forwarded PUBLISH messages, not NAMESPACE, and a relay cannot synthesize a
-// remote PUBLISH from a namespace advertisement alone.
-func (r *Relay) forwardNamespaceEvent(ctx context.Context, ev discovery.NamespaceEvent) {
+// Own-relay events are skipped: the registry already counts this relay's local
+// PUBLISH_NAMESPACE registrations, which are what it advertised.
+func (r *Relay) forwardNamespaceEvent(_ context.Context, ev discovery.NamespaceEvent) {
 	if ev.Info.RelayAddr == r.cfg.RelayAddr {
-		return // our own advertisement — already forwarded locally
+		return // our own advertisement — already counted locally
 	}
-	ns := ev.Info.Prefix
-	for _, sub := range r.names.MatchSubscribers(ns) {
-		if sub.WantsTracks {
-			continue
-		}
-		// Reuse the same suffix-stripping helpers handlePublishNamespace uses
-		// so the wire form is identical whether the namespace is local or
-		// remote (§10.17 NAMESPACE and §10.18 NAMESPACE_DONE both carry only the
-		// bytes beyond the subscriber prefix).
-		var err error
-		switch ev.Op {
-		case discovery.OpPublish:
-			err = sub.WriteMessage(namespaceMessageFor(ns, sub.Prefix))
-		case discovery.OpUnpublish:
-			err = sub.WriteMessage(namespaceDoneMessageFor(ns, sub.Prefix))
-		default:
-			continue
-		}
-		if err != nil {
-			r.log.LogAttrs(ctx, slog.LevelDebug, "discovery NAMESPACE forward failed",
-				slog.String("op", ev.Op.String()),
-				slog.String("err", err.Error()))
-		}
+	switch ev.Op {
+	case discovery.OpPublish:
+		r.names.RemoteNamespace(ev.Info.Prefix, ev.Info.RelayAddr, true)
+	case discovery.OpUnpublish:
+		r.names.RemoteNamespace(ev.Info.Prefix, ev.Info.RelayAddr, false)
 	}
 }
