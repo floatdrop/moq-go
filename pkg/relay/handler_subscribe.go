@@ -794,7 +794,7 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	if !slices.ContainsFunc(ps, func(p message.Parameter) bool { return message.IsRangeFilterParam(p.Type) }) {
 		return nil
 	}
-	rf, err := sub.RangeFilterSet().Update(ps)
+	rf, err := sub.GetRangeFilters().Update(ps)
 	if err != nil {
 		return err
 	}

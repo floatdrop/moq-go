@@ -111,7 +111,7 @@ By package, bottom-up along the dependency stack:
 | 5.1.1   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. |
 | 5.1.2   | Location filters                 | DONE   | Every start/end form (unfiltered, Next Object, relative and absolute start, absolute range) + `Matches`. |
 | 5.1.3   | Fill semantics                   | PARTIAL | Fill fetch streams from FILL_PARAMETERS on SUBSCRIBE / REQUEST_UPDATE (`handler_fill.go`). Fill streams do not inherit the subscription's Range Filters, and SUBSCRIBE_TRACKS opens none (see backlog). |
-| 5.1.4   | Range filters                    | DONE    | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; TRACK_PROPERTY_FILTER gates PUBLISH forwarding on SUBSCRIBE_TRACKS; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. Object filters on a SUBSCRIBE_TRACKS apply to the subscriptions its forwarded PUBLISHes open. One documented carve-out (see Known protocol gaps): REQUEST_UPDATE whole-set replace vs per-type merge. A zero-length filter is no filter; a subscription REQUEST_UPDATE replaces (or, zero-length, removes) the filter types it names and keeps the others. |
+| 5.1.4   | Range filters                    | DONE    | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; TRACK_PROPERTY_FILTER gates PUBLISH forwarding on SUBSCRIBE_TRACKS; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. Object filters on a SUBSCRIBE_TRACKS apply to the subscriptions its forwarded PUBLISHes open. A zero-length filter is no filter; a subscription REQUEST_UPDATE replaces (or, zero-length, removes) the filter types it names and keeps the others. |
 | 5.1.5   | Combining filters                | DONE    | `ForwardDecision` ANDs Forward + Location + Range filters per object (§5.1.5); Range filters combine SetIDs via AND/OR. |
 | 5.1.6   | Joining an ongoing track         | DONE   | A Location Filter plus FILL_PARAMETERS, served as a fill fetch stream (draft-20 removed the Joining FETCH). |
 | 5.1.6.1 | Dynamically starting new groups  | DONE   | Relay forwards a downstream `NEW_GROUP_REQUEST` upstream per §10.2.19: included in the on-demand upstream SUBSCRIBE (no established upstream) or sent as an upstream REQUEST_UPDATE, gated on `DYNAMIC_GROUPS` support, Largest-Group, and outstanding-request bookkeeping. |
@@ -474,6 +474,9 @@ Relay:
     exist under the new prefix; only later PUBLISHes are forwarded;
   - INCLUDE_PROPERTIES=0 is ignored: forwarded PUBLISHes (and SUBSCRIBE_OK)
     still carry Track Properties (§10.2.21 SHOULD).
+  - a REQUEST_UPDATE on a SUBSCRIBE_TRACKS request is answered REQUEST_OK but
+    its Range Filters (§5.1.4 names TRACK_PROPERTY_FILTER for it) are not
+    applied: the filters and forwarded-PUBLISH parameters stay as sent.
 - Fill streams do not inherit the subscription's Range Filters (§5.1.3).
 - Fill streams are not scheduled against their subscription (§7.2 rules 3
   and 4): a subscription-delivered object should go first when the fill's

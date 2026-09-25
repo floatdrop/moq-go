@@ -601,8 +601,8 @@ type subgroupWriter struct {
 	// Subgroup other than one before its Start Location — a filter, Forward
 	// State 0, an inbox overflow or an expiry. No stream of this writer can
 	// then carry the whole Subgroup, so each ends with a reset, not a FIN
-	// (§11.4.3), with incompleteCode: CANCELLED, or EXCESSIVE_LOAD for an
-	// overflow (§3.3.4). Set under dropsMu.
+	// (§11.4.3), with incompleteCode: EXCESSIVE_LOAD once any overflow drop
+	// happened, CANCELLED otherwise (§3.3.4). Set under dropsMu.
 	//
 	// Objects published before a subscription joined never reach its writer,
 	// so they do not count: the user chose to treat them like Objects before
@@ -610,10 +610,13 @@ type subgroupWriter struct {
 	// may still end with a FIN.
 	incomplete     bool
 	incompleteCode moqt.StreamResetCode
-	// admitted records that admit let an Object through, so a later
-	// SkipBeforeStart can only mean the Start was raised past it. Only
-	// touched by admit, under sg.Mu.
-	admitted bool
+	// lastAdmitted is the Object ID admit last let through (hasAdmitted:
+	// any), so a SkipBeforeStart above it can only mean the Start was raised
+	// past Objects already sent. One below it is a straggler from another
+	// upstream (Object IDs rise per inbound stream, not across contributors)
+	// and stays exempt. Only touched by admit, under sg.Mu.
+	lastAdmitted uint64
+	hasAdmitted  bool
 }
 
 // admit decides whether w takes the Object at objectID of the subgroup hdr
@@ -621,7 +624,7 @@ type subgroupWriter struct {
 func (w *subgroupWriter) admit(hdr message.SubgroupHeader, objectID uint64, props []byte) bool {
 	switch w.sub.ForwardDecision(hdr.GroupID, objectID, hdr.SubgroupID, hdr.PublisherPriority, props) {
 	case registry.Forward:
-		w.admitted = true
+		w.lastAdmitted, w.hasAdmitted = objectID, true
 		return true
 	case registry.SkipObject, registry.SkipPaused:
 		// The Object takes no queue slot (a paused subscription's control
@@ -639,11 +642,11 @@ func (w *subgroupWriter) admit(hdr message.SubgroupHeader, objectID uint64, prop
 		// on w.done.
 		w.close(true, moqt.StreamResetCancelled)
 	case registry.SkipBeforeStart:
-		// §11.4.3 allows a FIN after omitting these — but Object IDs rise
-		// within a Subgroup, so one after an admitted Object means a
-		// REQUEST_UPDATE raised the Start past it: "A REQUEST_UPDATE moving
-		// [...] the Start Location to a larger Location" MUST reset.
-		if w.admitted {
+		// §11.4.3 allows a FIN after omitting these — but one above an
+		// Object already admitted means a REQUEST_UPDATE raised the Start
+		// past it: "A REQUEST_UPDATE moving [...] the Start Location to a
+		// larger Location" MUST reset.
+		if w.hasAdmitted && objectID > w.lastAdmitted {
 			w.markIncomplete(moqt.StreamResetCancelled)
 		}
 	}
@@ -660,10 +663,24 @@ func (w *subgroupWriter) markIncomplete(code moqt.StreamResetCode) {
 }
 
 func (w *subgroupWriter) markIncompleteLocked(code moqt.StreamResetCode) {
-	if !w.incomplete {
+	// EXCESSIVE_LOAD overrides: the subscriber expects the omissions its own
+	// filter or pause makes, but not one the relay's load made (§3.3.4
+	// "SHOULD use a relevant error code").
+	if !w.incomplete || code == moqt.StreamResetExcessiveLoad {
 		w.incomplete = true
 		w.incompleteCode = code
 	}
+}
+
+// resetCode is the code to reset the current stream with: the omission's
+// (see subgroupWriter.incomplete) when there was one, else CANCELLED.
+func (w *subgroupWriter) resetCode() moqt.StreamResetCode {
+	w.dropsMu.Lock()
+	defer w.dropsMu.Unlock()
+	if w.incomplete {
+		return w.incompleteCode
+	}
+	return moqt.StreamResetCancelled
 }
 
 // publish does a non-blocking send onto the inbox, stamping the enqueue time
@@ -807,7 +824,9 @@ func (w *subgroupWriter) run() {
 			w.unbridge()
 			w.unbridge = nil
 		}
-		w.closeOut(false, moqt.StreamResetCancelled)
+		// A gap reopen leaves Objects missing on the stream it resets, so it
+		// carries the omission's code.
+		w.closeOut(false, w.resetCode())
 		hdr := w.hdr
 		hdr.ReplayingSubgroup = !first
 		if !first && hdr.SubgroupIDMode == message.SubgroupIDImplicitFirstObject {
