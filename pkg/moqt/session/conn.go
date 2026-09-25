@@ -29,15 +29,23 @@ type SendStream interface {
 	// control-send loop on shutdown.
 	CancelWrite(code uint64)
 
-	// Context returns a context that is cancelled when all data written to
-	// the stream has been acknowledged by the peer, or when the stream is
-	// reset. Used by SUBGROUP_DELIVERY_TIMEOUT enforcement (§8): after
-	// Close() is called, the implementation starts a timer; if the timer
-	// fires before Context() is done, the stream is reset with
-	// StreamResetDeliveryTimeout.
+	// Context returns a context that is cancelled when this side's send
+	// direction ends: Close (FIN) or CancelWrite is called, or the peer stops
+	// reading it (STOP_SENDING). It does NOT track acknowledgement — quic-go
+	// cancels it as soon as Close queues the FIN.
 	//
-	// For quic-go this maps directly to quic.SendStream.Context(). For
-	// in-process test streams it is cancelled when Close() returns.
+	// While this side's send direction is still open, a done Context
+	// therefore means the peer sent STOP_SENDING. That is how a responder
+	// observes a requester cancelling after it FINned its own side (§3.3.2: a
+	// FIN "is not a request cancellation"; §3.3.3: such a requester cancels
+	// with STOP_SENDING). Once this side has closed its send direction, the
+	// Context is already done and carries no further signal.
+	//
+	// For quic-go (and webtransport-go, which wraps it) this maps directly to
+	// quic.SendStream.Context(): "canceled as soon as the write-side of the
+	// stream is closed. This happens when [SendStream.Close] or
+	// [SendStream.CancelWrite] is called, or when the peer cancels the
+	// read-side of their stream." In-process test streams match it.
 	Context() context.Context
 }
 

@@ -50,11 +50,11 @@ type Suite struct {
 //
 //   - Conn.Context ends when the connection does. The relay's per-session
 //     handler goroutines hang off it.
-//   - A send stream's Context ends once its data is delivered and it is
-//     closed. §8 SUBGROUP_DELIVERY_TIMEOUT enforcement arms a timer against
-//     exactly this signal, so an adapter that never fires it would leak the
-//     timer and one that fires early would reset healthy streams.
+//   - A send stream's Context ends once it is closed. It does not track
+//     acknowledgement: quic-go cancels it when Close queues the FIN.
 //   - CancelWrite unblocks the peer's Read rather than leaving it parked.
+//   - A send stream's Context also ends on the peer's STOP_SENDING, which is
+//     how the relay learns a requester cancelled after FINning (§3.3.2).
 //   - OpenStream reports an exhausted peer limit as ErrNoStreamCredit. This
 //     one is a documented MUST on the interface, and PUBLISH_SKIPPED (§10.21)
 //     is built on it: the relay reacts to the sentinel instead of blocking.
@@ -89,9 +89,8 @@ func RunSuite(t *testing.T, s Suite) {
 		if err != nil {
 			t.Fatalf("OpenStream: %v", err)
 		}
-		// The peer must drain for the send side to count as delivered: on a
-		// real transport the context tracks acknowledgement, not the local
-		// Close. Drain concurrently — see the note on buffering above.
+		// The peer drains so the write can complete on every transport.
+		// Drain concurrently — see the note on buffering above.
 		drained := drainAsync(t, func() (io.Reader, error) { return server.AcceptStream(t.Context()) })
 		if _, err := stream.Write([]byte("hello")); err != nil {
 			t.Fatalf("Write: %v", err)
@@ -176,6 +175,8 @@ func RunSuite(t *testing.T, s Suite) {
 		}
 	})
 
+	runStopSendingSubtests(t, s)
+
 	t.Run("OpenStreamReportsNoStreamCredit", func(t *testing.T) {
 		if !s.SupportsBidiLimit {
 			// Not a silent pass: this transport cannot be made to exhaust its
@@ -203,6 +204,60 @@ func RunSuite(t *testing.T, s Suite) {
 				"or PUBLISH_SKIPPED (§10.21) cannot detect the condition", err)
 		}
 	})
+}
+
+// runStopSendingSubtests pins that a send stream's Context also ends when the
+// peer stops reading it (STOP_SENDING). MoQT cancels a request with
+// STOP_SENDING (§3.3.3), and after a requester's FIN (§3.3.2: "not a request
+// cancellation") that is the only way the responder learns of a later cancel,
+// so the relay waits on exactly this signal.
+func runStopSendingSubtests(t *testing.T, s Suite) {
+	t.Helper()
+	for _, tc := range []struct {
+		name string
+		open func(session.Conn) (session.SendStream, error)
+		peer func(ctx context.Context, c session.Conn) (session.ReceiveStream, error)
+	}{
+		{"BidiStreamContextEndsOnPeerStopSending",
+			func(c session.Conn) (session.SendStream, error) { return c.OpenStream() },
+			func(ctx context.Context, c session.Conn) (session.ReceiveStream, error) { return c.AcceptStream(ctx) }},
+		{"UniStreamContextEndsOnPeerStopSending",
+			func(c session.Conn) (session.SendStream, error) { return c.OpenUniStream() },
+			func(ctx context.Context, c session.Conn) (session.ReceiveStream, error) {
+				return c.AcceptUniStream(ctx)
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := s.NewPair(t, 0)
+			stream, err := tc.open(client)
+			if err != nil {
+				t.Fatalf("open: %v", err)
+			}
+			// Accept and read the first byte concurrently (see the note on
+			// buffering above), then stop reading.
+			stopped := make(chan error, 1)
+			go func() {
+				peer, err := tc.peer(t.Context(), server)
+				if err != nil {
+					stopped <- fmt.Errorf("accept: %w", err)
+					return
+				}
+				if _, err := io.ReadFull(peer, make([]byte, 1)); err != nil {
+					stopped <- fmt.Errorf("read: %w", err)
+					return
+				}
+				peer.CancelRead(uint64(moqt.StreamResetCancelled))
+				stopped <- nil
+			}()
+			if _, err := stream.Write([]byte("x")); err != nil {
+				t.Fatalf("Write: %v", err)
+			}
+			if err := <-stopped; err != nil {
+				t.Fatal(err)
+			}
+			awaitDone(stream.Context(), t, "SendStream.Context after the peer's STOP_SENDING")
+		})
+	}
 }
 
 // awaitDone fails the test unless ctx is cancelled promptly.

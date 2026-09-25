@@ -388,6 +388,13 @@ Found while fixing, left open deliberately:
     Stream Count 2^64-1.
   - PUBLISH_DONE goes to subscribers one at a time, so one that isn't reading
     its request stream can delay the rest.
+- **SUBGROUP_DELIVERY_TIMEOUT never fires on quic-go / WebTransport (§8)** —
+  `OutgoingSubgroupStream.Close` FINs, then waits on `SendStream.Context()` as
+  an "all data acknowledged" signal. quic-go cancels that context as soon as
+  Close queues the FIN, so the timer is always pre-empted and a subgroup stuck
+  behind congestion is never reset with DELIVERY_TIMEOUT. Only the in-process
+  test transport exercises the reset. quic-go exposes no acknowledgement
+  signal, so a fix needs a design choice.
 - **TRACK_NAMESPACE_PREFIX encoding (§10.2.20)** — encoded length-prefixed, as
   moxygen, moqtail and libquicr do. The draft text reads as a bare Track
   Namespace. Open WG issue: moq-wg/moq-transport#1942.
