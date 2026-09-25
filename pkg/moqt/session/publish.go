@@ -295,3 +295,29 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 func (s *Session) OpenPublish(m *message.Publish) (Stream, error) {
 	return s.openAllocRequest(m)
 }
+
+// AwaitPublishOK reads the peer's response to a PUBLISH sent with
+// [Session.OpenPublish], applying the checks [Session.Publish] does: a
+// PUBLISH_OK carrying Track Properties (§10.5) or out-of-scope parameters
+// (§10.2.1) closes the session, and REQUEST_ERROR is returned as a
+// *RequestRejectedError. The stream stays open either way.
+func (s *Session) AwaitPublishOK(ctx context.Context, stream Stream) (*message.RequestOK, error) {
+	resp, err := s.readResponse(ctx, stream)
+	if err != nil {
+		return nil, fmt.Errorf("moqt/session: read PUBLISH response: %w", err)
+	}
+	switch m := resp.(type) {
+	case *message.RequestOK:
+		if err := s.checkRequestOKTrackProperties((*message.Publish)(nil), m); err != nil {
+			return nil, err
+		}
+		if err := s.CheckPeerParams(message.ScopePublishOK, m); err != nil {
+			return nil, err
+		}
+		return m, nil
+	case *message.RequestError:
+		return nil, &RequestRejectedError{Code: m.ErrorCode, Reason: m.ErrorReason, RetryInterval: m.RetryInterval}
+	default:
+		return nil, fmt.Errorf("moqt/session: unexpected %s in PUBLISH response", resp.Type())
+	}
+}

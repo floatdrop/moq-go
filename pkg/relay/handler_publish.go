@@ -2,9 +2,9 @@ package relay
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync/atomic"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -150,104 +150,56 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		h.spawn(func() { h.propagateForwardUpstream(ctx, fullName) })
 	}
 
-	// Forward to every SUBSCRIBE_TRACKS holder whose prefix matches.
-	// Per §6.1 / §9.5 the relay sends a PUBLISH for the track to each such
-	// subscriber on its OWN new bidirectional stream (NOT multiplexed onto
-	// the SUBSCRIBE_TRACKS request stream). We snapshot the subscriber list
-	// so we don't hold the registry lock across stream opens.
-	var forwarded []session.Stream
+	// Forward to every SUBSCRIBE_TRACKS holder whose prefix matches (§6.1).
+	// Each subscriber's own handler serves the subscription the PUBLISH opens
+	// (see forwardTrack); it skips one that already has the track.
 	for _, sub := range h.names.MatchSubscribers(msg.Namespace) {
-		if !sub.WantsTracks {
-			// SUBSCRIBE_NAMESPACE holders get NAMESPACE messages
-			// emitted by handlePublishNamespace; PUBLISH targets only
-			// SUBSCRIBE_TRACKS holders.
-			continue
+		if sub.WantsTracks && sub.ForwardTrack != nil {
+			sub.ForwardTrack(sub, entry)
 		}
-		// §5.1.4: a TRACK_PROPERTY_FILTER on the SUBSCRIBE_TRACKS gates which
-		// PUBLISH messages are forwarded — "PUBLISH messages which pass the
-		// filter will be forwarded while those which do not pass it will not be
-		// forwarded nor will any Objects." MatchesTrack is vacuously true when
-		// the subscription carries no track-property filter.
-		if sub.RangeFilters != nil && !sub.RangeFilters.MatchesTrack(msg.TrackProperties) {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH forward suppressed: TRACK_PROPERTY_FILTER",
-				slog.String("name", string(msg.Name)))
-			continue
-		}
-		// §6.1 (draft-19): a PUBLISH_SKIPPED prohibition is scoped to the single
-		// PUBLISH that could not be forwarded, not sticky across re-PUBLISHes —
-		// so every inbound PUBLISH is a fresh forwarding attempt, and a track we
-		// skipped earlier is retried here.
-		fwd := &message.Publish{
-			Namespace: msg.Namespace,
-			Name:      msg.Name,
-			// §11.1: aliases are per session. Allocate from the subscriber
-			// session's space, which the relay's SUBSCRIBE_OK aliases share;
-			// the upstream's alias would collide with those.
-			TrackAlias:      sub.Session.AllocOutboundTrackAlias(),
-			Parameters:      publishParamsForSubscriber(msg.Parameters, sub, entry),
-			TrackProperties: msg.TrackProperties,
-		}
-		// OpenPublish is non-blocking (§6.1): if the subscriber's stream
-		// limit is exhausted it returns ErrNoStreamCredit — the PUBLISH_SKIPPED
-		// trigger handled below.
-		pubStream, err := sub.Session.OpenPublish(fwd)
-		if err != nil {
-			if errors.Is(err, session.ErrNoStreamCredit) {
-				// §6.1 / §10.21: no bidi-stream credit to open the PUBLISH
-				// stream — tell the subscriber with PUBLISH_SKIPPED on its
-				// SUBSCRIBE_TRACKS stream. The prohibition is scoped to this
-				// PUBLISH (draft-19); a later re-PUBLISH is retried above.
-				h.emitPublishSkipped(ctx, sub, fullName)
-				continue
-			}
-			h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH forward failed",
-				slog.String("err", err.Error()))
-			continue
-		}
-		forwarded = append(forwarded, pubStream)
 	}
 
 	// Block until the publisher tears the stream down, routing §10.9
 	// responses to any upstream REQUEST_UPDATE the relay sends meanwhile
 	// (e.g. NEW_GROUP_REQUEST propagation).
 	h.serveUpstreamStream(ctx, sub)
-
-	// The publication ended (publisher FIN/reset). FIN every forwarded
-	// PUBLISH stream so each subscriber sees the publication terminate.
-	for _, s := range forwarded {
-		_ = s.Close()
-	}
 }
 
-// publishParamsForSubscriber builds the Parameters for a PUBLISH the relay
-// sends to sub as a result of its SUBSCRIBE_TRACKS. Per §10.20.1, FORWARD
-// (§10.2.18) and GROUP_ORDER (§10.2.8) on that PUBLISH derive from the
-// SUBSCRIBE_TRACKS, not the upstream PUBLISH: any inherited from upstream are
-// dropped, FORWARD=0 is set only when the subscriber asked not to forward
-// (otherwise omitted → the default 1), and GROUP_ORDER is copied from the
-// subscriber's request when it specified one (otherwise omitted, so the
-// publisher's default applies).
-//
-// LARGEST_OBJECT is likewise not copied through. §10.2.17 requires a relay to
-// send the largest of every value it has observed, and the upstream's own figure
-// is only one of those: with a second upstream on the track, or with objects
-// already received, forwarding it verbatim would advertise a watermark below the
-// relay's own — so it is re-derived from the entry, which
-// [saveLargestLocation] has already folded this PUBLISH's value into.
-// §10.2.17 reserves omission for "no objects observed", which is what an entry
-// with no watermark means.
+// notEchoedInPublish are the SUBSCRIBE_TRACKS parameters
+// [publishParamsForSubscriber] does not copy: AUTHORIZATION_TOKEN (§10.2.2), and
+// the ones it sets itself.
+var notEchoedInPublish = []message.ParamID{
+	message.ParamAuthorizationToken, message.ParamForward, message.ParamGroupOrder, message.ParamLargestObject,
+}
+
+// publishParamsForSubscriber builds the Parameters of a PUBLISH the relay
+// sends to sub as a result of its SUBSCRIBE_TRACKS, whose parameters are
+// subscribeTracks. None is copied from an upstream: Message Parameters "are not
+// forwarded by Relays" (§10.2.1).
+//   - The SUBSCRIBE_TRACKS parameters are "the initial Subscription
+//     parameters" and "are explicitly communicated in PUBLISH" (§10.20.1): each
+//     one PUBLISH may carry (§10.2.1) is echoed, except AUTHORIZATION_TOKEN,
+//     which "MUST NOT be copied from a SUBSCRIBE_TRACKS to the resulting
+//     PUBLISH" (§10.2.2).
+//   - FORWARD and GROUP_ORDER come from the resolved subscription: FORWARD=0
+//     only when the subscriber asked not to forward (otherwise omitted,
+//     meaning 1), GROUP_ORDER when it specified one.
+//   - LARGEST_OBJECT is the relay's own watermark for the track (§10.2.17
+//     requires the largest of every value observed; omitted when there is
+//     none).
 func publishParamsForSubscriber(
-	upstream message.Parameters,
+	subscribeTracks message.Parameters,
 	sub *registry.SubscriberEntry,
 	entry *registry.TrackEntry,
 ) message.Parameters {
-	out := make(message.Parameters, 0, len(upstream)+3)
-	for _, p := range upstream {
-		if p.Type == message.ParamForward || p.Type == message.ParamGroupOrder ||
-			p.Type == message.ParamLargestObject {
+	var out message.Parameters
+	for _, p := range subscribeTracks {
+		if slices.Contains(notEchoedInPublish, p.Type) {
 			continue
 		}
-		out = append(out, p)
+		if (message.Parameters{p}).CheckScope(message.ScopePublish) == nil {
+			out = append(out, p)
+		}
 	}
 	if !sub.Forward {
 		out = append(out, message.ForwardParam(false))

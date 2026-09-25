@@ -228,6 +228,7 @@ func (h *sessionHandler) handleSubscribeNamespace(
 		true,
 		0,
 		nil,
+		nil,
 	)
 	defer h.names.UnregisterSubscriber(entry)
 
@@ -243,15 +244,16 @@ func (h *sessionHandler) handleSubscribeNamespace(
 
 // handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.20):
 //
-//  1. Authorize.
-//  2. Register in [registry.NamespaceRegistry] with WantsTracks=true.
-//  3. Reply REQUEST_OK.
-//  4. Block reading the request stream until the subscriber cancels it.
+//  1. Authorize, validate its subscription parameters (§10.20.1), and
+//     reserve the prefix (PREFIX_OVERLAP).
+//  2. Reply REQUEST_OK.
+//  3. Register in [registry.NamespaceRegistry] with WantsTracks=true and this
+//     handler's forwardTrack, then forward the tracks that already exist
+//     under the prefix (§10.20).
+//  4. Serve REQUEST_UPDATEs until the subscriber cancels.
 //
-// PUBLISH forwarding (the actual reason SUBSCRIBE_TRACKS exists) is the
-// responsibility of `handlePublish` — it queries
-// [registry.NamespaceRegistry.MatchSubscribers] on every inbound PUBLISH and routes
-// to each WantsTracks=true entry whose prefix matches.
+// Tracks published later are forwarded by `handlePublish`, which calls the
+// entry's ForwardTrack for each matching subscriber.
 func (h *sessionHandler) handleSubscribeTracks(
 	ctx context.Context,
 	req *session.Request,
@@ -289,6 +291,13 @@ func (h *sessionHandler) handleSubscribeTracks(
 		return
 	}
 
+	// §10.20.1: its SUBSCRIBE parameters become each forwarded PUBLISH's
+	// subscription, so they are refused on the same terms as a SUBSCRIBE's.
+	if err := installSubscribeParams(registry.NewDownstreamSub(0, h.sess, nil, 0), msg.Parameters); err != nil {
+		h.refuseSubscriptionParams(ctx, req, err)
+		return
+	}
+
 	if !h.trackPrefixes.reserve(msg.TrackNamespacePrefix) {
 		_ = req.RejectError(moqt.RequestPrefixOverlap,
 			"prefix overlaps an established SUBSCRIBE_TRACKS in this session")
@@ -314,10 +323,18 @@ func (h *sessionHandler) handleSubscribeTracks(
 		forward,
 		groupOrder,
 		rangeFilters,
+		h.forwardTrack(ctx, msg.Parameters),
 	)
 	defer h.names.UnregisterSubscriber(entry)
 
 	h.spawn(entry.RunWriter)
+	// §10.20: forward the tracks that already exist under the prefix, too;
+	// PUBLISHes arriving from now on are forwarded by their handlers.
+	for _, te := range h.tracks.MatchNamespace(msg.TrackNamespacePrefix) {
+		if hasEstablishedUpstream(te) {
+			entry.ForwardTrack(entry, te)
+		}
+	}
 	// REQUEST_UPDATE replies share the entry's queue with a prefix update's
 	// REQUEST_OK and PUBLISH_SKIPPED (emitPublishSkipped), so each
 	// PUBLISH_SKIPPED suffix matches the prefix the subscriber last saw.

@@ -56,28 +56,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 
 	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, req.Stream, alias)
 	if err := installSubscribeParams(sub, msg.Parameters); err != nil {
-		if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
-			// §10.2.8 / §10.2.18: an out-of-range GROUP_ORDER/FORWARD is a
-			// session-level PROTOCOL_VIOLATION.
-			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE parameter protocol violation",
-				slog.String("err", err.Error()))
-			_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
-			return
-		}
-		// §5.1.4 / §10.6: a malformed or over-limit Range Filter is INVALID_FILTER.
-		if errors.Is(err, message.ErrInvalidFilter) {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE range filter rejected",
-				slog.String("err", err.Error()))
-			_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
-			return
-		}
-		// §5.1.2 says a malformed LOCATION_FILTER is also a session-level
-		// PROTOCOL_VIOLATION. We scope that one to this request for now —
-		// unrelated subscriptions on the same session shouldn't die because
-		// one peer sent a bad filter.
-		h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE parameter parse failed",
-			slog.String("err", err.Error()))
-		_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
+		h.refuseSubscriptionParams(ctx, req, err)
 		return
 	}
 
@@ -235,7 +214,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	// subscriber cancels, the relay ends the subscription, or ctx is
 	// cancelled, dispatching REQUEST_UPDATE so Forward / priority / filter can
 	// change mid-flight. A subscriber FIN is not a cancel (§3.3.2).
-	h.readSubscribeUpdates(ctx, req, sub, fullName)
+	h.readSubscribeUpdates(ctx, req.Stream, sub, fullName)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE stream ended",
 		slog.String("name", string(msg.Name)))
 }
@@ -252,12 +231,12 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 // cleanup in handleSubscribe evicts the subscription.
 func (h *sessionHandler) readSubscribeUpdates(
 	ctx context.Context,
-	req *session.Request,
+	stream session.Stream,
 	sub *registry.DownstreamSub,
 	fullName track.FullTrackName,
 ) {
 	updates := h.sess.NewRequestUpdateLimiter()
-	fin := readRequestStream(ctx, h.sess, req.Stream, func(m message.Message) bool {
+	fin := readRequestStream(ctx, h.sess, stream, func(m message.Message) bool {
 		if h.isPeerStateNotify(m) {
 			return false
 		}
@@ -289,7 +268,7 @@ func (h *sessionHandler) readSubscribeUpdates(
 	if fin {
 		// The subscriber will send no more updates; the subscription lives
 		// on until it cancels or ends (§3.3.2).
-		awaitRequestEnd(ctx, req.Stream)
+		awaitRequestEnd(ctx, stream)
 	}
 }
 
@@ -826,6 +805,33 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 		sub.SetRangeFilters(rf)
 	}
 	return nil
+}
+
+// refuseSubscriptionParams answers a SUBSCRIBE or SUBSCRIBE_TRACKS whose
+// subscription parameters [installSubscribeParams] rejected.
+func (h *sessionHandler) refuseSubscriptionParams(ctx context.Context, req *session.Request, err error) {
+	if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
+		// §10.2.8 / §10.2.18: an out-of-range GROUP_ORDER/FORWARD is a
+		// session-level PROTOCOL_VIOLATION.
+		h.log.LogAttrs(ctx, slog.LevelDebug, "subscription parameter protocol violation",
+			slog.String("err", err.Error()))
+		_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
+		return
+	}
+	// §5.1.4 / §10.6: a malformed or over-limit Range Filter is INVALID_FILTER.
+	if errors.Is(err, message.ErrInvalidFilter) {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "subscription range filter rejected",
+			slog.String("err", err.Error()))
+		_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
+		return
+	}
+	// §5.1.2 says a malformed LOCATION_FILTER is also a session-level
+	// PROTOCOL_VIOLATION. We scope that one to this request for now —
+	// unrelated subscriptions on the same session shouldn't die because
+	// one peer sent a bad filter.
+	h.log.LogAttrs(ctx, slog.LevelDebug, "subscription parameter parse failed",
+		slog.String("err", err.Error()))
+	_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
 }
 
 // paramProtocolViolation marks a parameter value that draft-19 requires the
