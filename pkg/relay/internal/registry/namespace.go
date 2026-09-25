@@ -29,6 +29,11 @@ type PublisherEntry struct {
 	// The session handler reads further control messages from it and is
 	// the owner that closes/cancels it on teardown.
 	Stream session.Stream
+
+	// Seq orders registrations: each RegisterPublisher assigns the next
+	// value, so Seq > [NamespaceRegistry.Seq] read earlier means the
+	// publisher registered since.
+	Seq uint64
 }
 
 // SubscriberEntry records a single SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS
@@ -130,6 +135,9 @@ type NamespaceRegistry struct {
 	// produce one Discovery entry, not two.
 	pubCount map[string]int
 
+	// seq is the Seq of the last registered publisher. Guarded by mu.
+	seq uint64
+
 	// discovery / relayAddr / log mirror [TrackRegistry] — see those
 	// docs. nil discovery means "do not advertise"; failures log at
 	// Warn and are not propagated.
@@ -186,6 +194,8 @@ func (r *NamespaceRegistry) RegisterPublisher(
 	entry := &PublisherEntry{Namespace: ns, Session: sess, Stream: stream}
 	key := namespaceWireKey(ns)
 	r.mu.Lock()
+	r.seq++
+	entry.Seq = r.seq
 	r.publishers = append(r.publishers, entry)
 	r.pubCount[key]++
 	if r.pubCount[key] == 1 {
@@ -365,6 +375,14 @@ func namespaceWireKey(ns wire.TrackNamespace) string {
 	w := wire.NewWriter(nil)
 	w.TrackNamespace(ns)
 	return string(w.Bytes())
+}
+
+// Seq returns the Seq of the most recently registered publisher; a publisher
+// registered after the call has a larger one.
+func (r *NamespaceRegistry) Seq() uint64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.seq
 }
 
 // MatchPublishers returns every publisher entry whose advertised namespace

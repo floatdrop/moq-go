@@ -24,6 +24,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay/cache"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
@@ -91,6 +92,15 @@ type TrackRegistry struct {
 	// registry is the source of truth for local state, Discovery is
 	// best-effort.
 	log *slog.Logger
+
+	// claims holds the upstream SUBSCRIBEs in flight, one per (session,
+	// track); see [TrackRegistry.ClaimUpstream]. Guarded by mu.
+	claims map[upstreamClaim]struct{}
+}
+
+type upstreamClaim struct {
+	sess *session.Session
+	key  track.Key
 }
 
 // TrackRegistryOption tweaks a [TrackRegistry] at construction time.
@@ -168,6 +178,82 @@ func (r *TrackRegistry) Get(key track.Key) (*TrackEntry, bool) {
 	defer r.mu.RUnlock()
 	e, ok := r.tracks[key]
 	return e, ok
+}
+
+// MatchNamespace returns every entry whose Track Namespace has prefix as a
+// prefix — §9.5 Namespace Prefix Matching from the publisher's side: the
+// tracks a PUBLISH_NAMESPACE for prefix covers.
+func (r *TrackRegistry) MatchNamespace(prefix wire.TrackNamespace) []*TrackEntry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []*TrackEntry
+	for _, e := range r.tracks {
+		if e.FullName.Namespace.HasPrefix(prefix) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// ClaimUpstream marks an upstream SUBSCRIBE for key on sess as in flight, so a
+// relay-initiated SUBSCRIBE for an existing track (§9.5 late publisher) can
+// tell it would duplicate one. On success the caller opens and registers the
+// upstream, then calls release. ok is false when sess already has a registered
+// upstream for key or another claim is in flight.
+func (r *TrackRegistry) ClaimUpstream(sess *session.Session, key track.Key) (release func(), ok bool) {
+	c := upstreamClaim{sess: sess, key: key}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, busy := r.claims[c]; busy {
+		return nil, false
+	}
+	if e, exists := r.tracks[key]; exists && e.HasUpstreamOn(sess) {
+		return nil, false
+	}
+	if r.claims == nil {
+		r.claims = make(map[upstreamClaim]struct{})
+	}
+	r.claims[c] = struct{}{}
+	return func() {
+		r.mu.Lock()
+		delete(r.claims, c)
+		r.mu.Unlock()
+	}, true
+}
+
+// ReleaseIfUnsubscribed removes the on-demand upstream up from the entry for
+// fullName and tears it down if the entry has no downstream left — what
+// [TrackRegistry.RemoveDownstream] does when the last downstream leaves. It
+// is for an upstream opened for an existing track: its last downstream can
+// leave during the SUBSCRIBE round trip, before up is registered and so
+// before RemoveDownstream could strip it, and nothing would ever release it.
+// Reports whether up was released.
+func (r *TrackRegistry) ReleaseIfUnsubscribed(fullName track.FullTrackName, up *UpstreamSub) bool {
+	key := fullName.Key()
+	r.mu.Lock()
+	entry, ok := r.tracks[key]
+	if !ok {
+		r.mu.Unlock()
+		return false
+	}
+	entry.mu.Lock()
+	before := len(entry.Upstream)
+	if len(entry.Downstream) == 0 {
+		entry.Upstream = slices.DeleteFunc(entry.Upstream, func(u *UpstreamSub) bool { return u == up })
+	}
+	released := len(entry.Upstream) < before
+	upstreamEmpty := len(entry.Upstream) == 0
+	entry.mu.Unlock()
+	if released && upstreamEmpty {
+		delete(r.tracks, key)
+		// Still under r.mu: see [TrackRegistry.unpublishTrackFromDiscovery].
+		r.unpublishTrackFromDiscovery(entry)
+	}
+	r.mu.Unlock()
+	if released {
+		up.CloseOnDemand()
+	}
+	return released
 }
 
 // GetOrCreateNew is [TrackRegistry.GetOrCreate] that also reports whether this

@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -164,11 +166,29 @@ func (l *RequestUpdateLimiter) Responded() {
 }
 
 // RequestRejectedError is returned by Publish / Subscribe when the peer
-// answers a request with REQUEST_ERROR (§10.5). Callers can detect it via
-// errors.As and inspect Code / Reason.
+// answers a request with REQUEST_ERROR (§10.6). Callers can detect it via
+// errors.AsType and inspect Code / Reason.
 type RequestRejectedError struct {
 	Code   moqt.RequestErrorCode
 	Reason string
+	// RetryInterval is the REQUEST_ERROR's Retry Interval as sent (§10.6.2):
+	// 0 means the request SHOULD NOT be retried, N means it SHOULD NOT be
+	// sent again for N-1 milliseconds. [RequestRejectedError.RetryAfter]
+	// decodes it.
+	RetryInterval uint64
+}
+
+// RetryAfter decodes RetryInterval (§10.6.2): whether the request may be
+// retried with the same parameters, and the minimum wait before doing so.
+func (e *RequestRejectedError) RetryAfter() (time.Duration, bool) {
+	if e.RetryInterval == 0 {
+		return 0, false
+	}
+	ms := e.RetryInterval - 1
+	if ms > uint64(math.MaxInt64/int64(time.Millisecond)) {
+		return time.Duration(math.MaxInt64), true // a varint can exceed Duration
+	}
+	return time.Duration(ms) * time.Millisecond, true
 }
 
 func (e *RequestRejectedError) Error() string {
@@ -615,7 +635,7 @@ func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Mess
 //   - the expected success type OK is handed to onOK, which owns the still-open
 //     stream from that point: it wraps the stream in the typed handle, or closes
 //     it and returns an error (e.g. on Track Property validation failure);
-//   - REQUEST_ERROR (§10.5) is surfaced as a *RequestRejectedError and the
+//   - REQUEST_ERROR (§10.6) is surfaced as a *RequestRejectedError and the
 //     stream is closed;
 //   - any other message is an unexpected-response error and the stream is closed.
 //
@@ -650,7 +670,11 @@ func awaitRequestResponse[OK message.Message, R any](
 	}
 	_ = stream.Close()
 	if rerr, isErr := resp.(*message.RequestError); isErr {
-		return zero, &RequestRejectedError{Code: rerr.ErrorCode, Reason: rerr.ErrorReason}
+		return zero, &RequestRejectedError{
+			Code:          rerr.ErrorCode,
+			Reason:        rerr.ErrorReason,
+			RetryInterval: rerr.RetryInterval,
+		}
 	}
 	return zero, fmt.Errorf("moqt/session: unexpected %s in %s response", resp.Type(), m.Type())
 }

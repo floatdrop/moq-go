@@ -3,13 +3,16 @@ package relay
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
@@ -21,16 +24,15 @@ import (
 //  3. Reply REQUEST_OK on the request stream.
 //  4. Forward to every matching downstream SUBSCRIBE_NAMESPACE holder as a
 //     NAMESPACE message (§9.5).
-//  5. Block reading the request stream until the publisher cancels it
+//  5. SUBSCRIBE the publisher for every existing track the namespace covers
+//     (§9.5; see [sessionHandler.subscribeExistingTracks]). Tracks skipped
+//     for lack of a subscriber, and tracks subscribed later, reach it from
+//     the SUBSCRIBE handler once a downstream is registered.
+//  6. Block reading the request stream until the publisher cancels it
 //     (RESET_STREAM, or STOP_SENDING after a FIN — §6.2 "withdrawn by
 //     cancelling the request", §3.3.3; a FIN alone is not a withdrawal,
 //     §3.3.2). On exit, unregister from the registry.NamespaceRegistry and
 //     emit NAMESPACE_DONE to the same subscribers.
-//
-// The §9.5 "issue upstream SUBSCRIBE for matching downstream subs"
-// optimisation is handled by the SUBSCRIBE handler's on-demand
-// upstream subscribe path; here we only do forward-direction
-// propagation.
 func (h *sessionHandler) handlePublishNamespace(
 	ctx context.Context,
 	req *session.Request,
@@ -70,6 +72,12 @@ func (h *sessionHandler) handlePublishNamespace(
 		notified = append(notified, sub)
 	}
 
+	// Scoped to this PUBLISH_NAMESPACE: once the publisher withdraws it (§9.5)
+	// no further SUBSCRIBEs go out for it.
+	nsCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	h.spawn(func() { h.subscribeExistingTracks(nsCtx, entry) })
+
 	// Block until the publisher cancels (§6.2, §3.3.3: reset, or
 	// STOP_SENDING after a FIN) or our ctx is cancelled. Per §6.2 the bidi stream is the publisher's
 	// keepalive for the advertisement; NAMESPACE / NAMESPACE_DONE
@@ -99,6 +107,114 @@ func (h *sessionHandler) handlePublishNamespace(
 			h.log.LogAttrs(ctx, slog.LevelDebug, "NAMESPACE_DONE forward failed",
 				slog.String("err", err.Error()))
 		}
+	}
+}
+
+// subscribeExistingTracks is §9.5: "When a relay receives an authorized
+// PUBLISH_NAMESPACE for a namespace that matches one or more existing
+// subscriptions to other upstream sessions, it MUST send a SUBSCRIBE to the
+// publisher that sent the PUBLISH_NAMESPACE for each matching subscription."
+// Tracks it skips, and a downstream SUBSCRIBE racing it, are covered from the
+// SUBSCRIBE side by [sessionHandler.subscribeMissingPublishers].
+func (h *sessionHandler) subscribeExistingTracks(ctx context.Context, pub *registry.PublisherEntry) {
+	for _, e := range h.tracks.MatchNamespace(pub.Namespace) {
+		if ctx.Err() != nil {
+			return
+		}
+		h.subscribeLatePublisher(ctx, e.FullName, pub)
+	}
+}
+
+// subscribeMissingPublishers runs once a downstream is on the track's entry
+// and SUBSCRIBEs the registered publishers covering the track that have no
+// upstream for it: every one when the downstream reused an existing upstream
+// set (reused), which may lack publishers skipped while the track had no
+// subscriber or stripped when its last one left; otherwise only those
+// registered after seq, since a fresh set just tried the rest. A publisher
+// whose late-publisher SUBSCRIBE was refused is not asked again until its
+// Retry Interval passes, if ever (see [sessionHandler.subscribeLatePublisher]).
+func (h *sessionHandler) subscribeMissingPublishers(
+	ctx context.Context,
+	entry *registry.TrackEntry,
+	reused bool,
+	seq uint64,
+) {
+	pubs := h.names.MatchPublishers(entry.FullName.Namespace)
+	now := time.Now()
+	entry.RetainRefusals(pubs, now)
+	for _, pub := range pubs {
+		if pub.Session == h.sess || (!reused && pub.Seq <= seq) ||
+			entry.HasUpstreamOn(pub.Session) || entry.Refused(pub, now) {
+			continue
+		}
+		h.spawn(func() { h.subscribeLatePublisher(ctx, entry.FullName, pub) })
+	}
+}
+
+// subscribeLatePublisher opens an upstream subscription for an existing track
+// on pub, a publisher whose PUBLISH_NAMESPACE covers it but which is not yet
+// among the track's established upstreams (§9.5). The new upstream joins the
+// track's merged publisher set like any on-demand one.
+//
+// A refusal is recorded on the track entry so later subscribers do not ask
+// again: a REQUEST_ERROR until its Retry Interval passes, or for good when it
+// is 0 ("SHOULD NOT be retried", §10.6.2), and a SUBSCRIBE_OK the relay had to
+// cancel over its Track Properties (§2.5.1) for good. "For good" lasts while
+// the entry and the publisher's registration do. Refusals on the on-demand
+// path are not recorded; that path asks every publisher once per upstream set.
+//
+// Skipped, until a later downstream SUBSCRIBE asks again (these are this
+// relay's choices; §9.5 does not qualify "each matching subscription"):
+//   - while the track has no downstream subscriber. An on-demand upstream is
+//     released when its last downstream leaves, so one opened with none would
+//     never be;
+//   - while pub itself receives the track from the relay, which would echo it
+//     back to its receiver. The on-demand path likewise never subscribes on
+//     the requesting session.
+func (h *sessionHandler) subscribeLatePublisher(
+	ctx context.Context,
+	fullName track.FullTrackName,
+	pubEntry *registry.PublisherEntry,
+) {
+	pub := pubEntry.Session
+	e, ok := h.tracks.Get(fullName.Key())
+	if !ok || !hasEstablishedUpstream(e) || len(e.CopyDownstream()) == 0 || e.HasDownstreamOn(pub) ||
+		e.Refused(pubEntry, time.Now()) {
+		return
+	}
+	release, claimed := h.tracks.ClaimUpstream(pub, fullName.Key())
+	if !claimed {
+		return // already subscribed there, or being subscribed
+	}
+	defer release()
+	entry, up, err := h.subscribeUpstreamOnSession(ctx, pub, fullName, nil, anyDownstreamForwards(e))
+	if err != nil {
+		if rej, ok := errors.AsType[*session.RequestRejectedError](err); ok {
+			var retryAt time.Time // zero: never
+			if after, retry := rej.RetryAfter(); retry {
+				retryAt = time.Now().Add(after)
+			}
+			e.NoteRefusal(pubEntry, retryAt)
+		} else if isTrackPropertiesErr(err) {
+			e.NoteRefusal(pubEntry, time.Time{})
+		}
+		h.log.LogAttrs(ctx, slog.LevelDebug, "late publisher: SUBSCRIBE for existing track failed",
+			slog.String("name", string(fullName.Name)),
+			slog.String("err", err.Error()))
+		return
+	}
+	// The track's last downstream may have left during the round trip.
+	if h.tracks.ReleaseIfUnsubscribed(fullName, up) {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "late publisher: track lost its subscribers, released",
+			slog.String("name", string(fullName.Name)))
+		return
+	}
+	// Or a downstream may have switched to Forward=1 during it, when this
+	// upstream was not yet registered for §9.2 propagation to reach. Not
+	// bound to ctx: a withdrawn PUBLISH_NAMESPACE stops new subscriptions
+	// (§9.5), not the resume of this established one.
+	if up.ForwardState() == 0 && anyDownstreamForwards(entry) {
+		h.propagateForwardUpstream(context.WithoutCancel(ctx), fullName)
 	}
 }
 
