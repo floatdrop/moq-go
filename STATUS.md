@@ -450,7 +450,6 @@ Relay:
 - The MAX_CACHE_DURATION Track Property is ignored (§12.3).
 - Mandatory Track Properties are not enforced (§2.5.1).
 - Namespace subscriptions:
-  - PREFIX_OVERLAP is never sent (§10.19, §10.20);
   - a TRACK_NAMESPACE_PREFIX REQUEST_UPDATE is acknowledged but not applied
     (§10.9.2, §10.2.20);
   - NAMESPACE_DONE is tracked per publisher, not per namespace, with race

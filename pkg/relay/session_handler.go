@@ -28,6 +28,11 @@ import (
 // datagram loops on separate goroutines, plus per-request handler goroutines
 // spawned by the dispatch loop and tracked via wg for a clean join on teardown.
 type sessionHandler struct {
+	// nsPrefixes / trackPrefixes are this session's established
+	// SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS prefixes, for §10.19 / §10.20
+	// PREFIX_OVERLAP. The two types have independent overlap spaces.
+	nsPrefixes, trackPrefixes prefixSet
+
 	sess    *session.Session
 	log     *slog.Logger
 	tracks  *registry.TrackRegistry

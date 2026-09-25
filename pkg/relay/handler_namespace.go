@@ -1,8 +1,11 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"log/slog"
+	"slices"
+	"sync"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -120,6 +123,13 @@ func (h *sessionHandler) handleSubscribeNamespace(
 		h.rejectAuth(ctx, req, "SubscribeNamespace", err)
 		return
 	}
+
+	if !h.nsPrefixes.reserve(msg.TrackNamespacePrefix) {
+		_ = req.RejectError(moqt.RequestPrefixOverlap,
+			"prefix overlaps an established SUBSCRIBE_NAMESPACE in this session")
+		return
+	}
+	defer h.nsPrefixes.release(msg.TrackNamespacePrefix)
 
 	// Reply REQUEST_OK before registering. Registration makes the entry
 	// visible to MatchSubscribers, after which a concurrent publisher's
@@ -246,6 +256,13 @@ func (h *sessionHandler) handleSubscribeTracks(
 		_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
 		return
 	}
+
+	if !h.trackPrefixes.reserve(msg.TrackNamespacePrefix) {
+		_ = req.RejectError(moqt.RequestPrefixOverlap,
+			"prefix overlaps an established SUBSCRIBE_TRACKS in this session")
+		return
+	}
+	defer h.trackPrefixes.release(msg.TrackNamespacePrefix)
 
 	// Reply REQUEST_OK before registering, so the OK cannot race a
 	// PUBLISH_SKIPPED that a concurrent publisher's PUBLISH handler
@@ -380,4 +397,39 @@ func namespaceMessageFor(publisherNS, subscriberPrefix wire.TrackNamespace) *mes
 func namespaceDoneMessageFor(publisherNS, subscriberPrefix wire.TrackNamespace) *message.NamespaceDone {
 	suffix := publisherNS[len(subscriberPrefix):]
 	return &message.NamespaceDone{TrackNamespaceSuffix: append(wire.TrackNamespace(nil), suffix...)}
+}
+
+// prefixSet holds one session's established namespace-subscription prefixes
+// of one type, for PREFIX_OVERLAP (§10.19 / §10.20). The zero value is ready.
+type prefixSet struct {
+	mu       sync.Mutex
+	prefixes []wire.TrackNamespace
+}
+
+// reserve records prefix and reports true, or reports false — recording
+// nothing — when it overlaps an established one. Two tuple prefixes overlap
+// when one is a prefix of the other: the draft's "shares a common prefix",
+// read as "matches some of the same namespaces" (read literally, every pair
+// would share the empty prefix). The empty prefix overlaps everything.
+func (p *prefixSet) reserve(prefix wire.TrackNamespace) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if slices.ContainsFunc(p.prefixes, func(have wire.TrackNamespace) bool {
+		return have.HasPrefix(prefix) || prefix.HasPrefix(have)
+	}) {
+		return false
+	}
+	p.prefixes = append(p.prefixes, prefix)
+	return true
+}
+
+// release forgets a prefix reserve accepted.
+func (p *prefixSet) release(prefix wire.TrackNamespace) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i := slices.IndexFunc(p.prefixes, func(have wire.TrackNamespace) bool {
+		return slices.EqualFunc(have, prefix, bytes.Equal)
+	}); i >= 0 {
+		p.prefixes = slices.Delete(p.prefixes, i, i+1)
+	}
 }
