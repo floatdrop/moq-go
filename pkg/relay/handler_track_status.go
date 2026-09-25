@@ -37,11 +37,12 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 	if known {
 		largest, hasLargest = entry.GetLargest()
 	}
-	// §10.2.21: INCLUDE_PROPERTIES=0 asks for empty Track Properties.
-	hasProperties := known && len(entry.GetProperties()) > 0 && includeProperties(msg.Parameters)
+	hasProperties := known && len(entry.GetProperties()) > 0
 	if known && (hasProperties || hasLargest) {
 		reply := &message.TrackStatusOK{}
-		if hasProperties {
+		// §10.2.21: INCLUDE_PROPERTIES=0 empties the Track Properties; it
+		// does not change whether the track is answered.
+		if hasProperties && includeProperties(msg.Parameters) {
 			reply.TrackProperties = entry.GetProperties()
 		}
 		if hasLargest {

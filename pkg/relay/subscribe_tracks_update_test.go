@@ -213,3 +213,39 @@ func TestSubscribeTracks_ForwardsTrackGainedBySubscribe(t *testing.T) {
 	}
 	requireNoForward(t, subReqs, "the subscriber whose SUBSCRIBE created the track")
 }
+
+// TestSubscribeTracksUpdate_RefusalEndsRequest: "When a REQUEST_UPDATE fails
+// for a SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS or PUBLISH_NAMESPACE, the
+// responder MUST close the bidi stream" (§10.9.1), which ends the request
+// (§3.3.2). The relay stops serving it: its prefix is free again for a new
+// SUBSCRIBE_TRACKS on the same session.
+func TestSubscribeTracksUpdate_RefusalEndsRequest(t *testing.T) {
+	t.Parallel()
+	subSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	stream := openSubscribeTracks(t, subSess, ns("video"))
+
+	// An odd Property Type in a TRACK_PROPERTY_FILTER is INVALID_FILTER.
+	_, err := subSess.UpdateRequest(t.Context(), stream, message.Parameters{
+		message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamTrackPropertyFilter, PropertyType: 0x41, Ranges: []message.Range{{Start: 1, End: 1}},
+		}),
+	})
+	requireRejectedWithCode(t, err, moqt.RequestInvalidFilter)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		ts, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{TrackNamespacePrefix: ns("video")})
+		if err == nil {
+			_ = ts.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf(
+				"SUBSCRIBE_TRACKS video after the refused update: %v; the ended request still holds its prefix",
+				err,
+			)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

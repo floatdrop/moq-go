@@ -166,8 +166,8 @@ func (e *SubscriberEntry) Enqueue(m message.Message) {
 // Finish queues m as the last message of the request, after which the writer
 // FINs the stream: "When a REQUEST_UPDATE fails for a SUBSCRIBE_NAMESPACE,
 // SUBSCRIBE_TRACKS or PUBLISH_NAMESPACE, the responder MUST close the bidi
-// stream (see Section 3.3.2)". The subscription ends when the requester FINs
-// its side back (§3.3.2) or cancels.
+// stream (see Section 3.3.2)". That ends the request: the owner waits for
+// [SubscriberEntry.WriterDone] and then unregisters e.
 func (e *SubscriberEntry) Finish(m message.Message) {
 	e.push(m, true)
 }
@@ -200,6 +200,7 @@ func (e *SubscriberEntry) push(m message.Message, last bool) {
 // stream, so the request's reader returns and the owner unregisters e: that is
 // how a peer's STOP_SENDING-only cancel (§3.3.3) ends the subscription.
 func (e *SubscriberEntry) RunWriter() {
+	defer close(e.writerDone)
 	for {
 		select {
 		case <-e.closed:
@@ -226,6 +227,10 @@ func (e *SubscriberEntry) RunWriter() {
 		}
 	}
 }
+
+// WriterDone is closed once RunWriter has returned: after the FIN that
+// [SubscriberEntry.Finish] asked for, a failed write, or unregistration.
+func (e *SubscriberEntry) WriterDone() <-chan struct{} { return e.writerDone }
 
 // PublishSkipped queues a PUBLISH_SKIPPED (§10.21) for the track (ns, name) on
 // a SUBSCRIBE_TRACKS subscriber, its suffix relative to the prefix in force at

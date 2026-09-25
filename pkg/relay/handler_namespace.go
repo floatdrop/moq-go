@@ -349,7 +349,7 @@ func (h *sessionHandler) serveNamespaceFollowups(
 	ctx context.Context,
 	req *session.Request,
 	write func(message.Message) error,
-	update func(*message.RequestUpdate) bool,
+	update func(context.Context, *message.RequestUpdate) bool,
 ) {
 	stream := req.Stream
 	scope := message.ScopeOfUpdate(req.First.Type())
@@ -378,9 +378,10 @@ func (h *sessionHandler) serveNamespaceFollowups(
 			return false
 		}
 		// The two subscription requests supply update, which applies the
-		// REQUEST_UPDATE and replies; false means the session is closing.
+		// REQUEST_UPDATE and replies; false ends the request (the session is
+		// closing, or the update was refused and the stream closed).
 		if update != nil {
-			if !update(upd) {
+			if !update(ctx, upd) {
 				return false
 			}
 			updates.Responded()
@@ -438,17 +439,19 @@ func (h *sessionHandler) updatePrefixParam(upd *message.RequestUpdate) (prefix w
 func (h *sessionHandler) namespaceUpdate(
 	e *registry.SubscriberEntry,
 	cur *wire.TrackNamespace,
-) func(*message.RequestUpdate) bool {
+) func(context.Context, *message.RequestUpdate) bool {
 	updatePrefix := h.prefixUpdater(e, &h.nsPrefixes, cur)
-	return func(upd *message.RequestUpdate) bool {
+	return func(ctx context.Context, upd *message.RequestUpdate) bool {
 		prefix, found, ok := h.updatePrefixParam(upd)
 		if !ok {
 			return false
 		}
-		if found {
-			updatePrefix(prefix)
-		} else {
+		if !found {
 			e.Enqueue(&message.RequestOK{})
+			return true
+		}
+		if !updatePrefix(prefix) {
+			return endAfterFinish(ctx, e)
 		}
 		return true
 	}
@@ -460,7 +463,7 @@ func (h *sessionHandler) namespaceUpdate(
 // subscriptions are unaffected" (§10.2.18); so does a TRACK_NAMESPACE_PREFIX
 // (§10.9.2). The merged parameters are refused on the SUBSCRIBE_TRACKS's own
 // terms; a refused update ends the request, since "the responder MUST close
-// the bidi stream" (§10.9.1), and changes nothing.
+// the bidi stream" (§10.9.1), and changes nothing (see [endAfterFinish]).
 //
 // Tracks that exist and did not match before the update but do now, by prefix
 // or by Range Filter, are forwarded then: SUBSCRIBE_TRACKS asks for "all
@@ -469,8 +472,8 @@ func (h *sessionHandler) namespaceUpdate(
 func (h *sessionHandler) tracksUpdate(
 	e *registry.SubscriberEntry,
 	cur *wire.TrackNamespace,
-) func(*message.RequestUpdate) bool {
-	return func(upd *message.RequestUpdate) bool {
+) func(context.Context, *message.RequestUpdate) bool {
+	return func(ctx context.Context, upd *message.RequestUpdate) bool {
 		prefix, hasPrefix, ok := h.updatePrefixParam(upd)
 		if !ok {
 			return false
@@ -487,7 +490,7 @@ func (h *sessionHandler) tracksUpdate(
 				code = moqt.RequestInvalidFilter
 			}
 			e.Finish(&message.RequestError{ErrorCode: code, ErrorReason: err.Error()})
-			return true
+			return endAfterFinish(ctx, e)
 		}
 		oldPrefix := *cur
 		if hasPrefix {
@@ -496,7 +499,7 @@ func (h *sessionHandler) tracksUpdate(
 					ErrorCode:   moqt.RequestPrefixOverlap,
 					ErrorReason: "updated prefix overlaps another subscription in this session",
 				})
-				return true
+				return endAfterFinish(ctx, e)
 			}
 			*cur = prefix
 		}
@@ -521,9 +524,11 @@ func (h *sessionHandler) tracksUpdate(
 // SUBSCRIBE_TRACKS's: a parameter type present in upd replaces every stored
 // parameter of that type, and types upd omits are unchanged (§10.9). For a
 // Range Filter that is §5.1.4's rule — "Length of 0 removes the filter;
-// non-zero replaces it entirely" — per filter type, so a zero-length one is
-// not kept. TRACK_NAMESPACE_PREFIX and AUTHORIZATION_TOKEN belong to the
-// update itself, not to the subscriptions it shapes, and are not kept.
+// non-zero replaces it entirely" — per filter type, every SetID of it, so a
+// zero-length one is not kept. TRACK_NAMESPACE_PREFIX and AUTHORIZATION_TOKEN
+// belong to the update itself, not to the subscriptions it shapes: the
+// update's are not kept, and an update carrying a token drops the stored one
+// (which no forwarded PUBLISH echoes anyway, §10.2.2).
 func mergeTracksUpdate(stored, upd message.Parameters) message.Parameters {
 	out := slices.DeleteFunc(slices.Clone(stored), func(p message.Parameter) bool {
 		return slices.ContainsFunc(upd, func(u message.Parameter) bool { return u.Type == p.Type })
@@ -568,23 +573,38 @@ func (h *sessionHandler) resolveTracksParams(ps message.Parameters) (*registry.T
 // subscription of the same type in the same session" is refused with
 // PREFIX_OVERLAP (§10.2.20), checked against reserved excluding the request's
 // own current prefix, *cur. A failed update ends the request: "the responder
-// MUST close the bidi stream" (§10.9.1).
+// MUST close the bidi stream" (§10.9.1); it reports false then.
 func (h *sessionHandler) prefixUpdater(
 	e *registry.SubscriberEntry,
 	reserved *prefixSet,
 	cur *wire.TrackNamespace,
-) func(wire.TrackNamespace) {
-	return func(prefix wire.TrackNamespace) {
+) func(wire.TrackNamespace) bool {
+	return func(prefix wire.TrackNamespace) bool {
 		if !reserved.replace(*cur, prefix) {
 			e.Finish(&message.RequestError{
 				ErrorCode:   moqt.RequestPrefixOverlap,
 				ErrorReason: "updated prefix overlaps another subscription in this session",
 			})
-			return
+			return false
 		}
 		*cur = prefix
 		h.names.UpdatePrefix(e, prefix, &message.RequestOK{})
+		return true
 	}
+}
+
+// endAfterFinish ends a namespace subscription whose REQUEST_UPDATE was
+// refused. The responder "MUST close the bidi stream" (§10.9.1), and its FIN
+// says the request is complete (§3.3.2), so the relay stops serving it rather
+// than wait for the requester to answer. It waits for the writer to send the
+// queued REQUEST_ERROR and FIN, then reports false, which ends the follow-up
+// loop and lets the owner unregister the subscription and release its prefix.
+func endAfterFinish(ctx context.Context, e *registry.SubscriberEntry) bool {
+	select {
+	case <-e.WriterDone():
+	case <-ctx.Done():
+	}
+	return false
 }
 
 // prefixSet holds one session's established namespace-subscription prefixes
