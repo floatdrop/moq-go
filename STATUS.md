@@ -190,7 +190,7 @@ By package, bottom-up along the dependency stack:
 | 10.3.1.7| MAX_REQUEST_UPDATES           | 0x08   | DONE   | `WithMaxRequestUpdates` advertises the per-stream limit; enforced on inbound follow-ups via `RequestUpdateLimiter`, closing with `TOO_MANY_REQUEST_UPDATES` on overflow. |
 | 10.4    | GOAWAY                        | 0x10   | DONE   | Same encoding on control and request streams (draft-19 dropped the Request ID field); callback. As recipient the relay initiates no new SUBSCRIBE, FETCH or PUBLISH to the peer and leaves closing the session to the sender. |
 | 10.5    | REQUEST_OK                    | 0x07   | DONE   | Shared OK for PUBLISH/UPDATE/TRACK_STATUS/namespace reqs. Track Properties where they must be empty close the session on receipt and are refused on send (`ErrTrackPropertiesNotAllowed`), except a REQUEST_UPDATE_OK written with `Reply` on a SUBSCRIBE_TRACKS stream — see Limitations. |
-| 10.6    | REQUEST_ERROR (+ Redirect)    | 0x05   | DONE   | Redirect required only when code==REDIRECT. |
+| 10.6    | REQUEST_ERROR (+ Redirect)    | 0x05   | DONE   | Redirect required only when code==REDIRECT. `Request.Reject` sends a Retry Interval; the relay invites a jittered ~1 s retry on EXCESSIVE_LOAD and passes an upstream SUBSCRIBE rejection on by meaning, Retry Interval kept. |
 | 10.7    | SUBSCRIBE                     | 0x03   | DONE   | |
 | 10.8    | SUBSCRIBE_OK                  | 0x04   | DONE   | Registers inbound track alias. |
 | 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | A REQUEST_UPDATE opening a request stream closes the session with PROTOCOL_VIOLATION (`ErrUnexpectedRequestUpdate`). |
@@ -455,10 +455,6 @@ Validation:
 
 Relay:
 
-- `Request.RejectError` always sends Retry Interval 0 ("SHOULD NOT be
-  retried", §10.6.2). So the relay turns an upstream's "retry in N ms" into a
-  permanent refusal when it passes the rejection downstream, and its
-  EXCESSIVE_LOAD limit rejections never invite a retry.
 - MAX_CACHE_DURATION (§12.3) is enforced on cache reads and the live path, but:
   - FETCH and fill write their cache snapshot without re-checking age, so a
     blocked write can start sending an expired Object; a drop there needs an

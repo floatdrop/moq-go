@@ -3,6 +3,7 @@ package relay_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -793,39 +794,66 @@ func TestSubscribe_NoMatchingPublisher_RejectsDoesNotExist(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
 }
 
-// TestSubscribe_UpstreamRejects_PropagatesRejection verifies the failure
-// path: when the upstream publisher rejects the relay's SUBSCRIBE, the
-// downstream subscriber must also see a REQUEST_ERROR. The error code may
-// not match exactly (the relay normalises it) but it should signal failure.
+// TestSubscribe_UpstreamRejects_PropagatesRejection: when the upstream
+// publisher rejects the relay's SUBSCRIBE, the downstream subscriber gets a
+// REQUEST_ERROR whose code is chosen by meaning (§10.6.2 "The application
+// SHOULD use a relevant error code"). A code about the track or the
+// publisher's load passes through; one about the relay's own hop (its
+// authorization, the upstream going away, a redirect it does not follow) or
+// about the relay's own Next Object filter says nothing true about the
+// downstream request, and becomes INTERNAL_ERROR. Either way the upstream's
+// Retry Interval is kept: "retry in N ms" must not turn into "SHOULD NOT be
+// retried".
 func TestSubscribe_UpstreamRejects_PropagatesRejection(t *testing.T) {
 	t.Parallel()
-	pubSess, teardown := connectRelay(t, relay.Config{})
-	defer teardown()
+	for _, tc := range []struct {
+		upstream, want moqt.RequestErrorCode
+		retry          uint64
+	}{
+		{moqt.RequestDoesNotExist, moqt.RequestDoesNotExist, 0},
+		{moqt.RequestExcessiveLoad, moqt.RequestExcessiveLoad, 501},
+		{moqt.RequestTimeout, moqt.RequestTimeout, 1},
+		{moqt.RequestMalformedTrack, moqt.RequestMalformedTrack, 0},
+		{moqt.RequestUnauthorized, moqt.RequestInternalError, 0},
+		{moqt.RequestExpiredAuthToken, moqt.RequestInternalError, 2001},
+		{moqt.RequestGoingAway, moqt.RequestInternalError, 0},
+		{moqt.RequestInvalidRange, moqt.RequestInternalError, 0},
+		{moqt.RequestErrorCode(0x7777), moqt.RequestInternalError, 31},
+	} {
+		t.Run(fmt.Sprintf("%#x", uint64(tc.upstream)), func(t *testing.T) {
+			t.Parallel()
+			pubSess, teardown := connectRelay(t, relay.Config{})
+			defer teardown()
 
-	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
-	})
-	if err != nil {
-		t.Fatalf("PublishNamespace: %v", err)
+			pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
+				Namespace: wire.TrackNamespace{[]byte("video")},
+			})
+			if err != nil {
+				t.Fatalf("PublishNamespace: %v", err)
+			}
+			defer pubNSStream.Close()
+
+			go func() {
+				req, err := pubSess.AcceptRequest(t.Context())
+				if err != nil {
+					return
+				}
+				_ = req.Reject(&session.RequestRejectedError{
+					Code: tc.upstream, Reason: "upstream says no", RetryInterval: tc.retry,
+				})
+			}()
+
+			subSess := dialAnotherClient(t, pubSess)
+			_, err = subSess.Subscribe(t.Context(), &message.Subscribe{
+				Namespace: wire.TrackNamespace{[]byte("video")},
+				Name:      []byte("cam1"),
+			})
+			requireRejectedWithCode(t, err, tc.want)
+			if rej, _ := errors.AsType[*session.RequestRejectedError](err); rej.RetryInterval != tc.retry {
+				t.Fatalf("downstream Retry Interval %d, want the upstream's %d", rej.RetryInterval, tc.retry)
+			}
+		})
 	}
-	defer pubNSStream.Close()
-
-	go func() {
-		req, err := pubSess.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		_ = req.RejectError(moqt.RequestUnauthorized, "policy denial")
-	}()
-
-	subSess := dialAnotherClient(t, pubSess)
-	_, err = subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
-		Name:      []byte("cam1"),
-	})
-	// The relay normalises upstream rejection to RequestDoesNotExist
-	// since "no upstream is available" is the right downstream signal.
-	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
 }
 
 // TestSubscribe_AuthDenialUsesPolicyCode pins auth precedence on the
