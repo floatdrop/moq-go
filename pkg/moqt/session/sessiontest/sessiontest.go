@@ -134,9 +134,8 @@ var errConnClosed = errors.New("sessiontest: connection closed")
 // methods they can call.
 //
 // ctx / ctxCancel implement Context(): the context is cancelled when Close()
-// or CancelWrite() is called, signalling "all data committed" (or reset).
-// For in-process pipes, data is synchronously delivered, so Close() is
-// equivalent to "all data acknowledged".
+// or CancelWrite() is called, or when the acceptor's CancelRead stops reading
+// (STOP_SENDING) — the same three events as quic-go.
 type uniStream struct {
 	r         pipeReadCloser
 	w         pipeWriteCloser
@@ -161,19 +160,29 @@ func (s *uniStream) CancelWrite(uint64) {
 	s.ctxCancel() // signal reset
 }
 func (s *uniStream) Read(p []byte) (int, error) { return s.r.Read(p) }
-func (s *uniStream) CancelRead(uint64)          { _ = s.r.CloseWithError(errCancelled) }
 
-// Context is cancelled when Close() or CancelWrite() has been called,
-// indicating the send side is done (either cleanly or via reset).
+// CancelRead is the acceptor's STOP_SENDING: it also ends the opener's send
+// side, whose Context is cancelled as on a real transport.
+func (s *uniStream) CancelRead(uint64) {
+	_ = s.r.CloseWithError(errCancelled)
+	s.ctxCancel()
+}
+
+// Context is cancelled when Close() or CancelWrite() has been called, or the
+// peer called CancelRead — the send side is done (cleanly, via reset, or
+// because the peer stopped reading).
 func (s *uniStream) Context() context.Context { return s.ctx }
 
 // bidiStream is two io.Pipes wired so each end reads what the other writes.
-// ctx / ctxCancel implement Context() on the send side.
+// ctx / ctxCancel implement Context() on the send side; peerCtxCancel cancels
+// the other end's, which is how this end's CancelRead (STOP_SENDING) reaches
+// the writer.
 type bidiStream struct {
-	r         pipeReadCloser
-	w         pipeWriteCloser
-	ctx       context.Context
-	ctxCancel context.CancelFunc
+	r             pipeReadCloser
+	w             pipeWriteCloser
+	ctx           context.Context
+	ctxCancel     context.CancelFunc
+	peerCtxCancel context.CancelFunc
 }
 
 func newBidiStreamPair(bufSize int) (a, b *bidiStream) {
@@ -181,8 +190,8 @@ func newBidiStreamPair(bufSize int) (a, b *bidiStream) {
 	bR, bW := newPipe(bufSize) // b writes, a reads
 	aCtx, aCancel := context.WithCancel(context.Background())
 	bCtx, bCancel := context.WithCancel(context.Background())
-	return &bidiStream{r: bR, w: aW, ctx: aCtx, ctxCancel: aCancel},
-		&bidiStream{r: aR, w: bW, ctx: bCtx, ctxCancel: bCancel}
+	return &bidiStream{r: bR, w: aW, ctx: aCtx, ctxCancel: aCancel, peerCtxCancel: bCancel},
+		&bidiStream{r: aR, w: bW, ctx: bCtx, ctxCancel: bCancel, peerCtxCancel: aCancel}
 }
 
 func (s *bidiStream) Read(p []byte) (int, error)  { return s.r.Read(p) }
@@ -192,13 +201,17 @@ func (s *bidiStream) Close() error {
 	s.ctxCancel() // signal "all data committed"
 	return err
 }
-func (s *bidiStream) CancelRead(uint64) { _ = s.r.CloseWithError(errCancelled) }
+func (s *bidiStream) CancelRead(uint64) {
+	_ = s.r.CloseWithError(errCancelled)
+	s.peerCtxCancel() // STOP_SENDING ends the peer's send side
+}
 func (s *bidiStream) CancelWrite(uint64) {
 	_ = s.w.CloseWithError(errCancelled)
 	s.ctxCancel() // signal reset
 }
 
-// Context is cancelled when Close() or CancelWrite() has been called.
+// Context is cancelled when Close() or CancelWrite() has been called, or the
+// peer called CancelRead.
 func (s *bidiStream) Context() context.Context { return s.ctx }
 
 // cancellable is satisfied by both uniStream and bidiStream — anything the

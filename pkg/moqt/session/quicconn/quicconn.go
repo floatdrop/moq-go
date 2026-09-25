@@ -104,8 +104,8 @@ func (s *sendStream) CancelWrite(code uint64) {
 // extension (quic.Config.EnableStreamResetPartialDelivery).
 func (s *sendStream) SetReliableBoundary() { s.s.SetReliableBoundary() }
 
-// Context is cancelled when all data has been acknowledged by the peer or
-// the stream is reset. quic-go's SendStream.Context() provides this directly.
+// Context is cancelled when the send side is closed or reset, or the peer
+// sends STOP_SENDING. quic-go's SendStream.Context() provides this directly.
 func (s *sendStream) Context() context.Context { return s.s.Context() }
 
 // recvStream wraps *quic.ReceiveStream.
@@ -129,8 +129,8 @@ func (s *bidiStream) CancelWrite(code uint64) {
 	s.s.CancelWrite(quic.StreamErrorCode(code))
 }
 
-// Context is cancelled when all data has been acknowledged or the stream is
-// reset. quic-go's Stream embeds SendStream which has Context().
+// Context is cancelled when the send side is closed or reset, or the peer
+// sends STOP_SENDING. quic-go's Stream embeds SendStream which has Context().
 func (s *bidiStream) Context() context.Context { return s.s.Context() }
 
 // Listener adapts a *quic.Listener so it can be handed directly to the

@@ -120,8 +120,8 @@ func (s *sendStream) CancelWrite(code uint64) {
 	s.s.CancelWrite(webtransport.StreamErrorCode(code))
 }
 
-// Context is cancelled when all data has been acknowledged by the peer or
-// the stream is reset. webtransport-go's SendStream.Context() provides this
+// Context is cancelled when the send side is closed or reset, or the peer
+// sends STOP_SENDING. webtransport-go's SendStream.Context() provides this
 // directly.
 func (s *sendStream) Context() context.Context { return s.s.Context() }
 
@@ -149,8 +149,9 @@ func (s *bidiStream) CancelWrite(code uint64) {
 	s.s.CancelWrite(webtransport.StreamErrorCode(code))
 }
 
-// Context is cancelled when all data has been acknowledged or the stream is
-// reset. webtransport-go's Stream embeds SendStream which has Context().
+// Context is cancelled when the send side is closed or reset, or the peer
+// sends STOP_SENDING. webtransport-go's Stream embeds SendStream which has
+// Context().
 func (s *bidiStream) Context() context.Context { return s.s.Context() }
 
 // defaultBacklog bounds the pending-session queue used by [Listener].
