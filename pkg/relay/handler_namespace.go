@@ -86,7 +86,7 @@ func (h *sessionHandler) handlePublishNamespace(
 	// must be validated and answered. This handler goroutine is the only
 	// writer on the publisher's stream after the REQUEST_OK above, so the
 	// acks write directly.
-	h.serveNamespaceFollowups(ctx, req.Stream, func(m message.Message) error {
+	h.serveNamespaceFollowups(ctx, req, func(m message.Message) error {
 		return message.Marshal(req.Stream, m)
 	})
 
@@ -322,7 +322,7 @@ func (h *sessionHandler) handleSubscribeNamespace(
 	// REQUEST_OK acks go through entry.WriteMessage so they serialise with
 	// the NAMESPACE / NAMESPACE_DONE notifications concurrent publisher
 	// handlers write to this stream.
-	h.serveNamespaceFollowups(ctx, req.Stream, entry.WriteMessage)
+	h.serveNamespaceFollowups(ctx, req, entry.WriteMessage)
 }
 
 // handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.20):
@@ -403,7 +403,7 @@ func (h *sessionHandler) handleSubscribeTracks(
 	// REQUEST_OK acks go through entry.WriteMessage so they serialise with
 	// the PUBLISH_SKIPPED notifications concurrent PUBLISH handlers write
 	// to this stream (emitPublishSkipped).
-	h.serveNamespaceFollowups(ctx, req.Stream, entry.WriteMessage)
+	h.serveNamespaceFollowups(ctx, req, entry.WriteMessage)
 }
 
 // subscribeTracksForwarding resolves the FORWARD (§10.2.18) and GROUP_ORDER
@@ -442,17 +442,24 @@ func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder 
 // NAMESPACE_DONE, …) need no response and are ignored here.
 func (h *sessionHandler) serveNamespaceFollowups(
 	ctx context.Context,
-	stream session.Stream,
+	req *session.Request,
 	write func(message.Message) error,
 ) {
+	stream := req.Stream
+	scope := message.ScopeOfUpdate(req.First.Type())
 	updates := h.sess.NewRequestUpdateLimiter()
-	fin := readRequestStream(ctx, stream, func(m message.Message) bool {
+	fin := readRequestStream(ctx, h.sess, stream, func(m message.Message) bool {
 		if h.isPeerStateNotify(m) {
 			return false
 		}
 		upd, ok := m.(*message.RequestUpdate)
 		if !ok {
 			return true
+		}
+		// §10.2.1: parameters outside this request's update scope are
+		// session-fatal.
+		if h.sess.CheckPeerParams(scope, upd) != nil {
+			return false
 		}
 		if !h.handleFollowupRequestID(ctx, upd) {
 			return false

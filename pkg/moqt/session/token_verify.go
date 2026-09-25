@@ -144,7 +144,7 @@ func (s *Session) TokenCache() *TokenCache { return s.tokenCache }
 // alias) is returned as a [*TokenCacheError] carrying the session-level
 // SESSION_ERROR code the caller must close the session with.
 func (s *Session) processRequestTokens(msg message.Message) ([]ResolvedToken, error) {
-	ps, ok := messageParameters(msg)
+	ps, ok := message.ParamsOf(msg)
 	if !ok {
 		return nil, nil
 	}
@@ -237,32 +237,6 @@ func sessionCodeForCacheErr(err error) moqt.SessionErrorCode {
 		}
 	}
 	return moqt.SessionMalformedAuthToken
-}
-
-// messageParameters returns the Parameters block of msg for the request
-// message types that may carry AUTHORIZATION_TOKEN (§10.2.2). The second
-// return is false for message types that have no Parameters block, so the
-// caller can skip token processing entirely.
-func messageParameters(msg message.Message) (message.Parameters, bool) {
-	switch m := msg.(type) {
-	case *message.Subscribe:
-		return m.Parameters, true
-	case *message.Publish:
-		return m.Parameters, true
-	case *message.Fetch:
-		return m.Parameters, true
-	case *message.TrackStatus:
-		return m.Parameters, true
-	case *message.PublishNamespace:
-		return m.Parameters, true
-	case *message.SubscribeNamespace:
-		return m.Parameters, true
-	case *message.SubscribeTracks:
-		return m.Parameters, true
-	case *message.RequestUpdate:
-		return m.Parameters, true
-	}
-	return nil, false
 }
 
 // ProcessFollowupTokens resolves the AUTHORIZATION_TOKEN parameters (§10.2.2)

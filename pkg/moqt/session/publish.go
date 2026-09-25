@@ -80,7 +80,10 @@ func newPublication(s *Session, stream Stream, requestID, alias uint64, establis
 	// The subscriber may send REQUEST_UPDATE — as the SUBSCRIBE's sender, or
 	// as the subscriber of a PUBLISH (§10.9) — but not PUBLISH_STATE_NOTIFY,
 	// which "is sent only by the publisher" (§10.10).
-	p := &Publication{Stream: stream, s: s, requestID: requestID, peerUpdate: true, alias: alias}
+	p := &Publication{
+		Stream: stream, s: s, requestID: requestID, alias: alias,
+		peerUpdate: true, updateScope: message.ScopeUpdateFromSubscriber,
+	}
 	if f, ok := establishing.Find(message.ParamForward); ok {
 		p.paused.Store(f.Byte == 0)
 	}

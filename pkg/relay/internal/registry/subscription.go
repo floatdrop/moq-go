@@ -298,6 +298,9 @@ func NewUpstreamSub(
 ) *UpstreamSub {
 	broker := sess.NewRequestBroker(stream)
 	broker.PeerMessages(peerMayUpdate, true)
+	// The only peer that may update here is the publisher of an accepted
+	// PUBLISH (§10.9), so its REQUEST_UPDATEs carry a publisher's scope.
+	broker.UpdateScope(message.ScopeUpdateFromPublisher)
 	return &UpstreamSub{
 		state:        SubEstablished,
 		ID:           id,

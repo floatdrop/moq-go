@@ -139,7 +139,7 @@ var paramKinds = map[ParamID]ParamKind{
 func kindOf(t ParamID) (ParamKind, error) {
 	k, ok := paramKinds[t]
 	if !ok {
-		return 0, fmt.Errorf("moqt/message: unknown parameter type %s", t)
+		return 0, fmt.Errorf("%w %s", ErrUnknownParameter, t)
 	}
 	return k, nil
 }

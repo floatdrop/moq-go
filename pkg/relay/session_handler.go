@@ -568,7 +568,12 @@ func (h *sessionHandler) handleFollowupTokens(ctx context.Context, msg message.M
 // It reports fin when the requester ended its side with a FIN. That is not a
 // cancellation (§3.3.2); callers decide what the request does next — see
 // [awaitRequestEnd].
-func readRequestStream(ctx context.Context, stream session.Stream, onMsg func(message.Message) bool) (fin bool) {
+func readRequestStream(
+	ctx context.Context,
+	sess *session.Session,
+	stream session.Stream,
+	onMsg func(message.Message) bool,
+) (fin bool) {
 	// done carries the fin result, so nothing else escapes to the heap.
 	done := make(chan bool, 1)
 	go func() {
@@ -582,6 +587,11 @@ func readRequestStream(ctx context.Context, stream session.Stream, onMsg func(me
 				eof := errors.Is(err, io.EOF)
 				if !eof {
 					stream.CancelRead(uint64(moqt.StreamResetInternalError))
+				}
+				// §10.2: "An endpoint that receives an unknown Message
+				// Parameter MUST close the session with PROTOCOL_VIOLATION."
+				if errors.Is(err, message.ErrUnknownParameter) {
+					_ = sess.Close(moqt.SessionProtocolViolation, err.Error())
 				}
 				done <- eof
 				return
@@ -647,17 +657,16 @@ func (h *sessionHandler) serveFetchObjects(
 	fillTimeout time.Duration,
 	rangeFilters *message.RangeFilterSet,
 ) {
-	out, ok := h.streamFetchRange(ctx, kind, nil, requestID, entry, fullName,
+	ok := h.streamFetchRange(ctx, kind, nil, requestID, entry, fullName,
 		start, end, order, fillTimeout, rangeFilters)
 	if !ok {
 		return
 	}
 
 	// Read follow-ups (§10.9 REQUEST_UPDATE) on the bidi request stream until
-	// the requester resets or FINs it or ctx is cancelled, so a malformed
-	// FETCH update is answered with REQUEST_ERROR and the data stream reset
-	// per §10.9.
-	h.readFetchUpdates(ctx, req, out)
+	// the requester resets or FINs it or ctx is cancelled, so each update is
+	// answered.
+	h.readFetchUpdates(ctx, req)
 }
 
 // streamFetchRange opens a unidirectional fetch stream, writes the stitched
@@ -666,10 +675,8 @@ func (h *sessionHandler) serveFetchObjects(
 // and in what happens afterwards — a FETCH parks in the §10.9 follow-up loop,
 // a fill is simply done.
 //
-// ok is false when the stream could not be opened or the write failed; the
-// stream is already reset in the latter case. The returned stream is otherwise
-// closed (FIN) and returned only so a FETCH can reset it from its follow-up
-// loop.
+// It reports false when the stream could not be opened or the write failed;
+// the stream is already reset in the latter case, and closed (FIN) otherwise.
 func (h *sessionHandler) streamFetchRange(
 	ctx context.Context,
 	kind string,
@@ -681,12 +688,12 @@ func (h *sessionHandler) streamFetchRange(
 	order message.GroupOrder,
 	fillTimeout time.Duration,
 	rangeFilters *message.RangeFilterSet,
-) (*session.OutgoingFetchStream, bool) {
+) bool {
 	out, err := openFillOrFetchStream(h.sess, sub, requestID)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "OpenFetchStream failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))
-		return nil, false
+		return false
 	}
 
 	// Gather cached objects, stitching the below-floor portion from upstream
@@ -711,8 +718,8 @@ func (h *sessionHandler) streamFetchRange(
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fetch stream write failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))
 		out.Cancel(moqt.StreamResetInternalError)
-		return nil, false
+		return false
 	}
 	_ = out.Close()
-	return out, true
+	return true
 }

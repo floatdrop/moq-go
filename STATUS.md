@@ -388,7 +388,10 @@ Found while fixing, left open deliberately:
   - its PUBLISH_OK is never read, and a REQUEST_UPDATE on it is never answered;
   - it ends with a bare FIN, not PUBLISH_DONE.
 
-  When this is served, its data streams must carry the allocated alias.
+  When this is served, its data streams must carry the allocated alias. The
+  forwarded PUBLISH also copies the upstream's AUTHORIZATION_TOKEN and EXPIRES
+  parameters, which §10.2 says relays do not forward (a token alias means
+  nothing on another session).
 - **PUBLISH_DONE timing (§10.12)** — two gaps:
   - "A sender MUST NOT send PUBLISH_DONE until it has closed all streams it
     will ever open". The relay can still write it while fanout writers hold
@@ -426,13 +429,15 @@ Request lifecycle:
 
 Validation:
 
-- REQUEST_UPDATE / PUBLISH_STATE_NOTIFY roles (§10.9, §10.10) are enforced by
-  brokers from typed handles' `Broker()` and by the relay. Handles the
+- REQUEST_UPDATE / PUBLISH_STATE_NOTIFY roles (§10.9, §10.10) and Message
+  Parameter scope (§10.2.1) are enforced by brokers from typed handles'
+  `Broker()`, by the session's own reads, and by the relay. Handles the
   application reads itself (the namespace handles, `FetchResponder`, or any
-  stream read with `message.Parse`) get no enforcement.
+  stream read with `message.Parse`) are checked only if it calls
+  `Session.CheckPeerParams`. The relay never reads the stream of a PUBLISH it
+  forwards to a SUBSCRIBE_TRACKS holder (see "Forwarded PUBLISH is never
+  served"), so its PUBLISH_OK and REQUEST_UPDATEs go unchecked.
 
-- Message Parameter scope is not enforced: a parameter in a message it is not
-  defined for MUST close the session (§10.2.1).
 - Object Properties are never validated on receipt: nested Immutable
   Properties, duplicate gap properties, and Mandatory Track Properties used as
   Object Properties (§12.7–§12.9, §2.5.1).
