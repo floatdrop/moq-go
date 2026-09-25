@@ -43,6 +43,11 @@ type Session struct {
 
 	peerOptions []wire.KVPair
 
+	// earlyData holds data streams that arrived before the peer's control
+	// stream (§3.3), for AcceptDataStream; see acceptControlStream.
+	earlyMu   sync.Mutex
+	earlyData []ReceiveStream
+
 	// setupTokenAliases are the aliases this endpoint REGISTERed in its SETUP
 	// that the peer holds; see [Session.SetupTokenAliases].
 	setupTokenAliases []uint64
