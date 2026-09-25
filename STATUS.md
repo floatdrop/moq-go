@@ -6,7 +6,7 @@ Tracks this codebase's implementation of
 [`-msf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/), and
 [`-cmsf-01`](https://datatracker.ietf.org/doc/draft-ietf-moq-cmsf/) at the edges).
 
-## Overall: ~97% complete
+## Overall: ~95% complete
 
 The wire codec, all control messages and parameters, data streams/datagrams, the
 session lifecycle, and the relay are implemented and wired end to end. What remains is intentionally out of scope: behaviour the draft delegates to
@@ -136,7 +136,7 @@ By package, bottom-up along the dependency stack:
 
 | §   | Feature                       | Status | Notes |
 |-----|-------------------------------|--------|-------|
-| 8   | Delivery timeouts / reliability| PARTIAL| OBJECT/SUBGROUP delivery timeouts enforced in `session/datastream_out.go`; reset w/ `StreamResetDeliveryTimeout`. OBJECT_DELIVERY_TIMEOUT is measured per object from its receipt time (`WriteObjectReceivedAt`), not from stream open. `WithDeliveryTimeouts` takes the publisher's and subscriber's halves separately so the §12.1/§12.2 first-object override resolves within the publisher's half before `DeliveryTimeouts.Effective` takes the smaller of the two. The relay sources both sides — the publisher's Track Properties (decoded once onto the entry) and the subscriber's SUBSCRIBE parameters (§10.2.3/§10.2.4) — and passes them to every subgroup stream it opens downstream, resetting that stream alone with DELIVERY_TIMEOUT while the subscription continues. Not enforced on the raw `Write` path (no object boundaries) or inbound — see Limitations. |
+| 8   | Delivery timeouts / reliability| PARTIAL| OBJECT_DELIVERY_TIMEOUT enforced on subgroup streams in `session/datastream_out.go`; SUBGROUP_DELIVERY_TIMEOUT only where the transport reports acknowledgement (`session.DeliveryTrackingSendStream`), which no bundled adapter does, so not on quic-go or WebTransport; reset w/ `StreamResetDeliveryTimeout`. Datagrams are never dropped for either timeout (§8 "MUST drop the datagrams"). See Limitations. OBJECT_DELIVERY_TIMEOUT is measured per object from its receipt time (`WriteObjectReceivedAt`), not from stream open. `WithDeliveryTimeouts` takes the publisher's and subscriber's halves separately so the §12.1/§12.2 first-object override resolves within the publisher's half before `DeliveryTimeouts.Effective` takes the smaller of the two. The relay sources both sides — the publisher's Track Properties (decoded once onto the entry) and the subscriber's SUBSCRIBE parameters (§10.2.3/§10.2.4) — and passes them to every subgroup stream it opens downstream, resetting that stream alone with DELIVERY_TIMEOUT while the subscription continues. Not enforced on the raw `Write` path (no object boundaries) or inbound — see Limitations. |
 
 ## §9 Relays
 
@@ -160,7 +160,7 @@ By package, bottom-up along the dependency stack:
 | 10.2    | Message parameters (20 types) | —      | DONE   | All 20 defined with correct kinds; unknown and duplicate parameters close the session; see §10.2.x below. |
 | 10.2.1  | Parameter scope               | —      | DONE   | Per-message scope validation at every session receive point and the relay's own readers (`Parameters.CheckScope`). |
 | 10.2.2  | AUTHORIZATION_TOKEN           | 0x03   | DONE   | 4 alias types; session token cache resolves inbound. |
-| 10.2.3  | SUBGROUP_DELIVERY_TIMEOUT     | 0x06   | DONE   | |
+| 10.2.3  | SUBGROUP_DELIVERY_TIMEOUT     | 0x06   | PARTIAL| Parsed and resolved; the stream reset is not enforced on the bundled transports, and datagrams are not dropped (see §8). |
 | 10.2.4  | OBJECT_DELIVERY_TIMEOUT       | 0x02   | DONE   | |
 | 10.2.5  | FILL_TIMEOUT                  | 0x0A   | DONE   | |
 | 10.2.6  | RENDEZVOUS_TIMEOUT            | 0x04   | DONE   | |
@@ -228,7 +228,7 @@ By package, bottom-up along the dependency stack:
 
 | §     | Property                       | Type | Status | Notes |
 |-------|--------------------------------|------|--------|-------|
-| 12.1  | SUBGROUP_DELIVERY_TIMEOUT      | 0x06 | DONE   | Track + Object Property; the first object of a subgroup overrides the Track-level value (§8 resolution in `message.DeliveryTimeouts`, enforced in `OutgoingSubgroupStream`). |
+| 12.1  | SUBGROUP_DELIVERY_TIMEOUT      | 0x06 | PARTIAL| Track + Object Property; the first object of a subgroup overrides the Track-level value (§8 resolution in `message.DeliveryTimeouts`, enforced in `OutgoingSubgroupStream` where the transport reports acknowledgement — none of the bundled ones do, see §8). |
 | 12.2  | OBJECT_DELIVERY_TIMEOUT        | 0x02 | DONE   | Track + Object Property; first-object override, as §12.1. |
 | 12.3  | MAX_CACHE_DURATION             | 0x04 | DONE   | Lazy age-eviction in cache. |
 | 12.4  | DEFAULT_PUBLISHER_PRIORITY     | 0x0E | DONE   | |
@@ -251,7 +251,7 @@ policy. This library provides the hooks; enforcement is the operator's.
 | 13.3.2 | Replay attacks                   | PARTIAL| Session-scoped token cache; replay defence delegated to token scheme. |
 | 13.4   | Media security                   | N/A    | Payloads opaque; E2EE (e.g. SFrame) is external. |
 | 13.5   | Resource exhaustion              | DONE   | QUIC flow control + slow-reader reset (`fanout.go`) + per-session subscription/namespace caps; the publisher cancels lowest-priority streams on overload. Global cross-session quotas remain a deployment concern. |
-| 13.6   | Timeouts                         | DONE   | Delivery timeouts enforced (§8). |
+| 13.6   | Timeouts                         | PARTIAL| Delivery timeouts enforced (§8), except SUBGROUP_DELIVERY_TIMEOUT on the bundled transports. |
 | 13.6.1 | Idle connection handling         | PARTIAL| Keep-alive options documented; not enforced in-library. |
 | 13.7   | Relay security                   | DONE   | §13.7.1: `Config.MaxNamespaceRequestsPerSession` bounds PUBLISH_NAMESPACE/SUBSCRIBE_NAMESPACE/SUBSCRIBE_TRACKS state per session (EXCESSIVE_LOAD). §13.7.2: the `Authorizer` hook gates short-prefix subscriptions. |
 | 13.8   | Implementation fingerprinting    | DONE   | MOQT_IMPLEMENTATION optional/configurable. |
@@ -289,20 +289,27 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   not record which mapping a session arrived on (it merges both into one accept
   queue) — recoverable by conn type, since `quicconn` and `wtconn` are distinct
   implementations, but not currently carried.
-- **Delivery-timeout enforcement is outbound-only, and not on the raw path
-  (§8)** — the publisher side is wired end to end: `OutgoingSubgroupStream`
-  enforces `OBJECT`/`SUBGROUP_DELIVERY_TIMEOUT` (including the §12.1/§12.2
-  first-object override) and the relay's fanout applies both halves to every
+- **Delivery-timeout enforcement is outbound-only, subgroup-only, not on the
+  raw path, and SUBGROUP_DELIVERY_TIMEOUT needs transport support (§8)** — the
+  publisher side is wired end to end: `OutgoingSubgroupStream` resolves both
+  timeouts (including the §12.1/§12.2 first-object override) and enforces
+  OBJECT_DELIVERY_TIMEOUT, and the relay's fanout applies both halves to every
   subgroup stream it opens, sourcing the publisher's from the entry's Track
-  Properties and the subscriber's from the SUBSCRIBE parameters. Two gaps
-  remain. The raw `Write` escape hatch does not enforce OBJECT_DELIVERY_TIMEOUT
+  Properties and the subscriber's from the SUBSCRIBE parameters. Four gaps
+  remain. SUBGROUP_DELIVERY_TIMEOUT is enforced only on a transport that
+  reports acknowledgement, which the bundled ones do not (see the review
+  backlog). Datagrams are sent regardless of age: neither `SendDatagram` nor
+  the relay's datagram forwarding drops an expired one, where §8 says the
+  implementation "MUST drop the datagrams if the time elapsed exceeds
+  OBJECT_DELIVERY_TIMEOUT" (SUBGROUP_DELIVERY_TIMEOUT acting the same way for
+  datagrams). The raw `Write` escape hatch does not enforce OBJECT_DELIVERY_TIMEOUT
   at all: §8 measures it per object from that object's receipt, and a caller
   managing its own framing is the only party that knows either fact, so the
   check belongs to `WriteObjectReceivedAt`. And the inbound (subscriber-side)
   path enforces no timeout — a subscriber does not police how long the relay
   takes to deliver a subgroup it was promised.
 
-  The relay's receipt time is also approximate. §8 names the first payload byte
+  The relay's receipt time is also approximate. §8 names "the last header byte"
   of the object; the fanout passes `fwdObject.enqueuedAt`, stamped once the
   object has been read whole, deduped and cached, so the clock starts late by
   the object's inbound transfer time. The error is always lenient and scales
@@ -385,13 +392,16 @@ Found while fixing, left open deliberately:
     Stream Count 2^64-1.
   - PUBLISH_DONE goes to subscribers one at a time, so one that isn't reading
     its request stream can delay the rest.
-- **SUBGROUP_DELIVERY_TIMEOUT never fires on quic-go / WebTransport (§8)** —
-  `OutgoingSubgroupStream.Close` FINs, then waits on `SendStream.Context()` as
-  an "all data acknowledged" signal. quic-go cancels that context as soon as
-  Close queues the FIN, so the timer is always pre-empted and a subgroup stuck
-  behind congestion is never reset with DELIVERY_TIMEOUT. Only the in-process
-  test transport exercises the reset. quic-go exposes no acknowledgement
-  signal, so a fix needs a design choice.
+- **SUBGROUP_DELIVERY_TIMEOUT is not enforced on quic-go / WebTransport (§8)**
+  — the reset needs to know when the peer has acknowledged the whole stream
+  ("all data committed"). quic-go tracks that internally but exposes no API for
+  it (quic-go#3291), and webtransport-go wraps quic-go. `OutgoingSubgroupStream`
+  enforces the timeout only on a stream implementing
+  `session.DeliveryTrackingSendStream`, which no bundled adapter does, so a
+  subgroup stuck behind congestion is not reset with DELIVERY_TIMEOUT. The
+  timer alone is not used instead: it would reset streams the peer already
+  holds in full. Closing this needs an acknowledgement signal from quic-go,
+  then `Finished()` in quicconn and wtconn.
 - **TRACK_NAMESPACE_PREFIX encoding (§10.2.20)** — encoded length-prefixed, as
   moxygen, moqtail and libquicr do. The draft text reads as a bare Track
   Namespace. Open WG issue: moq-wg/moq-transport#1942.

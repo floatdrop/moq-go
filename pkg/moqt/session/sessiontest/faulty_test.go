@@ -389,6 +389,12 @@ type reliableSend struct{ session.SendStream }
 
 func (reliableSend) SetReliableBoundary() {}
 
+// trackingSend is a SendStream that also satisfies
+// [session.DeliveryTrackingSendStream].
+type trackingSend struct{ session.SendStream }
+
+func (trackingSend) Finished() <-chan struct{} { return nil }
+
 // optionalIfaceConn hands out a SendStream carrying an optional interface, so
 // the assertion in Faulty has something to fire on.
 type optionalIfaceConn struct {
@@ -417,6 +423,7 @@ func TestFaulty_PanicsOnUnforwardableStream(t *testing.T) {
 	}{
 		{"PrioritizedSendStream", func(s session.SendStream) session.SendStream { return prioritySend{s} }},
 		{"ReliableResetStream", func(s session.SendStream) session.SendStream { return reliableSend{s} }},
+		{"DeliveryTrackingSendStream", func(s session.SendStream) session.SendStream { return trackingSend{s} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

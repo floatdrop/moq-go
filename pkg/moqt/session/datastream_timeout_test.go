@@ -447,31 +447,22 @@ func TestObjectDeliveryTimeoutDisabled(t *testing.T) {
 // SUBGROUP_DELIVERY_TIMEOUT: Close() enforcement
 // ---------------------------------------------------------------------------
 
-// TestSubgroupDeliveryTimeoutReset verifies that the stream is reset when the
-// subgroup timeout fires before the transport acknowledges all data.
+// TestSubgroupDeliveryTimeoutReset pins the §8 reset: once the subgroup is
+// closed, a stream the peer has not finished acknowledging within
+// SUBGROUP_DELIVERY_TIMEOUT is reset with DELIVERY_TIMEOUT.
 //
-// We use a fake SendStream that blocks Context() until we release it, so we
-// can control the "all data committed" signal precisely.
+// The stream's Context ends at Close, as quic-go's does, so only the
+// [session.DeliveryTrackingSendStream] signal can tell delivery apart from the
+// FIN being queued. Waiting on Context instead pre-empts the timer on every
+// real transport, and the reset never fires.
 func TestSubgroupDeliveryTimeoutReset(t *testing.T) {
-	// Build a fake SendStream whose Context() we control.
-	fake := &fakeSendStream{
-		buf:    &bytes.Buffer{},
-		doneCh: make(chan struct{}),
-	}
-
-	// Use the internal constructor via the exported OpenSubgroup path is not
-	// possible without a real session, so we test WithDeliveryTimeouts directly
-	// by constructing an OutgoingDataStream through the session layer with a
-	// real pair, then verify the reset code arrives on the receive side.
-	//
-	// For the fake-stream path we use the exported ErrDeliveryTimeout sentinel
-	// and the fakeSendStream's cancelCode field.
+	t.Parallel()
+	fake := newFinishingSendStream()
 
 	const timeout = 20 * time.Millisecond
 	ds := newOutgoingDataStreamForTest(fake)
 	ds = ds.WithDeliveryTimeouts(message.DeliveryTimeouts{Subgroup: timeout}, message.DeliveryTimeouts{})
 
-	// Write some data and close (FIN).
 	if _, err := ds.Write([]byte("payload")); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -479,10 +470,11 @@ func TestSubgroupDeliveryTimeoutReset(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// The subgroup timer is now running. Wait for it to fire.
-	time.Sleep(timeout * 3)
-
-	// The stream should have been reset with StreamResetDeliveryTimeout.
+	// The peer never acknowledges: the timer must reset the stream.
+	deadline := time.Now().Add(time.Second)
+	for fake.CancelCode() == 0 && time.Now().Before(deadline) {
+		time.Sleep(timeout / 4)
+	}
 	if fake.CancelCode() != uint64(moqt.StreamResetDeliveryTimeout) {
 		t.Errorf("CancelWrite code = %d, want %d (StreamResetDeliveryTimeout)",
 			fake.CancelCode(), moqt.StreamResetDeliveryTimeout)
@@ -490,12 +482,10 @@ func TestSubgroupDeliveryTimeoutReset(t *testing.T) {
 }
 
 // TestSubgroupDeliveryTimeoutNoReset verifies that the stream is NOT reset
-// when the transport acknowledges all data before the timer fires.
+// when the peer acknowledges all data before the timer fires.
 func TestSubgroupDeliveryTimeoutNoReset(t *testing.T) {
-	fake := &fakeSendStream{
-		buf:    &bytes.Buffer{},
-		doneCh: make(chan struct{}),
-	}
+	t.Parallel()
+	fake := newFinishingSendStream()
 
 	const timeout = 100 * time.Millisecond
 	ds := newOutgoingDataStreamForTest(fake)
@@ -508,8 +498,8 @@ func TestSubgroupDeliveryTimeoutNoReset(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Signal "all data committed" immediately — before the timer fires.
-	close(fake.doneCh)
+	// "All data committed" — before the timer fires.
+	close(fake.finished)
 
 	// Wait longer than the timeout to confirm no spurious reset.
 	time.Sleep(timeout * 2)
@@ -519,13 +509,39 @@ func TestSubgroupDeliveryTimeoutNoReset(t *testing.T) {
 	}
 }
 
+// TestSubgroupDeliveryTimeoutNotEnforcedWithoutDeliverySignal pins the
+// documented gap: a transport that cannot report delivery (quic-go and
+// webtransport-go today) gets no SUBGROUP_DELIVERY_TIMEOUT reset. Resetting on
+// the timer alone would reset streams the peer already has in full, and a
+// peer that has not read them yet would drop that data.
+func TestSubgroupDeliveryTimeoutNotEnforcedWithoutDeliverySignal(t *testing.T) {
+	t.Parallel()
+	fake := newFakeSendStream()
+
+	const timeout = 20 * time.Millisecond
+	ds := newOutgoingDataStreamForTest(fake)
+	ds = ds.WithDeliveryTimeouts(message.DeliveryTimeouts{Subgroup: timeout}, message.DeliveryTimeouts{})
+
+	if _, err := ds.Write([]byte("payload")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := ds.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	time.Sleep(timeout * 3)
+
+	if fake.CancelCode() != 0 {
+		t.Errorf("CancelWrite was called with code %d on a stream with no delivery "+
+			"signal, want no reset", fake.CancelCode())
+	}
+}
+
 // TestSubgroupDeliveryTimeoutDisabled verifies that Close() does not start a
 // timer when subgroupTimeout is zero.
 func TestSubgroupDeliveryTimeoutDisabled(t *testing.T) {
-	fake := &fakeSendStream{
-		buf:    &bytes.Buffer{},
-		doneCh: make(chan struct{}),
-	}
+	t.Parallel()
+	fake := newFinishingSendStream()
 
 	ds := newOutgoingDataStreamForTest(fake)
 	// No subgroup timeout.
@@ -606,13 +622,21 @@ func TestOutgoingDataStreamRoundTripWithTimeouts(t *testing.T) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// fakeSendStream is a minimal SendStream for unit-testing OutgoingDataStream
-// without a real QUIC transport. Context() blocks until doneCh is closed.
+// fakeSendStream is a minimal SendStream for unit-testing
+// OutgoingSubgroupStream without a real QUIC transport. Like quic-go's, its
+// Context ends as soon as Close or CancelWrite is called, so it says nothing
+// about delivery.
 type fakeSendStream struct {
 	buf        *bytes.Buffer
-	doneCh     chan struct{}
+	ctx        context.Context
+	cancel     context.CancelFunc
 	cancelCode uint64
 	mu         sync.Mutex
+}
+
+func newFakeSendStream() *fakeSendStream {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &fakeSendStream{buf: &bytes.Buffer{}, ctx: ctx, cancel: cancel}
 }
 
 func (f *fakeSendStream) Write(p []byte) (int, error) {
@@ -621,12 +645,16 @@ func (f *fakeSendStream) Write(p []byte) (int, error) {
 	return f.buf.Write(p)
 }
 
-func (f *fakeSendStream) Close() error { return nil }
+func (f *fakeSendStream) Close() error {
+	f.cancel()
+	return nil
+}
 
 func (f *fakeSendStream) CancelWrite(code uint64) {
 	f.mu.Lock()
 	f.cancelCode = code
 	f.mu.Unlock()
+	f.cancel()
 }
 
 // CancelCode reads the cancellation code under the mutex so tests can poll
@@ -638,14 +666,22 @@ func (f *fakeSendStream) CancelCode() uint64 {
 	return f.cancelCode
 }
 
-func (f *fakeSendStream) Context() context.Context {
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		<-f.doneCh
-		cancel()
-	}()
-	return ctx
+func (f *fakeSendStream) Context() context.Context { return f.ctx }
+
+// finishingSendStream adds the delivery signal of
+// [session.DeliveryTrackingSendStream]: the test closes finished to model the
+// peer acknowledging every byte and the FIN.
+type finishingSendStream struct {
+	*fakeSendStream
+
+	finished chan struct{}
 }
+
+func newFinishingSendStream() *finishingSendStream {
+	return &finishingSendStream{fakeSendStream: newFakeSendStream(), finished: make(chan struct{})}
+}
+
+func (f *finishingSendStream) Finished() <-chan struct{} { return f.finished }
 
 // newOutgoingDataStreamForTest constructs an OutgoingSubgroupStream backed by
 // the given SendStream. This bypasses the session layer so we can unit-test

@@ -152,7 +152,7 @@ func newUniStream(bufSize int) *uniStream {
 func (s *uniStream) Write(p []byte) (int, error) { return s.w.Write(p) }
 func (s *uniStream) Close() error {
 	err := s.w.Close()
-	s.ctxCancel() // signal "all data committed"
+	s.ctxCancel() // the send side is closed (not "all data committed")
 	return err
 }
 func (s *uniStream) CancelWrite(uint64) {
@@ -198,7 +198,7 @@ func (s *bidiStream) Read(p []byte) (int, error)  { return s.r.Read(p) }
 func (s *bidiStream) Write(p []byte) (int, error) { return s.w.Write(p) }
 func (s *bidiStream) Close() error {
 	err := s.w.Close()
-	s.ctxCancel() // signal "all data committed"
+	s.ctxCancel() // the send side is closed (not "all data committed")
 	return err
 }
 func (s *bidiStream) CancelRead(uint64) {
