@@ -152,6 +152,21 @@ func TestFanout_DeliveryTimeoutKeepsSubscriptionAlive(t *testing.T) {
 // the relay sourcing it is what the whole mechanism rests on.
 func TestFanout_PublisherTrackDeliveryTimeoutApplies(t *testing.T) {
 	const timeout = 100 * time.Millisecond
+	prop := wire.KVPair{Type: message.PropertyObjectDeliveryTimeout, IntVal: uint64(timeout / time.Millisecond)}
+	for name, props := range map[string][]wire.KVPair{
+		"mutable": {prop},
+		// §12.7: "processors MUST search both the mutable properties and the
+		// contents of Immutable Properties".
+		"inside Immutable Properties": {{
+			Type:    message.PropertyImmutableProperties,
+			ByteVal: message.AppendTrackProperties([]wire.KVPair{prop}),
+		}},
+	} {
+		t.Run(name, func(t *testing.T) { testPublisherTrackDeliveryTimeout(t, timeout, props) })
+	}
+}
+
+func testPublisherTrackDeliveryTimeout(t *testing.T, timeout time.Duration, trackProps []wire.KVPair) {
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 
@@ -159,10 +174,7 @@ func TestFanout_PublisherTrackDeliveryTimeoutApplies(t *testing.T) {
 	ns := wire.TrackNamespace{[]byte("video")}
 	name := []byte("cam1")
 
-	props := message.AppendTrackProperties([]wire.KVPair{{
-		Type:   message.PropertyObjectDeliveryTimeout,
-		IntVal: uint64(timeout / time.Millisecond),
-	}})
+	props := message.AppendTrackProperties(trackProps)
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
 		Namespace: ns, Name: name, TrackAlias: alias, TrackProperties: props,
 	})

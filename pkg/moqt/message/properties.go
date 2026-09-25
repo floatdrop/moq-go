@@ -3,6 +3,7 @@ package message
 import (
 	"fmt"
 	"math"
+	"slices"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
@@ -97,6 +98,45 @@ func findDefaultPublisherPriority(pairs []wire.KVPair) (uint8, bool) {
 		}
 	}
 	return 0, false
+}
+
+// ExpandImmutable returns pairs followed by the contents of each Immutable
+// Properties property (§12.7) among them — "When looking for the value of a
+// property, processors MUST search both the mutable properties and the
+// contents of Immutable Properties." A lookup that stops at the first match
+// gets the mutable value when both carry one, as [TrackDefaultPublisherPriority]
+// does; a loop in which a later pair overwrites an earlier one should range
+// over the result backwards for the same outcome.
+//
+// pairs is returned as is, without allocating, when it holds no Immutable
+// Properties. Contents that do not parse are an error: §12.7 makes the track
+// malformed when "A Key-Value-Pair cannot be parsed".
+func ExpandImmutable(pairs []wire.KVPair) ([]wire.KVPair, error) {
+	out := pairs
+	for _, kv := range pairs {
+		if kv.Type != PropertyImmutableProperties {
+			continue
+		}
+		nested, err := ParseTrackProperties(kv.ByteVal)
+		if err != nil {
+			return nil, fmt.Errorf("moqt/message: immutable properties: %w", err)
+		}
+		if len(out) == len(pairs) {
+			out = slices.Clip(out) // append must not write into the caller's array
+		}
+		out = append(out, nested...)
+	}
+	return out, nil
+}
+
+// parseSearchable parses raw Properties and expands their Immutable
+// Properties, see [ExpandImmutable].
+func parseSearchable(raw []byte) ([]wire.KVPair, error) {
+	pairs, err := ParseTrackProperties(raw)
+	if err != nil {
+		return nil, err
+	}
+	return ExpandImmutable(pairs)
 }
 
 // MandatoryTrackPropertyMin and MandatoryTrackPropertyMax define the range of

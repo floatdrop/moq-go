@@ -70,7 +70,13 @@ func ValidateTrackProperties(
 	if err != nil {
 		return nil, fmt.Errorf("%w in %s: %w", ErrMalformedTrackProperties, context, err)
 	}
-	if typ, unknown := message.FirstUnknownMandatoryTrackProperty(pairs, knownMandatory); unknown {
+	// §12.7: a Mandatory Track Property inside Immutable Properties counts
+	// too, and contents that do not parse make the track malformed.
+	all, err := message.ExpandImmutable(pairs)
+	if err != nil {
+		return nil, fmt.Errorf("%w in %s: %w", ErrMalformedTrackProperties, context, err)
+	}
+	if typ, unknown := message.FirstUnknownMandatoryTrackProperty(all, knownMandatory); unknown {
 		return nil, &ErrUnsupportedMandatoryTrackProperty{
 			PropertyType: typ,
 			Context:      context,

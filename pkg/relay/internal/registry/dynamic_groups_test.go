@@ -2,6 +2,7 @@ package registry_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
@@ -140,4 +141,31 @@ func TestConsiderNewGroupRequest(t *testing.T) {
 			t.Fatal("smaller request forwarded despite larger outstanding value")
 		}
 	})
+}
+
+// TestTrackEntry_PropertiesInsideImmutable: §12.7 "When looking for the value
+// of a property, processors MUST search both the mutable properties and the
+// contents of Immutable Properties." Every Track Property the relay decodes
+// is found there too.
+func TestTrackEntry_PropertiesInsideImmutable(t *testing.T) {
+	t.Parallel()
+	nested := message.AppendTrackProperties([]wire.KVPair{
+		{Type: message.PropertyDynamicGroups, IntVal: 1},
+		{Type: message.PropertyObjectDeliveryTimeout, IntVal: 2000},
+		{Type: message.PropertySubgroupDeliveryTimeout, IntVal: 3000},
+		{Type: message.PropertyMaxCacheDuration, IntVal: 4000},
+	})
+	e := &registry.TrackEntry{}
+	e.SetProperties(message.AppendTrackProperties([]wire.KVPair{
+		{Type: message.PropertyImmutableProperties, ByteVal: nested},
+	}))
+	if got, err := e.DynamicGroups(); err != nil || !got {
+		t.Errorf("DynamicGroups() = (%v, %v), want (true, nil)", got, err)
+	}
+	if got := e.DeliveryTimeouts(); got.Object != 2*time.Second || got.Subgroup != 3*time.Second {
+		t.Errorf("DeliveryTimeouts() = %+v, want Object 2s, Subgroup 3s", got)
+	}
+	if got := e.MaxCacheDuration(); got != 4*time.Second {
+		t.Errorf("MaxCacheDuration() = %v, want 4s", got)
+	}
 }

@@ -2,6 +2,7 @@ package registry
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -49,11 +50,15 @@ type decodedProperties struct {
 // (e.g. §12.6) are recorded on the matching field's error.
 func decodeTrackProperties(raw []byte) decodedProperties {
 	pairs, err := message.ParseTrackProperties(raw)
+	if err == nil {
+		// §12.7: search the contents of Immutable Properties too.
+		pairs, err = message.ExpandImmutable(pairs)
+	}
 	if err != nil {
 		return decodedProperties{parseErr: err}
 	}
 	var d decodedProperties
-	for _, kv := range pairs {
+	for _, kv := range slices.Backward(pairs) { // the mutable value wins (§12.7)
 		// Dispatch each property the relay acts on to its decoder. Add a
 		// branch here for each new property.
 		switch kv.Type {
