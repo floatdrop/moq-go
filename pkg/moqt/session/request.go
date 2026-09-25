@@ -227,6 +227,10 @@ type Request struct {
 	// s is the owning session, used by the AcceptSubscribe / AcceptPublish
 	// helpers to allocate Track Aliases and register inbound aliases.
 	s *Session
+
+	// okSent records that a REQUEST_OK has gone out through Reply or an
+	// Accept helper, so a later one answers a REQUEST_UPDATE (§10.5).
+	okSent atomic.Bool
 }
 
 // AcceptRequest blocks until a peer opens a bidirectional stream, reads and
@@ -778,7 +782,8 @@ func (s *Session) CheckPeerParams(scope message.ParamScope, m message.Message) e
 // or FETCH stream, which are first answered SUBSCRIBE_OK and FETCH_OK.
 // Responses the list does not name (TRACK_STATUS_OK, and the SUBSCRIBE_TRACKS
 // OK) report false — as does a REQUEST_UPDATE_OK on a SUBSCRIBE_TRACKS stream,
-// which req alone cannot tell from that stream's first OK.
+// which req alone cannot tell from that stream's first OK: callers that can
+// pass nil for it.
 func emptyPropertiesOK(req message.Message) (string, bool) {
 	switch req.(type) {
 	case nil, *message.Subscribe, *message.Fetch:
@@ -815,16 +820,29 @@ func (s *Session) checkRequestOKTrackProperties(req, resp message.Message) error
 //
 // A REQUEST_OK carrying Track Properties where §10.5 says they are empty —
 // answering a PUBLISH, PUBLISH_NAMESPACE or SUBSCRIBE_NAMESPACE, or a
-// REQUEST_UPDATE on a SUBSCRIBE or FETCH — is refused with
+// REQUEST_UPDATE on a SUBSCRIBE, FETCH or SUBSCRIBE_TRACKS — is refused with
 // [ErrTrackPropertiesNotAllowed] and nothing is written: the peer would have
-// to close the session.
+// to close the session. On a SUBSCRIBE_TRACKS stream every REQUEST_OK after
+// the first answers a REQUEST_UPDATE; a first one written to Stream directly
+// rather than through Reply goes uncounted.
 func (r *Request) Reply(msg message.Message) error {
-	if ok, isOK := msg.(*message.RequestOK); isOK && len(ok.TrackProperties) > 0 {
-		if name, empty := emptyPropertiesOK(r.First); empty {
+	ok, isOK := msg.(*message.RequestOK)
+	if isOK && len(ok.TrackProperties) > 0 {
+		answering := r.First
+		if _, st := answering.(*message.SubscribeTracks); st && r.okSent.Load() {
+			answering = nil // a REQUEST_UPDATE_OK
+		}
+		if name, empty := emptyPropertiesOK(answering); empty {
 			return fmt.Errorf("%w: %s", ErrTrackPropertiesNotAllowed, name)
 		}
 	}
-	return message.Marshal(r.Stream, msg)
+	if err := message.Marshal(r.Stream, msg); err != nil {
+		return err
+	}
+	if isOK {
+		r.okSent.Store(true)
+	}
+	return nil
 }
 
 // RejectError writes a REQUEST_ERROR with the given code and reason, then

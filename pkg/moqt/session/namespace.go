@@ -180,7 +180,7 @@ func acceptNamespaceRequest[M message.Message, T any](r *Request, op string, wra
 	if _, ok := r.First.(M); !ok {
 		return zero, fmt.Errorf("moqt/session: %s on a %s request", op, r.First.Type())
 	}
-	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
+	if err := r.Reply(&message.RequestOK{}); err != nil {
 		return zero, fmt.Errorf("moqt/session: %s: write REQUEST_OK: %w", op, err)
 	}
 	return wrap(r.Stream), nil
