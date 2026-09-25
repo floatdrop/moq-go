@@ -90,3 +90,28 @@ func TestUpdateHandlerRejectionKeepsRetryInterval(t *testing.T) {
 		t.Fatalf("Update = %v, want REQUEST_ERROR with Retry Interval 5001", err)
 	}
 }
+
+// TestRejectSendsRetryInterval: Request.Reject puts the rejection's Retry
+// Interval on the wire (§10.6.2: "If a request is retryable with the same
+// parameters at a later time, the sender of REQUEST_ERROR includes a non-zero
+// Retry Interval"), which RejectError cannot express.
+func TestRejectSendsRetryInterval(t *testing.T) {
+	client, server := openPair(t)
+	go func() {
+		r, err := server.AcceptRequest(t.Context())
+		if err != nil {
+			return
+		}
+		_ = r.Reject(&session.RequestRejectedError{
+			Code: moqt.RequestExcessiveLoad, Reason: "busy", RetryInterval: 251,
+		})
+	}()
+	_, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
+	rej, ok := errors.AsType[*session.RequestRejectedError](err)
+	if !ok {
+		t.Fatalf("Subscribe = %v, want *RequestRejectedError", err)
+	}
+	if rej.Code != moqt.RequestExcessiveLoad || rej.Reason != "busy" || rej.RetryInterval != 251 {
+		t.Fatalf("rejection = %+v, want EXCESSIVE_LOAD \"busy\" Retry Interval 251", *rej)
+	}
+}

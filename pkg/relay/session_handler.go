@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -457,14 +458,34 @@ func (h *sessionHandler) rejectAuth(ctx context.Context, req *session.Request, k
 	}
 }
 
+// excessiveLoadRetry is the least wait an EXCESSIVE_LOAD rejection invites. A
+// per-session cap frees up when one of the session's earlier requests ends,
+// which the relay cannot predict, so this is a guess, not a promise.
+const excessiveLoadRetry = time.Second
+
+// excessiveLoadRetryInterval is the Retry Interval for an EXCESSIVE_LOAD
+// rejection: excessiveLoadRetry plus up to half again of random jitter, which
+// §10.6.2 suggests "to minimize the risk of synchronized retry storms",
+// encoded as milliseconds plus one.
+func excessiveLoadRetryInterval() uint64 {
+	const ms = uint64(excessiveLoadRetry / time.Millisecond)
+	return ms + rand.Uint64N(ms/2) + 1 //nolint:gosec // G404: retry jitter, not a secret.
+}
+
 // rejectExcessiveLoad rejects a request that exceeds a per-session resource cap
 // (§13.1 / §13.7.1) with REQUEST_ERROR EXCESSIVE_LOAD and FINs the bidi stream.
+// §10.6.2: for EXCESSIVE_LOAD "The sender SHOULD use the Retry Interval to
+// indicate when the request can be retried" — see [excessiveLoadRetryInterval].
 // what names the limit category for the log/reason. The reject happens before
 // any registry mutation, so no cleanup is needed.
 func (h *sessionHandler) rejectExcessiveLoad(ctx context.Context, req *session.Request, what string) {
 	h.log.LogAttrs(ctx, slog.LevelDebug, "relay rejecting request: per-session limit reached",
 		slog.String("limit", what))
-	if err := req.RejectError(moqt.RequestExcessiveLoad, "relay: "+what+" limit reached"); err != nil &&
+	if err := req.Reject(&session.RequestRejectedError{
+		Code:          moqt.RequestExcessiveLoad,
+		Reason:        "relay: " + what + " limit reached",
+		RetryInterval: excessiveLoadRetryInterval(),
+	}); err != nil &&
 		!errors.Is(err, context.Canceled) {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "relay EXCESSIVE_LOAD reject write failed",
 			slog.String("err", err.Error()))
