@@ -111,7 +111,7 @@ By package, bottom-up along the dependency stack:
 | 5.1.1   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. |
 | 5.1.2   | Location filters                 | DONE   | Every start/end form (unfiltered, Next Object, relative and absolute start, absolute range) + `Matches`. |
 | 5.1.3   | Fill semantics                   | PARTIAL | Fill fetch streams from FILL_PARAMETERS on SUBSCRIBE / REQUEST_UPDATE (`handler_fill.go`). Fill streams do not inherit the subscription's Range Filters, and SUBSCRIBE_TRACKS opens none (see backlog). |
-| 5.1.4   | Range filters                    | DONE    | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; TRACK_PROPERTY_FILTER gates PUBLISH forwarding on SUBSCRIBE_TRACKS; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. Object filters on a SUBSCRIBE_TRACKS apply to the subscriptions its forwarded PUBLISHes open. One documented carve-out (see Known protocol gaps): REQUEST_UPDATE whole-set replace vs per-type merge. |
+| 5.1.4   | Range filters                    | DONE    | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; TRACK_PROPERTY_FILTER gates PUBLISH forwarding on SUBSCRIBE_TRACKS; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. Object filters on a SUBSCRIBE_TRACKS apply to the subscriptions its forwarded PUBLISHes open. One documented carve-out (see Known protocol gaps): REQUEST_UPDATE whole-set replace vs per-type merge. A zero-length filter is no filter; a subscription REQUEST_UPDATE replaces (or, zero-length, removes) the filter types it names and keeps the others. |
 | 5.1.5   | Combining filters                | DONE    | `ForwardDecision` ANDs Forward + Location + Range filters per object (§5.1.5); Range filters combine SetIDs via AND/OR. |
 | 5.1.6   | Joining an ongoing track         | DONE   | A Location Filter plus FILL_PARAMETERS, served as a fill fetch stream (draft-20 removed the Joining FETCH). |
 | 5.1.6.1 | Dynamically starting new groups  | DONE   | Relay forwards a downstream `NEW_GROUP_REQUEST` upstream per §10.2.19: included in the on-demand upstream SUBSCRIBE (no established upstream) or sent as an upstream REQUEST_UPDATE, gated on `DYNAMIC_GROUPS` support, Largest-Group, and outstanding-request bookkeeping. |
@@ -273,14 +273,6 @@ Out of scope in the relay's cross-instance routing: multi-hop **loop detection**
 never pulls in its client library.
 
 Known protocol gaps, roughly ordered by how load-bearing they are:
-
-- **Range Filter REQUEST_UPDATE semantics (§5.1.4)** — updating a
-  subscription's Range Filters mid-stream replaces the *whole* filter set rather
-  than the spec's per-parameter-type replace (non-zero Length) / remove
-  (Length 0) with untouched types preserved. So a partial REQUEST_UPDATE wipes
-  other filter types, and a Length-0 "remove" param is rejected as
-  INVALID_FILTER instead of removing that type. Initial SUBSCRIBE/FETCH filtering
-  and adding filters on update work; the per-type merge is a tracked follow-up.
 
 - **PATH / AUTHORITY are sent but never validated on receipt (§10.3.1.1,
   §10.3.1.2)** — `WithPath` / `WithAuthority` emit the SETUP parameters, but
@@ -451,9 +443,6 @@ Validation:
 - AUTHORITY / PATH are not validated against RFC 3986 (MALFORMED_AUTHORITY /
   MALFORMED_PATH, §10.3.1.1–2). The PATH / AUTHORITY entry in Limitations
   covers part of this.
-- A zero-length Range Filter is rejected everywhere, including the initial
-  SUBSCRIBE and FETCH, although §5.1.4 defines it as "no filter". The Range
-  Filter REQUEST_UPDATE entry in Limitations covers the update case.
 - A data stream that arrives before the control streams fails the handshake
   (§3.3 SHOULD buffer).
 

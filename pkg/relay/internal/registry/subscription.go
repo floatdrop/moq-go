@@ -554,6 +554,14 @@ func (d *DownstreamSub) GetDeliveryTimeouts() message.DeliveryTimeouts {
 	return d.deliveryTimeouts
 }
 
+// RangeFilterSet returns the subscription's current §5.1.4 Range Filters, nil
+// when it has none.
+func (d *DownstreamSub) RangeFilterSet() *message.RangeFilterSet {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.rangeFilters
+}
+
 // SetRangeFilters installs the subscription's Range Filters (§5.1.4), which the
 // fanout ANDs with the Location filter and Forward gate per object (read
 // directly under mu by ForwardDecision). nil clears them (no range restriction).
