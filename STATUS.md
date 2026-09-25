@@ -188,7 +188,7 @@ By package, bottom-up along the dependency stack:
 | 10.3.1.5| MOQT_IMPLEMENTATION           | 0x07   | DONE   | Advisory. |
 | 10.3.1.6| MAX_FILTER_RANGES             | 0x06   | DONE   | `WithMaxFilterRanges` advertises it; relay rejects over-limit/prohibited filters with INVALID_FILTER. The relay advertises `relay.DefaultMaxFilterRanges` (16) rather than inheriting the session default of 0, which would prohibit the Range Filters it fully implements; `relay.Config.MaxFilterRanges` overrides, negative to prohibit. |
 | 10.3.1.7| MAX_REQUEST_UPDATES           | 0x08   | DONE   | `WithMaxRequestUpdates` advertises the per-stream limit; enforced on inbound follow-ups via `RequestUpdateLimiter`, closing with `TOO_MANY_REQUEST_UPDATES` on overflow. |
-| 10.4    | GOAWAY                        | 0x10   | DONE   | Same encoding on control and request streams (draft-19 dropped the Request ID field); callback. |
+| 10.4    | GOAWAY                        | 0x10   | DONE   | Same encoding on control and request streams (draft-19 dropped the Request ID field); callback. As recipient the relay initiates no new SUBSCRIBE, FETCH or PUBLISH to the peer and leaves closing the session to the sender. |
 | 10.5    | REQUEST_OK                    | 0x07   | DONE   | Shared OK for PUBLISH/UPDATE/TRACK_STATUS/namespace reqs. |
 | 10.6    | REQUEST_ERROR (+ Redirect)    | 0x05   | DONE   | Redirect required only when code==REDIRECT. |
 | 10.7    | SUBSCRIBE                     | 0x03   | DONE   | |
@@ -499,8 +499,8 @@ Relay:
 - Upstream PUBLISH_DONE codes are flattened to TRACK_ENDED; §10.12 asks for "a
   relevant status code".
 - Duplicate objects from redundant upstreams are not compared (§9.1).
-- Inbound GOAWAY handling does not match §10.4:
-  - the relay, as recipient, force-closes with GOAWAY_TIMEOUT, a code for the
-    sender to use once its own timeout expires;
-  - it keeps initiating requests on the session, where the recipient "SHOULD NOT
-    initiate new requests".
+- After an inbound GOAWAY the relay stops initiating requests to that peer
+  (§10.4) but, as its subscriber, neither unsubscribes ("A subscriber SHOULD
+  individually unsubscribe from each existing subscription"), nor migrates to
+  the New Session URI (§9.4.1), nor closes the session once no subscriptions
+  remain (§3.6 RECOMMENDED). It waits for the sender to close.

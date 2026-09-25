@@ -601,50 +601,10 @@ func TestRelay_StopForceClosesOnTimeout(t *testing.T) {
 	}
 }
 
-// TestRelay_InboundGoawayClosesAfterTimeout is the canonical inbound-GOAWAY
-// assertion: when a peer sends GOAWAY, the relay grants the peer's
-// declared Timeout for in-flight work to drain and then closes the
-// session. We exercise the server-side server.SendGoaway()... no:
-// the relay is the server. The CLIENT sends GOAWAY at the relay; the
-// relay's session_handler.handleInboundGoaway must observe it and
-// close the session.
-func TestRelay_InboundGoawayClosesAfterTimeout(t *testing.T) {
-	t.Parallel()
-	const peerGrace = 150 * time.Millisecond
-
-	clientSess, teardown := connectRelay(t, relay.Config{})
-	defer teardown()
-
-	// Client sends GOAWAY to the relay. Per §10.4 a client MUST NOT
-	// include a New Session URI, so we pass an empty string. The
-	// relay's inbound watcher must observe the GOAWAY, wait peerGrace,
-	// then close the session.
-	if err := clientSess.SendGoaway(peerGrace, ""); err != nil {
-		t.Fatalf("client SendGoaway: %v", err)
-	}
-
-	start := time.Now()
-	select {
-	case <-clientSess.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("session never closed after inbound GOAWAY")
-	}
-	elapsed := time.Since(start)
-
-	if elapsed < peerGrace {
-		t.Errorf("session closed after %v; expected >= peer-declared timeout %v", elapsed, peerGrace)
-	}
-	// Be generous on the upper bound — scheduler jitter, plus the
-	// relay's own GoawayTimeout window can stack with the peer's.
-	if elapsed > 2*time.Second {
-		t.Errorf("session took %v to close; expected ~%v", elapsed, peerGrace)
-	}
-}
-
-// TestRelay_InboundGoawayCleanDrainExitsEarly pins the cooperative
-// path of the same flow: if the peer sends GOAWAY and then closes
-// the session itself before the timeout expires, the relay's inbound
-// watcher must exit via sess.Done() without waiting the full timeout.
+// TestRelay_InboundGoawayCleanDrainExitsEarly pins the cooperative path of
+// an inbound GOAWAY: if the peer sends GOAWAY and then closes the session
+// itself before its timeout expires, the relay's watcher exits via
+// sess.Done() without waiting the full timeout.
 func TestRelay_InboundGoawayCleanDrainExitsEarly(t *testing.T) {
 	t.Parallel()
 	const peerGrace = 5 * time.Second // generous; we'll close before this

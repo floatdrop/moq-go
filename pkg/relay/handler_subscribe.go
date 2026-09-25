@@ -552,6 +552,9 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	extra message.Parameters,
 	wantForward bool,
 ) (*registry.TrackEntry, *registry.UpstreamSub, error) {
+	if peerSentGoaway(sess) {
+		return nil, nil, errPeerGoingAway
+	}
 	// Next Object filter (§5.1.2) — keeps the upstream subscription stable
 	// as downstream subscribers come and go with varying filters.
 	filter := &message.LocationFilter{Fields: 2}
@@ -823,6 +826,10 @@ func (h *sessionHandler) refuseSubscriptionParams(ctx context.Context, req *sess
 		slog.String("err", err.Error()))
 	_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
 }
+
+// errPeerGoingAway reports a request the relay did not send because the peer
+// sent GOAWAY (§10.4; see [peerSentGoaway]).
+var errPeerGoingAway = errors.New("relay: peer sent GOAWAY; no new requests to it (§10.4)")
 
 // paramProtocolViolation marks a parameter value that the draft requires the
 // receiver answer with a session-level PROTOCOL_VIOLATION — an out-of-range
