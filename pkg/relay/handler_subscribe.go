@@ -147,6 +147,14 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	sub.SetLargestAtSubscribe(snapshotLargest, snapshotHas)
 	// §9.5: "Relays MUST send SUBSCRIBE messages to all matching publishers".
 	h.subscribeMissingPublishers(ctx, entry, reusedUpstream, pubSeq)
+	// §10.20: a track that just gained its upstream through this SUBSCRIBE is
+	// news to SUBSCRIBE_TRACKS holders under its namespace, which so far were
+	// offered only tracks a publisher PUBLISHed. Offered after this downstream
+	// is registered, so this subscriber, if it holds one, is not also sent a
+	// PUBLISH for the track it just subscribed to.
+	if !reusedUpstream {
+		h.forwardToTrackSubscribers(entry)
+	}
 
 	subRef := h.trackRef(fullName)
 	h.metrics.SubscriptionOpened(subRef)

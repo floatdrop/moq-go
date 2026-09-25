@@ -173,3 +173,43 @@ func TestSubscribeTracksUpdate_ExistingSubscriptionsUnaffected(t *testing.T) {
 	go sendObject(pubSess, 7, 1)
 	awaitObjectOn(t, subSess, kept.First.(*message.Publish).TrackAlias)
 }
+
+// TestSubscribeTracks_ForwardsTrackGainedBySubscribe: SUBSCRIBE_TRACKS asks for
+// "all tracks within matching namespaces, as well as future track
+// publications" (§10.20). A track that appears because the relay itself
+// SUBSCRIBEd to a namespace publisher, not because one PUBLISHed it, is one
+// of them. The subscriber whose SUBSCRIBE caused it gets no PUBLISH for it.
+func TestSubscribeTracks_ForwardsTrackGainedBySubscribe(t *testing.T) {
+	t.Parallel()
+	holder, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	reqs := forwardedPublishes(t, holder)
+	openSubscribeTracks(t, holder, ns("video"))
+
+	pubSess := dialAnotherClient(t, holder)
+	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns("video")}); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	go func() {
+		for {
+			r, err := pubSess.AcceptRequest(t.Context())
+			if err != nil {
+				return
+			}
+			if _, ok := r.First.(*message.Subscribe); ok {
+				_ = r.Reply(&message.SubscribeOK{TrackAlias: 7})
+			}
+		}
+	}()
+	requireNoForward(t, reqs, "a namespace with no track yet")
+
+	subSess := dialAnotherClient(t, holder)
+	subReqs := forwardedPublishes(t, subSess)
+	openSubscribeTracks(t, subSess, ns("video"))
+	subscribeCam1Req(t, subSess)
+
+	if got := publishName(awaitForwarded(t, reqs)); got != "cam1" {
+		t.Fatalf("forwarded %q, want video/cam1", got)
+	}
+	requireNoForward(t, subReqs, "the subscriber whose SUBSCRIBE created the track")
+}

@@ -150,19 +150,24 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		h.spawn(func() { h.propagateForwardUpstream(ctx, fullName) })
 	}
 
-	// Forward to every SUBSCRIBE_TRACKS holder whose prefix matches (§6.1).
-	// Each subscriber's own handler serves the subscription the PUBLISH opens
-	// (see forwardTrack); it skips one that already has the track.
-	for _, sub := range h.names.MatchSubscribers(msg.Namespace) {
-		if sub.WantsTracks && sub.ForwardTrack != nil {
-			sub.ForwardTrack(sub, entry)
-		}
-	}
+	h.forwardToTrackSubscribers(entry)
 
 	// Block until the publisher tears the stream down, routing §10.9
 	// responses to any upstream REQUEST_UPDATE the relay sends meanwhile
 	// (e.g. NEW_GROUP_REQUEST propagation).
 	h.serveUpstreamStream(ctx, sub)
+}
+
+// forwardToTrackSubscribers offers entry's track to every SUBSCRIBE_TRACKS
+// holder whose prefix matches (§6.1, §10.20). Each subscriber's own handler
+// serves the subscription the PUBLISH opens (see forwardTrack); it skips one
+// that already has the track, or publishes it.
+func (h *sessionHandler) forwardToTrackSubscribers(entry *registry.TrackEntry) {
+	for _, sub := range h.names.MatchSubscribers(entry.FullName.Namespace) {
+		if sub.WantsTracks && sub.ForwardTrack != nil {
+			sub.ForwardTrack(sub, entry)
+		}
+	}
 }
 
 // notEchoedInPublish are the SUBSCRIBE_TRACKS parameters
