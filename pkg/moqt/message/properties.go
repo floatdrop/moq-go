@@ -195,6 +195,29 @@ func AppendTrackProperties(pairs []wire.KVPair) []byte {
 	return w.Bytes()
 }
 
+// CheckTrackPropertyValues reports a Track Property in pairs (Immutable
+// Properties expanded, see [ExpandImmutable]) whose value the draft makes
+// session-fatal: DEFAULT_PUBLISHER_GROUP_ORDER outside {1, 2} (§12.5) or
+// DYNAMIC_GROUPS above 1 (§12.6). The caller MUST close the session with
+// PROTOCOL_VIOLATION.
+func CheckTrackPropertyValues(pairs []wire.KVPair) error {
+	for _, kv := range pairs {
+		switch kv.Type {
+		case PropertyDefaultPublisherGroupOrder:
+			if kv.IntVal != uint64(GroupOrderAscending) && kv.IntVal != uint64(GroupOrderDescending) {
+				return fmt.Errorf(
+					"moqt/message: DEFAULT_PUBLISHER_GROUP_ORDER value %d outside {1,2} (PROTOCOL_VIOLATION §12.5)",
+					kv.IntVal)
+			}
+		case PropertyDynamicGroups:
+			if kv.IntVal > 1 {
+				return fmt.Errorf("moqt/message: DYNAMIC_GROUPS value %d above 1 (PROTOCOL_VIOLATION §12.6)", kv.IntVal)
+			}
+		}
+	}
+	return nil
+}
+
 // FirstUnknownMandatoryTrackProperty returns the first Mandatory Track
 // Property (range 0x4000–0x7FFF) in pairs whose type is not in knownTypes,
 // and whether one was found — the offending type is what callers need to

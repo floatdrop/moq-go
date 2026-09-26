@@ -41,6 +41,8 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 
 	// §2.5.1: refuse an unknown Mandatory Track Property. MALFORMED_TRACK for
 	// unparseable Track Properties is this repo's choice; the draft is silent.
+	// AcceptRequest has closed the session on a session-fatal value (§12.5,
+	// §12.6).
 	if err := h.sess.CheckTrackProperties(msg.TrackProperties, "PUBLISH"); err != nil {
 		_ = req.RejectError(session.TrackPropertiesRejectCode(err), err.Error())
 		return

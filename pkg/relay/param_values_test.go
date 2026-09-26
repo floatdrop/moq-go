@@ -12,7 +12,8 @@ import (
 // TestRelay_SessionFatalParamValuesClose: a request carrying a value the draft
 // makes session-fatal closes the relay's session, on every path the relay
 // serves: GROUP_ORDER outside {1, 2} on PUBLISH and FETCH and inside
-// FILL_PARAMETERS (§10.2.8), and a LOCATION_FILTER whose end Group overflows
+// FILL_PARAMETERS (§10.2.8), a DYNAMIC_GROUPS or DEFAULT_PUBLISHER_GROUP_ORDER
+// Track Property out of range (§12.5, §12.6), and a LOCATION_FILTER whose end Group overflows
 // (§5.1.2, which the relay used to answer per request), on an opener and in a
 // REQUEST_UPDATE.
 func TestRelay_SessionFatalParamValuesClose(t *testing.T) {
@@ -50,6 +51,18 @@ func TestRelay_SessionFatalParamValuesClose(t *testing.T) {
 		{name: "LOCATION_FILTER overflow on FETCH", send: func(t *testing.T, sess *session.Session, _ *session.Subscription) {
 			_, _ = sess.Fetch(t.Context(), &message.Fetch{
 				Namespace: ns("video"), Name: []byte("cam1"), Parameters: message.Parameters{overflow},
+			})
+		}},
+		{name: "DYNAMIC_GROUPS 5 in PUBLISH Track Properties", send: func(t *testing.T, sess *session.Session, _ *session.Subscription) {
+			_, _ = sess.Publish(t.Context(), &message.Publish{
+				Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: 1,
+				TrackProperties: message.AppendTrackProperties(trackProp(message.PropertyDynamicGroups, 5)),
+			})
+		}},
+		{name: "DEFAULT_PUBLISHER_GROUP_ORDER 3 in PUBLISH Track Properties", send: func(t *testing.T, sess *session.Session, _ *session.Subscription) {
+			_, _ = sess.Publish(t.Context(), &message.Publish{
+				Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: 1,
+				TrackProperties: message.AppendTrackProperties(trackProp(message.PropertyDefaultPublisherGroupOrder, 3)),
 			})
 		}},
 		{

@@ -19,8 +19,8 @@ func dynamicGroupsProps(t *testing.T, value uint64) []byte {
 
 // TestTrackEntry_DynamicGroups pins the §12.6 DYNAMIC_GROUPS decode that
 // SetProperties performs once and caches: an absent property and value 0 are
-// false, value 1 is true, and value > 1 is a PROTOCOL_VIOLATION surfaced as an
-// error.
+// false, and value 1 is true. The session closes on a value above 1 (§12.6)
+// before Properties reach the registry.
 func TestTrackEntry_DynamicGroups(t *testing.T) {
 	t.Parallel()
 
@@ -49,12 +49,6 @@ func TestTrackEntry_DynamicGroups(t *testing.T) {
 		got, err := setProps(dynamicGroupsProps(t, 1)).DynamicGroups()
 		if err != nil || !got {
 			t.Fatalf("got (%v, %v), want (true, nil)", got, err)
-		}
-	})
-	t.Run("value > 1 is an error (§12.6)", func(t *testing.T) {
-		t.Parallel()
-		if _, err := setProps(dynamicGroupsProps(t, 2)).DynamicGroups(); err == nil {
-			t.Fatal("got nil error, want §12.6 protocol-violation error")
 		}
 	})
 	t.Run("malformed block is an error", func(t *testing.T) {
@@ -92,6 +86,10 @@ func TestTrackEntry_DefaultGroupOrder(t *testing.T) {
 		{"inside Immutable Properties", message.AppendTrackProperties([]wire.KVPair{
 			{Type: message.PropertyImmutableProperties, ByteVal: order(2)},
 		}), message.GroupOrderDescending},
+		{"mutable Ascending over immutable Descending", message.AppendTrackProperties([]wire.KVPair{
+			{Type: message.PropertyDefaultPublisherGroupOrder, IntVal: 1},
+			{Type: message.PropertyImmutableProperties, ByteVal: order(2)},
+		}), message.GroupOrderAscending},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

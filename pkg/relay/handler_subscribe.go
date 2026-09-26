@@ -298,8 +298,8 @@ func (h *sessionHandler) propagateNewGroupUpstream(
 
 	dynamic, err := entry.DynamicGroups()
 	if err != nil {
-		// §12.6: a bad DYNAMIC_GROUPS only declines the request here.
-		h.log.LogAttrs(ctx, slog.LevelDebug, "NEW_GROUP_REQUEST: bad DYNAMIC_GROUPS property",
+		// Unparseable Track Properties only decline the request here.
+		h.log.LogAttrs(ctx, slog.LevelDebug, "NEW_GROUP_REQUEST: unparseable Track Properties",
 			slog.String("err", err.Error()))
 		return
 	}

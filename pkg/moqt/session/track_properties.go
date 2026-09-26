@@ -77,27 +77,52 @@ func ValidateTrackProperties(
 	return pairs, nil
 }
 
-// CheckTrackProperties validates raw Track Properties against the types
-// configured with [WithKnownMandatoryTrackProperties] (§2.5.1), returning
+// CheckTrackProperties validates raw Track Properties: a value the draft makes
+// session-fatal closes the session (§12.5, §12.6), and against the types
+// configured with [WithKnownMandatoryTrackProperties] (§2.5.1) it returns
 // *ErrUnsupportedMandatoryTrackProperty or an error wrapping
 // [ErrMalformedTrackProperties]; see [TrackPropertiesRejectCode]. It is for
 // callers that bypass [Request.AcceptPublish] and the outbound openers, which
-// already check. Without that option it returns nil.
+// already check. Without that option only the values are checked.
 func (s *Session) CheckTrackProperties(raw []byte, context string) error {
 	return s.validateTrackProperties(raw, context)
 }
 
-// validateTrackProperties is a session-level convenience that uses the
-// session's configured set of known mandatory track property types.
-//
-// If WithKnownMandatoryTrackProperties was never called (the map is nil),
-// the check is skipped, for endpoints that pass Track Properties through.
+// validateTrackProperties checks Track Properties received in context. A value
+// the draft makes session-fatal (see [message.CheckTrackPropertyValues])
+// closes the session with PROTOCOL_VIOLATION. Then, against the session's
+// configured set of known mandatory track property types, an unknown one is
+// refused (§2.5.1); if WithKnownMandatoryTrackProperties was never called (the
+// map is nil), that check is skipped, for endpoints that pass Track
+// Properties through.
 func (s *Session) validateTrackProperties(raw []byte, context string) error {
+	if err := s.checkTrackPropertyValues(raw, context); err != nil {
+		return err
+	}
 	if s.knownMandatoryTrackProperties == nil {
 		return nil // not configured — skip enforcement
 	}
 	_, err := ValidateTrackProperties(raw, s.knownMandatoryTrackProperties, context)
 	return err
+}
+
+// checkTrackPropertyValues closes the session with PROTOCOL_VIOLATION when
+// Track Properties received in context hold a value the draft makes
+// session-fatal (see [message.CheckTrackPropertyValues]): "If an endpoint
+// receives a value outside this range, it MUST close the session" (§12.5,
+// §12.6). Immutable Properties are searched when they parse (§12.7); Track
+// Properties that do not parse are left to the caller.
+func (s *Session) checkTrackPropertyValues(raw []byte, context string) error {
+	pairs, parseErr := message.ParseTrackProperties(raw)
+	if parseErr == nil {
+		if all, err := message.ExpandImmutable(pairs); err == nil {
+			pairs = all
+		}
+	}
+	if err := message.CheckTrackPropertyValues(pairs); err != nil {
+		return s.closeProtocolViolation(fmt.Errorf("%s: %w", context, err))
+	}
+	return nil
 }
 
 // TrackPropertiesRejectCode is the REQUEST_ERROR code for a Track Properties

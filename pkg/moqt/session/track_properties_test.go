@@ -778,3 +778,122 @@ func TestMandatoryTrackPropertyBoundaries(t *testing.T) {
 		})
 	}
 }
+
+// TestTrackPropertyValueOutOfRangeCloses: a DEFAULT_PUBLISHER_GROUP_ORDER
+// outside {1, 2} (§12.5) or a DYNAMIC_GROUPS above 1 (§12.6), also inside
+// Immutable Properties (§12.7), closes the receiver with PROTOCOL_VIOLATION on
+// each path Track Properties arrive by, whether or not it enforces Mandatory
+// Track Properties.
+func TestTrackPropertyValueOutOfRangeCloses(t *testing.T) {
+	t.Parallel()
+	prop := func(typ message.PropertyType, v uint64) []wire.KVPair {
+		return []wire.KVPair{{Type: typ, IntVal: v}}
+	}
+	values := []struct {
+		name  string
+		props []byte
+	}{
+		{
+			"DEFAULT_PUBLISHER_GROUP_ORDER 3",
+			message.AppendTrackProperties(prop(message.PropertyDefaultPublisherGroupOrder, 3)),
+		},
+		{
+			"DEFAULT_PUBLISHER_GROUP_ORDER 0",
+			message.AppendTrackProperties(prop(message.PropertyDefaultPublisherGroupOrder, 0)),
+		},
+		{"DYNAMIC_GROUPS 2", message.AppendTrackProperties(prop(message.PropertyDynamicGroups, 2))},
+		{"inside Immutable Properties", message.AppendTrackProperties([]wire.KVPair{
+			{
+				Type:    message.PropertyImmutableProperties,
+				ByteVal: message.AppendTrackProperties(prop(message.PropertyDynamicGroups, 7)),
+			},
+		})},
+		{"next to Immutable Properties that do not parse", message.AppendTrackProperties([]wire.KVPair{
+			{Type: message.PropertyDynamicGroups, IntVal: 2},
+			{Type: message.PropertyImmutableProperties, ByteVal: []byte{0x40}},
+		})},
+	}
+	ns := wire.TrackNamespace{[]byte("ns")}
+	paths := []struct {
+		name string
+		// run makes the receiver get props, returning it.
+		run func(t *testing.T, cli, srv *session.Session, props []byte) *session.Session
+	}{
+		{"SUBSCRIBE_OK", func(t *testing.T, cli, srv *session.Session, props []byte) *session.Session {
+			go func() {
+				if r, err := srv.AcceptRequest(t.Context()); err == nil {
+					_ = r.Reply(&message.SubscribeOK{TrackAlias: 7, TrackProperties: props})
+				}
+			}()
+			go func() { _, _ = cli.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte("t")}) }()
+			return cli
+		}},
+		{"FETCH_OK", func(t *testing.T, cli, srv *session.Session, props []byte) *session.Session {
+			go func() {
+				if r, err := srv.AcceptRequest(t.Context()); err == nil {
+					_ = r.Reply(&message.FetchOK{EndLocation: message.Location{Group: 1}, TrackProperties: props})
+				}
+			}()
+			go func() { _, _ = cli.Fetch(t.Context(), &message.Fetch{Namespace: ns, Name: []byte("t")}) }()
+			return cli
+		}},
+		{"TRACK_STATUS_OK", func(t *testing.T, cli, srv *session.Session, props []byte) *session.Session {
+			go func() {
+				if r, err := srv.AcceptRequest(t.Context()); err == nil {
+					_ = r.Reply(&message.RequestOK{TrackProperties: props})
+				}
+			}()
+			go func() { _, _ = cli.TrackStatus(t.Context(), &message.TrackStatus{Namespace: ns, Name: []byte("t")}) }()
+			return cli
+		}},
+		{"SUBSCRIBE_TRACKS_OK", func(t *testing.T, cli, srv *session.Session, props []byte) *session.Session {
+			go func() {
+				if r, err := srv.AcceptRequest(t.Context()); err == nil {
+					_ = r.Reply(&message.RequestOK{TrackProperties: props})
+				}
+			}()
+			go func() {
+				_, _ = cli.SubscribeTracks(t.Context(), &message.SubscribeTracks{TrackNamespacePrefix: ns})
+			}()
+			return cli
+		}},
+		{
+			"PUBLISH, rejected by the application",
+			func(t *testing.T, cli, srv *session.Session, props []byte) *session.Session {
+				go func() {
+					_, _ = cli.Publish(t.Context(), &message.Publish{
+						Namespace: ns, Name: []byte("t"), TrackAlias: 1, TrackProperties: props,
+					})
+				}()
+				go func() {
+					if r, err := srv.AcceptRequest(t.Context()); err == nil {
+						_ = r.RejectError(moqt.RequestUnauthorized, "no")
+					}
+				}()
+				return srv
+			},
+		},
+		{"PUBLISH", func(t *testing.T, cli, srv *session.Session, props []byte) *session.Session {
+			go func() {
+				_, _ = cli.Publish(t.Context(), &message.Publish{
+					Namespace: ns, Name: []byte("t"), TrackAlias: 1, TrackProperties: props,
+				})
+			}()
+			go func() {
+				if r, err := srv.AcceptRequest(t.Context()); err == nil {
+					_, _ = r.AcceptPublish()
+				}
+			}()
+			return srv
+		}},
+	}
+	for _, p := range paths {
+		for _, v := range values {
+			t.Run(p.name+"/"+v.name, func(t *testing.T) {
+				t.Parallel()
+				cli, srv := openPair(t)
+				requireClosedProtocolViolation(t, p.run(t, cli, srv, v.props))
+			})
+		}
+	}
+}

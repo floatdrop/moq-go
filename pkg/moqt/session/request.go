@@ -237,9 +237,10 @@ type Request struct {
 // requests for session-level tracks and namespaces". AcceptRequest loops until
 // it has an application-visible request to return.
 //
-// A stream not opened by a request message (§3.3), or whose first message is
-// malformed (§10, wrapping [message.ErrMalformedMessage]), closes the session
-// with PROTOCOL_VIOLATION; the error is *ErrUnexpectedRequestOpener,
+// A stream not opened by a request message (§3.3), whose first message is
+// malformed (§10, wrapping [message.ErrMalformedMessage]), or a PUBLISH with a
+// session-fatal Track Property value (§12.5, §12.6), closes the session with
+// PROTOCOL_VIOLATION; the error is *ErrUnexpectedRequestOpener,
 // *ErrUnexpectedRequestUpdate, ErrUnexpectedPublishStateNotify or the parse
 // error. A Request ID violation (§10.1) closes it with INVALID_REQUEST_ID and
 // returns *ErrRequestIDParityViolation or *ErrDuplicateRequestID, and a token
@@ -302,6 +303,13 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 		if err := s.CheckPeerParams(message.ScopeOfRequest(msg.Type()), msg); err != nil {
 			resetStream(stream)
 			return nil, err
+		}
+		// §12.5, §12.6: on receipt, whatever the application answers.
+		if pub, ok := msg.(*message.Publish); ok {
+			if err := s.checkTrackPropertyValues(pub.TrackProperties, "PUBLISH"); err != nil {
+				resetStream(stream)
+				return nil, err
+			}
 		}
 
 		// §10.1 parity and duplicate check.
@@ -815,7 +823,8 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 // Track Properties that fail validation (see
 // [WithKnownMandatoryTrackProperties]) are rejected with REQUEST_ERROR —
 // UNSUPPORTED_EXTENSION for an unknown Mandatory Track Property (§2.5.1),
-// MALFORMED_TRACK for ones that do not parse — and the error returned. On an
+// MALFORMED_TRACK for ones that do not parse — and the error returned. A
+// session-fatal value (§12.5, §12.6) closed the session in AcceptRequest. On an
 // alias collision *ErrDuplicateTrackAlias is returned without replying; the
 // caller MUST close the session with [moqt.SessionDuplicateTrackAlias]
 // (§11.1).
