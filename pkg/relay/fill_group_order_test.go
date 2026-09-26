@@ -74,12 +74,19 @@ func TestSubscribe_FillFollowsPublisherGroupOrder(t *testing.T) {
 }
 
 // TestSubscribeTracks_FillFollowsPublisherGroupOrder: a forwarded PUBLISH's
-// subscription (§10.20.1).
+// subscription (§10.20.1). The PUBLISH states the Group Order it resolved to,
+// since §10.20.1 says these parameters "are explicitly communicated in
+// PUBLISH".
 func TestSubscribeTracks_FillFollowsPublisherGroupOrder(t *testing.T) {
 	t.Parallel()
 	holder := dialAnotherClient(t, publishDescendingCam(t))
 	reqs := forwardedPublishes(t, holder)
 	subscribeTracks(t, holder, ns("video"), fillWholeTrack...)
-	acceptForwarded(t, awaitForwarded(t, reqs))
+	fwd := awaitForwarded(t, reqs)
+	if p, ok := fwd.First.(*message.Publish).Parameters.Find(message.ParamGroupOrder); !ok ||
+		message.GroupOrder(p.Byte) != message.GroupOrderDescending {
+		t.Errorf("forwarded GROUP_ORDER = %d (present=%v), want Descending (0x2)", p.Byte, ok)
+	}
+	acceptForwarded(t, fwd)
 	requireDescendingFill(t, holder)
 }
