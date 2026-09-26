@@ -1,7 +1,10 @@
 package cache_test
 
 import (
+	"fmt"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/relay/cache"
@@ -195,4 +198,49 @@ func TestObjectCache_Delete(t *testing.T) {
 
 	// Idempotent — Delete on a missing key is a silent no-op.
 	c.Delete(0, 0)
+}
+
+// TestPerObjectMaxCacheDuration: each Object carries the MAX_CACHE_DURATION of
+// the upstream it arrived through (§12.3). An expired Object above the oldest
+// served one reads as an End of Unknown Range marker in GetRange ("Once
+// Objects have expired from cache, their state becomes unknown"); below it,
+// the caller accounts for the span (see OldestRetained). A present 0 is never
+// served; an absent value leaves only the relay's TTL.
+func TestPerObjectMaxCacheDuration(t *testing.T) {
+	c := cache.NewObjectCache(16, 0)
+	put := func(group uint64, maxAge time.Duration, has bool) *cache.CachedObject {
+		o := &cache.CachedObject{
+			GroupID:             group,
+			Payload:             []byte("x"),
+			MaxCacheDuration:    maxAge,
+			HasMaxCacheDuration: has,
+		}
+		c.Put(o)
+		return o
+	}
+	put(0, 10*time.Millisecond, true) // expires, below the floor
+	put(1, 0, false)                  // never expires
+	short := put(2, 10*time.Millisecond, true)
+	put(3, 0, false)
+	zero := put(4, 0, true) // never served from the cache
+	time.Sleep(30 * time.Millisecond)
+
+	var got []string
+	for _, o := range c.GetRange(message.Location{}, message.Location{Group: 4}, message.GroupOrderAscending) {
+		kind := "obj"
+		if o.EndOfUnknownRange {
+			kind = "unknown"
+		}
+		got = append(got, fmt.Sprintf("%d:%s", o.GroupID, kind))
+	}
+	want := []string{"1:obj", "2:unknown", "3:obj", "4:unknown"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("GetRange = %v, want %v", got, want)
+	}
+	if !c.Expired(short) || !c.Expired(zero) {
+		t.Error("Expired: an Object past its MAX_CACHE_DURATION, or with 0, must read as expired")
+	}
+	if c.Expired(&cache.CachedObject{GroupID: 9, EndOfUnknownRange: true}) {
+		t.Error("Expired: an element the cache never stored must not read as expired")
+	}
 }

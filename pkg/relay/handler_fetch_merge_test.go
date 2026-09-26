@@ -123,7 +123,7 @@ func TestStreamFetchObjects_DescendingSeamRoundTrip(t *testing.T) {
 			writeErr <- err
 			return
 		}
-		if _, err := streamFetchObjects(out, merged); err != nil {
+		if _, err := streamFetchObjects(out, merged, nil); err != nil {
 			// Reset so the reader fails fast instead of hanging on a
 			// never-FIN'd stream.
 			out.Cancel(moqt.StreamResetInternalError)

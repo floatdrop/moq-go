@@ -231,7 +231,7 @@ By package, bottom-up along the dependency stack:
 |-------|--------------------------------|------|--------|-------|
 | 12.1  | SUBGROUP_DELIVERY_TIMEOUT      | 0x06 | PARTIAL| Track + Object Property; the first object of a subgroup overrides the Track-level value (§8 resolution in `message.DeliveryTimeouts`, enforced in `OutgoingSubgroupStream` where the transport reports acknowledgement — none of the bundled ones do, see §8). |
 | 12.2  | OBJECT_DELIVERY_TIMEOUT        | 0x02 | DONE   | Track + Object Property; first-object override, as §12.1. |
-| 12.3  | MAX_CACHE_DURATION             | 0x04 | DONE   | Lazy age-eviction in cache. |
+| 12.3  | MAX_CACHE_DURATION             | 0x04 | DONE   | Per Object: each carries the value of the upstream it arrived through (captured with the Track Alias in `session.InboundTrack`), and is not forwarded live or served from the cache past it; a present 0 is never served from the cache. In FETCH and fill an expired Object is an End of Unknown Range, whether it expired before the snapshot or while the stream was written. |
 | 12.4  | DEFAULT_PUBLISHER_PRIORITY     | 0x0E | DONE   | |
 | 12.5  | DEFAULT_PUBLISHER_GROUP_ORDER  | 0x22 | DONE   | Validated. |
 | 12.6  | DYNAMIC_GROUPS                 | 0x30 | DONE   | Property defined & scope-validated (flow: see §5.1.6.1). |
@@ -463,16 +463,6 @@ rule it misses.
 
 Relay:
 
-- MAX_CACHE_DURATION (§12.3) is enforced on cache reads and the live path, but:
-  - FETCH and fill write their cache snapshot without re-checking age, so a
-    blocked write can start sending an expired Object; a drop there needs an
-    End of Unknown Range marker.
-  - Objects that expire out of arrival order show up in FETCH as plain gaps,
-    which assert non-existence, where §12.3 says their state is unknown.
-  - It is per track, the first upstream's value (first-setter-wins
-    Properties), where §12.3 says "this subscription or fetch".
-  - A live writer opened before the track's Properties arrive (the #85
-    window) does not enforce it.
 - Namespace subscriptions:
   - a Discovery event the store drops (MemoryStore does, for a slow consumer)
     is not recovered until the watch restarts, so a remote namespace can be

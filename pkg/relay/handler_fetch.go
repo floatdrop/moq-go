@@ -747,7 +747,11 @@ func fetchPredecessor(loc message.Location) (message.Location, bool) {
 //
 // The returned count is the number of real objects written (markers are
 // serialized but not counted — they carry no payload).
-func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedObject) (int, error) {
+func streamFetchObjects(
+	out *session.OutgoingFetchStream,
+	objs []*cache.CachedObject,
+	expired func(*cache.CachedObject) bool,
+) (int, error) {
 	var (
 		written      int
 		prevGroup    uint64
@@ -765,6 +769,15 @@ func streamFetchObjects(out *session.OutgoingFetchStream, objs []*cache.CachedOb
 	)
 
 	for _, o := range objs {
+		// §12.3: "the relay MUST NOT start forwarding any individual Object
+		// [...] after" its MAX_CACHE_DURATION; a slow reader can hold the
+		// stream until a cached Object in it expires. Its state is then
+		// unknown ("Once Objects have expired from cache, their state
+		// becomes unknown"), which an End of Unknown Range at its Location
+		// says; a plain gap would assert non-existence (§11.4.4).
+		if !o.IsRangeMarker() && !o.IsStatusMarker() && expired != nil && expired(o) {
+			o = &cache.CachedObject{GroupID: o.GroupID, ObjectID: o.ObjectID, EndOfUnknownRange: true}
+		}
 		if o.IsRangeMarker() {
 			// §11.4.4.2 End of Unknown / Timed-Out Range: the Group/Object ID fields
 			// carry the absolute range boundary, and the marker becomes

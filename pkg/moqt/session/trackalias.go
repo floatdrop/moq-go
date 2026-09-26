@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
@@ -51,6 +52,14 @@ type InboundTrack struct {
 	// alias, so a data stream that resolves the alias always sees the value of
 	// the control message that established it.
 	DefaultPublisherPriority uint8
+
+	// MaxCacheDuration is the MAX_CACHE_DURATION (§12.3) in the same Track
+	// Properties, and HasMaxCacheDuration whether there was one. §12.3 limits
+	// "any individual Object received through this subscription or fetch",
+	// so it belongs with the alias Objects arrive on, like
+	// DefaultPublisherPriority.
+	MaxCacheDuration    time.Duration
+	HasMaxCacheDuration bool
 }
 
 // RegisterInboundTrack records that the peer has assigned alias to the track
@@ -75,6 +84,7 @@ func (s *Session) RegisterInboundTrack(alias uint64, key track.Key, trackPropert
 		Key:                      key,
 		DefaultPublisherPriority: message.TrackDefaultPublisherPriority(trackProperties),
 	}
+	in.MaxCacheDuration, in.HasMaxCacheDuration = message.TrackMaxCacheDuration(trackProperties)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.inboundAliases[alias]; ok {

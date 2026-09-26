@@ -64,6 +64,16 @@ type CachedObject struct {
 	Payload           []byte // retained by reference; opaque
 	ReceivedAt        time.Time
 
+	// MaxCacheDuration is the MAX_CACHE_DURATION (§12.3) of the upstream the
+	// Object arrived through, and HasMaxCacheDuration whether it sent one:
+	// §12.3 limits "any individual Object received through this subscription
+	// or fetch", so two upstreams of a track can differ. The Object is not
+	// served once that long has passed since ReceivedAt; a present 0 means it
+	// is never served from the cache (this implementation's reading; live
+	// forwarding is unaffected).
+	MaxCacheDuration    time.Duration
+	HasMaxCacheDuration bool
+
 	// EndOfUnknownRange marks this element as a §11.4.4.2 End of Unknown
 	// Range (0x10C) FETCH marker rather than a stored object: every Location
 	// from the previous element in the response stream (exclusive) through
@@ -129,10 +139,9 @@ type ObjectCache struct {
 	// overwrite-in-place on duplicate Put, and Delete.
 	index map[cacheKey]int
 
-	// maxAge is the read-side TTL filter. Zero disables filtering.
+	// maxAge is the relay's own read-side TTL. Zero disables it. An Object's
+	// MAX_CACHE_DURATION applies on top (see CachedObject).
 	maxAge time.Duration
-	// serveNone makes every entry read as expired (MAX_CACHE_DURATION 0).
-	serveNone bool
 }
 
 // effectiveMaxSize returns a non-zero capacity. Callers that pass 0
@@ -192,8 +201,9 @@ func (c *ObjectCache) Put(obj *CachedObject) {
 // into a CachedObject and stores it. Datagrams have no subgroup, so
 // SubgroupID is 0; ForwardingPref records the wire shape so a FETCH
 // response can replay it as a datagram even if the subscriber's transport
-// supports both.
-func (c *ObjectCache) PutDatagram(d *message.ObjectDatagram) {
+// supports both. maxAge / hasMaxAge are the MAX_CACHE_DURATION of the
+// upstream it arrived through (see CachedObject.MaxCacheDuration).
+func (c *ObjectCache) PutDatagram(d *message.ObjectDatagram, maxAge time.Duration, hasMaxAge bool) {
 	if d == nil {
 		return
 	}
@@ -206,6 +216,9 @@ func (c *ObjectCache) PutDatagram(d *message.ObjectDatagram) {
 		Status:            d.ObjectStatus,
 		Properties:        d.Properties,
 		Payload:           d.ObjectPayload,
+
+		MaxCacheDuration:    maxAge,
+		HasMaxCacheDuration: hasMaxAge,
 	})
 }
 
@@ -238,33 +251,30 @@ func (c *ObjectCache) insertLocked(src *CachedObject) {
 	c.size++
 }
 
-// LimitMaxAge lowers the read-side TTL to d if that is shorter than the one
-// configured (or if none is): an Object received more than d ago is no longer
-// served. A d of 0 stops serving entirely. Used for a track's
-// MAX_CACHE_DURATION (§12.3).
-func (c *ObjectCache) LimitMaxAge(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if d <= 0 {
-		c.serveNone = true
-		return
-	}
-	if c.maxAge <= 0 || d < c.maxAge {
-		c.maxAge = d
-	}
-}
-
-// notExpiredLocked reports whether obj is still within the read-side
-// TTL. With maxAge <= 0, every entry is considered fresh.
-// Caller must hold c.mu.
+// notExpiredLocked reports whether obj may still be served: within its own
+// MAX_CACHE_DURATION, if it has one, and within the relay's TTL. Caller must
+// hold c.mu.
 func (c *ObjectCache) notExpiredLocked(obj *CachedObject) bool {
-	if c.serveNone {
+	age := time.Since(obj.ReceivedAt)
+	if obj.HasMaxCacheDuration && (obj.MaxCacheDuration <= 0 || age > obj.MaxCacheDuration) {
 		return false
 	}
-	if c.maxAge <= 0 {
-		return true
+	return c.maxAge <= 0 || age <= c.maxAge
+}
+
+// Expired reports whether obj, taken from this cache, may no longer be
+// served — §12.3: "the relay MUST NOT start forwarding any individual Object
+// [...] after the specified number of milliseconds has elapsed since the
+// beginning of the Object was received". A FETCH writer asks just before each
+// write. Elements the cache did not store (range markers, Objects stitched
+// from upstream) are never expired.
+func (c *ObjectCache) Expired(obj *CachedObject) bool {
+	if obj.ReceivedAt.IsZero() {
+		return false
 	}
-	return time.Since(obj.ReceivedAt) <= c.maxAge
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return !c.notExpiredLocked(obj)
 }
 
 // Get returns the stored object at {group, object}, or (nil, false) if
@@ -336,19 +346,26 @@ func (c *ObjectCache) GetRange(start, end message.Location, order message.GroupO
 		return nil
 	}
 	c.mu.RLock()
+	floor, hasFloor := c.oldestRetainedLocked()
 	out := make([]*CachedObject, 0)
 	for _, obj := range c.ring {
 		if obj == nil {
 			continue
 		}
-		if !c.notExpiredLocked(obj) {
-			continue
-		}
 		loc := message.Location{Group: obj.GroupID, Object: obj.ObjectID}
-		if loc.Less(start) {
+		if loc.Less(start) || end.Less(loc) {
 			continue
 		}
-		if end.Less(loc) {
+		if !c.notExpiredLocked(obj) {
+			// §12.3: "Once Objects have expired from cache, their state
+			// becomes unknown". Below the floor the whole span is the
+			// caller's to account for (see OldestRetained); above it, an
+			// Object that expired out of arrival order would otherwise
+			// leave a plain gap, which a FETCH response asserts as
+			// non-existence (§11.4.4).
+			if hasFloor && floor.Less(loc) {
+				out = append(out, &CachedObject{GroupID: obj.GroupID, ObjectID: obj.ObjectID, EndOfUnknownRange: true})
+			}
 			continue
 		}
 		// Append the stored pointer directly — Put never recycles or
@@ -379,6 +396,11 @@ func (c *ObjectCache) GetRange(start, end message.Location, order message.GroupO
 func (c *ObjectCache) OldestRetained() (message.Location, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	return c.oldestRetainedLocked()
+}
+
+// oldestRetainedLocked is OldestRetained with c.mu held.
+func (c *ObjectCache) oldestRetainedLocked() (message.Location, bool) {
 	var (
 		oldest message.Location
 		found  bool

@@ -100,7 +100,7 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 	// properties BY REFERENCE (see cache.PutDatagram); ReceiveDatagram
 	// hands out caller-owned buffers, so nothing here mutates them after
 	// the Put.
-	entry.Cache.PutDatagram(d)
+	entry.Cache.PutDatagram(d, in.MaxCacheDuration, in.HasMaxCacheDuration)
 
 	downstream := entry.CopyDownstream()
 	for _, sub := range downstream {

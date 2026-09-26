@@ -431,13 +431,6 @@ func (e *TrackEntry) SetProperties(props []byte) {
 func (e *TrackEntry) setPropertiesLocked(raw []byte) {
 	e.Properties = raw
 	e.decoded = decodeTrackProperties(raw)
-	// §12.3: cached Objects of this track are servable only for
-	// MAX_CACHE_DURATION after receipt, however long the relay would keep
-	// them otherwise. A present 0 means never serve them from the cache
-	// (this implementation's reading; live forwarding is unaffected).
-	if e.decoded.hasMaxCacheDuration && e.Cache != nil {
-		e.Cache.LimitMaxAge(e.decoded.maxCacheDuration)
-	}
 }
 
 // GetProperties returns the raw Track Properties captured from the upstream
