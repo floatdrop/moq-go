@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay"
@@ -60,9 +61,10 @@ func fetchCam1Range(
 	sess *session.Session,
 	start, end message.Location,
 	order message.GroupOrder,
+	extra ...message.Parameter,
 ) []fetchElem {
 	t.Helper()
-	params := message.Parameters{fetchRangeFilter(start, end)}
+	params := append(message.Parameters{fetchRangeFilter(start, end)}, extra...)
 	if order == message.GroupOrderDescending {
 		params = append(params, message.GroupOrderParam(order))
 	}
@@ -327,5 +329,68 @@ func TestFetch_UpstreamUnknownKeepsWhatTheRelayKnows(t *testing.T) {
 				t.Fatalf("the relay asked the upstream %d times, want once", asked.Load())
 			}
 		})
+	}
+}
+
+// TestFetch_FillTimeoutBoundsUpstreamRead: FILL_TIMEOUT is the budget for the
+// whole upstream FETCH, its response included (§10.2.5). An upstream that
+// sends part of its answer and stalls has what it sent served, and the rest
+// reported "as Timed-Out gaps" — between what it sent too, since without a FIN
+// its gaps assert nothing (§10.13).
+func TestFetch_FillTimeoutBoundsUpstreamRead(t *testing.T) {
+	t.Parallel()
+	upSess, teardown := connectRelay(t, relay.Config{})
+	t.Cleanup(teardown)
+	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns("video")}); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	go func() {
+		for {
+			req, err := upSess.AcceptRequest(t.Context())
+			if err != nil {
+				return
+			}
+			switch m := req.First.(type) {
+			case *message.Subscribe:
+				if req.Reply(&message.SubscribeOK{TrackAlias: 42}) != nil {
+					return
+				}
+				// The live stream misses Objects 2 to 4.
+				publishCam1Group(t, upSess, 42, true,
+					cam1Object{0, 0, nil}, cam1Object{0, 1, nil}, cam1Object{0, 5, nil})
+			case *message.Fetch:
+				_, end, _ := fetchRequestRange(m)
+				if req.Reply(&message.FetchOK{EndLocation: end}) != nil {
+					return
+				}
+				out, err := upSess.OpenFetchStream(message.FetchHeader{RequestID: m.RequestID})
+				if err != nil {
+					return
+				}
+				// Objects 2 and 4, then nothing: the stream stays open.
+				_ = out.WriteObject(&message.FetchObject{
+					SerializationFlags: message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta |
+						message.FetchFlagPriority | uint64(message.FetchSubgroupIDExplicit),
+					GroupIDDelta: 0, ObjectIDDelta: 2, ObjectPayload: []byte("x"),
+				})
+				_ = out.WriteObject(&message.FetchObject{
+					SerializationFlags: message.FetchFlagObjectIDDelta | uint64(message.FetchSubgroupIDPrior),
+					ObjectIDDelta:      2, ObjectPayload: []byte("x"),
+				})
+				t.Cleanup(func() { out.Cancel(moqt.StreamResetCancelled) })
+			}
+		}
+	}()
+	live := dialAnotherClient(t, upSess)
+	subscribeCam1(t, live)
+	go drainAll(t.Context(), live)
+	fc := dialAnotherClient(t, upSess)
+	waitRelayLargest(t, fc, ns("video"), []byte("cam1"), 0, 5)
+
+	got := fetchCam1Range(t, fc, message.Location{}, message.Location{Group: 0, Object: 5},
+		message.GroupOrderAscending, message.FillTimeoutParam(300*time.Millisecond))
+	want := []fetchElem{obj(0, 0), obj(0, 1), obj(0, 2), timedOutAt(0, 3), obj(0, 4), obj(0, 5)}
+	if !slices.Equal(got, want) {
+		t.Fatalf("FETCH elements %v, want %v", got, want)
 	}
 }

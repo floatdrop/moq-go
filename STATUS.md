@@ -163,7 +163,7 @@ By package, bottom-up along the dependency stack:
 | 10.2.2  | AUTHORIZATION_TOKEN           | 0x03   | DONE   | 4 alias types; session token cache resolves inbound. |
 | 10.2.3  | SUBGROUP_DELIVERY_TIMEOUT     | 0x06   | PARTIAL| Parsed and resolved; the stream reset is not enforced on the bundled transports, and datagrams are not dropped (see §8). |
 | 10.2.4  | OBJECT_DELIVERY_TIMEOUT       | 0x02   | DONE   | |
-| 10.2.5  | FILL_TIMEOUT                  | 0x0A   | DONE   | |
+| 10.2.5  | FILL_TIMEOUT                  | 0x0A   | DONE   | The budget for a FETCH's or fill's upstream FETCH, its response included: when it runs out, what arrived is served and the rest is an End of Timed-Out Range; 0 asks no upstream. Default 5s. |
 | 10.2.6  | RENDEZVOUS_TIMEOUT            | 0x04   | DONE   | |
 | 10.2.7  | SUBSCRIBER_PRIORITY           | 0x20   | DONE   | |
 | 10.2.8  | GROUP_ORDER                   | 0x22   | DONE   | Ascending/Descending validated. |
@@ -575,8 +575,6 @@ Relay:
   delivery-timeout override (§8, §12.1, §12.2).
 - FETCH_OK never sets End Of Track (§10.14).
 - A cancelled FETCH keeps writing its data stream (§5.2: "MUST reset").
-- FILL_TIMEOUT does not bound an upstream FETCH once its data stream is open
-  (§10.2.5 SHOULD).
 - Objects from an upstream FETCH are exempt from MAX_CACHE_DURATION, and cached
   Objects age from when they were read whole rather than their beginning (§12.3).
 - A fill range is evaluated against a later Largest Object than SUBSCRIBE_OK or
@@ -605,7 +603,7 @@ Documentation:
   GROUP_ORDER entry omits PUBLISH and FILL_PARAMETERS; the LOC entry names
   `PropAudioLevel = 0x0A` (it is 0x0C); "Handles the application reads itself"
   says `CheckPeerParams` checks roles; "Inbound GOAWAY" omits request streams.
-- Table rows 10.2.5, 10.2.6, 10.2.8, 10.2.9, 10.2.15, 10.2.18, 10.2.21, 12.3,
+- Table rows 10.2.6, 10.2.8, 10.2.9, 10.2.15, 10.2.18, 10.2.21, 12.3,
   12.5 and 12.6 overstate what is done (see the items above), and the package
   summary still lists joining FETCH.
 - `session/namespace.go` says NAMESPACE / NAMESPACE_DONE go on a
