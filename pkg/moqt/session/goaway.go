@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -86,12 +87,9 @@ func (s *Session) handleGoaway(m *message.Goaway) error {
 		s.mu.Unlock()
 		return errors.New("duplicate GOAWAY on control stream")
 	}
-	// §10.4: a client cannot direct a server to migrate, so a non-empty URI
-	// from a client is a PROTOCOL_VIOLATION. From our perspective, that means
-	// if we are the server we must reject a GOAWAY with a URI.
-	if s.role == roleServer && len(m.NewSessionURI) > 0 {
+	if err := s.checkGoawayURI(m); err != nil {
 		s.mu.Unlock()
-		return errors.New("GOAWAY from client carries non-empty URI")
+		return err
 	}
 	s.goawayReceived = m
 	// Snapshot the registered handler under the lock and mark it fired so a
@@ -107,6 +105,42 @@ func (s *Session) handleGoaway(m *message.Goaway) error {
 	close(s.goawayCh)
 	if handler != nil {
 		go handler(m)
+	}
+	return nil
+}
+
+// checkGoawayURI enforces §10.4 "If a server receives a GOAWAY with a
+// non-zero New Session URI Length it MUST close the session with a
+// PROTOCOL_VIOLATION": a client cannot direct a server to migrate.
+func (s *Session) checkGoawayURI(m *message.Goaway) error {
+	if s.role == roleServer && len(m.NewSessionURI) > 0 {
+		return errors.New("GOAWAY from client carries non-empty URI")
+	}
+	return nil
+}
+
+// RequestGoaways checks the GOAWAYs one request stream carries (§10.4): "The
+// endpoint MUST close the session with a PROTOCOL_VIOLATION ... if it receives
+// more than one GOAWAY on the control stream or on a single request stream",
+// and a server closes on one carrying a New Session URI. The zero value is
+// ready for a stream; callers that read a request stream with [message.Parse]
+// keep one per stream.
+//
+// Not safe for concurrent use, which matches the single reader of a request
+// stream ([RequestBroker.Serve] and the relay's per-stream readers).
+type RequestGoaways struct {
+	seen bool
+}
+
+// Received checks a GOAWAY read off the stream. On a violation it closes s
+// with PROTOCOL_VIOLATION and returns the error.
+func (g *RequestGoaways) Received(s *Session, m *message.Goaway) error {
+	if g.seen {
+		return s.closeProtocolViolation(errors.New("moqt/session: second GOAWAY on a request stream"))
+	}
+	g.seen = true
+	if err := s.checkGoawayURI(m); err != nil {
+		return s.closeProtocolViolation(fmt.Errorf("moqt/session: request stream %w", err))
 	}
 	return nil
 }

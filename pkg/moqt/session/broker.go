@@ -30,6 +30,8 @@ import (
 //     [RequestBroker.HandleUpdates], or declined with NOT_SUPPORTED when there
 //     is none, since acknowledging an unapplied update would misstate the
 //     request's state.
+//   - A second GOAWAY on the stream, or one with a New Session URI received
+//     by a server, closes the session (§10.4; see [RequestGoaways]).
 //   - Everything else (PUBLISH_DONE, unsolicited responses, …) is handed to
 //     Serve's callback.
 //
@@ -344,6 +346,43 @@ func (b *RequestBroker) Close(code moqt.StreamResetCode) {
 	b.stream.CancelWrite(uint64(code))
 }
 
+// receiveUpdate checks and answers a peer REQUEST_UPDATE for Serve (§10.9).
+// A non-nil error means Serve stops; a violation closed the session.
+func (b *RequestBroker) receiveUpdate(m *message.RequestUpdate, updates *RequestUpdateLimiter) error {
+	if b.noPeerUpdate {
+		return b.sess.closeProtocolViolation(errors.New(
+			"moqt/session: REQUEST_UPDATE from a peer that may not send one"))
+	}
+	if b.updateScope != 0 {
+		if err := b.sess.CheckPeerParams(b.updateScope, m); err != nil {
+			return err
+		}
+	}
+	// §10.1: a REQUEST_UPDATE consumes a Request ID from the sender's space;
+	// a wrong-parity or duplicate ID is session-fatal.
+	if err := b.sess.CheckPeerRequestID(m.RequestID); err != nil {
+		_ = b.sess.Close(moqt.SessionInvalidRequestID, err.Error())
+		return err
+	}
+	// §10.3.1.7: reject a REQUEST_UPDATE that exceeds the per-stream
+	// MAX_REQUEST_UPDATES limit before acting on it.
+	if err := updates.Received(); err != nil {
+		_ = b.sess.Close(moqt.SessionTooManyRequestUpdates, err.Error())
+		return err
+	}
+	// §10.9: "MUST respond with exactly one REQUEST_OK or REQUEST_ERROR".
+	// onMsg still observes the update.
+	accepted, err := b.answerUpdate(m)
+	if err != nil {
+		return err
+	}
+	updates.Responded()
+	if !accepted && b.onUpdateFailed != nil {
+		b.onUpdateFailed()
+	}
+	return nil
+}
+
 // Serve owns every read on the request stream until the peer tears it down
 // (EOF / reset), ctx is cancelled (the read side is then reset to unblock
 // the parse), or onMsg returns false. On exit, pending and future Update
@@ -379,6 +418,7 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 	// §10.3.1.7: per-stream MAX_REQUEST_UPDATES enforcement. One limiter per
 	// stream, since the limit is scoped to a single request stream.
 	updates := b.sess.NewRequestUpdateLimiter()
+	var goaways RequestGoaways
 
 	for {
 		msg, err := message.Parse(b.stream)
@@ -428,6 +468,10 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 				continue
 			}
 			// Unsolicited response — surface via onMsg below.
+		case *message.Goaway:
+			if err := goaways.Received(b.sess, m); err != nil {
+				return err
+			}
 		case *message.PublishStateNotify:
 			if b.noPeerNotify {
 				return b.sess.closeProtocolViolation(errors.New(
@@ -437,37 +481,8 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 				return err
 			}
 		case *message.RequestUpdate:
-			if b.noPeerUpdate {
-				return b.sess.closeProtocolViolation(errors.New(
-					"moqt/session: REQUEST_UPDATE from a peer that may not send one"))
-			}
-			if b.updateScope != 0 {
-				if err := b.sess.CheckPeerParams(b.updateScope, m); err != nil {
-					return err
-				}
-			}
-			// §10.1: a REQUEST_UPDATE consumes a Request ID from the
-			// sender's space; a wrong-parity or duplicate ID is
-			// session-fatal.
-			if err := b.sess.CheckPeerRequestID(m.RequestID); err != nil {
-				_ = b.sess.Close(moqt.SessionInvalidRequestID, err.Error())
+			if err := b.receiveUpdate(m, updates); err != nil {
 				return err
-			}
-			// §10.3.1.7: reject a REQUEST_UPDATE that exceeds the per-stream
-			// MAX_REQUEST_UPDATES limit before acting on it.
-			if err := updates.Received(); err != nil {
-				_ = b.sess.Close(moqt.SessionTooManyRequestUpdates, err.Error())
-				return err
-			}
-			// §10.9: "MUST respond with exactly one REQUEST_OK or
-			// REQUEST_ERROR". onMsg still observes the update.
-			accepted, err := b.answerUpdate(m)
-			if err != nil {
-				return err
-			}
-			updates.Responded()
-			if !accepted && b.onUpdateFailed != nil {
-				b.onUpdateFailed()
 			}
 		}
 
