@@ -387,6 +387,12 @@ type subgroupLedger struct {
 	maxNormal, maxStatus uint64
 	hasNormal, hasStatus bool
 	end                  end
+	// minObject is the lowest Object ID forwarded, if hasObject: a
+	// FIRST_OBJECT claim above it is wrong (§11.4.2, §2.2). A duplicate
+	// whose first copy was in another Subgroup or a datagram counts too;
+	// that can only clear FIRST_OBJECT, never set it.
+	minObject uint64
+	hasObject bool
 }
 
 // SubgroupEnded records that an inbound subgroup stream ended with a FIN after
@@ -476,6 +482,21 @@ func (e *TrackEntry) RecordDuplicate(o ObjectInfo) error {
 	}
 	e.recordEndsLocked(g, o)
 	return nil
+}
+
+// LowestForwarded reports the lowest Object ID forwarded in Subgroup
+// (group, subgroup), if any, within the window. The writers of a Subgroup
+// forget it when its last contributor leaves; this keeps it for a later
+// contributor's FIRST_OBJECT claim (§11.4.2, §2.2).
+func (e *TrackEntry) LowestForwarded(group, subgroup uint64) (uint64, bool) {
+	e.deliveredMu.Lock()
+	defer e.deliveredMu.Unlock()
+	g := e.delivered[group]
+	if g == nil {
+		return 0, false
+	}
+	sg := g.subgroups[subgroup]
+	return sg.minObject, sg.hasObject
 }
 
 // groupEnd reports where o ends its Group (see [end]), if it does: an
@@ -630,6 +651,9 @@ func (e *TrackEntry) recordEndsLocked(g *deliveredGroup, o ObjectInfo) {
 		sg.maxNormal, sg.hasNormal = max(sg.maxNormal, o.Object), true
 	} else {
 		sg.maxStatus, sg.hasStatus = max(sg.maxStatus, o.Object), true
+	}
+	if !sg.hasObject || o.Object < sg.minObject {
+		sg.minObject, sg.hasObject = o.Object, true
 	}
 	g.subgroups[o.Subgroup] = sg
 }

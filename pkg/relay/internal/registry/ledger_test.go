@@ -448,3 +448,24 @@ func TestTrackEntry_LateEndPurgesCache(t *testing.T) {
 		}
 	}
 }
+
+// TestTrackEntry_LowestForwarded: the lowest Object ID forwarded per Subgroup,
+// status Objects included and datagrams not, outlives the writers of the
+// Subgroup so a later FIRST_OBJECT claim can be checked (§11.4.2, §2.2).
+func TestTrackEntry_LowestForwarded(t *testing.T) {
+	t.Parallel()
+	e := newTestEntry("lowest")
+	if _, ok := e.LowestForwarded(1, 0); ok {
+		t.Fatal("a Subgroup nothing was forwarded in has a lowest Object")
+	}
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 5}, true)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 3}, true)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 1, Datagram: true}, true)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 0, Subgroup: 1}, true)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 9, Subgroup: 2, Status: message.ObjectStatusEndOfGroup}, true)
+	for _, tc := range []struct{ subgroup, want uint64 }{{0, 3}, {1, 0}, {2, 9}} {
+		if low, ok := e.LowestForwarded(1, tc.subgroup); !ok || low != tc.want {
+			t.Errorf("LowestForwarded(1, %d) = (%d, %v), want (%d, true)", tc.subgroup, low, ok, tc.want)
+		}
+	}
+}

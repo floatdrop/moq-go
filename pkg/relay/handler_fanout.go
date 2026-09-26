@@ -66,8 +66,9 @@ type subgroupWriterSet struct {
 	// lowest is the lowest Object ID forwarded, if forwarded. Objects are
 	// published in ascending order (§2.2), so a FIRST_OBJECT claim (§11.4.2)
 	// for a higher ID is wrong, whether or not a given subscriber got the
-	// lower one. It lives only as long as the set: after every contributor
-	// left, a new one's claim is not checked against earlier Objects.
+	// lower one. A new set starts from the ledger's
+	// ([registry.TrackEntry.LowestForwarded]), so it holds across contributors
+	// within the ledger's window.
 	lowest    uint64
 	forwarded bool
 
@@ -247,8 +248,14 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// double-open. The stream is drained even with no subscribers (§9.7).
 		initialSubs, gen := entry.CopyDownstreamWithGen()
 		pubTimeouts := entry.DeliveryTimeouts()
+		lowest, forwarded := entry.LowestForwarded(hdr.GroupID, hdr.SubgroupID)
 		sg.Mu.Lock()
 		set.gen = gen
+		// The minimum, not an assignment: a contributor that joined the set
+		// before this lock may already have forwarded a lower Object.
+		if forwarded && (!set.forwarded || lowest < set.lowest) {
+			set.lowest, set.forwarded = lowest, true
+		}
 		for _, sub := range initialSubs {
 			h.openWriterForSub(ctx, set.hdr, sub, set.writers, pubTimeouts, ref)
 		}

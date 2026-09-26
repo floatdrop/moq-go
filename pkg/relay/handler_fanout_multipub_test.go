@@ -611,3 +611,77 @@ func TestFanout_MultiPublisher_FirstObjectOnlyForSubgroupsFirst(t *testing.T) {
 		})
 	}
 }
+
+// TestFanout_MultiPublisher_FirstObjectAfterTeardown: the lowest Object
+// forwarded in a Subgroup outlives its contributors, so a later contributor's
+// FIRST_OBJECT claim above it is still not honoured (§11.4.2, §2.2).
+func TestFanout_MultiPublisher_FirstObjectAfterTeardown(t *testing.T) {
+	t.Parallel()
+	pubA, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	pubB := dialAnotherClient(t, pubA)
+	aPub := publishVideoTrack(t, pubA, "cam1", 1)
+	bPub := publishVideoTrack(t, pubB, "cam1", 2)
+	subSess := newCam1Subscriber(t, pubA)
+
+	type stream struct {
+		hdr message.SubgroupHeader
+		end error
+	}
+	streams := make(chan stream, 2)
+	go func() {
+		for {
+			ds, err := subSess.AcceptDataStream(t.Context())
+			if err != nil {
+				return
+			}
+			sg, ok := ds.(*session.IncomingSubgroupStream)
+			if !ok {
+				return
+			}
+			for {
+				if _, err := sg.ReadObject(); err != nil {
+					streams <- stream{sg.Header, err}
+					break
+				}
+			}
+		}
+	}()
+	next := func() stream {
+		t.Helper()
+		select {
+		case s := <-streams:
+			return s
+		case <-time.After(2 * time.Second):
+			t.Fatal("no subgroup stream ended")
+			return stream{}
+		}
+	}
+
+	// A sends Objects 0..2 and resets: a FIN would end the Subgroup there,
+	// making B's Object 3 malformed (§2.4.2).
+	hdr := message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit}
+	a, err := aPub.OpenSubgroup(hdr)
+	if err != nil {
+		t.Fatalf("A OpenSubgroup: %v", err)
+	}
+	for id := range uint64(3) {
+		if err := a.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte("a")}); err != nil {
+			t.Fatalf("A WriteObjectAt %d: %v", id, err)
+		}
+	}
+	a.Cancel(moqt.StreamResetCancelled)
+	next() // the downstream stream ends once the Subgroup has no contributor
+
+	b, err := bPub.OpenSubgroup(hdr) // FIRST_OBJECT set, starting at Object 3
+	if err != nil {
+		t.Fatalf("B OpenSubgroup: %v", err)
+	}
+	if err := b.WriteObjectAt(3, &message.SubgroupObject{Payload: []byte("b")}); err != nil {
+		t.Fatalf("B WriteObjectAt 3: %v", err)
+	}
+	_ = b.Close()
+	if s := next(); !s.hdr.ReplayingSubgroup {
+		t.Fatal("the stream beginning with Object 3 sets FIRST_OBJECT, though Object 0 was forwarded before it")
+	}
+}
