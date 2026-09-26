@@ -17,12 +17,11 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
-// §10.19: "The publisher MUST NOT send NAMESPACE_DONE for a namespace suffix
-// before the corresponding NAMESPACE", and NAMESPACE_DONE means the relay
-// stops "serving new subscriptions for tracks within the provided Track
-// Namespace" (§10.18) — so it is per namespace, not per publisher. §10.9.2
-// covers TRACK_NAMESPACE_PREFIX updates.
+// NAMESPACE / NAMESPACE_DONE state is per namespace, not per publisher, and
+// NAMESPACE_DONE never precedes its NAMESPACE (§10.18, §10.19);
+// TRACK_NAMESPACE_PREFIX updates follow §10.9.2.
 
+// requireQuiet fails if a message arrives on msgs within 300ms.
 func requireQuiet(t *testing.T, msgs <-chan message.Message, what string) {
 	t.Helper()
 	select {
@@ -32,6 +31,7 @@ func requireQuiet(t *testing.T, msgs <-chan message.Message, what string) {
 	}
 }
 
+// requireNamespace requires the next message to be NAMESPACE for suffix.
 func requireNamespace(t *testing.T, msgs <-chan message.Message, suffix ...string) {
 	t.Helper()
 	m := nextMessage(t, msgs)
@@ -41,6 +41,8 @@ func requireNamespace(t *testing.T, msgs <-chan message.Message, suffix ...strin
 	}
 }
 
+// requireNamespaceDone requires the next message to be NAMESPACE_DONE for
+// suffix.
 func requireNamespaceDone(t *testing.T, msgs <-chan message.Message, suffix ...string) {
 	t.Helper()
 	m := nextMessage(t, msgs)
@@ -50,6 +52,7 @@ func requireNamespaceDone(t *testing.T, msgs <-chan message.Message, suffix ...s
 	}
 }
 
+// publishNS sends PUBLISH_NAMESPACE for the namespace fields from sess.
 func publishNS(t *testing.T, sess *session.Session, fields ...string) *session.NamespacePublication {
 	t.Helper()
 	p, err := sess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns(fields...)})
@@ -59,6 +62,8 @@ func publishNS(t *testing.T, sess *session.Session, fields ...string) *session.N
 	return p
 }
 
+// subscribeNS sends SUBSCRIBE_NAMESPACE for the prefix fields and returns the
+// subscription with the messages read from its stream.
 func subscribeNS(
 	t *testing.T,
 	sess *session.Session,
@@ -105,6 +110,8 @@ func TestNamespace_ReplayedNamespaceGetsDone(t *testing.T) {
 	requireNamespaceDone(t, msgs, "cam")
 }
 
+// sendPrefixUpdate writes a TRACK_NAMESPACE_PREFIX REQUEST_UPDATE on stream
+// without awaiting the reply, which arrives among the stream's messages.
 func sendPrefixUpdate(t *testing.T, sess *session.Session, stream session.Stream, fields ...string) {
 	t.Helper()
 	if err := message.Marshal(stream, &message.RequestUpdate{
@@ -115,11 +122,9 @@ func sendPrefixUpdate(t *testing.T, sess *session.Session, stream session.Stream
 	}
 }
 
-// TestNamespace_PrefixUpdateReconciles: after a TRACK_NAMESPACE_PREFIX update
-// the subscriber's announced set matches the new prefix. Namespaces the new
-// prefix drops are done before the REQUEST_OK (their suffixes are relative to
-// the old prefix); namespaces it adds are announced after, relative to the new
-// one (§10.9.2), and later events use it too.
+// TestNamespace_PrefixUpdateReconciles: after a TRACK_NAMESPACE_PREFIX update,
+// namespaces the new prefix drops are done before the REQUEST_OK and ones it
+// adds are announced after, relative to the new prefix (§10.9.2).
 func TestNamespace_PrefixUpdateReconciles(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -140,12 +145,10 @@ func TestNamespace_PrefixUpdateReconciles(t *testing.T) {
 	requireNamespaceDone(t, msgs, "b")
 }
 
-// TestNamespace_PrefixUpdateOverlapRejected: an updated prefix that "would
-// share a common prefix with another active subscription of the same type in
-// the same session" gets REQUEST_ERROR PREFIX_OVERLAP (§10.2.20), and a failed
-// update ends the request — "the responder MUST close the bidi stream"
-// (§10.9.1). Once the requester FINs back (§3.3.2) its prefix is free for a
-// new subscription.
+// TestNamespace_PrefixUpdateOverlapRejected: an updated prefix overlapping
+// another subscription of the session is PREFIX_OVERLAP (§10.2.20); the failed
+// update ends the request (§10.9.1), freeing its prefix once the requester FINs
+// (§3.3.2).
 func TestNamespace_PrefixUpdateOverlapRejected(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -183,6 +186,7 @@ func TestNamespace_StopSendingEndsSubscription(t *testing.T) {
 	requirePrefixReusable(t, subSess, "video")
 }
 
+// requireStreamEnds requires msgs to close within 2s with no further message.
 func requireStreamEnds(t *testing.T, msgs <-chan message.Message) {
 	t.Helper()
 	select {
@@ -406,9 +410,8 @@ func TestNamespace_RestartedWatchDropsStaleRemote(t *testing.T) {
 }
 
 // TestNamespace_RestartedWatchChangesOnlyWhatChanged: a restarted watch is
-// reconciled against what the relay already knew. A namespace withdrawn while
-// the watch was down is done, one added then is announced, and one still
-// advertised causes nothing — no NAMESPACE_DONE followed by NAMESPACE again.
+// reconciled with what the relay knew: withdrawn namespaces are done, added
+// ones announced, and unchanged ones cause nothing.
 func TestNamespace_RestartedWatchChangesOnlyWhatChanged(t *testing.T) {
 	t.Parallel()
 	store := &cuttableWatchStore{MemoryStore: discovery.NewMemoryStore(), cut: make(chan struct{})}
@@ -504,12 +507,8 @@ func TestNamespace_LargeSeedNotReset(t *testing.T) {
 	}
 }
 
-// TestNamespace_BlockedSubscriberReset: §10.19 "If the publisher is unable to
-// send NAMESPACE or NAMESPACE_DONE messages in a timely manner because the
-// SUBSCRIBE_NAMESPACE response stream is blocked by flow control, the
-// publisher MAY reset the SUBSCRIBE_NAMESPACE response stream." A subscriber
-// that stops reading has its stream reset once its queue reaches the bound,
-// rather than the queue growing without one.
+// TestNamespace_BlockedSubscriberReset: a SUBSCRIBE_NAMESPACE subscriber that
+// stops reading has its stream reset once its queue reaches the bound (§10.19).
 func TestNamespace_BlockedSubscriberReset(t *testing.T) {
 	t.Parallel()
 	store := discovery.NewMemoryStore()
@@ -559,10 +558,8 @@ func TestNamespace_BlockedSubscriberReset(t *testing.T) {
 	}
 }
 
-// TestNamespace_TricklingSubscriberReset: a subscriber that reads, but too
-// slowly to keep up, is as blocked as one that stopped: every single write
-// completes, yet the oldest unsent message waits longer and longer. Once
-// enough are waiting long enough, the stream is reset.
+// TestNamespace_TricklingSubscriberReset: a subscriber that reads too slowly to
+// keep up is reset too, once enough messages have waited long enough.
 func TestNamespace_TricklingSubscriberReset(t *testing.T) {
 	t.Parallel()
 	store := discovery.NewMemoryStore()

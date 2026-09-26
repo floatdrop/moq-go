@@ -14,27 +14,13 @@ import (
 
 var errRejectWrite = errors.New("transport gone")
 
-// firstRequestStream is the relay-side [sessiontest.FaultOp] stream ordinal of
-// a client's first bidirectional request stream. The MoQT control stream is a
-// pair of unidirectional streams, so the relay's per-conn ordinals run: 1 the
-// inbound control stream it accepts, 2 the outbound one it opens, and 3 the
-// first request stream. Faulting by ordinal is only deterministic while the
-// test drives one request at a time on that conn.
+// firstRequestStream is the relay-side [sessiontest.FaultOp] ordinal of a
+// client's first request stream: 1 and 2 are the control streams. It is
+// deterministic only while one request at a time runs on the conn.
 const firstRequestStream = 3
 
-// TestSessionHandler_FailedRejectWriteKeepsTheSessionAlive pins the contract
-// rejectAuth's doc comment states: "Any write failure is logged but otherwise
-// swallowed — the stream is being torn down anyway." Swallowed means
-// *stream*-scoped. A REQUEST_ERROR the relay cannot deliver must not cost the
-// peer its whole session, because §9.5's "one bad request must not break an
-// unrelated subscription" is exactly as true when the failure is ours.
-//
-// Nothing else in the suite reaches that branch: an in-process pipe never
-// fails a write, so before [sessiontest.Faulty] the error arm was unreachable
-// and turning the swallow into a session close would have gone unnoticed.
-//
-// The relay's own writes are faulted by ordinal — [firstRequestStream] is the
-// stream carrying this REQUEST_ERROR.
+// TestSessionHandler_FailedRejectWriteKeepsTheSessionAlive: a REQUEST_ERROR the
+// relay cannot write fails only that request, not the peer's session.
 func TestSessionHandler_FailedRejectWriteKeepsTheSessionAlive(t *testing.T) {
 	t.Parallel()
 	auth := &denyAuthorizer{err: relay.Deny(moqt.RequestUnauthorized, "test denial")}

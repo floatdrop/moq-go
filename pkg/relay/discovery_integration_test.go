@@ -2,8 +2,6 @@ package relay_test
 
 import (
 	"context"
-	"net"
-	"sync"
 	"testing"
 	"time"
 
@@ -61,10 +59,8 @@ func TestDiscovery_PublishOnFirstUpstream(t *testing.T) {
 	}
 }
 
-// TestDiscovery_UnpublishOnLastUpstream pins the complementary half:
-// when the only upstream goes away, Discovery sees an Unpublish event.
-// We exercise the path via the publisher closing its session, which
-// triggers per-session bulk cleanup in the TrackRegistry.
+// TestDiscovery_UnpublishOnLastUpstream: when the only upstream's session
+// closes, Discovery sees Unpublish.
 func TestDiscovery_UnpublishOnLastUpstream(t *testing.T) {
 	t.Parallel()
 
@@ -111,11 +107,8 @@ func TestDiscovery_UnpublishOnLastUpstream(t *testing.T) {
 	}
 }
 
-// TestDiscovery_PublishNamespaceOnFirstAdvertise pins the parallel
-// namespace path: PUBLISH_NAMESPACE triggers
-// Discovery.PublishNamespace; a second PUBLISH_NAMESPACE for the same
-// namespace from the same relay does NOT generate a second event
-// (ref-counting collapses duplicate advertisements).
+// TestDiscovery_PublishNamespaceOnFirstAdvertise: the first PUBLISH_NAMESPACE
+// reaches Discovery; a second for the same namespace does not.
 func TestDiscovery_PublishNamespaceOnFirstAdvertise(t *testing.T) {
 	t.Parallel()
 
@@ -250,11 +243,8 @@ func TestDiscovery_NilDiscoveryIsNoop(t *testing.T) {
 	}
 }
 
-// Sentinel: ensure the package-level helpers we use are still
-// referenced and don't dead-code-eliminate.
-var _ = net.IPv4
-var _ = sync.WaitGroup{}
-
+// receiveTrackEvent returns the next event from ch, or false after d or once ch
+// closes.
 func receiveTrackEvent(ch <-chan discovery.TrackEvent, d time.Duration) (discovery.TrackEvent, bool) {
 	select {
 	case ev, ok := <-ch:
@@ -264,6 +254,7 @@ func receiveTrackEvent(ch <-chan discovery.TrackEvent, d time.Duration) (discove
 	}
 }
 
+// receiveNamespaceEvent is [receiveTrackEvent] for namespace events.
 func receiveNamespaceEvent(ch <-chan discovery.NamespaceEvent, d time.Duration) (discovery.NamespaceEvent, bool) {
 	select {
 	case ev, ok := <-ch:
@@ -287,6 +278,8 @@ func skipTrackSnapshot(t *testing.T, ch <-chan discovery.TrackEvent) {
 	}
 }
 
+// skipNamespaceSnapshot reads a namespace watch's snapshot up to its
+// OpSnapshotDone.
 func skipNamespaceSnapshot(t *testing.T, ch <-chan discovery.NamespaceEvent) {
 	t.Helper()
 	for {

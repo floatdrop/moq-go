@@ -29,12 +29,9 @@ func TestFetchPredecessor(t *testing.T) {
 	}
 }
 
-// draft-20 made both the FETCH range and FETCH_OK's End Location inclusive, so
-// the exclusive/inclusive conversion the relay used to do is gone. What is left
-// is §10.14's cap: the response ends at the requested end, or at Largest Object
-// if the request reaches past it, or at Largest Object when the filter is
-// open-ended ("When they are omitted from a Fetch, the EndGroup and EndObject
-// are Largest Object", §5.1.2).
+// TestCapFetchEndLocation: the response ends at the requested end, or at
+// Largest Object when the request reaches past it or is open-ended (§10.14,
+// §5.1.2).
 func TestCapFetchEndLocation(t *testing.T) {
 	largest := message.Location{Group: 10, Object: 4}
 
@@ -110,6 +107,7 @@ func TestMergeFetchObjects(t *testing.T) {
 	}
 }
 
+// groupIDs returns the Group IDs of objs.
 func groupIDs(objs []*cache.CachedObject) []uint64 {
 	out := make([]uint64, len(objs))
 	for i, o := range objs {

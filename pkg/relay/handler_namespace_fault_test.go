@@ -13,11 +13,8 @@ import (
 )
 
 // requestStreamWriteFault fails every relay write on a client's first request
-// stream, and closes fired the first time it does. Tests wait on fired rather
-// than on the client call it breaks: these faults hit the REQUEST_OK, which
-// [session.Request.Reply] writes with no teardown of its own, so the client is
-// left hanging and the hook is the only precise signal that the branch under
-// test has run.
+// stream and closes fired the first time. The failed write is the REQUEST_OK,
+// which leaves the client hanging, so tests wait on fired instead.
 func requestStreamWriteFault() (fault sessiontest.FaultFunc, fired <-chan struct{}, writes func() int) {
 	var (
 		mu      sync.Mutex
@@ -53,15 +50,9 @@ func awaitFault(t *testing.T, fired <-chan struct{}) {
 	}
 }
 
-// TestPublishNamespace_FailedRequestOKIsNotAdvertised pins what
-// handlePublishNamespace does when it cannot deliver the REQUEST_OK: it
-// returns, which runs the deferred UnregisterPublisher and — crucially —
-// skips the §6.2 NAMESPACE fanout below it.
-//
-// That ordering is the whole point. A publisher that never received its
-// REQUEST_OK does not believe it is publishing, so advertising its namespace
-// to subscribers would announce a namespace nobody is serving. Deleting the
-// `return` leaves the suite green everywhere else while doing exactly that.
+// TestPublishNamespace_FailedRequestOKIsNotAdvertised: a PUBLISH_NAMESPACE whose
+// REQUEST_OK could not be written is unregistered and never advertised to
+// subscribers (§6.2).
 func TestPublishNamespace_FailedRequestOKIsNotAdvertised(t *testing.T) {
 	t.Parallel()
 	fault, fired, _ := requestStreamWriteFault()
@@ -115,14 +106,9 @@ func TestPublishNamespace_FailedRequestOKIsNotAdvertised(t *testing.T) {
 	}
 }
 
-// TestSubscribeNamespace_FailedRequestOKLeavesNoSubscriber pins the other
-// half of the reply-before-register ordering handleSubscribeNamespace
-// documents: because the REQUEST_OK is written BEFORE RegisterSubscriber, a
-// failed write must leave no subscriber behind at all.
-//
-// The assertion is that the relay never writes to that stream again. A
-// registered-anyway subscriber would be picked up by MatchSubscribers and get
-// the NAMESPACE fanout, which the hook would see as a second write.
+// TestSubscribeNamespace_FailedRequestOKLeavesNoSubscriber: a
+// SUBSCRIBE_NAMESPACE whose REQUEST_OK could not be written leaves no
+// subscriber: the relay never writes to that stream again.
 func TestSubscribeNamespace_FailedRequestOKLeavesNoSubscriber(t *testing.T) {
 	t.Parallel()
 	fault, fired, writes := requestStreamWriteFault()

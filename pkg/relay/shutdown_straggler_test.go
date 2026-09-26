@@ -21,14 +21,9 @@ func (stragglerListener) Accept(ctx context.Context) (session.Conn, error) {
 func (stragglerListener) Addr() net.Addr { return nil }
 func (stragglerListener) Close() error   { return nil }
 
-// TestRelay_addSessionDrainsStraggler pins the straggler partition that
-// beginShutdown + addSession enforce. A session that registers AFTER Stop has
-// snapshotted the live-session set (so the snapshot misses it) must still be
-// driven through the full GOAWAY / grace / force-close lifecycle — by
-// addSession's drainStraggler, since Stop's bulk drain never saw it.
-//
-// This is the path that the deleted per-session stopWatch goroutine used to
-// cover; the test guards against a regression in the move to drainStraggler.
+// TestRelay_addSessionDrainsStraggler: a session registered after Stop took its
+// snapshot still goes through GOAWAY, grace and force-close, via
+// addSession's drainStraggler.
 func TestRelay_addSessionDrainsStraggler(t *testing.T) {
 	t.Parallel()
 	const grace = 150 * time.Millisecond

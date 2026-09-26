@@ -10,12 +10,9 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestRelay_SharedTrackAliasSurvivesFirstSubscriptionEnd: §5.1 "A publisher
-// MAY assign the same or different Track Aliases to these subscriptions" —
-// concurrent subscriptions to the same Track. Two downstream SUBSCRIBEs racing
-// for a track with no upstream yet send two upstream SUBSCRIBEs to the
-// publisher; answered with the same alias, the survivor must keep routing when
-// the first one ends.
+// TestRelay_SharedTrackAliasSurvivesFirstSubscriptionEnd: two racing upstream
+// SUBSCRIBEs answered with the same Track Alias (§5.1) keep routing after the
+// first one ends.
 func TestRelay_SharedTrackAliasSurvivesFirstSubscriptionEnd(t *testing.T) {
 	t.Parallel()
 	const alias = uint64(42)

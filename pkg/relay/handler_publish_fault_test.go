@@ -12,25 +12,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestPublish_FailedRequestOKRollsBackRegistration pins both halves of the
-// rollback in handlePublish's REQUEST_OK failure branch.
-//
-// The registration is deliberately performed inside the broker's setup
-// closure, so by the time the REQUEST_OK write fails the track already has an
-// upstream and the publisher's §11.1 Track Alias is already claimed — on a
-// session the publisher does not believe is publishing anything. Both must be
-// undone, and they fail differently:
-//
-//   - A leaked alias is claimed for the life of the session, so the publisher
-//     can never use that alias for another track.
-//   - A leaked upstream advertises a track no publisher is feeding, so
-//     subscribers are accepted onto a track that will never produce an object.
-//
-// Probing them takes some care. Re-offering the SAME track under the same
-// alias proves nothing, because RegisterInboundTrackAlias accepts (and counts)
-// a registration whose alias still maps to the same track key — an earlier
-// version of this test
-// did exactly that and stayed green with both rollback lines deleted.
+// TestPublish_FailedRequestOKRollsBackRegistration: a PUBLISH whose REQUEST_OK
+// could not be written releases its Track Alias (§11.1) and its upstream. The
+// probe uses another track, since re-offering the same one under the same alias
+// is accepted either way.
 func TestPublish_FailedRequestOKRollsBackRegistration(t *testing.T) {
 	t.Parallel()
 	fault, fired, _ := requestStreamWriteFault()

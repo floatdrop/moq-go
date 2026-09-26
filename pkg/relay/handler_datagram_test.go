@@ -11,10 +11,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestDatagram_PublisherToSubscriberSingleDatagram is the canonical
-// E2E test: publisher sends one OBJECT_DATAGRAM, relay forwards it to a
-// subscriber on a separate session with the Track Alias remapped to the
-// subscriber's per-session outbound alias.
+// TestDatagram_PublisherToSubscriberSingleDatagram: one datagram reaches a
+// subscriber under its per-session outbound Track Alias.
 func TestDatagram_PublisherToSubscriberSingleDatagram(t *testing.T) {
 	t.Parallel()
 
@@ -83,11 +81,8 @@ func TestDatagram_PublisherToSubscriberSingleDatagram(t *testing.T) {
 	}
 }
 
-// TestDatagram_FilterDropsBelowStart pins the §5.1.2 filter behaviour on
-// the datagram path: a subscriber with AbsoluteStart {Group: 0, Object: 2}
-// only sees datagrams whose Location is >= {0, 2}. The relay does not
-// re-encode anything on a datagram (each is self-contained), so this is a
-// straight gate check.
+// TestDatagram_FilterDropsBelowStart: an AbsoluteStart {0, 2} filter drops
+// earlier datagrams (§5.1.2).
 func TestDatagram_FilterDropsBelowStart(t *testing.T) {
 	t.Parallel()
 
@@ -164,10 +159,8 @@ func TestDatagram_FilterDropsBelowStart(t *testing.T) {
 	}
 }
 
-// TestDatagram_UnknownAliasDroppedSilently pins the §11.3 rule: an inbound
-// datagram with a Track Alias the relay doesn't recognise is dropped
-// silently — the session must NOT be closed, and the relay must keep
-// processing further datagrams normally.
+// TestDatagram_UnknownAliasDroppedSilently: a datagram with an unknown Track
+// Alias is dropped without closing the session (§11.3).
 func TestDatagram_UnknownAliasDroppedSilently(t *testing.T) {
 	t.Parallel()
 
@@ -240,10 +233,8 @@ func TestDatagram_UnknownAliasDroppedSilently(t *testing.T) {
 	}
 }
 
-// TestDatagram_PausedSubscriptionReceivesNothing pins the §9.2 Forward-State
-// gate on the datagram path: a subscription paused via REQUEST_UPDATE
-// (Forward=0) receives no datagrams, and resuming (Forward=1) restores
-// delivery — mirroring the subgroup fanout's ForwardDecision gate.
+// TestDatagram_PausedSubscriptionReceivesNothing: FORWARD=0 stops datagrams
+// and FORWARD=1 restores them (§9.2).
 func TestDatagram_PausedSubscriptionReceivesNothing(t *testing.T) {
 	t.Parallel()
 
@@ -324,10 +315,8 @@ func TestDatagram_PausedSubscriptionReceivesNothing(t *testing.T) {
 	}
 }
 
-// TestDatagram_RedundantPublishersDeduped pins §2.1 on the datagram path:
-// with two redundant publishers feeding the same track, each {Group,
-// Object} is forwarded to a subscriber exactly once (the subgroup path
-// already dedups via the same entry ledger).
+// TestDatagram_RedundantPublishersDeduped: datagrams from two redundant
+// publishers reach the subscriber once each (§2.1).
 func TestDatagram_RedundantPublishersDeduped(t *testing.T) {
 	t.Parallel()
 

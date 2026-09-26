@@ -9,11 +9,9 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestFanout_ObjectAfterEndOfGroupResetsStream pins the §11.4.3 / §2.4.2 rule
-// that no object may follow a terminal-status object (EndOfGroup / EndOfTrack)
-// on the same Subgroup stream: the relay forwards the normal object and the
-// EndOfGroup object, then — when a further object arrives on the same inbound
-// subgroup — resets the downstream stream instead of forwarding it.
+// TestFanout_ObjectAfterEndOfGroupResetsStream: an Object after END_OF_GROUP on
+// the same subgroup resets the downstream stream instead of being forwarded
+// (§11.4.3, §2.4.2).
 func TestFanout_ObjectAfterEndOfGroupResetsStream(t *testing.T) {
 	t.Parallel()
 

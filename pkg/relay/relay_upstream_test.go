@@ -32,10 +32,8 @@ func rankedAddrs(ns wire.TrackNamespace, addrs []string) []string {
 	return out
 }
 
-// TestRankByAffinityConverges is the property the whole scheme rests on: the
-// ranking is a pure function of (namespace, candidate set), so relays that
-// receive the advertisements in different orders still compute the same order —
-// and therefore agree on the top-fanIn upstreams.
+// TestRankByAffinityConverges: the ranking depends only on the namespace and
+// candidate set, so relays agree on it whatever order they learned it in.
 func TestRankByAffinityConverges(t *testing.T) {
 	t.Parallel()
 
@@ -60,10 +58,8 @@ func TestRankByAffinityConverges(t *testing.T) {
 	}
 }
 
-// TestRankByAffinitySpreads guards against a degenerate hash: if the address
-// were left out of the weight, every namespace would tie and fall back to the
-// same alphabetically-first relay. Distinct namespaces must land on more than
-// one top relay.
+// TestRankByAffinitySpreads: distinct namespaces land on more than one top
+// relay.
 func TestRankByAffinitySpreads(t *testing.T) {
 	t.Parallel()
 
@@ -78,10 +74,8 @@ func TestRankByAffinitySpreads(t *testing.T) {
 	}
 }
 
-// TestRankByAffinitySubsetOrderStable pins the subset-order-preservation that
-// keeps two leaves convergent even when their candidate sets differ by an
-// unreachable entry: removing any relay must not reorder the rest, because each
-// weight is independent of the others present.
+// TestRankByAffinitySubsetOrderStable: removing a candidate does not reorder
+// the rest.
 func TestRankByAffinitySubsetOrderStable(t *testing.T) {
 	t.Parallel()
 
@@ -96,10 +90,8 @@ func TestRankByAffinitySubsetOrderStable(t *testing.T) {
 	}
 }
 
-// TestNewUpstreamPoolFanInPassthrough pins that UpstreamFanIn is carried
-// verbatim: the pool applies no default, because zero (and any negative) already
-// means "unbounded" — the §9.5 full fan-in — which resolveUpstreams enforces via
-// its `fanIn > 0` guard rather than by normalizing the value here.
+// TestNewUpstreamPoolFanInPassthrough: UpstreamFanIn is kept verbatim; zero or
+// negative means unbounded, the full fan-in of §9.5.
 func TestNewUpstreamPoolFanInPassthrough(t *testing.T) {
 	t.Parallel()
 
@@ -112,10 +104,9 @@ func TestNewUpstreamPoolFanInPassthrough(t *testing.T) {
 	}
 }
 
-// TestResolveUpstreamsSkipsGoingAwayRelay: a pooled session to a remote relay
-// that sent GOAWAY takes no new requests (§10.4), so it must not take one of
-// the UpstreamFanIn slots either; resolution falls through to the next-ranked
-// relay while the draining one is still listed in Discovery.
+// TestResolveUpstreamsSkipsGoingAwayRelay: a pooled session whose relay sent
+// GOAWAY (§10.4) takes no UpstreamFanIn slot; resolution falls through to the
+// next-ranked relay.
 func TestResolveUpstreamsSkipsGoingAwayRelay(t *testing.T) {
 	t.Parallel()
 	ctx := t.Context()

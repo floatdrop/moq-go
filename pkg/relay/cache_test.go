@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"slices"
 	"testing"
 	"time"
 
@@ -117,12 +118,11 @@ func fetchCam1(t *testing.T, sess *session.Session, lastGroup uint64) []fetchEle
 
 // findElem returns the element at {group, 0}.
 func findElem(elems []fetchElem, group uint64) (fetchElem, bool) {
-	for _, e := range elems {
-		if e.Group == group && e.Object == 0 {
-			return e, true
-		}
+	i := slices.IndexFunc(elems, func(e fetchElem) bool { return e.Group == group && e.Object == 0 })
+	if i < 0 {
+		return fetchElem{}, false
 	}
-	return fetchElem{}, false
+	return elems[i], true
 }
 
 // TestRelay_MaxCacheDurationNotServedFromCache: a FETCH is not served an Object

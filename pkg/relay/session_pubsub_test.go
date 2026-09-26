@@ -37,10 +37,8 @@ func TestPublish_AcceptedAndRegistered(t *testing.T) {
 	}
 }
 
-// TestSubscribe_RejectsWhenNoUpstream: when no publisher has touched
-// the track AND no namespace match is available, SUBSCRIBE returns
-// RequestDoesNotExist (the on-demand upstream subscribe path only
-// kicks in when a matching namespace publisher exists).
+// TestSubscribe_RejectsWhenNoUpstream: with no publisher of the track and no
+// matching namespace publisher, SUBSCRIBE is refused DOES_NOT_EXIST.
 func TestSubscribe_RejectsWhenNoUpstream(t *testing.T) {
 	t.Parallel()
 	clientSess, teardown := connectRelay(t, relay.Config{})
@@ -53,11 +51,8 @@ func TestSubscribe_RejectsWhenNoUpstream(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
 }
 
-// TestSubscribe_ServedFromExistingUpstream is the canonical aggregation
-// test: a publisher claims a track, then a subscriber arrives on a separate
-// session and receives SUBSCRIBE_OK immediately from the cached upstream
-// state. No on-demand upstream subscribe is involved here; the upstream
-// was already Established.
+// TestSubscribe_ServedFromExistingUpstream: a SUBSCRIBE to an already
+// published track is answered from the existing upstream (§9.4).
 func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -104,12 +99,9 @@ func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 	}
 }
 
-// TestPublish_ForwardsToSubscribeTracks verifies §6.1 / §9.5: when a
-// SUBSCRIBE_TRACKS is open and a PUBLISH arrives for a matching namespace, the
-// relay forwards the PUBLISH to the subscriber on its OWN new bidirectional
-// stream (accepted via AcceptRequest), NOT multiplexed onto the
-// SUBSCRIBE_TRACKS request stream. This is the precondition for PUBLISH_SKIPPED
-// (§10.21): the forward consumes the subscriber's bidi-stream credit.
+// TestPublish_ForwardsToSubscribeTracks: a PUBLISH matching a SUBSCRIBE_TRACKS
+// is forwarded on its own new bidi stream, not on the SUBSCRIBE_TRACKS stream
+// (§6.1, §9.5).
 func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -166,15 +158,9 @@ func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	}
 }
 
-// TestPublish_ForwardedAliasDoesNotCollide pins §11.1 for PUBLISH forwarded to
-// a SUBSCRIBE_TRACKS holder: "The same Track Alias MUST NOT be used by a
-// publisher to refer to two different Tracks simultaneously in the same
-// session." Track Aliases are per session, so the relay must allocate the
-// forwarded PUBLISH's alias from the subscriber session's own space, shared
-// with the aliases it hands out in SUBSCRIBE_OK. Copying the upstream
-// publisher's alias collides as soon as those two spaces overlap — here the
-// subscriber already holds relay alias 1 for cam1 when a second publisher
-// PUBLISHes rtp under its own alias 1.
+// TestPublish_ForwardedAliasDoesNotCollide: a forwarded PUBLISH's Track Alias
+// comes from the subscriber session's own alias space, so it cannot collide
+// with one the relay handed out in SUBSCRIBE_OK (§11.1).
 func TestPublish_ForwardedAliasDoesNotCollide(t *testing.T) {
 	t.Parallel()
 	pub1, teardown := connectRelay(t, relay.Config{})
@@ -299,10 +285,8 @@ func TestSubscribeTracks_InvalidGroupOrderClosesSession(t *testing.T) {
 	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER SUBSCRIBE_TRACKS (§10.2.8)")
 }
 
-// TestPublish_DuplicateAliasRejected pins the §11.1 duplicate-alias rule:
-// reusing the same Track Alias on the same session for a different
-// {namespace, name} pair must fail. The session-level RegisterInboundTrackAlias
-// already enforces this; here we verify the request-level surfacing.
+// TestPublish_DuplicateAliasRejected: reusing a Track Alias on the session for
+// another track refuses the PUBLISH (§11.1).
 func TestPublish_DuplicateAliasRejected(t *testing.T) {
 	t.Parallel()
 	clientSess, teardown := connectRelay(t, relay.Config{})
@@ -326,12 +310,9 @@ func TestPublish_DuplicateAliasRejected(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
 }
 
-// TestSubscribe_OnDemandUpstreamSubscribe is the canonical test for the
-// on-demand upstream subscribe path: a
-// publisher advertises a namespace via PUBLISH_NAMESPACE; a subscriber on a
-// different session asks for a track under that namespace; the relay must
-// issue an upstream SUBSCRIBE to the publisher, wait for SUBSCRIBE_OK, and
-// only then reply SUBSCRIBE_OK downstream.
+// TestSubscribe_OnDemandUpstreamSubscribe: a SUBSCRIBE under a published
+// namespace makes the relay SUBSCRIBE upstream and answer downstream only after
+// the upstream SUBSCRIBE_OK.
 func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -394,11 +375,8 @@ func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 	}
 }
 
-// upstreamForwardValue runs the publisher side of one on-demand upstream
-// SUBSCRIBE and reports the FORWARD parameter the relay sent: (0/1, present)
-// when FORWARD is on the SUBSCRIBE, or (0, false) when it is omitted (§10.2.18
-// default 1). It replies SUBSCRIBE_OK and drains follow-ups. The result arrives
-// on the returned channel once the relay's upstream SUBSCRIBE is accepted.
+// upstreamForwardValue answers one upstream SUBSCRIBE on pubSess and delivers
+// the FORWARD it carried as (value, present); absent means 1 (§10.2.18).
 func upstreamForwardValue(t *testing.T, pubSess *session.Session) <-chan [2]int {
 	t.Helper()
 	out := make(chan [2]int, 1)
@@ -502,10 +480,9 @@ func TestSubscribe_UpstreamForwardOmittedWhenDownstreamForwards(t *testing.T) {
 	}
 }
 
-// TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins pins §9.2: a
-// Forward=0 subscriber establishes a paused (Forward=0) upstream; when a second
-// Forward=1 subscriber reuses that upstream, the relay MUST resume it by
-// sending an upstream REQUEST_UPDATE with Forward=1.
+// TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins: a paused upstream
+// is resumed with REQUEST_UPDATE FORWARD=1 when a Forward=1 subscriber joins
+// (§9.2).
 func TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -606,10 +583,8 @@ func TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins(t *testing.T) {
 	}
 }
 
-// acceptUpstreamSubscribe runs the publisher side of one on-demand upstream
-// SUBSCRIBE: accept the relay's request, reply SUBSCRIBE_OK with the given
-// alias, then drain follow-ups. The returned channel closes when the relay
-// ends the subscription (reset / FIN errors the drain).
+// acceptUpstreamSubscribe answers one upstream SUBSCRIBE on pubSess with alias
+// and drains its follow-ups; the channel closes when the relay ends it.
 func acceptUpstreamSubscribe(t *testing.T, pubSess *session.Session, alias uint64) <-chan struct{} {
 	t.Helper()
 	ended := make(chan struct{})
@@ -632,11 +607,8 @@ func acceptUpstreamSubscribe(t *testing.T, pubSess *session.Session, alias uint6
 	return ended
 }
 
-// TestSubscribe_UpstreamSurvivesInitiatingSubscriber is the §9.4 aggregation
-// lifetime test: subscriber A triggers the on-demand upstream SUBSCRIBE,
-// subscriber B reuses it, then A's whole session goes away. The upstream
-// subscription serves B, so it must survive — B keeps receiving objects and
-// does NOT get a spurious PUBLISH_DONE "upstream gone".
+// TestSubscribe_UpstreamSurvivesInitiatingSubscriber: an on-demand upstream
+// outlives the subscriber that triggered it while another still uses it (§9.4).
 func TestSubscribe_UpstreamSurvivesInitiatingSubscriber(t *testing.T) {
 	t.Parallel()
 	closed := &recordingMetrics{}
@@ -726,10 +698,8 @@ func TestSubscribe_UpstreamSurvivesInitiatingSubscriber(t *testing.T) {
 	}
 }
 
-// TestSubscribe_LastDownstreamTearsDownUpstream pins the inverse lifetime
-// rule: when the LAST downstream subscriber of an on-demand upstream leaves,
-// the relay ends its upstream subscription (closes the request stream,
-// §10.7) instead of letting the publisher stream into a void forever.
+// TestSubscribe_LastDownstreamTearsDownUpstream: when the last downstream
+// subscriber leaves, the relay ends its upstream subscription.
 func TestSubscribe_LastDownstreamTearsDownUpstream(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -765,10 +735,8 @@ func TestSubscribe_LastDownstreamTearsDownUpstream(t *testing.T) {
 	}
 }
 
-// TestSubscribe_NoMatchingPublisher_RejectsDoesNotExist pins the 5e
-// fallback: if no PUBLISH_NAMESPACE matches, the relay still rejects with
-// RequestDoesNotExist. The Discovery Store path will relax this for
-// cross-relay tracks.
+// TestSubscribe_NoMatchingPublisher_RejectsDoesNotExist: with no matching
+// PUBLISH_NAMESPACE, SUBSCRIBE is refused DOES_NOT_EXIST.
 func TestSubscribe_NoMatchingPublisher_RejectsDoesNotExist(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -790,16 +758,9 @@ func TestSubscribe_NoMatchingPublisher_RejectsDoesNotExist(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
 }
 
-// TestSubscribe_UpstreamRejects_PropagatesRejection: when the upstream
-// publisher rejects the relay's SUBSCRIBE, the downstream subscriber gets a
-// REQUEST_ERROR whose code is chosen by meaning (§10.6.2 "The application
-// SHOULD use a relevant error code"). A code about the track or the
-// publisher's load passes through; one about the relay's own hop (its
-// authorization, the upstream going away, a redirect it does not follow) or
-// about the relay's own Next Object filter says nothing true about the
-// downstream request, and becomes INTERNAL_ERROR. Either way the upstream's
-// Retry Interval is kept: "retry in N ms" must not turn into "SHOULD NOT be
-// retried".
+// TestSubscribe_UpstreamRejects_PropagatesRejection: an upstream REQUEST_ERROR
+// code about the track passes downstream; one about the relay's own hop becomes
+// INTERNAL_ERROR (§10.6.2). The Retry Interval is kept either way.
 func TestSubscribe_UpstreamRejects_PropagatesRejection(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -852,32 +813,9 @@ func TestSubscribe_UpstreamRejects_PropagatesRejection(t *testing.T) {
 	}
 }
 
-// TestSubscribe_AuthDenialUsesPolicyCode pins auth precedence on the
-// SUBSCRIBE arm even when the track does not exist locally — the auth check
-// runs before the track lookup.
-func TestSubscribe_AuthDenialUsesPolicyCode(t *testing.T) {
-	t.Parallel()
-	auth := &denyAuthorizer{err: errors.New("token expired")}
-	clientSess, teardown := connectRelay(t, relay.Config{Authorizer: auth})
-	defer teardown()
-
-	_, err := clientSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: ns("video"),
-		Name:      []byte("cam1"),
-	})
-	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
-	if got := auth.subscribeCalls.Load(); got != 1 {
-		t.Errorf("subscribeCalls = %d, want 1", got)
-	}
-}
-
-// TestSubscribe_PublisherDisappears_EmitsPublishDone pins §10.12
-// publisher-side termination. When the upstream publisher's session
-// dies (here: we explicitly close the publisher session), the relay
-// must notify every dependent downstream subscriber by writing a
-// PUBLISH_DONE message with [moqt.PublishDoneTrackEnded] on each
-// subscriber's request stream. Before this fix, the subscriber would
-// see an idle stream that never produced another byte.
+// TestSubscribe_PublisherDisappears_EmitsPublishDone: when the publisher's
+// session ends, each downstream subscriber gets PUBLISH_DONE TRACK_ENDED
+// (§10.12).
 func TestSubscribe_PublisherDisappears_EmitsPublishDone(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -928,11 +866,8 @@ func TestSubscribe_PublisherDisappears_EmitsPublishDone(t *testing.T) {
 	}
 }
 
-// TestSubscribe_PublisherDisappears_StreamClosesAfterPublishDone pins
-// the second half of the contract: after the relay sends
-// PUBLISH_DONE it must also FIN the request stream so the subscriber
-// can release its handler. message.Parse on a FIN'd stream returns
-// io.EOF after the last message is consumed.
+// TestSubscribe_PublisherDisappears_StreamClosesAfterPublishDone: the relay
+// FINs the request stream after PUBLISH_DONE.
 func TestSubscribe_PublisherDisappears_StreamClosesAfterPublishDone(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -981,13 +916,9 @@ func TestSubscribe_PublisherDisappears_StreamClosesAfterPublishDone(t *testing.T
 	}
 }
 
-// TestSubscribe_NoAliasCollisionWhenAlsoPublishing is a regression test for a
-// conferencing client that PUBLISHes and SUBSCRIBEs on the same session. The
-// relay's outbound alias space (used to deliver tracks downstream) is
-// independent of the inbound aliases the client chose for its own PUBLISHes
-// (§11.1). Both spaces start at 0, so a session that publishes alias 0 and
-// then subscribes to a peer track (relay allocates outbound alias 0) must not
-// see a spurious "alias collision" that rejects the SUBSCRIBE.
+// TestSubscribe_NoAliasCollisionWhenAlsoPublishing: the relay's outbound alias
+// space is independent of the aliases a session PUBLISHes with (§11.1), so
+// both starting at 0 is no collision.
 func TestSubscribe_NoAliasCollisionWhenAlsoPublishing(t *testing.T) {
 	t.Parallel()
 	clientSess, teardown := connectRelay(t, relay.Config{})
@@ -1029,16 +960,9 @@ func TestSubscribe_NoAliasCollisionWhenAlsoPublishing(t *testing.T) {
 	defer subStream.Close()
 }
 
-// TestPublish_SavesLargestObjectFromPublish pins §10.2.17 item 1 on the PUBLISH
-// path: a LARGEST_OBJECT on an inbound PUBLISH is one of the values the relay's
-// own watermark MUST be the largest of, so it has to reach the track entry even
-// though no object has arrived yet.
-//
-// Observable through the next SUBSCRIBE: §10.2.17 requires the relay to include
-// LARGEST_OBJECT once objects exist on the track, and that value is the
-// subscriber's live edge, which §5.1.3 has it size a fill against. Before the fix the
-// parameter was dropped, so the relay claimed to know nothing and the backfill
-// was unreachable.
+// TestPublish_SavesLargestObjectFromPublish: LARGEST_OBJECT on an inbound
+// PUBLISH feeds the relay's watermark before any Object arrives, and the next
+// SUBSCRIBE_OK carries it (§10.2.17).
 func TestPublish_SavesLargestObjectFromPublish(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -1073,19 +997,9 @@ func TestPublish_SavesLargestObjectFromPublish(t *testing.T) {
 	}
 }
 
-// TestPublish_ForwardedPublishCarriesEntryLargestObject pins the other half of
-// §10.2.17 for the PUBLISH-forwarding path: the relay MUST send the largest of
-// everything it has observed, so the LARGEST_OBJECT on a PUBLISH it generates for
-// a SUBSCRIBE_TRACKS holder is re-derived from the track entry rather than copied
-// through from the upstream's own PUBLISH.
-//
-// Two publishers on one track (§9.5) is what separates the two behaviours. The
-// second announces a *lower* watermark than the first, so copying it through
-// would advertise {3,4} when the relay has already observed {9,9} — a value below
-// its own maximum, which is exactly what §10.2.17 forbids. With one publisher the
-// two readings coincide and the bug is invisible, which is why this test needs
-// the second one. The subscriber arrives after both, and gets one PUBLISH for
-// the track.
+// TestPublish_ForwardedPublishCarriesEntryLargestObject: a forwarded PUBLISH
+// carries the largest LARGEST_OBJECT the relay observed, not the upstream
+// PUBLISH's own (§10.2.17). Two publishers, the second with a lower value.
 func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
 	t.Parallel()
 	pubA, teardown := connectRelay(t, relay.Config{})

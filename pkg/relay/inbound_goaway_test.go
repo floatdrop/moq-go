@@ -9,12 +9,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// §10.4 from the recipient's side. The GOAWAY's Timeout is "The time in
-// milliseconds the sender will wait for graceful closure": closing the session
-// is the sender's job, with GOAWAY_TIMEOUT, not the recipient's. What the
-// recipient owes is restraint: "Upon receiving a GOAWAY on the control stream,
-// an endpoint SHOULD NOT initiate new requests to the peer including
-// SUBSCRIBE, PUBLISH, FETCH, [...]".
+// GOAWAY from the recipient's side (§10.4): closing the session is the
+// sender's job; the recipient SHOULD NOT initiate new requests to the peer.
 
 // TestRelay_InboundGoawayLeavesSessionOpen: the relay does not close a session
 // because its peer sent GOAWAY, whether the peer named a timeout or not (0: "no
@@ -101,10 +97,8 @@ func TestRelay_NoForwardedPublishToGoingAwayHolder(t *testing.T) {
 	requireNoForward(t, forwarded, "holder that sent GOAWAY")
 }
 
-// TestRelay_NoUpstreamFetchToGoingAwayPublisher: a FETCH reaching below the
-// relay's cache would be stitched with an upstream FETCH to the publisher, but
-// not to one that sent GOAWAY; the range it would have filled is reported
-// unknown instead.
+// TestRelay_NoUpstreamFetchToGoingAwayPublisher: a FETCH below the cache is not
+// stitched from a publisher that sent GOAWAY; the range is reported unknown.
 func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})

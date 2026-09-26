@@ -3,6 +3,7 @@ package relay
 import (
 	"errors"
 	"io"
+	"slices"
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -13,16 +14,20 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/cache"
 )
 
+// obj is a cached Object at {g, o}.
 func obj(g, o uint64) *cache.CachedObject {
 	return &cache.CachedObject{GroupID: g, ObjectID: o, Payload: []byte{byte(o)}}
 }
 
+// marker is a cached End of Unknown Range marker at {g, o}.
 func marker(g, o uint64) *cache.CachedObject {
 	return &cache.CachedObject{GroupID: g, ObjectID: o, EndOfUnknownRange: true}
 }
 
+// loc is a {Group, Object} Location.
 type loc struct{ G, O uint64 }
 
+// locsOf returns the Locations of objs.
 func locsOf(objs []*cache.CachedObject) []loc {
 	out := make([]loc, 0, len(objs))
 	for _, o := range objs {
@@ -31,25 +36,9 @@ func locsOf(objs []*cache.CachedObject) []loc {
 	return out
 }
 
-func locsEqual(got, want []loc) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
-}
-
-// TestMergeFetchObjects_DescendingSeamSplice pins the mid-group-floor merge:
-// when the eviction floor splits a group between the cache and the upstream
-// stitch, the descending merge must splice the seam group into one
-// contiguous ascending run (upstream's lower Object IDs first) — plain
-// concatenation puts the cache's high-object run first, a same-group
-// transition to a lower Object ID that §11.4.4's delta encoding cannot
-// express.
+// TestMergeFetchObjects_DescendingSeamSplice: when the eviction floor splits a
+// group, the descending merge splices it into one ascending run, upstream's
+// lower Object IDs first, which §11.4.4's delta encoding can express.
 func TestMergeFetchObjects_DescendingSeamSplice(t *testing.T) {
 	t.Parallel()
 	desc := message.GroupOrderDescending
@@ -87,7 +76,7 @@ func TestMergeFetchObjects_DescendingSeamSplice(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := locsOf(mergeFetchObjects(desc, tc.lower, tc.upper))
-			if !locsEqual(got, tc.want) {
+			if !slices.Equal(got, tc.want) {
 				t.Errorf("merged %v, want %v", got, tc.want)
 			}
 		})
@@ -97,16 +86,13 @@ func TestMergeFetchObjects_DescendingSeamSplice(t *testing.T) {
 	asc := locsOf(mergeFetchObjects(message.GroupOrderAscending,
 		[]*cache.CachedObject{obj(6, 0), obj(6, 1)},
 		[]*cache.CachedObject{obj(6, 2), obj(7, 0)}))
-	if !locsEqual(asc, []loc{{6, 0}, {6, 1}, {6, 2}, {7, 0}}) {
+	if !slices.Equal(asc, []loc{{6, 0}, {6, 1}, {6, 2}, {7, 0}}) {
 		t.Errorf("ascending merge = %v", asc)
 	}
 }
 
-// TestStreamFetchObjects_DescendingSeamRoundTrip pins the wire outcome: a
-// descending stitched response whose floor split a group must decode back
-// to the exact merged Locations. Before the seam splice, the concatenated
-// order made streamFetchObjects emit a wrapped same-group delta the
-// subscriber decoded into garbage Object IDs.
+// TestStreamFetchObjects_DescendingSeamRoundTrip: a descending stitched
+// response with a split group decodes back to the merged Locations.
 func TestStreamFetchObjects_DescendingSeamRoundTrip(t *testing.T) {
 	t.Parallel()
 	cli, srv := sessiontest.NewSessionPair(t)
@@ -159,17 +145,13 @@ func TestStreamFetchObjects_DescendingSeamRoundTrip(t *testing.T) {
 	}
 
 	want := []loc{{7, 0}, {6, 0}, {6, 1}, {6, 2}, {6, 3}, {5, 0}}
-	if !locsEqual(got, want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("decoded %v, want %v", got, want)
 	}
 }
 
-// TestMergeFetchObjects_SeamMarkersSpliced pins the marker-tolerant splice:
-// an upstream 0x10C marker interleaved with (or trailing) the seam group's
-// objects moves with them — stopping the splice at a marker would re-emit
-// the cache's high-object run before the remaining low-object seam objects,
-// the very order the splice exists to prevent. A prefix with no objects
-// (the whole-sub-range unknown marker) still stays after the cache.
+// TestMergeFetchObjects_SeamMarkersSpliced: an upstream marker among the seam
+// group's Objects moves with them; a marker-only prefix stays after the cache.
 func TestMergeFetchObjects_SeamMarkersSpliced(t *testing.T) {
 	t.Parallel()
 	desc := message.GroupOrderDescending
@@ -199,7 +181,7 @@ func TestMergeFetchObjects_SeamMarkersSpliced(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := locsOf(mergeFetchObjects(desc, tc.lower, upper))
-			if !locsEqual(got, tc.want) {
+			if !slices.Equal(got, tc.want) {
 				t.Errorf("merged %v, want %v", got, tc.want)
 			}
 		})

@@ -89,10 +89,8 @@ func TestRelay_AcceptsSession(t *testing.T) {
 	}
 }
 
-// TestRelay_StopBroadcastsGoaway pins §10.4: Stop must
-// broadcast a GOAWAY to every active session before tearing it down,
-// and the message carries Timeout = Config.GoawayTimeout (in ms) and
-// an empty NewSessionURI (the relay isn't redirecting).
+// TestRelay_StopBroadcastsGoaway: Stop sends every session GOAWAY with Timeout
+// = Config.GoawayTimeout and no NewSessionURI (§10.4).
 func TestRelay_StopBroadcastsGoaway(t *testing.T) {
 	t.Parallel()
 	const grace = 250 * time.Millisecond
@@ -158,16 +156,9 @@ func (s *withdrawSpyStore) Withdraw(ctx context.Context, relayAddr string) error
 	return s.MemoryStore.Withdraw(ctx, relayAddr)
 }
 
-// TestRelay_StopWithdrawsFromDiscoveryBeforeGoaway pins the shutdown ordering
-// cross-relay deployments depend on: Stop must remove this relay's
-// advertisements from Discovery before it closes the listener and before any
-// GOAWAY goes out. A peer whose FindTrack / FindNamespace resolves to this relay
-// during the drain would otherwise dial an endpoint that is already dead.
-//
-// The store's Withdraw blocks until the test has finished asserting, which is
-// what makes this deterministic rather than a race against Stop's own progress:
-// while the withdrawal is in flight, Stop cannot have closed the listener or sent
-// a GOAWAY, so both "not yet" assertions are checked against a frozen shutdown.
+// TestRelay_StopWithdrawsFromDiscoveryBeforeGoaway: Stop withdraws this relay's
+// Discovery advertisements before closing the listener or sending GOAWAY. The
+// store's Withdraw blocks until the assertions are done.
 func TestRelay_StopWithdrawsFromDiscoveryBeforeGoaway(t *testing.T) {
 	t.Parallel()
 	const (
@@ -321,18 +312,9 @@ func TestRelay_StopWithdrawFailureIsNotFatal(t *testing.T) {
 	}
 }
 
-// TestRelay_RunGoawaysOnShutdownSignal pins the contract the relay binaries
-// depend on: when the context handed to Run is cancelled — what
-// [os/signal.NotifyContext] does on SIGINT/SIGTERM — every live session still
-// receives a GOAWAY (§10.4), and Run does not return until the drain it started
-// has finished.
-//
-// Both halves are load-bearing, and each was independently broken when the
-// binaries wired the signal context straight into Start and called Stop from a
-// background goroutine: Start propagates its context to the per-session
-// handlers, so the signal tore the sessions down before Stop could GOAWAY them,
-// and Start returns as soon as Stop closes the listener, so main exited
-// mid-drain.
+// TestRelay_RunGoawaysOnShutdownSignal: cancelling Run's context (as a signal
+// does) still sends every session GOAWAY (§10.4), and Run returns only once the
+// drain has finished.
 func TestRelay_RunGoawaysOnShutdownSignal(t *testing.T) {
 	t.Parallel()
 	const grace = 250 * time.Millisecond
@@ -397,10 +379,8 @@ func TestRelay_RunGoawaysOnShutdownSignal(t *testing.T) {
 	}
 }
 
-// TestRelay_StopReturnsEarlyOnCleanDrain pins the drain-success path: when
-// the client closes its session cleanly after observing GOAWAY, Stop
-// returns well before GoawayTimeout elapses. The whole point of GOAWAY
-// is to give peers a chance to migrate without paying the full timeout.
+// TestRelay_StopReturnsEarlyOnCleanDrain: when the client closes after GOAWAY,
+// Stop returns well before GoawayTimeout.
 func TestRelay_StopReturnsEarlyOnCleanDrain(t *testing.T) {
 	t.Parallel()
 	const grace = 5 * time.Second // generous; we want to prove Stop is faster than this
@@ -444,10 +424,8 @@ func TestRelay_StopReturnsEarlyOnCleanDrain(t *testing.T) {
 	}
 }
 
-// TestRelay_StopForceClosesOnTimeout pins the timeout path: a client
-// that observes GOAWAY but ignores it gets force-closed at the
-// GoawayTimeout boundary, with session error code GoawayTimeout
-// (§10.4 / IANA §15.11.1).
+// TestRelay_StopForceClosesOnTimeout: a client that ignores GOAWAY is closed at
+// GoawayTimeout with session error GOAWAY_TIMEOUT (§10.4).
 func TestRelay_StopForceClosesOnTimeout(t *testing.T) {
 	t.Parallel()
 	const grace = 200 * time.Millisecond
@@ -490,10 +468,8 @@ func TestRelay_StopForceClosesOnTimeout(t *testing.T) {
 	}
 }
 
-// TestRelay_InboundGoawayCleanDrainExitsEarly pins the cooperative path of
-// an inbound GOAWAY: if the peer sends GOAWAY and then closes the session
-// itself before its timeout expires, the relay's watcher exits via
-// sess.Done() without waiting the full timeout.
+// TestRelay_InboundGoawayCleanDrainExitsEarly: after an inbound GOAWAY, a peer
+// that closes its session ends the relay's wait early.
 func TestRelay_InboundGoawayCleanDrainExitsEarly(t *testing.T) {
 	t.Parallel()
 	const peerGrace = 5 * time.Second // generous; we'll close before this
@@ -567,6 +543,7 @@ func TestRelay_StartReturnsListenerError(t *testing.T) {
 	}
 }
 
+// errListener is a [relay.Listener] whose Accept always fails with err.
 type errListener struct{ err error }
 
 func (l *errListener) Accept(context.Context) (session.Conn, error) { return nil, l.err }

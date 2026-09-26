@@ -31,6 +31,8 @@ type testRelay struct {
 	startErr chan error
 }
 
+// startTestRelay starts a relay on its own pipeListener; its Stop is the
+// caller's.
 func startTestRelay(ctx context.Context, cfg relay.Config) *testRelay {
 	if cfg.GoawayTimeout == 0 {
 		cfg.GoawayTimeout = 50 * time.Millisecond
@@ -71,11 +73,8 @@ func dialClient(t *testing.T, tr *testRelay) *session.Session {
 	return sess
 }
 
-// TestCrossRelay_OnDemandSubscribe is the end-to-end happy path: a subscriber
-// on relay A receives objects published to relay B, routed across the boundary
-// purely through Discovery + the Dialer. B advertises the "video" namespace;
-// A has no local publisher, follows FindNamespace to B, dials it, and
-// subscribes upstream. Objects flow publisher → B → A → subscriber.
+// TestCrossRelay_OnDemandSubscribe: a subscriber on relay A receives Objects
+// published to relay B, which A finds through Discovery and dials.
 func TestCrossRelay_OnDemandSubscribe(t *testing.T) {
 	t.Parallel()
 
@@ -197,11 +196,9 @@ func TestCrossRelay_OnDemandSubscribe(t *testing.T) {
 	relayB.stop(t)
 }
 
-// TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery pins that a local
-// publisher whose upstream SUBSCRIBE fails does not abort the search: the relay
-// still falls back to a remote relay via Discovery. Without that, a transiently
-// failing local publisher would reject the downstream SUBSCRIBE even though a
-// healthy remote serves the track.
+// TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery: when the local
+// publisher's upstream SUBSCRIBE fails, the relay still falls back to a remote
+// relay found through Discovery.
 func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
 	t.Parallel()
 
@@ -321,12 +318,9 @@ func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
 	<-rejectDone
 }
 
-// TestCrossRelay_MultiRemoteFanIn pins §9.5 cross-relay fault tolerance: when
-// two remote relays both advertise a namespace, relay A subscribes to BOTH (not
-// just the first) and fans them into one track. The Dialer must fire for each
-// remote, and the subscriber must receive each object exactly once even though
-// both remotes push the same {GroupID, ObjectID} stream (the §2.1 dedup gate
-// drops the redundant copy).
+// TestCrossRelay_MultiRemoteFanIn: with two remote relays advertising a
+// namespace, relay A subscribes to both (§9.5) and delivers each Object once (§9.3,
+// §2.1).
 func TestCrossRelay_MultiRemoteFanIn(t *testing.T) {
 	t.Parallel()
 
@@ -449,11 +443,8 @@ collect:
 	relayC.stop(t)
 }
 
-// TestCrossRelay_SelfExclusion pins the loop guard: a FindNamespace result that
-// names this relay's own RelayAddr must never trigger a dial or a self-loop
-// SUBSCRIBE. The store is seeded with a namespace owned by "relay-A" itself;
-// A's subscriber must be rejected (no other relay serves it) and the Dialer
-// must never fire.
+// TestCrossRelay_SelfExclusion: a Discovery entry naming this relay's own
+// RelayAddr is never dialled; the subscriber is refused.
 func TestCrossRelay_SelfExclusion(t *testing.T) {
 	t.Parallel()
 
@@ -625,18 +616,8 @@ func TestCrossRelay_WatchNamespacesForward(t *testing.T) {
 	relayA.stop(t)
 }
 
-// TestCrossRelay_WatchNamespacesForwardsUnpublish is the withdrawal half of
-// TestCrossRelay_WatchNamespacesForward: when a remote relay retracts a
-// namespace, the local SUBSCRIBE_NAMESPACE holder learns of it via
-// NAMESPACE_DONE.
-//
-// Until this existed the OpUnpublish arm of forwardNamespaceEvent was taken by
-// no test at all. OpUnpublish itself is asserted on all over the suite, but
-// every one of those stops at the store boundary — memory_test.go and
-// discovery_integration_test.go check the event comes *out* of
-// WatchNamespaces, not that the relay reflects it onward. So the arm could
-// be deleted with the suite still green, while a downstream subscriber
-// silently never learned the namespace had gone away.
+// TestCrossRelay_WatchNamespacesForwardsUnpublish: a remote relay's withdrawn
+// namespace reaches the local SUBSCRIBE_NAMESPACE holder as NAMESPACE_DONE.
 func TestCrossRelay_WatchNamespacesForwardsUnpublish(t *testing.T) {
 	t.Parallel()
 
@@ -720,17 +701,9 @@ func TestCrossRelay_WatchNamespacesForwardsUnpublish(t *testing.T) {
 	relayA.stop(t)
 }
 
-// TestCrossRelay_WatchNamespacesSkipsTrackSubscribers pins the WantsTracks skip
-// in forwardNamespaceEvent: a SUBSCRIBE_TRACKS holder must NOT be sent the
-// NAMESPACE reflected from a remote relay's advertisement. Those holders
-// receive forwarded PUBLISH messages (§6.1 / §10.20), and a relay cannot
-// synthesize a remote PUBLISH from a namespace advertisement alone.
-//
-// The SUBSCRIBE_NAMESPACE holder here is load-bearing, not decoration. A bare
-// "nothing arrived on the SUBSCRIBE_TRACKS stream" assertion would pass just as
-// well if the watch never fired, if the prefix never matched, or if the relay
-// never started — the control subscriber is what distinguishes "delivered, then
-// deliberately skipped" from "never delivered to anyone".
+// TestCrossRelay_WatchNamespacesSkipsTrackSubscribers: a remote relay's
+// namespace is not sent to a SUBSCRIBE_TRACKS holder (§6.1, §10.20). The
+// SUBSCRIBE_NAMESPACE holder is the control that shows it was delivered at all.
 func TestCrossRelay_WatchNamespacesSkipsTrackSubscribers(t *testing.T) {
 	t.Parallel()
 
@@ -789,13 +762,8 @@ func TestCrossRelay_WatchNamespacesSkipsTrackSubscribers(t *testing.T) {
 	// The event was delivered and the ticker keeps re-delivering it, so anything
 	// on the SUBSCRIBE_TRACKS stream now is the skip having been dropped.
 	//
-	// A Parse *error* fails just as loudly as a message. A stream that died is
-	// not a stream that was correctly skipped, and treating the two alike is how
-	// this assertion would stay green if the relay started resetting the
-	// SUBSCRIBE_TRACKS stream on a namespace event, or if SubscribeTracks
-	// stopped establishing it at all — the regressions it exists to catch. The
-	// reader is left blocked in Parse on the way out; it unblocks when the test
-	// closes the stream, and the buffered channel keeps it from leaking.
+	// A Parse error fails as loudly as a message: a dead stream was not
+	// correctly skipped. The reader unblocks when the test closes the stream.
 	type parsed struct {
 		msg message.Message
 		err error
@@ -821,12 +789,8 @@ func TestCrossRelay_WatchNamespacesSkipsTrackSubscribers(t *testing.T) {
 	relayA.stop(t)
 }
 
-// TestCrossRelay_SubscribeNamespaceSeedsRemote pins the seed side of
-// cross-relay namespace discovery: a SUBSCRIBE_NAMESPACE holder is told about a
-// namespace a *remote* relay advertised BEFORE the subscriber (and before this
-// relay) existed. The watch's initial snapshot records it in the namespace
-// registry, which seeds the subscriber, so one pre-advertise suffices — no
-// re-advertise ticker needed.
+// TestCrossRelay_SubscribeNamespaceSeedsRemote: a SUBSCRIBE_NAMESPACE holder
+// learns of a namespace a remote relay advertised before either existed.
 func TestCrossRelay_SubscribeNamespaceSeedsRemote(t *testing.T) {
 	t.Parallel()
 
@@ -867,12 +831,9 @@ func TestCrossRelay_SubscribeNamespaceSeedsRemote(t *testing.T) {
 	relayA.stop(t)
 }
 
-// TestCrossRelay_ConcurrentSubscriberWrites drives two independent writers at
-// one SUBSCRIBE_NAMESPACE holder's stream: a local publisher's PUBLISH_NAMESPACE
-// forwards (on a session-handler goroutine) and the relay-level WatchNamespaces
-// consumer forwarding remote advertisements. The two write the same stream from
-// different goroutines, so this must stay clean under -race (it is the race
-// SubscriberEntry.WriteMessage's mutex closes).
+// TestCrossRelay_ConcurrentSubscriberWrites: a local PUBLISH_NAMESPACE and a
+// remote advertisement write one SUBSCRIBE_NAMESPACE stream from two
+// goroutines; run under -race.
 func TestCrossRelay_ConcurrentSubscriberWrites(t *testing.T) {
 	t.Parallel()
 
@@ -941,10 +902,8 @@ func TestCrossRelay_ConcurrentSubscriberWrites(t *testing.T) {
 	<-drained
 }
 
-// TestCrossRelay_DialerWithoutRelayAddrWarns pins the misconfiguration
-// diagnostic for #4: a Dialer set with an empty RelayAddr disables cross-relay
-// routing silently (self/remote Discovery entries become indistinguishable), so
-// New must emit a warning. A RelayAddr-set relay must NOT warn.
+// TestCrossRelay_DialerWithoutRelayAddrWarns: New warns when a Dialer is set
+// without a RelayAddr, and not when one is set.
 func TestCrossRelay_DialerWithoutRelayAddrWarns(t *testing.T) {
 	t.Parallel()
 
@@ -1013,11 +972,9 @@ func TestCrossRelay_NoDialerNoop(t *testing.T) {
 	relayA.stop(t)
 }
 
-// TestCrossRelay_UpstreamFanInCapConverges pins Phase-1 affinity routing: when
-// three remote relays advertise a namespace but UpstreamFanIn is 1, a leaf relay
-// subscribes to exactly one of them (the cap), and two independent leaf relays
-// pick the *same* one (rendezvous convergence). That is what turns a full
-// O(n²) relay-to-relay mesh into a tree rooted at one relay per namespace.
+// TestCrossRelay_UpstreamFanInCapConverges: with UpstreamFanIn 1 and three
+// remotes, a leaf relay subscribes to exactly one, and two leaves pick the same
+// one.
 func TestCrossRelay_UpstreamFanInCapConverges(t *testing.T) {
 	t.Parallel()
 
@@ -1131,27 +1088,9 @@ func TestCrossRelay_UpstreamFanInCapConverges(t *testing.T) {
 	relayD.stop(t)
 }
 
-// TestCrossRelay_GoawayPrecedesUpstreamTeardown pins the §3.6 shutdown ordering:
-// "When the server is a subscriber, it SHOULD send a GOAWAY message to
-// downstream subscribers prior to unsubscribing from upstream publishers."
-//
-// The relay is a subscriber on every session its upstream pool dialled, so
-// cancelling the pool is the "unsubscribe from upstream" step and must not run
-// before the GOAWAY broadcast. It used to run first, at the same point as the
-// listener close, which raced the upstream session out of Stop's snapshot — so
-// the upstream peer could be dropped having never been told the relay was going
-// away.
-//
-// The test owns the upstream peer's session directly (the Dialer hands the relay
-// one end of a pipe and the test serves the other), so it can observe what that
-// peer receives.
-//
-// Detection profile, measured against the old ordering: 5/5 failures at
-// GOMAXPROCS=1, 0/5 on a multi-core run. Cancelling the pool does not itself
-// close the session — it unwinds the handler, and only if that wins the race to
-// deregister does the session miss Stop's snapshot and lose its GOAWAY. So this
-// is a strict regression guard single-threaded and a correctness assertion
-// everywhere else.
+// TestCrossRelay_GoawayPrecedesUpstreamTeardown: on Stop the relay sends GOAWAY
+// before it unsubscribes from upstream publishers (§3.6). Reliably fails a
+// wrong ordering only at GOMAXPROCS=1.
 func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 	t.Parallel()
 
@@ -1240,23 +1179,9 @@ func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 	}
 }
 
-// TestCrossRelay_FetchBackfillsPublishOnceTrack pins §10.2.17, which §9.4 makes
-// binding on relays: the LARGEST_OBJECT a relay reports includes any value its
-// upstream sent in SUBSCRIBE_OK, because its own downstream subscribers need it
-// to FETCH what was published before they arrived.
-//
-// The track here is published *once* and then goes quiet, which is what makes
-// the omission fatal rather than merely late. A live subscription carries only
-// future objects, so the sole route to content published before the subscriber
-// arrived is a §10.13 FETCH — and that is refused with INVALID_RANGE
-// when the relay knows no Largest Object to compute a range from. Before the
-// fix, relay A learned no watermark from B's SUBSCRIBE_OK, omitted
-// LARGEST_OBJECT from its own SUBSCRIBE_OK (violating §10.2.17), and rejected
-// the backfill; the subscriber never saw the track's contents at all.
-//
-// An MSF catalog is exactly this shape — published on join, republished only
-// when a participant's tracks change — so in a conference across two relays the
-// participant behind that catalog stayed invisible for the whole call.
+// TestCrossRelay_FetchBackfillsPublishOnceTrack: relay A's LARGEST_OBJECT
+// includes the one its upstream sent in SUBSCRIBE_OK (§10.2.17, §9.4), so a
+// track published once, like an MSF catalog, can be FETCHed from A later.
 func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 	t.Parallel()
 
@@ -1344,9 +1269,8 @@ func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 	// it arrived. A's own cache is empty — its upstream uses the §9.4 Next Object
 	// filter — so answering means stitching from B (§9.4).
 	//
-	// StartGroup=1 is the relative one-field form (§5.1.2): start at the current
-	// group. On a Fetch an omitted end means Largest Object, so this is the range
-	// draft-19 expressed as a Relative Joining FETCH with JoiningStart=0.
+	// StartGroup=1 is the relative one-field form (§5.1.2): the current group
+	// up to Largest Object.
 	fetchReq, err := subSess.Fetch(ctx, &message.Fetch{
 		Namespace: subMsg.Namespace,
 		Name:      subMsg.Name,
@@ -1409,12 +1333,8 @@ func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 	relayB.stop(t)
 }
 
-// TestCrossRelay_PublishDoneCodeCrossesRelays: §10.12 "The application SHOULD
-// use a relevant status code in PUBLISH_DONE". A code about the track reaches
-// a subscriber two relays away: the origin relay passes the publisher's code
-// to its downstream, which here is relay A's own upstream SUBSCRIBE, and A
-// passes it on in turn rather than reporting its upstream's end as
-// TRACK_ENDED.
+// TestCrossRelay_PublishDoneCodeCrossesRelays: a PUBLISH_DONE code about the
+// track reaches a subscriber two relays away unchanged (§10.12).
 func TestCrossRelay_PublishDoneCodeCrossesRelays(t *testing.T) {
 	t.Parallel()
 	store := discovery.NewMemoryStore()

@@ -185,7 +185,7 @@ func TestPublishDone_AfterStreamsClose(t *testing.T) {
 }
 
 // TestPublishDone_EndedSubscriptionStopsAtNextObject: a subscription ended with
-// UPDATE_FAILED (§10.9) while its upstream stays live has its open stream reset
+// UPDATE_FAILED (§10.9.1) while its upstream stays live has its open stream reset
 // at the next Object, so PUBLISH_DONE is not held while the upstream runs.
 func TestPublishDone_EndedSubscriptionStopsAtNextObject(t *testing.T) {
 	t.Parallel()

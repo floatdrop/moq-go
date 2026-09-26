@@ -10,25 +10,14 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// The §8 delivery timeouts and the §8 lag window are both "this subscriber is
-// too slow", and the relay must not confuse them. §3.3.4 draws the line by the
-// reset code it attaches: TOO_FAR_BEHIND is defined as "the corresponding
-// subscription has exceeded the publisher's resource limits and is being
-// terminated", whereas DELIVERY_TIMEOUT says only "A delivery timeout
-// (Section 8) was exceeded for this stream". The tests below pin the difference from the
-// subscriber's side, which is the only side that can observe it: after a
-// delivery timeout the track keeps flowing, after a lag breach it does not
-// (see TestFanout_LagWindowResetsSlowSubscriber).
-//
-// MaxFanoutLag is deliberately left at its zero value throughout, so the only
-// escalation that can fire is the one under test.
+// A §8 delivery timeout resets one stream and the track keeps flowing, unlike a
+// lag-window breach, which ends the subscription (§3.3.4; see
+// TestFanout_LagWindowResetsSlowSubscriber). MaxFanoutLag stays zero here, so
+// only the escalation under test can fire.
 
-// countUntilEnd reads objects until the stream ends and returns how many
-// arrived. The in-process pipe transport does not carry §3.3.4 reset codes, so
-// a reset and a clean FIN look alike to the reader — the count is what
-// separates them: a stream cut short by a timeout delivers fewer objects than
-// the publisher wrote, and one that ran to completion delivers all of them.
-// That is also the difference a real subscriber cares about.
+// countUntilEnd reads Objects until the stream ends or within elapses and
+// returns how many arrived. The pipe transport carries no reset codes, so a
+// short count is what shows a reset.
 func countUntilEnd(sg *session.IncomingSubgroupStream, within time.Duration) int {
 	deadline := time.Now().Add(within)
 	got := 0
@@ -41,16 +30,9 @@ func countUntilEnd(sg *session.IncomingSubgroupStream, within time.Duration) int
 	return got
 }
 
-// TestFanout_DeliveryTimeoutKeepsSubscriptionAlive pins the §8 /
-// §3.3.4 distinction that makes a per-subgroup timeout usable: a subscriber
-// that stalls past OBJECT_DELIVERY_TIMEOUT loses the subgroup it stalled on,
-// and nothing else. The relay resets that one stream and keeps forwarding, so
-// the next group arrives without the subscriber having to re-SUBSCRIBE.
-//
-// Before delivery timeouts were sourced in the fanout, the only escalation the
-// relay had was the lag window, which terminates the subscription outright —
-// so a publisher had no way to mark one subgroup as sheddable without risking
-// the whole track.
+// TestFanout_DeliveryTimeoutKeepsSubscriptionAlive: a subscriber stalled past
+// OBJECT_DELIVERY_TIMEOUT loses only that subgroup; the next group still
+// arrives (§8, §3.3.4).
 func TestFanout_DeliveryTimeoutKeepsSubscriptionAlive(t *testing.T) {
 	const timeout = 100 * time.Millisecond
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -122,13 +104,8 @@ func TestFanout_DeliveryTimeoutKeepsSubscriptionAlive(t *testing.T) {
 	}
 }
 
-// TestFanout_PublisherTrackDeliveryTimeoutApplies pins the other half of the
-// §8 resolution: the value can come from the publisher's Track Properties
-// (§12.2) rather than the subscriber's parameters, and the relay must apply it
-// to the streams it opens downstream. The subscriber here asks for nothing.
-//
-// This is the direction a publisher uses to mark its own data sheddable, so
-// the relay sourcing it is what the whole mechanism rests on.
+// TestFanout_PublisherTrackDeliveryTimeoutApplies: a delivery timeout from the
+// publisher's Track Properties (§12.2) applies downstream too.
 func TestFanout_PublisherTrackDeliveryTimeoutApplies(t *testing.T) {
 	const timeout = 100 * time.Millisecond
 	prop := wire.KVPair{Type: message.PropertyObjectDeliveryTimeout, IntVal: uint64(timeout / time.Millisecond)}
@@ -145,6 +122,8 @@ func TestFanout_PublisherTrackDeliveryTimeoutApplies(t *testing.T) {
 	}
 }
 
+// testPublisherTrackDeliveryTimeout requires a stalled subscriber's stream to
+// be cut short by the delivery timeout the publisher's trackProps set.
 func testPublisherTrackDeliveryTimeout(t *testing.T, timeout time.Duration, trackProps []wire.KVPair) {
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
@@ -188,11 +167,8 @@ func testPublisherTrackDeliveryTimeout(t *testing.T, timeout time.Duration, trac
 	}
 }
 
-// TestFanout_NoDeliveryTimeoutLeavesStalledSubscriberAlone is the control for
-// both tests above: with neither side declaring a timeout and no MaxFanoutLag,
-// the same stall must cost the subscriber nothing. Without this, a bug that
-// reset every slow stream unconditionally would still pass the two tests that
-// assert a reset happens.
+// TestFanout_NoDeliveryTimeoutLeavesStalledSubscriberAlone: the control — with
+// no timeout and no MaxFanoutLag, the same stall resets nothing.
 func TestFanout_NoDeliveryTimeoutLeavesStalledSubscriberAlone(t *testing.T) {
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()

@@ -11,26 +11,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestPublish_TrackEntryPrecedesAliasRouting pins the ordering issue #85 turned
-// on, on the PUBLISH path.
-//
-// handlePublish registers the publisher's §11.1 Track Alias, which makes it
-// resolve on inbound data streams, and only creates the track entry later in
-// WriteMessageAfterSetup. A subgroup stream arriving in between reaches
-// runFanout, resolves its alias, finds no entry, and is reset — losing those
-// Objects from the cache and from live fanout alike, permanently, with nothing
-// above DEBUG to say so.
-//
-// §10.11 makes this the expected sequence rather than a race a publisher has to
-// lose: with FORWARD "omitted or equal to 1, the publisher will start
-// transmitting objects immediately, possibly before PUBLISH_OK" — that is,
-// before AddUpstream has run at all.
-//
-// So the Group MUST be written before Publish returns: Publish returns on
-// REQUEST_OK, which the relay writes after AddUpstream, by which time the
-// window has shut. The hook drives the ordering rather than a sleep — it
-// reports the alias routable, waits for the write, then holds the window open
-// while the relay routes (or drops) the stream.
+// TestPublish_TrackEntryPrecedesAliasRouting: a publisher may send Objects
+// before PUBLISH_OK (§10.11), so a subgroup routed by its alias (§11.1) before
+// the relay created the track entry must not be lost. The hook holds that
+// window open.
 func TestPublish_TrackEntryPrecedesAliasRouting(t *testing.T) {
 	video := ns("video")
 	name := []byte("cam-publish-alias-window")
@@ -97,16 +81,8 @@ func TestPublish_TrackEntryPrecedesAliasRouting(t *testing.T) {
 	waitRelayLargest(t, probe, video, name, groupID, 0)
 }
 
-// TestPublish_RejectedAliasLeavesTrackUnknown pins the other half of the entry
-// being created before the request is known to succeed: when the PUBLISH is
-// then rejected, the speculative entry must not survive it.
-//
-// handleFetch reads "an entry exists" as "the track is known", so a lingering
-// empty entry answers a FETCH with INVALID_RANGE ("no objects published", the
-// §10.13 rule) where §10.6 wants DOES_NOT_EXIST — "the track or namespace is
-// not available at the publisher". Those mean different things to a client
-// deciding whether to retry, and nothing would reclaim the entry until an
-// unrelated session teardown swept it.
+// TestPublish_RejectedAliasLeavesTrackUnknown: a rejected PUBLISH leaves no
+// track entry behind, so a FETCH is DOES_NOT_EXIST (§10.6), not INVALID_RANGE.
 func TestPublish_RejectedAliasLeavesTrackUnknown(t *testing.T) {
 	video := ns("video")
 	const alias = uint64(91)

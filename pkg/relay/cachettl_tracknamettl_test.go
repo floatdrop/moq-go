@@ -7,6 +7,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 )
 
+// name is a FullTrackName with an empty namespace.
 func name(n string) track.FullTrackName {
 	return track.FullTrackName{Name: []byte(n)}
 }

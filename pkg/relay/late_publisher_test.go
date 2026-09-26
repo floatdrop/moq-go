@@ -13,11 +13,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// §9.5: "When a relay receives an authorized PUBLISH_NAMESPACE for a namespace
-// that matches one or more existing subscriptions to other upstream sessions,
-// it MUST send a SUBSCRIBE to the publisher that sent the PUBLISH_NAMESPACE
-// for each matching subscription."
+// A PUBLISH_NAMESPACE matching existing subscriptions gets a SUBSCRIBE for each
+// (§9.5).
 
+// acceptedSubscribe is one SUBSCRIBE a test publisher accepted.
 type acceptedSubscribe struct {
 	track string // last namespace field + "/" + name
 	alias uint64
@@ -71,6 +70,8 @@ func publishNamespaceLate(
 	return late, subs
 }
 
+// awaitAcceptedSubscribe requires the next accepted SUBSCRIBE to be for want
+// ("namespace/name") within 2s.
 func awaitAcceptedSubscribe(t *testing.T, subs <-chan acceptedSubscribe, want string) acceptedSubscribe {
 	t.Helper()
 	select {
@@ -85,6 +86,7 @@ func awaitAcceptedSubscribe(t *testing.T, subs <-chan acceptedSubscribe, want st
 	return acceptedSubscribe{}
 }
 
+// requireNoSubscribe fails if a SUBSCRIBE is accepted within 300ms.
 func requireNoSubscribe(t *testing.T, subs <-chan acceptedSubscribe) {
 	t.Helper()
 	select {
@@ -94,10 +96,9 @@ func requireNoSubscribe(t *testing.T, subs <-chan acceptedSubscribe) {
 	}
 }
 
-// TestRelay_LatePublishNamespaceJoinsOnDemandSubscription: the existing
-// upstream is the relay's own on-demand SUBSCRIBE to an earlier namespace
-// publisher. The late publisher is subscribed too, and its Objects reach the
-// downstream subscriber.
+// TestRelay_LatePublishNamespaceJoinsOnDemandSubscription: a late namespace
+// publisher is subscribed alongside the relay's on-demand upstream, and its
+// Objects reach the subscriber.
 func TestRelay_LatePublishNamespaceJoinsOnDemandSubscription(t *testing.T) {
 	t.Parallel()
 	video := ns("video")
@@ -162,6 +163,7 @@ func acceptOneSubscribeRequest(t *testing.T, sess *session.Session) <-chan *sess
 	return got
 }
 
+// awaitRequest returns the next request from reqs, failing after 2s.
 func awaitRequest(t *testing.T, reqs <-chan *session.Request) *session.Request {
 	t.Helper()
 	select {
@@ -173,10 +175,9 @@ func awaitRequest(t *testing.T, reqs <-chan *session.Request) *session.Request {
 	return nil
 }
 
-// TestRelay_LatePublisherReleasedWhenSubscriberLeavesMidSubscribe: the
-// track's last subscriber leaves while the relay waits for the late
-// publisher's SUBSCRIBE_OK. The subscription must then be cancelled, not kept
-// with nothing that would ever release it.
+// TestRelay_LatePublisherReleasedWhenSubscriberLeavesMidSubscribe: if the last
+// subscriber leaves while the late publisher's SUBSCRIBE_OK is pending, that
+// subscription is cancelled.
 func TestRelay_LatePublisherReleasedWhenSubscriberLeavesMidSubscribe(t *testing.T) {
 	t.Parallel()
 	video := ns("video")
@@ -257,10 +258,8 @@ func TestRelay_WithdrawnPublishNamespaceGetsNoMoreSubscribes(t *testing.T) {
 	requireNoSubscribe(t, rest)
 }
 
-// TestRelay_PublishNamespaceDuringPendingSubscribe: the late publisher
-// registers while the track's first upstream SUBSCRIBE is still pending, so
-// the track has neither an established upstream nor a downstream when its
-// PUBLISH_NAMESPACE is handled. It must still be subscribed once the
+// TestRelay_PublishNamespaceDuringPendingSubscribe: a publisher registering
+// while the track's first upstream SUBSCRIBE is pending is subscribed once the
 // downstream is registered.
 func TestRelay_PublishNamespaceDuringPendingSubscribe(t *testing.T) {
 	video := ns("video")
@@ -299,10 +298,8 @@ func TestRelay_PublishNamespaceDuringPendingSubscribe(t *testing.T) {
 	awaitAcceptedSubscribe(t, lateSubs, "video/"+name)
 }
 
-// TestRelay_LatePublishNamespaceSkipsItsOwnDownstream: a session receiving a
-// track from the relay is not asked to publish that track back when it sends
-// PUBLISH_NAMESPACE, matching the on-demand path, which never subscribes on
-// the requesting session.
+// TestRelay_LatePublishNamespaceSkipsItsOwnDownstream: a session receiving the
+// track is not asked to publish it back.
 func TestRelay_LatePublishNamespaceSkipsItsOwnDownstream(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)
@@ -354,6 +351,8 @@ func TestRelay_OverlappingPublishNamespacesSubscribeOnce(t *testing.T) {
 	requireNoSubscribeRequest(t, reqs)
 }
 
+// requireNoSubscribeRequest fails if a request arrives on reqs within the
+// quiet period.
 func requireNoSubscribeRequest(t *testing.T, reqs <-chan *session.Request) {
 	t.Helper()
 	select {
@@ -363,10 +362,9 @@ func requireNoSubscribeRequest(t *testing.T, reqs <-chan *session.Request) {
 	}
 }
 
-// TestRelay_LatePublisherResumedWhenForwardChangesMidSubscribe: the track's
-// only subscriber switches to Forward=1 while the relay waits for the late
-// publisher's SUBSCRIBE_OK, sent with Forward=0. §9.2 propagation cannot
-// reach the late upstream yet, so the relay must resume it once registered.
+// TestRelay_LatePublisherResumedWhenForwardChangesMidSubscribe: a subscriber
+// switching to Forward=1 while the late publisher's Forward=0 SUBSCRIBE is
+// pending gets that upstream resumed once registered (§9.2).
 func TestRelay_LatePublisherResumedWhenForwardChangesMidSubscribe(t *testing.T) {
 	t.Parallel()
 	video := ns("video")
@@ -417,9 +415,8 @@ func TestRelay_LatePublisherResumedWhenForwardChangesMidSubscribe(t *testing.T) 
 }
 
 // TestRelay_SkippedLatePublisherSubscribedWhenFirstSubscriberArrives: a
-// publisher whose PUBLISH_NAMESPACE was skipped for a track with no
-// subscriber is subscribed once one arrives. The skip defers the §9.5
-// SUBSCRIBE; it does not drop it.
+// publisher skipped for a track with no subscriber is subscribed once one
+// arrives.
 func TestRelay_SkippedLatePublisherSubscribedWhenFirstSubscriberArrives(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)
@@ -479,10 +476,8 @@ func TestRelay_LatePublisherResubscribedForNextSubscriber(t *testing.T) {
 	awaitAcceptedSubscribe(t, lateSubs, "video/cam1")
 }
 
-// TestRelay_WithdrawnSkippedPublisherNotAsked: a late publisher skipped for
-// a track with no subscriber withdraws its PUBLISH_NAMESPACE; the track's
-// first subscriber must not get it SUBSCRIBEd (§9.5: withdrawal stops new
-// subscriptions).
+// TestRelay_WithdrawnSkippedPublisherNotAsked: a skipped publisher that
+// withdrew its PUBLISH_NAMESPACE is not subscribed later (§9.5).
 func TestRelay_WithdrawnSkippedPublisherNotAsked(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)

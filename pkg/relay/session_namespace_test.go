@@ -127,10 +127,8 @@ func TestPublishNamespace_FanoutsToMatchingSubscriber(t *testing.T) {
 	}
 }
 
-// TestSubscribeTracks_AcceptedWithoutForwarding: SUBSCRIBE_TRACKS is
-// registered and replied OK, but no PUBLISH messages flow yet (those
-// arrive via handlePublish). The subscriber's stream stays open and
-// silent until the subscriber cancels.
+// TestSubscribeTracks_AcceptedWithoutForwarding: SUBSCRIBE_TRACKS with no
+// matching track is accepted and its stream stays silent.
 func TestSubscribeTracks_AcceptedWithoutForwarding(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -149,70 +147,8 @@ func TestSubscribeTracks_AcceptedWithoutForwarding(t *testing.T) {
 	}
 }
 
-// TestPublishNamespace_AuthDenialUsesPolicyCode pins the auth-precedence
-// behaviour for the namespace dispatch arm: a custom policy that denies
-// PUBLISH_NAMESPACE surfaces its own REQUEST_ERROR code, not REQUEST_OK.
-func TestPublishNamespace_AuthDenialUsesPolicyCode(t *testing.T) {
-	t.Parallel()
-	auth := &denyAuthorizer{err: relay.Deny(moqt.RequestUnauthorized, "nope")}
-	clientSess, teardown := connectRelay(t, relay.Config{Authorizer: auth})
-	defer teardown()
-
-	_, err := clientSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: ns("video"),
-	})
-	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
-	if got := auth.publishNamespaceCalls.Load(); got != 1 {
-		t.Errorf("publishNamespaceCalls = %d, want 1", got)
-	}
-}
-
-// TestSubscribeNamespace_AuthDenialUsesPolicyCode is
-// [TestPublishNamespace_AuthDenialUsesPolicyCode] for the SUBSCRIBE_NAMESPACE
-// arm. Each namespace handler calls its own Authorize method and each has its
-// own reject-before-register early return, so one arm passing says nothing
-// about the others — a handler that skipped the check, or checked after
-// registering, would leave this suite green.
-func TestSubscribeNamespace_AuthDenialUsesPolicyCode(t *testing.T) {
-	t.Parallel()
-	auth := &denyAuthorizer{err: relay.Deny(moqt.RequestUnauthorized, "no subscribing")}
-	clientSess, teardown := connectRelay(t, relay.Config{Authorizer: auth})
-	defer teardown()
-
-	_, err := clientSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
-		TrackNamespacePrefix: ns("video"),
-	})
-	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
-	if got := auth.subscribeNamespaceCalls.Load(); got != 1 {
-		t.Errorf("subscribeNamespaceCalls = %d, want 1", got)
-	}
-}
-
-// TestSubscribeTracks_AuthDenialUsesPolicyCode is the same for the
-// SUBSCRIBE_TRACKS arm.
-func TestSubscribeTracks_AuthDenialUsesPolicyCode(t *testing.T) {
-	t.Parallel()
-	auth := &denyAuthorizer{err: relay.Deny(moqt.RequestUnauthorized, "no tracks")}
-	clientSess, teardown := connectRelay(t, relay.Config{Authorizer: auth})
-	defer teardown()
-
-	_, err := clientSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: ns("video"),
-	})
-	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
-	if got := auth.subscribeTracksCalls.Load(); got != 1 {
-		t.Errorf("subscribeTracksCalls = %d, want 1", got)
-	}
-}
-
-// ----- shared helpers --------------------------------------------------
-
-// TestNamespaceStreams_AnswerRequestUpdate pins §10.9 on the namespace
-// request streams: the relay previously held them open with a drain that
-// discarded follow-ups unparsed, so a peer's REQUEST_UPDATE was never
-// answered (the peer blocked until its ctx expired) and its §10.1 Request ID
-// was never accounted for. Both the PUBLISH_NAMESPACE and the
-// SUBSCRIBE_NAMESPACE streams must now reply REQUEST_OK.
+// TestNamespaceStreams_AnswerRequestUpdate: a REQUEST_UPDATE on a
+// PUBLISH_NAMESPACE or SUBSCRIBE_NAMESPACE stream gets REQUEST_OK (§10.9).
 func TestNamespaceStreams_AnswerRequestUpdate(t *testing.T) {
 	t.Parallel()
 

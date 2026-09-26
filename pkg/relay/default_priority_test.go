@@ -64,10 +64,13 @@ func tryFetchedPriority(
 	return obj.PublisherPriority, true
 }
 
+// defaultPriorityProp sets DEFAULT_PUBLISHER_PRIORITY to v.
 func defaultPriorityProp(v uint64) []wire.KVPair {
 	return trackProp(message.PropertyDefaultPublisherPriority, v)
 }
 
+// TestDefaultPriority_Subgroup: a cached DEFAULT_PRIORITY subgroup Object is
+// served with the inherited priority; an inline one keeps its own.
 func TestDefaultPriority_Subgroup(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -103,6 +106,8 @@ func TestDefaultPriority_Subgroup(t *testing.T) {
 	}
 }
 
+// TestDefaultPriority_Datagram: a cached DEFAULT_PRIORITY datagram is served
+// with the track's DEFAULT_PUBLISHER_PRIORITY (§11.3.1).
 func TestDefaultPriority_Datagram(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, defaultPriorityProp(200))

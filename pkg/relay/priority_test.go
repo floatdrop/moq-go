@@ -12,10 +12,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// prioritySpyConn wraps an underlying [session.Conn] and intercepts every
-// outbound unidirectional stream it opens, returning a [session.SendStream]
-// that ALSO implements [session.PrioritizedSendStream]. Every SetSendPriority
-// call is appended to a shared slice the test can read after teardown.
+// prioritySpyConn wraps a [session.Conn] so its outbound uni streams implement
+// [session.PrioritizedSendStream] and record every SetSendPriority call.
 type prioritySpyConn struct {
 	session.Conn
 
@@ -45,6 +43,7 @@ func (c *prioritySpyConn) snapshot() []session.StreamPriority {
 	return out
 }
 
+// prioritySpyStream records SetSendPriority on its parent prioritySpyConn.
 type prioritySpyStream struct {
 	session.SendStream
 
@@ -55,12 +54,8 @@ func (s *prioritySpyStream) SetSendPriority(p session.StreamPriority) {
 	s.parent.record(p)
 }
 
-// spyPipeListener wraps a pipeListener and intercepts every server-side
-// conn handed to the relay via Accept. The wrapped conn returns priority
-// spy streams so the relay's outbound OpenSubgroup calls land in the
-// recorder. (The subscriber's client-side conn doesn't need wrapping —
-// the relay opens streams from *its* end of the pair, which is what the
-// listener yields.)
+// spyPipeListener is a pipeListener whose accepted (relay-side) conns are
+// wrapped in a prioritySpyConn.
 type spyPipeListener struct {
 	inner *pipeListener
 	mu    sync.Mutex
@@ -70,6 +65,7 @@ type spyPipeListener struct {
 	spies []*prioritySpyConn
 }
 
+// newSpyPipeListener wraps a fresh pipeListener.
 func newSpyPipeListener() *spyPipeListener { return &spyPipeListener{inner: newPipeListener()} }
 
 func (l *spyPipeListener) Accept(ctx context.Context) (session.Conn, error) {
@@ -100,12 +96,9 @@ func (l *spyPipeListener) LastSpy() *prioritySpyConn {
 	return l.spies[len(l.spies)-1]
 }
 
-// TestFanout_AppliesEffectivePriorityOnStreamOpen pins the end-to-end
-// wiring: when the relay opens a downstream subgroup stream for a subscriber
-// whose SUBSCRIBE carried SUBSCRIBER_PRIORITY=42, the underlying
-// SendStream's SetSendPriority MUST be invoked with that byte before any
-// objects are written. This proves both that applyPriority runs at the
-// right moment AND that the OutgoingSubgroupStream forwards the call.
+// TestFanout_AppliesEffectivePriorityOnStreamOpen: the relay sets a downstream
+// subgroup stream's send priority to the subscriber's SUBSCRIBER_PRIORITY
+// before writing Objects.
 func TestFanout_AppliesEffectivePriorityOnStreamOpen(t *testing.T) {
 	t.Parallel()
 

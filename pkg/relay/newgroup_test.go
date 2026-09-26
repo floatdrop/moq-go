@@ -9,6 +9,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
+// newGroupReqValue returns the NEW_GROUP_REQUEST value in ps, if present.
 func newGroupReqValue(ps message.Parameters) (uint64, bool) {
 	if p, ok := ps.Find(message.ParamNewGroupRequest); ok {
 		return p.Varint, true
@@ -16,11 +17,9 @@ func newGroupReqValue(ps message.Parameters) (uint64, bool) {
 	return 0, false
 }
 
-// TestNewGroupRequest_ForwardedUpstreamOnUpdate is the §10.2.19 end-to-end
-// test: a downstream subscriber sends a REQUEST_UPDATE carrying
-// NEW_GROUP_REQUEST on a track that advertises DYNAMIC_GROUPS=1, and the relay
-// forwards a REQUEST_UPDATE with the same NEW_GROUP_REQUEST to the original
-// publisher.
+// TestNewGroupRequest_ForwardedUpstreamOnUpdate: a NEW_GROUP_REQUEST in a
+// downstream REQUEST_UPDATE on a DYNAMIC_GROUPS track reaches the publisher
+// (§10.2.19).
 func TestNewGroupRequest_ForwardedUpstreamOnUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -69,14 +68,9 @@ func TestNewGroupRequest_ForwardedUpstreamOnUpdate(t *testing.T) {
 	}
 }
 
-// TestNewGroupRequest_BackToBackUpdatesSurvive is the regression test for the
-// upstream REQUEST_UPDATE response routing: the relay's upstream update rides
-// the PUBLISH request stream, whose reader must route the publisher's
-// REQUEST_OK back to the in-flight update instead of discarding it (the old
-// DrainAndWait swallowed it, wedging the subscriber's update-dispatch loop
-// forever after the first propagation). Two NEW_GROUP_REQUEST propagations
-// back to back must both reach the publisher and both downstream updates must
-// be answered.
+// TestNewGroupRequest_BackToBackUpdatesSurvive: two NEW_GROUP_REQUEST updates in
+// a row both reach the publisher and both downstream updates are answered; the
+// publisher's REQUEST_OK is routed back to the relay's upstream update.
 func TestNewGroupRequest_BackToBackUpdatesSurvive(t *testing.T) {
 	t.Parallel()
 
