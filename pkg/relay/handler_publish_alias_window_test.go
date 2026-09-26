@@ -81,9 +81,10 @@ func TestPublish_TrackEntryPrecedesAliasRouting(t *testing.T) {
 	waitRelayLargest(t, probe, video, name, groupID, 0)
 }
 
-// TestPublish_RejectedAliasLeavesTrackUnknown: a rejected PUBLISH leaves no
-// track entry behind, so a FETCH is DOES_NOT_EXIST (§10.6), not INVALID_RANGE.
-func TestPublish_RejectedAliasLeavesTrackUnknown(t *testing.T) {
+// TestPublish_DuplicateAliasLeavesTrackUnknown: a PUBLISH whose duplicate
+// alias closes the session leaves no track entry behind, so a FETCH is
+// DOES_NOT_EXIST (§10.6), not INVALID_RANGE.
+func TestPublish_DuplicateAliasLeavesTrackUnknown(t *testing.T) {
 	video := ns("video")
 	const alias = uint64(91)
 	first := []byte("cam-alias-taken")
@@ -100,12 +101,12 @@ func TestPublish_RejectedAliasLeavesTrackUnknown(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = pub.Close() })
 
-	// §11.1: the alias is taken, so this PUBLISH is rejected — after the
-	// relay has already created the entry for `second`.
+	// §11.1: the alias is taken, so this PUBLISH closes the session — after
+	// the relay has already created the entry for `second`.
 	if _, err := pubSess.Publish(t.Context(), &message.Publish{
 		Namespace: video, Name: second, TrackAlias: alias,
 	}); err == nil {
-		t.Fatal("duplicate Track Alias PUBLISH was accepted, want rejection")
+		t.Fatal("duplicate Track Alias PUBLISH was accepted, want the session closed")
 	}
 
 	fetcher := dialAnotherClient(t, pubSess)

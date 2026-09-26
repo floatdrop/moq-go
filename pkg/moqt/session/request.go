@@ -824,10 +824,9 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 // [WithKnownMandatoryTrackProperties]) are rejected with REQUEST_ERROR —
 // UNSUPPORTED_EXTENSION for an unknown Mandatory Track Property (§2.5.1),
 // MALFORMED_TRACK for ones that do not parse — and the error returned. A
-// session-fatal value (§12.5, §12.6) closed the session in AcceptRequest. On an
-// alias collision *ErrDuplicateTrackAlias is returned without replying; the
-// caller MUST close the session with [moqt.SessionDuplicateTrackAlias]
-// (§11.1).
+// session-fatal value (§12.5, §12.6) closed the session in AcceptRequest. An
+// alias collision closes the session with DUPLICATE_TRACK_ALIAS and returns
+// *ErrDuplicateTrackAlias (§11.1).
 func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 	pub, isPub := r.First.(*message.Publish)
 	if !isPub {

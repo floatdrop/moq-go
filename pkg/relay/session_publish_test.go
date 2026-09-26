@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
@@ -35,20 +34,23 @@ func TestPublish_AcceptedAndRegistered(t *testing.T) {
 	}
 }
 
-// TestPublish_DuplicateAliasRejected: reusing a Track Alias on the session for
-// another track refuses the PUBLISH (§11.1).
-func TestPublish_DuplicateAliasRejected(t *testing.T) {
+// TestPublish_DuplicateAliasClosesSession: reusing the Track Alias of a
+// published track on the session for another track closes the session with
+// DUPLICATE_TRACK_ALIAS (§11.1).
+func TestPublish_DuplicateAliasClosesSession(t *testing.T) {
 	t.Parallel()
 	clientSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 
 	publishVideoTrack(t, clientSess, "cam1", 7)
-	_, err := clientSess.Publish(t.Context(), &message.Publish{
-		Namespace:  ns("video"),
-		Name:       []byte("cam2"),
-		TrackAlias: 7,
-	})
-	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
+	go func() {
+		_, _ = clientSess.Publish(t.Context(), &message.Publish{
+			Namespace:  ns("video"),
+			Name:       []byte("cam2"),
+			TrackAlias: 7,
+		})
+	}()
+	requireSessionClosed(t, clientSess, "a PUBLISH reusing another track's alias")
 }
 
 // TestPublish_SavesLargestObjectFromPublish: LARGEST_OBJECT on an inbound
