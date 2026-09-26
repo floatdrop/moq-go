@@ -107,7 +107,7 @@ By package, bottom-up along the dependency stack:
 
 | §       | Feature                          | Status | Notes |
 |---------|----------------------------------|--------|-------|
-| 5.1     | Subscriptions                    | DONE   | Subscribe/Publish/OK/Error state machine in `pubsub.go`. |
+| 5.1     | Subscriptions                    | DONE   | Subscribe/Publish/OK/Error state machine in `subscribe.go` and `publish.go`. A second response to this side's SUBSCRIBE or PUBLISH closes the session with PROTOCOL_VIOLATION: on a `Subscription`'s or `Session.Publish` `Publication`'s broker, a SUBSCRIBE_OK, or a REQUEST_OK / REQUEST_ERROR before any Update (after one it may answer an Update that gave up); in the relay, a REQUEST_OK / REQUEST_ERROR on a forwarded PUBLISH. |
 | 5.1.1   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. The relay resets a cancelled subscription's open subgroup and fill streams. |
 | 5.1.2   | Location filters                 | DONE   | Every start/end form (unfiltered, Next Object, relative and absolute start, absolute range) + `Matches`. |
 | 5.1.3   | Fill semantics                   | PARTIAL | Fill fetch streams from FILL_PARAMETERS on SUBSCRIBE / REQUEST_UPDATE (`handler_fill.go`), and on SUBSCRIBE_TRACKS, one per forwarded PUBLISH's subscription, keyed to the PUBLISH's Request ID (§10.1). A fill inherits the subscription's Range Filters; the ones inside FILL_PARAMETERS override per type. A cancelled subscription's open fills are reset (§5.1.3.1). Not done: scheduling fills against their subscription (§7.2, see Limitations). |
@@ -518,11 +518,11 @@ already listed as Limitations above are not repeated here.
 
 Session layer:
 
-- The relay's `readRequestStream` does not check a REQUEST_ERROR arriving on a
-  request stream after the response (e.g. on a forwarded PUBLISH after
-  PUBLISH_OK), so a Connect URI in one does not close the session as
-  `RequestBroker.Serve` does (§10.6.1). The draft does not define such a
-  REQUEST_ERROR.
+- On a request stream the relay answered, a REQUEST_OK or REQUEST_ERROR from
+  the requester is ignored rather than closing the session, so a Connect URI in
+  one is not checked (§10.6.1). The draft defines no such message; only on a
+  forwarded PUBLISH, where it is a second response, does the relay close the
+  session (§5.1).
 - A GOAWAY on a request stream before its initial response (other than to
   SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS, where §10.19/§10.20 make it a
   PROTOCOL_VIOLATION), or on a SUBSCRIBE_TRACKS stream read with
@@ -537,7 +537,6 @@ Session layer:
 - `ReadPublishSkipped` does not close the session on a REQUEST_UPDATE or
   PUBLISH_STATE_NOTIFY from the publisher (§10.9, §10.10), and nothing enforces
   NAMESPACE_DONE-before-NAMESPACE on a namespace subscription (§10.19).
-- A second SUBSCRIBE_OK is handed to the application (§5.1 SHOULD close).
 - A rejected request sends STOP_SENDING with INTERNAL_ERROR (§3.3.4 SHOULD use a
   relevant code).
 - Mandatory Track Property enforcement is off unless configured (§2.5.1).

@@ -250,7 +250,9 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 		func(stream Stream, _ *message.RequestOK) (*Publication, error) {
 			// The PUBLISH sets the initial Forward State (§5.1); PUBLISH_OK
 			// carries no subscription parameters.
-			return newPublication(s, stream, m.RequestID, m.TrackAlias, m.Parameters), nil
+			p := newPublication(s, stream, m.RequestID, m.TrackAlias, m.Parameters)
+			p.answered = message.TypePublish
+			return p, nil
 		})
 }
 

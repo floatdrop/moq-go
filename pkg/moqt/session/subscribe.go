@@ -67,6 +67,7 @@ func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscri
 				peerNotify:   true,
 				inboundAlias: ok.TrackAlias,
 				holdsAlias:   true,
+				answered:     message.TypeSubscribe,
 				OK:           ok,
 			}, nil
 		})

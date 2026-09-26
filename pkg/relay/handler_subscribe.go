@@ -176,7 +176,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		h.propagateForwardUpstream(ctx, fullName)
 	}
 
-	h.readSubscribeUpdates(ctx, req.Stream, sub, fullName)
+	h.readSubscribeUpdates(ctx, req.Stream, sub, fullName, false)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE stream ended",
 		slog.String("name", string(msg.Name)))
 }
@@ -185,17 +185,30 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 // SUBSCRIBE's stream to [sessionHandler.handleSubscribeUpdate] until the
 // subscriber cancels, the stream turns undecodable (see [readRequestStream])
 // or ctx ends. A subscriber FIN is not a cancellation (§3.3.2): the
-// subscription lives on in [awaitRequestEnd].
+// subscription lives on in [awaitRequestEnd]. forwarded marks a PUBLISH the
+// relay forwarded, which the subscriber answered.
 func (h *sessionHandler) readSubscribeUpdates(
 	ctx context.Context,
 	stream session.Stream,
 	sub *registry.DownstreamSub,
 	fullName track.FullTrackName,
+	forwarded bool,
 ) {
 	updates := h.sess.NewRequestUpdateLimiter()
 	fin := readRequestStream(ctx, h.sess, stream, func(m message.Message) bool {
 		if h.isPeerStateNotify(m) {
 			return false
+		}
+		switch m.(type) {
+		case *message.RequestOK, *message.RequestError:
+			// On a forwarded PUBLISH the subscriber answered already, and
+			// the relay sends no REQUEST_UPDATE here: a second PUBLISH_OK
+			// or REQUEST_ERROR (§5.1).
+			if forwarded {
+				_ = h.sess.Close(moqt.SessionProtocolViolation,
+					fmt.Sprintf("%s after the PUBLISH_OK", m.Type()))
+				return false
+			}
 		}
 		if upd, ok := m.(*message.RequestUpdate); ok {
 			// §10.2.1: parameters outside the scope of a subscriber's

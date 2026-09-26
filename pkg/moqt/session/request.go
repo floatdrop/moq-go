@@ -532,6 +532,11 @@ type requestHandle struct {
 	released     atomic.Bool
 	// peerDone records that the publisher's FIN was read.
 	peerDone atomic.Bool
+
+	// answered is TypeSubscribe or TypePublish for a request this side sent,
+	// whose response was read: its broker closes the session on another
+	// (§5.1). Zero otherwise.
+	answered message.Type
 }
 
 // Read reads the request stream. On the receiving side of a subscription

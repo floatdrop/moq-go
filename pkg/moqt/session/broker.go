@@ -30,10 +30,14 @@ import (
 //     [RequestBroker.HandleUpdates], or declined with NOT_SUPPORTED when there
 //     is none, since acknowledging an unapplied update would misstate the
 //     request's state.
+//   - On the broker of a [Subscription], or of a [Publication] from
+//     [Session.Publish], a REQUEST_OK / REQUEST_ERROR before any Update, or a
+//     SUBSCRIBE_OK on a Subscription, is a second response to the request and
+//     closes the session (§5.1).
 //   - A second GOAWAY on the stream, or one with a New Session URI received
 //     by a server, closes the session (§10.4; see [RequestGoaways]).
-//   - Everything else (PUBLISH_DONE, unsolicited responses, …) is handed to
-//     Serve's callback.
+//   - Everything else (PUBLISH_DONE, other unsolicited responses, …) is
+//     handed to Serve's callback.
 //
 // Obtain one from a typed request handle's Broker method (e.g.
 // [Publication.Broker]) or [Session.NewRequestBroker]; from then on every
@@ -56,6 +60,9 @@ type RequestBroker struct {
 	// e.g. a PUBLISH_DONE after the peer tore its side down.
 	updatesClosed bool
 	streamClosed  bool
+	// updated records that Update sent a REQUEST_UPDATE, the only thing a
+	// REQUEST_OK or REQUEST_ERROR read here can answer.
+	updated bool
 
 	// onUpdate decides each peer REQUEST_UPDATE; nil declines it.
 	// onUpdateFailed runs after a declined update (§10.9.1). Both are set
@@ -152,6 +159,15 @@ func (b *RequestBroker) answerUpdate(upd *message.RequestUpdate) (bool, error) {
 	return false, nil
 }
 
+// answered is the request type (SUBSCRIBE or PUBLISH) of a broker on this
+// side's request, whose response the peer has sent; zero otherwise.
+func (b *RequestBroker) answered() message.Type {
+	if b.handle == nil {
+		return 0
+	}
+	return b.handle.answered
+}
+
 // updateResult carries one §10.9 response to a waiting Update call.
 type updateResult struct {
 	ok  *message.RequestOK
@@ -226,6 +242,7 @@ func (b *RequestBroker) Update(ctx context.Context, params message.Parameters) (
 	})
 	if err == nil {
 		b.waiters = append(b.waiters, ch)
+		b.updated = true
 	}
 	b.mu.Unlock()
 	if err != nil {
@@ -391,9 +408,10 @@ func (b *RequestBroker) receiveUpdate(m *message.RequestUpdate, updates *Request
 //
 // Responses route to Update waiters; a token cache fault closes the session
 // (§10.2.2); peer REQUEST_UPDATEs are answered as described on
-// [RequestBroker]. Every other message, including each REQUEST_UPDATE and any
-// unsolicited response, is passed to onMsg (nil means "discard"); return false
-// from onMsg to stop serving.
+// [RequestBroker], and a second response to this side's SUBSCRIBE or PUBLISH
+// closes the session (§5.1). Every other message, including each
+// REQUEST_UPDATE and any other unsolicited response, is passed to onMsg (nil
+// means "discard"); return false from onMsg to stop serving.
 //
 // A read error resets the read side with INTERNAL_ERROR; a malformed follow-up
 // also closes the session with PROTOCOL_VIOLATION (§10). Serve returns nil on
@@ -455,10 +473,28 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 		}
 
 		switch m := msg.(type) {
+		case *message.SubscribeOK:
+			// §5.1: the response to this side's SUBSCRIBE was read already,
+			// and "The peer SHOULD close the session with a protocol error if
+			// it receives more than one."
+			if b.answered() == message.TypeSubscribe {
+				return b.sess.closeProtocolViolation(errors.New("moqt/session: SUBSCRIBE_OK after the response"))
+			}
 		case *message.RequestOK, *message.RequestError:
 			// The request's own response was read before the broker
 			// attached, so every REQUEST_OK here is a REQUEST_UPDATE_OK
-			// (§10.5), even one whose Update gave up.
+			// (§10.5), even one whose Update gave up. Before any Update, on
+			// this side's SUBSCRIBE or PUBLISH, it is a second response to
+			// the request, a second PUBLISH_OK among them (§5.1).
+			if b.answered() != 0 {
+				b.mu.Lock()
+				updated := b.updated
+				b.mu.Unlock()
+				if !updated {
+					return b.sess.closeProtocolViolation(
+						fmt.Errorf("moqt/session: %s after the response, before any REQUEST_UPDATE", m.Type()))
+				}
+			}
 			if err := b.sess.checkRequestOKTrackProperties(nil, m); err != nil {
 				return err
 			}
