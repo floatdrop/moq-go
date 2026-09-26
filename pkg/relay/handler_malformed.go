@@ -12,7 +12,7 @@ import (
 // endMalformedTrack handles a malformed track (§2.4.2) detected in an Object
 // src sent on entry's track: every downstream subscription ends with
 // PUBLISH_DONE MALFORMED_TRACK, and only the upstreams on src are cancelled,
-// so a redundant publisher (§9.5) keeps serving. Callers never cache the
+// so a redundant publisher (§9.3) keeps serving. Callers never cache the
 // Object. Open subgroup streams are reset now, since PUBLISH_DONE waits for
 // them (§10.12). Downstream fetch streams are not reset.
 //

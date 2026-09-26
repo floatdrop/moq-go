@@ -69,14 +69,14 @@ func TestSubscription_TerminateLatch(t *testing.T) {
 }
 
 // TestSubscription_ForwardState covers the §9.2 Forward flag round-trip.
-// A fresh upstream subscription starts at Forward State 1: per §10.7 a
+// A fresh upstream subscription starts at Forward State 1: per §10.2.18 a
 // SUBSCRIBE (or accepted PUBLISH) without the FORWARD parameter implies 1,
 // and the relay's upstream requests never carry FORWARD.
 func TestSubscription_ForwardState(t *testing.T) {
 	t.Parallel()
 	sub := registry.NewUpstreamSub(1, nil, nil, 0, 0, false)
 	if got := sub.ForwardState(); got != 1 {
-		t.Fatalf("initial ForwardState = %d, want 1 (§10.7 default)", got)
+		t.Fatalf("initial ForwardState = %d, want 1 (§10.2.18 default)", got)
 	}
 	sub.SetForwardState(0)
 	if got := sub.ForwardState(); got != 0 {

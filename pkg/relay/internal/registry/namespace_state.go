@@ -130,6 +130,8 @@ func (r *NamespaceRegistry) UpdatePrefix(e *SubscriberEntry, prefix wire.TrackNa
 		return
 	}
 	counts, names := r.namespaceSources(prefix)
+	// e.announced holds exactly the namespaces with sources under old, so
+	// oldNames names each one to be done.
 	_, oldNames := r.namespaceSources(old)
 	for k := range e.announced {
 		if _, still := counts[k]; !still {
@@ -225,9 +227,10 @@ func (e *SubscriberEntry) blockedLocked(now time.Time) bool {
 
 // RunWriter sends e's queued messages in order until e is unregistered, the
 // request finishes, a write fails, or the queue bound resets the stream. Its
-// owner runs it once, for the subscription's lifetime. After a failed write it
-// also stops reading the stream, so a peer's STOP_SENDING-only cancel (§3.3.3)
-// ends the subscription.
+// owner runs it once, for the subscription's lifetime. It takes one message
+// at a time, so what it has not sent stays counted by the queue bound (see
+// maxQueuedMessages). After a failed write it also stops reading the stream,
+// so a peer's STOP_SENDING-only cancel (§3.3.3) ends the subscription.
 func (e *SubscriberEntry) RunWriter() {
 	defer close(e.writerDone)
 	for {
