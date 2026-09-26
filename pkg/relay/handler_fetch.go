@@ -699,8 +699,10 @@ func mergeFetchObjects(order message.GroupOrder, lower, upper []*cache.CachedObj
 	if !seamHasObject {
 		splice = 0
 	}
-	// cut is where upper's trailing seam-group run starts (the cache never
-	// holds unknown-range markers, so a plain group comparison suffices).
+	// cut is where upper's trailing seam-group run starts. A plain group
+	// comparison suffices: the only markers in upper are the ones GetRange
+	// makes for expired Objects (§12.3), each at its own Location, so they
+	// move with the run like the Objects around them.
 	cut := len(upper)
 	for cut > 0 && upper[cut-1].GroupID == seamG {
 		cut--

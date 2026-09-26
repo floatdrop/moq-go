@@ -1,6 +1,8 @@
 package registry
 
 import (
+	"time"
+
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
@@ -179,23 +181,29 @@ func (e *SubscriberEntry) enqueue(m message.Message) { e.push(m, false) }
 // waiting to be sent. §10.19: "If the publisher is unable to send NAMESPACE or
 // NAMESPACE_DONE messages in a timely manner because the SUBSCRIBE_NAMESPACE
 // response stream is blocked by flow control, the publisher MAY reset the
-// SUBSCRIBE_NAMESPACE response stream." A queue this long means the subscriber
-// stopped reading; the same bound holds a SUBSCRIBE_TRACKS stream's
-// PUBLISH_SKIPPEDs.
-const maxQueuedMessages = 1024
+// SUBSCRIBE_NAMESPACE response stream." The relay treats a stream as blocked
+// when its writer has been stuck in one write for maxBlockedWrite while at
+// least maxQueuedMessages wait behind it; a burst (seeding a subscription, a
+// prefix update, a Discovery resync) queues many messages at once but keeps
+// the writer moving, so it does not count. The same rule holds a
+// SUBSCRIBE_TRACKS stream's PUBLISH_SKIPPEDs.
+const (
+	maxQueuedMessages = 1024
+	maxBlockedWrite   = time.Second
+)
 
 // push appends m, then the finish marker (a nil message) when last. Nothing
-// is queued once the request is finishing or its stream failed. A push that
-// would exceed maxQueuedMessages resets the stream with EXCESSIVE_LOAD instead
-// — both halves, which also unblocks a writer stuck in a flow-controlled
-// write, and ends the request's reader so the owner unregisters e.
+// is queued once the request is finishing or its stream failed. A push to a
+// blocked stream (see maxQueuedMessages) resets it with EXCESSIVE_LOAD instead
+// — both halves, which also unblocks the stuck write and ends the request's
+// reader, so the owner unregisters e.
 func (e *SubscriberEntry) push(m message.Message, last bool) {
 	e.outMu.Lock()
 	if e.stopped {
 		e.outMu.Unlock()
 		return
 	}
-	if len(e.outbox) >= maxQueuedMessages {
+	if len(e.outbox) >= maxQueuedMessages && e.writeBlocked() {
 		e.stopped = true
 		e.outbox = nil
 		e.outMu.Unlock()
@@ -237,7 +245,10 @@ func (e *SubscriberEntry) RunWriter() {
 				_ = e.Stream.Close()
 				return
 			}
-			if e.write(m) != nil {
+			e.writeSince.Store(time.Now().UnixNano())
+			err := e.write(m)
+			e.writeSince.Store(0)
+			if err != nil {
 				e.outMu.Lock()
 				e.stopped = true
 				e.outbox = nil
@@ -247,6 +258,13 @@ func (e *SubscriberEntry) RunWriter() {
 			}
 		}
 	}
+}
+
+// writeBlocked reports whether RunWriter has been stuck in one write for
+// maxBlockedWrite.
+func (e *SubscriberEntry) writeBlocked() bool {
+	since := e.writeSince.Load()
+	return since != 0 && time.Since(time.Unix(0, since)) > maxBlockedWrite
 }
 
 // WriterDone is closed once RunWriter has returned: after the FIN that

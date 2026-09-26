@@ -122,6 +122,9 @@ type SubscriberEntry struct {
 	outbox   []message.Message
 	stopped  bool
 	outReady chan struct{}
+	// writeSince is when RunWriter's current write began (UnixNano), 0 while
+	// it is not writing; see [SubscriberEntry.push].
+	writeSince atomic.Int64
 	// writerDone is closed when RunWriter returns; see
 	// [SubscriberEntry.WriterDone].
 	writerDone chan struct{}

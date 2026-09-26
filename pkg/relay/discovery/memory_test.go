@@ -3,6 +3,7 @@ package discovery_test
 import (
 	"context"
 	"errors"
+	"runtime"
 	"slices"
 	"sort"
 	"strconv"
@@ -685,5 +686,32 @@ func TestMemoryStore_OverflowClosesWatch(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatalf("watch still open after %d events; an overflowing watcher must be closed", n)
 		}
+	}
+}
+
+// TestMemoryStore_OverflowReleasesWatch: a watch ended on overflow leaves
+// nothing behind, even while its ctx lives on — a consumer that keeps falling
+// behind and re-watching with the same ctx must not accumulate goroutines.
+func TestMemoryStore_OverflowReleasesWatch(t *testing.T) {
+	s := discovery.NewMemoryStore(discovery.WithWatchBufferSize(1))
+	defer s.Close()
+	ctx := t.Context()
+	before := runtime.NumGoroutine()
+	for i := range 50 {
+		ch, err := s.WatchNamespaces(ctx)
+		if err != nil {
+			t.Fatalf("WatchNamespaces: %v", err)
+		}
+		for j := range 3 {
+			_ = s.PublishNamespace(ctx, discovery.NamespaceInfo{
+				Prefix: wire.TrackNamespace{[]byte(strconv.Itoa(i*3 + j))}, RelayAddr: "relay-C",
+			})
+		}
+		for range ch { //nolint:revive // drain until the overflow close
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if grew := runtime.NumGoroutine() - before; grew > 10 {
+		t.Fatalf("%d goroutines more after 50 overflowed watches; each should release its own", grew)
 	}
 }

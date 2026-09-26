@@ -151,3 +151,65 @@ func TestEarlyDataStreamsBounded(t *testing.T) {
 		}
 	}
 }
+
+// TestHandshakeSkipsPaddingAndAbortedStreams: before the control stream,
+// a padding stream is discarded, not held (§11.5.1: "The receiver MUST
+// discard all data received on a padding stream"), and a stream that ends
+// before its type arrived is skipped as it would be after setup, rather than
+// failing the handshake.
+func TestHandshakeSkipsPaddingAndAbortedStreams(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	clientConn, serverConn := sessiontest.NewConnPair()
+
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	wg.Go(func() {
+		empty, err := clientConn.OpenUniStream()
+		if err != nil {
+			return
+		}
+		_ = empty.Close() // FIN before any byte
+		padding, err := clientConn.OpenUniStream()
+		if err != nil {
+			return
+		}
+		wg.Go(func() {
+			_, _ = padding.Write(wire.AppendVarint(nil, message.PaddingStreamType))
+			_, _ = padding.Write(make([]byte, 64))
+			_ = padding.Close()
+		})
+		data, err := clientConn.OpenUniStream()
+		if err != nil {
+			return
+		}
+		wg.Go(func() {
+			_ = message.WriteSubgroupHeader(data, message.SubgroupHeader{
+				TrackAlias: 5, SubgroupIDMode: message.SubgroupIDExplicit,
+			})
+			_ = data.Close()
+		})
+		time.Sleep(20 * time.Millisecond)
+		ctrl, err := clientConn.OpenUniStream()
+		if err != nil {
+			return
+		}
+		_ = message.Marshal(ctrl, &message.Setup{})
+		if recv, err := clientConn.AcceptUniStream(ctx); err == nil {
+			_, _ = message.Parse(recv)
+		}
+	})
+
+	srv, err := session.Server(ctx, serverConn)
+	if err != nil {
+		t.Fatalf("handshake with an aborted and a padding stream first: %v", err)
+	}
+	defer srv.Close(moqt.SessionNoError, "test cleanup")
+	ds, err := srv.AcceptDataStream(ctx)
+	if err != nil {
+		t.Fatalf("AcceptDataStream = %v, want the subgroup stream (padding discarded)", err)
+	}
+	if sg, ok := ds.(*session.IncomingSubgroupStream); !ok || sg.Header.TrackAlias != 5 {
+		t.Fatalf("AcceptDataStream = %T, want the subgroup for alias 5", ds)
+	}
+}
