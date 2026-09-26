@@ -529,8 +529,7 @@ func (d *DownstreamSub) takeReadyDoneLocked() (*pendingPublishDone, uint64) {
 // accepts the subscriber's SUBSCRIBE (replying SUBSCRIBE_OK) before building
 // the sub, so it is live from construction.
 //
-// Forward State defaults to 1: §10.7 specifies that when the FORWARD
-// parameter is omitted from SUBSCRIBE the subscription forwards objects.
+// Forward State defaults to 1: an omitted FORWARD means 1 (§10.2.18).
 // installSubscribeParams overrides this to 0 only when the peer explicitly
 // sends FORWARD=0, and REQUEST_UPDATE can flip it later (§9.2 / §10.9).
 func NewDownstreamSub(id uint64, sess *session.Session, stream session.Stream, trackAlias uint64) *DownstreamSub {
@@ -709,8 +708,8 @@ const (
 
 // ForwardDecision decides whether an Object goes to this subscription, under
 // one lock acquisition (it runs per Object per subscriber). §5.1.5: "Pass =
-// Forward AND Location AND Range". The Location filter uses the subscribe-time
-// LargestObject snapshot, not the live watermark.
+// Forward AND Location Filters AND Range Filters". The Location filter uses
+// the subscribe-time LargestObject snapshot, not the live watermark.
 func (d *DownstreamSub) ForwardDecision(
 	group, object, subgroupID uint64, priority uint8, objProps []byte,
 ) ForwardVerdict {

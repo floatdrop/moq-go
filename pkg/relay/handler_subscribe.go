@@ -461,7 +461,8 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	// Create the entry before Subscribe: the alias resolves as soon as
 	// Subscribe returns and streams may already be arriving, which runFanout
 	// can only route to an existing entry. Not inside the round trip, which
-	// would widen the window streams wait for their alias.
+	// would widen the window streams wait for their alias. handleFetch's
+	// trackKnown keeps the empty entry off the wire meanwhile.
 	var entryCreated bool
 	_, entryCreated = h.tracks.GetOrCreateNew(fullName)
 
@@ -482,6 +483,8 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	upstreamSub := registry.NewUpstreamSub(
 		h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias, subMsg.RequestID, false)
 	upstreamSub.SetFilter(filter)
+	// Match the Forward=0 sent upstream: NewUpstreamSub starts at 1, and a
+	// later §9.2 resume skips upstreams already at 1.
 	if !wantForward {
 		upstreamSub.SetForwardState(0)
 	}
@@ -680,8 +683,9 @@ func includeProperties(ps message.Parameters) bool {
 // unparseable Track Properties are MALFORMED_TRACK (an interpretation: the
 // draft does not cover them). An upstream REQUEST_ERROR code about the track
 // or the publisher's load passes through with its Retry Interval (§10.6.2),
-// MALFORMED_TRACK included though §10.6.2 scopes it to FETCH; one about the relay's own hop or its Next Object filter, or an unknown one,
-// becomes INTERNAL_ERROR. If the relay ever combines downstream filters
+// MALFORMED_TRACK included though §10.6.2 scopes it to FETCH; one about the
+// relay's own hop or its Next Object filter, or an unknown one, becomes
+// INTERNAL_ERROR. If the relay ever combines downstream filters
 // upstream (§9.4), INVALID_RANGE must pass through too. Any other failure
 // reads as DOES_NOT_EXIST.
 func upstreamRejection(err error) *session.RequestRejectedError {

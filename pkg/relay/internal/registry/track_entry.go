@@ -126,7 +126,7 @@ type TrackEntry struct {
 	// mu-guarded control mutations.
 	deliveredMu sync.Mutex
 
-	// delivered is the dedup ledger across multiple upstream publishers (§9.5):
+	// delivered is the dedup ledger across multiple upstream publishers (§9.3):
 	// GroupID → set of Object IDs already forwarded downstream. The first upstream
 	// to reach a {GroupID, ObjectID} forwards it; later copies from redundant or
 	// lagging peers are dropped (§2.1 — SubgroupID is not part of object
@@ -144,7 +144,7 @@ type TrackEntry struct {
 
 	// subgroups holds the shared outbound fan-out state for each
 	// (GroupID, SubgroupID) currently being produced by one or more upstreams.
-	// §9.5 lets N redundant upstreams feed one track; §2.2 requires that the
+	// §9.3 lets N redundant upstreams feed one track; §2.2 requires that the
 	// objects of a single Subgroup go out on exactly ONE downstream stream per
 	// subscriber. Sharing this state across every inbound runFanout goroutine
 	// (each of which carries one (group, subgroup)) is what lets the relay merge

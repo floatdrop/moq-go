@@ -154,7 +154,7 @@ func (h *sessionHandler) resolveInboundTrack(
 // runFanout forwards one inbound subgroup stream to every downstream
 // subscriber, remapping the Track Alias per subscriber.
 //
-// §9.5: inbound streams carrying the same (GroupID, SubgroupID) share one
+// §9.3: inbound streams carrying the same (GroupID, SubgroupID) share one
 // outbound writer per subscriber (§2.2: a Subgroup is not split across
 // streams), and [registry.TrackEntry.ClaimDelivered] drops duplicate objects
 // (§2.1). Each writer is a [subgroupWriter] goroutine behind a bounded queue.
@@ -224,7 +224,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	}
 
 	// This contributor's termination, applied outbound only if it is the last
-	// to leave the Subgroup (§9.5).
+	// to leave the Subgroup (§9.3).
 	var (
 		inboundReset     bool
 		inboundResetCode = moqt.StreamResetCancelled
@@ -409,7 +409,7 @@ func (h *sessionHandler) openWriterForSub(
 		subHdr.InlinePriority = true
 	}
 	// cancelIO unblocks a writer wedged on a subscriber that stopped
-	// reading (see [subgroupWriter.join]).
+	// reading (see [joinWriters]).
 	ioCtx, cancelIO := context.WithCancel(ctx)
 	w := &subgroupWriter{
 		sub:                 sub,
@@ -712,7 +712,9 @@ func (w *subgroupWriter) run() {
 			}
 		}
 
-		// §11.4.3: no non-consecutive Object on an existing stream.
+		// §11.4.3: only "the next Object" may go on an existing stream. Of
+		// the draft's three ways to tell, this relay uses only "one greater
+		// than the previous Object" (a choice) and reopens on any other gap.
 		if hasWritten && fwd.absID != prevID+1 {
 			w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseGap)
 			if !reopen(fwd.first) {

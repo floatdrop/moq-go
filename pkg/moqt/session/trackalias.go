@@ -15,7 +15,7 @@ import (
 //
 // Allocation starts at 1: [Session.Publish] and [Request.AcceptSubscribe]
 // treat a zero TrackAlias as "allocate one for me", so an allocated 0 would be
-// silently replaced.
+// silently replaced. [Session.OpenPublish] does not: its caller allocates.
 func (s *Session) AllocOutboundTrackAlias() uint64 {
 	return s.nextOutboundTrackAlias.Add(1)
 }
@@ -59,10 +59,14 @@ type InboundTrack struct {
 //
 // Registering an alias again for the same track counts one more registration
 // (§5.1 allows subscriptions to share an alias); it stays registered until
-// each is released by [Session.UnregisterInboundTrackAlias]. The latest Track
-// Properties replace earlier ones (§2.5). If alias is registered for a
-// different track, *ErrDuplicateTrackAlias is returned and the caller MUST
-// close the session with SessionDuplicateTrackAlias (§11.1).
+// each is released by [Session.UnregisterInboundTrackAlias]. Assumption: the
+// latest Track Properties replace earlier ones — the draft does not say which
+// a shared alias carries, and a release cannot tell which registration it
+// ends, so the survivor may keep a released one's properties.
+//
+// If alias is registered for a different track, *ErrDuplicateTrackAlias is
+// returned and the caller MUST close the session with
+// SessionDuplicateTrackAlias (§11.1).
 func (s *Session) RegisterInboundTrack(alias uint64, key track.Key, trackProperties []byte) error {
 	in := InboundTrack{
 		Key:                      key,

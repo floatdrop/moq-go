@@ -798,10 +798,12 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 // r.First MUST be a *message.Publish.
 //
 // Track Properties that fail validation (see
-// [WithKnownMandatoryTrackProperties]) are rejected with REQUEST_ERROR and the
-// error returned. On an alias collision *ErrDuplicateTrackAlias is returned
-// without replying; the caller MUST close the session with
-// [moqt.SessionDuplicateTrackAlias] (§11.1).
+// [WithKnownMandatoryTrackProperties]) are rejected with REQUEST_ERROR —
+// UNSUPPORTED_EXTENSION for an unknown Mandatory Track Property (§2.5.1),
+// MALFORMED_TRACK for ones that do not parse — and the error returned. On an
+// alias collision *ErrDuplicateTrackAlias is returned without replying; the
+// caller MUST close the session with [moqt.SessionDuplicateTrackAlias]
+// (§11.1).
 func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 	pub, isPub := r.First.(*message.Publish)
 	if !isPub {
