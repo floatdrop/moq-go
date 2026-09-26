@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,38 +32,136 @@ func TestTrackEntry_ClaimDelivered(t *testing.T) {
 
 	r := registry.NewTrackRegistry()
 	e := r.GetOrCreate(newTestTrackName("dedup"))
+	claim := func(group, object uint64) bool {
+		t.Helper()
+		fresh, err := e.ClaimDelivered(group, object, message.PriorGaps{})
+		if err != nil {
+			t.Fatalf("ClaimDelivered(%d, %d): %v", group, object, err)
+		}
+		return fresh
+	}
 
 	// First sighting wins; an exact repeat loses.
-	if !e.ClaimDelivered(0, 5) {
+	if !claim(0, 5) {
 		t.Fatal("first ClaimDelivered(0,5) should win")
 	}
-	if e.ClaimDelivered(0, 5) {
+	if claim(0, 5) {
 		t.Fatal("repeat ClaimDelivered(0,5) should lose")
 	}
 	// A gap-fill in the same group (object 5 already seen, 2 not) is independent.
-	if !e.ClaimDelivered(0, 2) {
+	if !claim(0, 2) {
 		t.Fatal("ClaimDelivered(0,2) should win — distinct object in a seen group")
 	}
 	// A different group is independent.
-	if !e.ClaimDelivered(1, 5) {
+	if !claim(1, 5) {
 		t.Fatal("ClaimDelivered(1,5) should win — distinct group")
 	}
 
 	// Advance the group far enough that group 0 ages out of the window; a late
 	// straggler from group 0 must then be treated as already delivered.
-	if !e.ClaimDelivered(1000, 0) {
+	if !claim(1000, 0) {
 		t.Fatal("ClaimDelivered(1000,0) should win")
 	}
-	if e.ClaimDelivered(0, 9) {
+	if claim(0, 9) {
 		t.Fatal("ClaimDelivered(0,9) should lose — group 0 has aged out of the dedup window")
 	}
 	// The current group still dedups normally after the window advanced.
-	if !e.ClaimDelivered(1000, 1) {
+	if !claim(1000, 1) {
 		t.Fatal("ClaimDelivered(1000,1) should win in the current group")
 	}
-	if e.ClaimDelivered(1000, 1) {
+	if claim(1000, 1) {
 		t.Fatal("repeat ClaimDelivered(1000,1) should lose")
 	}
+}
+
+// TestTrackEntry_ClaimDeliveredGapProperties pins how the ledger treats the
+// Prior Group and Object ID Gaps (§12.8, §12.9) of earlier Objects. An Object
+// inside an announced gap is known not to exist (§2.1) and dropped (§9.1); a gap
+// covering a received Object is accepted (§2.1); two Prior Group ID Gap values
+// in one Group make the track malformed (§12.8).
+func TestTrackEntry_ClaimDeliveredGapProperties(t *testing.T) {
+	t.Parallel()
+	type claim struct {
+		group, object uint64
+		gaps          message.PriorGaps
+	}
+	const (
+		forwarded = iota
+		dropped
+		malformed
+	)
+	var none message.PriorGaps
+	objectGap := func(n uint64) message.PriorGaps { return message.PriorGaps{Object: n, HasObject: true} }
+	groupGap := func(n uint64) message.PriorGaps { return message.PriorGaps{Group: n, HasGroup: true} }
+	for _, tc := range []struct {
+		name   string
+		claims []claim // all but the last are forwarded
+		want   int     // the last one's outcome
+	}{
+		// §12.9
+		{"object gap over missing IDs", []claim{{1, 0, none}, {1, 3, objectGap(2)}}, forwarded},
+		{"object gap covering a received Object", []claim{{1, 1, none}, {1, 3, objectGap(2)}}, forwarded},
+		{"Object inside an announced object gap", []claim{{1, 3, objectGap(2)}, {1, 2, none}}, dropped},
+		{"Object below an announced object gap", []claim{{1, 3, objectGap(2)}, {1, 0, none}}, forwarded},
+		{"same ID in another Group", []claim{{1, 3, objectGap(2)}, {2, 2, none}}, forwarded},
+		{"a copy with the same object gap", []claim{{1, 3, objectGap(2)}, {1, 3, objectGap(2)}}, dropped},
+		// §12.8
+		{"group gap over missing Groups", []claim{{1, 0, none}, {4, 0, groupGap(2)}}, forwarded},
+		{"group gap covering a received Group", []claim{{2, 5, none}, {4, 0, groupGap(2)}}, forwarded},
+		{"Group inside an announced group gap", []claim{{4, 0, groupGap(2)}, {3, 0, none}}, dropped},
+		{"Group covered after it arrived", []claim{{2, 5, none}, {4, 0, groupGap(2)}, {2, 6, none}}, dropped},
+		{"same group gap twice in a Group", []claim{{4, 0, groupGap(2)}, {4, 1, groupGap(2)}}, forwarded},
+		{"different group gaps in a Group", []claim{{4, 0, groupGap(2)}, {4, 1, groupGap(1)}}, malformed},
+		{"group gap on one Object of a Group only", []claim{{4, 0, groupGap(2)}, {4, 1, none}}, forwarded},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := registry.NewTrackRegistry().GetOrCreate(newTestTrackName("gaps"))
+			last := len(tc.claims) - 1
+			for i, c := range tc.claims {
+				fresh, err := e.ClaimDelivered(c.group, c.object, c.gaps)
+				got := forwarded
+				switch {
+				case err != nil:
+					got = malformed
+					if !errors.Is(err, session.ErrMalformedTrack) {
+						t.Fatalf("claim %d %+v: %v, want it to wrap session.ErrMalformedTrack", i, c, err)
+					}
+				case !fresh:
+					got = dropped
+				}
+				want := forwarded
+				if i == last {
+					want = tc.want
+				}
+				if got != want {
+					t.Fatalf("claim %d %+v: outcome %d (err %v), want %d", i, c, got, err, want)
+				}
+			}
+		})
+	}
+}
+
+// TestTrackEntry_ClaimDeliveredMalformedLeavesNoTrace: a malformed claim
+// records nothing: neither its Object nor its Prior Group ID Gap.
+func TestTrackEntry_ClaimDeliveredMalformedLeavesNoTrace(t *testing.T) {
+	t.Parallel()
+	e := registry.NewTrackRegistry().GetOrCreate(newTestTrackName("gaps"))
+	mustClaim := func(group, object uint64, gaps message.PriorGaps, wantFresh bool) {
+		t.Helper()
+		fresh, err := e.ClaimDelivered(group, object, gaps)
+		if err != nil || fresh != wantFresh {
+			t.Fatalf("ClaimDelivered(%d, %d, %+v) = (%v, %v), want (%v, nil)",
+				group, object, gaps, fresh, err, wantFresh)
+		}
+	}
+	mustClaim(9, 0, message.PriorGaps{Group: 2, HasGroup: true}, true) // Groups 7-8 absent
+	if _, err := e.ClaimDelivered(9, 1, message.PriorGaps{Group: 3, HasGroup: true}); err == nil {
+		t.Fatal("a second Prior Group ID Gap value in Group 9 is not malformed")
+	}
+	mustClaim(9, 1, message.PriorGaps{}, true) // Object 1 was not recorded
+	mustClaim(6, 0, message.PriorGaps{}, true) // nor the gap of 3 (Groups 6-8)
+	mustClaim(8, 0, message.PriorGaps{}, false)
 }
 
 // TestTrackRegistry_GetMissingReturnsFalse confirms the unknown-key path of

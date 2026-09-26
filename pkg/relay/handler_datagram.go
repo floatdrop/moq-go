@@ -60,8 +60,14 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		d.PublisherPriority = in.DefaultPublisherPriority
 	}
 
-	// §2.1: the first copy of {GroupID, ObjectID} wins.
-	if !entry.ClaimDelivered(d.GroupID, d.ObjectID) {
+	// §9.3: the first copy of {GroupID, ObjectID} wins, unless an announced
+	// gap says it does not exist (§2.1, §9.1).
+	fresh, err := entry.ClaimDelivered(d.GroupID, d.ObjectID, message.ObjectPriorGaps(d.Properties))
+	if err != nil {
+		h.endMalformedTrack(ctx, entry, h.sess, err)
+		return
+	}
+	if !fresh {
 		return
 	}
 

@@ -315,6 +315,34 @@ func TestPriorObjectIDGap(t *testing.T) {
 	}
 }
 
+// TestObjectPriorGaps: both gaps are read in one walk, from either list (§12.7).
+func TestObjectPriorGaps(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		want PriorGaps
+	}{
+		{"empty", nil, PriorGaps{}},
+		{"both", AppendTrackProperties([]wire.KVPair{
+			kv(PropertyPriorGroupIDGap, 2), kv(PropertyPriorObjectIDGap, 3),
+		}), PriorGaps{Group: 2, Object: 3, HasGroup: true, HasObject: true}},
+		{"group inside Immutable", AppendTrackProperties([]wire.KVPair{
+			immutable(kv(PropertyPriorGroupIDGap, 0)),
+		}), PriorGaps{HasGroup: true}},
+		{"malformed", AppendTrackProperties([]wire.KVPair{
+			kv(PropertyPriorGroupIDGap, 1), kv(PropertyPriorGroupIDGap, 1),
+		}), PriorGaps{}},
+	} {
+		if got := ObjectPriorGaps(tc.raw); got != tc.want {
+			t.Errorf("%s: ObjectPriorGaps = %+v, want %+v", tc.name, got, tc.want)
+		}
+	}
+	raw := AppendTrackProperties([]wire.KVPair{kv(PropertyPriorGroupIDGap, 2)})
+	if n := testing.AllocsPerRun(10, func() { ObjectPriorGaps(raw) }); n != 0 {
+		t.Errorf("ObjectPriorGaps allocates %v times, want 0", n)
+	}
+}
+
 func BenchmarkCheckObjectProperties(b *testing.B) {
 	raw := AppendTrackProperties([]wire.KVPair{
 		kv(0x40, 1), kv(PropertyPriorObjectIDGap, 1), immutable(kv(0x42, 7)),

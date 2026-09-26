@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"sync"
@@ -26,7 +27,7 @@ import (
 //     overlapping sessions while migrating WiFi → cellular,
 //   - redundant origins (N-redundant encoders) used for live-media
 //     reliability — the relay deduplicates objects by {GroupID, ObjectID}
-//     (§2.1) via [TrackEntry.ClaimDelivered] so each object is forwarded
+//     (§9.3) via [TrackEntry.ClaimDelivered] so each object is forwarded
 //     downstream exactly once.
 //
 // Concurrency:
@@ -138,7 +139,12 @@ type TrackEntry struct {
 	// group is treated as already-delivered (a peer lagging by that many groups
 	// is beyond any useful reorder window). deliveredMax/HasMax track the largest
 	// group seen, for the pruning window.
-	delivered       map[uint64]map[uint64]struct{}
+	//
+	// It also holds the Prior Group and Object ID Gaps (§12.8, §12.9) seen:
+	// each Group its Object ID gaps and Group gap value, and groupGaps the Group
+	// ID ranges announced absent, pruned with the same window.
+	delivered       map[uint64]*deliveredGroup
+	groupGaps       []idRange
 	deliveredMax    uint64
 	deliveredHasMax bool
 
@@ -221,51 +227,123 @@ func (e *TrackEntry) CopySubgroups() []*SharedSubgroup {
 // few groups behind) while keeping per-track dedup memory bounded.
 const deliveredGroupWindow = 32
 
-// ClaimDelivered is the §2.1 dedup gate across multiple upstream publishers. It
-// records (group, object) as forwarded and reports whether the caller is the
-// first to do so (true → forward it) or it was already forwarded by a peer
+// ClaimDelivered is the dedup gate across multiple upstream publishers (§9.3).
+// It records (group, object) as forwarded and reports whether the caller is
+// the first to do so (true → forward it) or it was already forwarded by a peer
 // upstream (false → drop it). The ledger persists on the entry (not on a
 // per-Subgroup structure) and is independent of the size-bounded Object Cache,
 // so redundant streams that do not temporally overlap, or peers lagging by more
 // than the cache capacity, still dedup correctly. Memory is bounded to the most
 // recent [deliveredGroupWindow] groups.
-func (e *TrackEntry) ClaimDelivered(group, object uint64) bool {
+//
+// gaps are the Object's Prior Group and Object ID Gaps (§12.8, §12.9), which
+// the ledger records for the whole track. An Object inside a gap announced
+// earlier is known not to exist, and that is permanent (§2.1): false, since a
+// caching relay "SHOULD NOT cache or forward" it (§9.1). A gap covering an
+// Object already received is accepted: an Object may go from existing to not
+// existing (§2.1).
+//
+// Interpretation: §12.8 and §12.9 list both cases as making the track
+// malformed, but §2.1 says the first "is not a protocol error and the Track is
+// not malformed"; the relay follows §2.1 and §9.1 for both. It also takes
+// §9.1's specific SHOULD NOT forward over §9.4's general "MUST NOT reorder or
+// drop objects received on a multi-object stream". A cached copy of an Object
+// a gap later covers is kept (§9.1 makes updating the cache a MAY). The one gap rule
+// it does report, as an error wrapping [session.ErrMalformedTrack], is a Group
+// carrying two Prior Group ID Gap values (§12.8). The rejected Object leaves no
+// state in the ledger.
+func (e *TrackEntry) ClaimDelivered(group, object uint64, gaps message.PriorGaps) (bool, error) {
 	e.deliveredMu.Lock()
 	defer e.deliveredMu.Unlock()
 
-	if e.delivered == nil {
-		e.delivered = make(map[uint64]map[uint64]struct{})
+	// An object from a group already aged out of the window is treated as
+	// already delivered — a peer lagging that far behind is past any useful
+	// reorder window, and re-forwarding it would be a large out-of-order break.
+	if e.deliveredHasMax && group <= e.deliveredMax && e.deliveredMax-group >= deliveredGroupWindow {
+		return false, nil
+	}
+	g := e.delivered[group]
+	if gaps.HasGroup && g != nil && g.hasGroupGap && g.groupGap != gaps.Group {
+		return false, fmt.Errorf("%w: Group %d carries Prior Group ID Gaps %d and %d (§12.8)",
+			session.ErrMalformedTrack, group, g.groupGap, gaps.Group)
+	}
+	if e.announcedAbsentLocked(g, group, object) {
+		return false, nil
 	}
 
+	if e.delivered == nil {
+		e.delivered = make(map[uint64]*deliveredGroup)
+	}
 	// Advance the window when a newer group appears, pruning groups that have
 	// fallen out of it.
 	if !e.deliveredHasMax || group > e.deliveredMax {
 		e.deliveredMax = group
 		e.deliveredHasMax = true
-		for g := range e.delivered {
-			if e.deliveredMax-g >= deliveredGroupWindow {
-				delete(e.delivered, g)
-			}
+		maps.DeleteFunc(e.delivered, func(id uint64, _ *deliveredGroup) bool {
+			return e.deliveredMax-id >= deliveredGroupWindow
+		})
+		e.groupGaps = slices.DeleteFunc(e.groupGaps, func(r idRange) bool {
+			return e.deliveredMax-r.hi >= deliveredGroupWindow
+		})
+	}
+
+	if g == nil {
+		g = &deliveredGroup{objects: make(map[uint64]struct{})}
+		e.delivered[group] = g
+	}
+	e.recordGapsLocked(g, group, object, gaps)
+	if _, ok := g.objects[object]; ok {
+		return false, nil
+	}
+	g.objects[object] = struct{}{}
+	return true, nil
+}
+
+// deliveredGroup is one Group of the [TrackEntry.ClaimDelivered] ledger; g is
+// nil for a Group not yet seen.
+type deliveredGroup struct {
+	objects map[uint64]struct{}
+	// objectGaps are the Object ID ranges announced absent (§12.9).
+	objectGaps []idRange
+	// groupGap is the Group's Prior Group ID Gap (§12.8), if hasGroupGap.
+	groupGap    uint64
+	hasGroupGap bool
+}
+
+// idRange is an inclusive range of Group or Object IDs.
+type idRange struct{ lo, hi uint64 }
+
+func (r idRange) contains(id uint64) bool { return r.lo <= id && id <= r.hi }
+
+// gapRange is the IDs a Prior Group or Object ID Gap of n on id announces
+// absent (§12.8, §12.9); none for n == 0. The session layer has already
+// rejected an n above id ([message.CheckObjectProperties]).
+func gapRange(id, n uint64) (idRange, bool) {
+	return idRange{lo: id - n, hi: id - 1}, n > 0
+}
+
+// announcedAbsentLocked reports whether the Object at (group, object), g
+// being its Group's ledger entry, is inside a gap announced earlier. The
+// Group's scan grows with its distinct Object ID gaps, bounded only by the
+// window; publishers rarely send many, so the cost is accepted.
+func (e *TrackEntry) announcedAbsentLocked(g *deliveredGroup, group, object uint64) bool {
+	if slices.ContainsFunc(e.groupGaps, func(r idRange) bool { return r.contains(group) }) {
+		return true
+	}
+	return g != nil && slices.ContainsFunc(g.objectGaps, func(r idRange) bool { return r.contains(object) })
+}
+
+// recordGapsLocked records the gaps an Object at (group, object) announced.
+func (e *TrackEntry) recordGapsLocked(g *deliveredGroup, group, object uint64, gaps message.PriorGaps) {
+	if r, ok := gapRange(object, gaps.Object); gaps.HasObject && ok && !slices.Contains(g.objectGaps, r) {
+		g.objectGaps = append(g.objectGaps, r)
+	}
+	if gaps.HasGroup && !g.hasGroupGap {
+		g.groupGap, g.hasGroupGap = gaps.Group, true
+		if r, ok := gapRange(group, gaps.Group); ok {
+			e.groupGaps = append(e.groupGaps, r)
 		}
 	}
-
-	// An object from a group already aged out of the window is treated as
-	// already delivered — a peer lagging that far behind is past any useful
-	// reorder window, and re-forwarding it would be a large out-of-order break.
-	if group <= e.deliveredMax && e.deliveredMax-group >= deliveredGroupWindow {
-		return false
-	}
-
-	set := e.delivered[group]
-	if set == nil {
-		set = make(map[uint64]struct{})
-		e.delivered[group] = set
-	}
-	if _, ok := set[object]; ok {
-		return false
-	}
-	set[object] = struct{}{}
-	return true
 }
 
 // ReleaseSubgroup drops one contributor from (group, subgroup) and reports

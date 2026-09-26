@@ -236,8 +236,8 @@ By package, bottom-up along the dependency stack:
 | 12.5  | DEFAULT_PUBLISHER_GROUP_ORDER  | 0x22 | DONE   | Validated. |
 | 12.6  | DYNAMIC_GROUPS                 | 0x30 | DONE   | Property defined & scope-validated (flow: see §5.1.6.1). |
 | 12.7  | Immutable properties           | 0x0B | DONE   | Relays cache & forward verbatim, never add. Property lookups search its contents too (`message.ExpandImmutable`), the mutable value winning: delivery timeouts, MAX_CACHE_DURATION, DYNAMIC_GROUPS, Mandatory Track Property screening, and property Range Filters. |
-| 12.8  | Prior group ID gap             | 0x3C | PARTIAL| Object-scope; encoder in `msf/groupid.go`. More than one, or one past the Group ID, makes the track malformed (`message.CheckObjectProperties`); the rules that need earlier Objects are not checked — see Limitations. |
-| 12.9  | Prior object ID gap            | 0x3E | PARTIAL| Object-scope. More than one, or one past the Object ID, makes the track malformed; the rules that need earlier Objects are not checked — see Limitations. |
+| 12.8  | Prior group ID gap             | 0x3C | PARTIAL| Object-scope; encoder in `msf/groupid.go`. More than one, or one past the Group ID, makes the track malformed (`message.CheckObjectProperties`), and the relay also ends the track for two values in one Group. Against the last 32 Groups of any upstream (`registry.TrackEntry.ClaimDelivered`), the relay neither forwards nor caches an Object in a Group announced absent; a gap covering a received Group is accepted (§2.1, §9.1, see Limitations). Not in upstream FETCH responses, nor in a session that is not a relay's. |
+| 12.9  | Prior object ID gap            | 0x3E | PARTIAL| Object-scope. More than one, or one past the Object ID, makes the track malformed. The relay neither forwards nor caches an Object announced absent, and accepts a gap covering a received Object, as for §12.8. |
 
 ## §13 Security considerations
 
@@ -428,19 +428,32 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   subscription"), nor migrates to the New Session URI, nor closes the session
   once no subscriptions remain (§3.6 RECOMMENDED). It waits for the sender to
   close.
-- **Malformed tracks: only per-Object conditions (§2.4.2, §12.8, §12.9)** —
-  the session reports Object Properties that make a track malformed
+- **Malformed tracks: per-Object conditions (§2.4.2, §12.8, §12.9)** — the
+  session reports Object Properties that make a track malformed
   (`session.ErrMalformedTrack`), and the relay then ends the track: PUBLISH_DONE
   MALFORMED_TRACK to every downstream subscriber, its subscription to that
-  publisher cancelled, the Object not cached. Not detected: the gap rules that
-  need earlier Objects (a gap covering an Object already received, an Object
-  inside a gap already communicated, differing Prior Group ID Gaps in a
-  Group), and §2.4.2's list other than an Object after END_OF_GROUP on the
-  same stream. A downstream FETCH already being served from the cache when
-  the track is found malformed is not reset: the relay does not track fetch
-  streams per track. One interpretation: an Object with two Immutable
-  Properties is treated as malformed, although §12.7 states "MUST NOT contain
-  more than one instance" outside its list of malformed conditions.
+  publisher cancelled, the Object not cached. The relay also ends it for two
+  Prior Group ID Gap values in one Group. Not detected: §2.4.2's list other
+  than an Object after END_OF_GROUP on the same stream. A downstream FETCH
+  already being served from the cache when the track is found malformed is not
+  reset: the relay does not track fetch streams per track. One interpretation:
+  an Object with two Immutable Properties is treated as malformed, although
+  §12.7 states "MUST NOT contain more than one instance" outside its list of
+  malformed conditions.
+- **Objects inside an announced gap are dropped, not malformed (§2.1, §9.1,
+  §12.8, §12.9)** — an interpretation. §12.8 and §12.9 list "an Object with an
+  ID within a previously communicated gap" and "a gap covering an Object it
+  previously received" as malformed-track conditions, but §2.1 says the first
+  "is not a protocol error and the Track is not malformed", and lets an Object
+  go from existing to not existing. The relay follows §2.1: it neither
+  forwards nor caches such an Object (§9.1 SHOULD NOT) and accepts the covering
+  gap, keeping any cached copy of the Object it covers (§9.1 makes updating
+  the cache a MAY). §9.1's specific SHOULD NOT is taken over §9.4's general
+  "MUST NOT reorder or drop objects received on a multi-object stream".
+  Checked on live subgroup and datagram Objects against the last 32 Groups;
+  not in upstream FETCH responses, nor in a session that is not a relay's. The
+  gap properties are forwarded unchanged, so a subscriber reading §12.9
+  literally may still end the track itself.
 - **LOC properties inside Immutable Properties (§12.7)** — `loc.Properties.Parse`
   reads only the mutable list, so a LOC Timestamp and the like placed inside
   Immutable Properties is not found. Filling the fields from there would make

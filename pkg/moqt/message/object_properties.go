@@ -77,16 +77,32 @@ func (c *objectPropertiesCheck) walk(raw []byte, nested bool) error {
 	return nil
 }
 
-// PriorObjectIDGap returns the Prior Object ID Gap (§12.9) in an Object's raw
-// Properties and whether there is one, searching Immutable Properties too
-// (§12.7). Properties that [CheckObjectProperties] rejects for a reason it can
-// see without the Object's ID carry none.
+// PriorGaps are an Object's Prior Group ID Gap (§12.8) and Prior Object ID
+// Gap (§12.9), each if present.
+type PriorGaps struct {
+	Group, Object       uint64
+	HasGroup, HasObject bool
+}
+
+// ObjectPriorGaps returns the Prior Group and Object ID Gaps in an Object's raw
+// Properties, searching Immutable Properties too (§12.7). Properties that
+// [CheckObjectProperties] rejects for a reason it can see without the Object's
+// IDs carry none.
 //
 // Must not allocate: per-Object path.
-func PriorObjectIDGap(raw []byte) (uint64, bool) {
+func ObjectPriorGaps(raw []byte) PriorGaps {
 	var c objectPropertiesCheck
-	if c.walk(raw, false) != nil || c.objectGaps != 1 {
-		return 0, false
+	if c.walk(raw, false) != nil {
+		return PriorGaps{}
 	}
-	return c.objectGap, true
+	return PriorGaps{
+		Group: c.groupGap, Object: c.objectGap,
+		HasGroup: c.groupGaps == 1, HasObject: c.objectGaps == 1,
+	}
+}
+
+// PriorObjectIDGap is [ObjectPriorGaps] reduced to the Prior Object ID Gap.
+func PriorObjectIDGap(raw []byte) (uint64, bool) {
+	g := ObjectPriorGaps(raw)
+	return g.Object, g.HasObject
 }
