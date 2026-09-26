@@ -16,8 +16,12 @@ import (
 // wraps [session.ErrMalformedTrack]. Mutable Properties may differ (§9.1).
 //
 // Normal becoming End of Group or End of Track is the existing-to-not-existing
-// change §9.1 allows, and the reverse a late Object (§2.1), so Payloads are
+// change §9.1 allows, and the reverse a late Object (§2.1). Only a Normal
+// Object has a Payload or Properties (§11.2.1.1, §11.2.1.2), so those are
 // compared only when both copies are Normal.
+//
+// A copy an announced gap says does not exist is compared too, when the
+// first copy is cached: §2.1 excuses its arrival, not a different content.
 //
 // Limitation: nothing is compared when the first copy is not in the cache:
 // evicted, expired (§12.3), or not yet put there by a concurrent contributor.
@@ -34,8 +38,9 @@ func checkDuplicate(c *cache.ObjectCache, dup *cache.CachedObject) error {
 		field = "Subgroup ID"
 	case first.PublisherPriority != dup.PublisherPriority:
 		field = "Priority"
-	case first.Status == message.ObjectStatusNormal && dup.Status == message.ObjectStatusNormal &&
-		!bytes.Equal(first.Payload, dup.Payload):
+	case first.Status != message.ObjectStatusNormal || dup.Status != message.ObjectStatusNormal:
+		return nil
+	case !bytes.Equal(first.Payload, dup.Payload):
 		field = "Payload"
 	case !sameImmutableProperties(first.Properties, dup.Properties):
 		field = "Immutable Properties"

@@ -434,16 +434,16 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   MALFORMED_TRACK to every downstream subscriber, its subscription to that
   publisher cancelled, the Object not cached. The relay also ends it for two
   Prior Group ID Gap values in one Group, and for a duplicate that differs from
-  the cached first copy (§9.1; Payloads compared only when both copies are
-  Normal, since Normal may become End of Group). A duplicate is not compared
-  once the first copy left the cache (evicted or expired), nor while a
-  concurrent contributor has yet to cache it. Not detected: the rest of
-  §2.4.2's list other than an Object after END_OF_GROUP on the same stream. A downstream FETCH
-  already being served from the cache when the track is found malformed is not
-  reset: the relay does not track fetch streams per track. One interpretation:
-  an Object with two Immutable Properties is treated as malformed, although
-  §12.7 states "MUST NOT contain more than one instance" outside its list of
-  malformed conditions.
+  the cached first copy (§9.1; Payloads and Immutable Properties compared only
+  when both copies are Normal, since Normal may become End of Group). A
+  duplicate is not compared once the first copy left the cache (evicted or
+  expired), nor while a concurrent contributor has yet to cache it. Not
+  detected: the rest of §2.4.2's list other than an Object after END_OF_GROUP
+  on the same stream. A downstream FETCH already being served from the cache
+  when the track is found malformed is not reset: the relay does not track
+  fetch streams per track. One interpretation: an Object with two Immutable
+  Properties is treated as malformed, although §12.7 states "MUST NOT contain
+  more than one instance" outside its list of malformed conditions.
 - **Objects inside an announced gap are dropped, not malformed (§2.1, §9.1,
   §12.8, §12.9)** — an interpretation. §12.8 and §12.9 list "an Object with an
   ID within a previously communicated gap" and "a gap covering an Object it
