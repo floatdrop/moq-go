@@ -108,7 +108,9 @@ func (s *Session) RegisterInboundTrackAlias(alias uint64, key track.Key) error {
 
 // UnregisterInboundTrackAlias releases one registration of alias (see
 // [Session.RegisterInboundTrack]); the last release removes it. Call it once
-// the subscription or publication is torn down, after a grace period (§11.1).
+// the subscription is Terminated (§5.1), for an alias registered with
+// RegisterInboundTrack directly: a [Subscription] or [IncomingPublication]
+// releases its own.
 //
 // Unregistering an alias that was never registered is a no-op.
 func (s *Session) UnregisterInboundTrackAlias(alias uint64) {

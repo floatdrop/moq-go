@@ -73,8 +73,12 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		(*hook)(fullName)
 	}
 
-	// The publisher sent the PUBLISH, so it may send REQUEST_UPDATE (§10.9).
-	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, msg.TrackAlias, msg.RequestID, true)
+	// The publisher sent the PUBLISH, so it may send REQUEST_UPDATE (§10.9),
+	// in the scope an accepted PUBLISH's publisher has.
+	broker := h.sess.NewRequestBroker(req.Stream)
+	broker.PeerMessages(true, true)
+	broker.UpdateScope(message.ScopeUpdateFromPublisher)
+	sub := registry.NewUpstreamSub(h.allocSubID(), h.sess, req.Stream, broker, msg.TrackAlias, msg.RequestID)
 	// §5.1: the PUBLISH sets the initial Forward State (default 1).
 	if f, ok := msg.Parameters.Find(message.ParamForward); ok && f.Byte == 0 {
 		sub.SetForwardState(0)

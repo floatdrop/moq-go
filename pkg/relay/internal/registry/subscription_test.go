@@ -37,7 +37,7 @@ func TestSubscription_BornEstablished(t *testing.T) {
 		IsEstablished() bool
 		IsTerminated() bool
 	}{
-		registry.NewUpstreamSub(1, nil, nil, 0, 0, false),
+		registry.NewUpstreamSub(1, nil, nil, nil, 0, 0),
 		registry.NewDownstreamSub(1, nil, nil, 0),
 	} {
 		if !sub.IsEstablished() || sub.IsTerminated() {
@@ -52,7 +52,7 @@ func TestSubscription_BornEstablished(t *testing.T) {
 // reports false.
 func TestSubscription_TerminateLatch(t *testing.T) {
 	t.Parallel()
-	sub := registry.NewUpstreamSub(1, nil, nil, 0, 0, false)
+	sub := registry.NewUpstreamSub(1, nil, nil, nil, 0, 0)
 
 	if !sub.Terminate() {
 		t.Fatal("first Terminate returned false, want true")
@@ -74,7 +74,7 @@ func TestSubscription_TerminateLatch(t *testing.T) {
 // and the relay's upstream requests never carry FORWARD.
 func TestSubscription_ForwardState(t *testing.T) {
 	t.Parallel()
-	sub := registry.NewUpstreamSub(1, nil, nil, 0, 0, false)
+	sub := registry.NewUpstreamSub(1, nil, nil, nil, 0, 0)
 	if got := sub.ForwardState(); got != 1 {
 		t.Fatalf("initial ForwardState = %d, want 1 (§10.2.18 default)", got)
 	}
@@ -91,7 +91,7 @@ func TestSubscription_ForwardState(t *testing.T) {
 // TestUpstreamSub_FilterRoundTrip pins the upstream filter accessor pair.
 func TestUpstreamSub_FilterRoundTrip(t *testing.T) {
 	t.Parallel()
-	sub := registry.NewUpstreamSub(7, nil, nil, 42, 0, false)
+	sub := registry.NewUpstreamSub(7, nil, nil, nil, 42, 0)
 	if sub.GetFilter() != nil {
 		t.Fatal("initial filter not nil")
 	}
@@ -214,7 +214,7 @@ func TestDownstreamSub_EffectiveStreamPriority(t *testing.T) {
 //   - the final state is Terminated.
 func TestSubscription_ConcurrentTerminate(t *testing.T) {
 	t.Parallel()
-	sub := registry.NewUpstreamSub(1, nil, nil, 0, 0, false)
+	sub := registry.NewUpstreamSub(1, nil, nil, nil, 0, 0)
 
 	const goroutines = 32
 	var winners atomic.Int32

@@ -475,10 +475,10 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 		(*hook)(fullName)
 	}
 
-	// The relay is the requester, so the publisher may not send
-	// REQUEST_UPDATE (§10.9).
-	upstreamSub := registry.NewUpstreamSub(
-		h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias, subMsg.RequestID, false)
+	// The Subscription's broker: the publisher may not send REQUEST_UPDATE
+	// (§10.9), and the session releases the alias when it ends (§11.1).
+	upstreamSub := registry.NewUpstreamSub(h.allocSubID(), sess, upstreamStream, upstreamStream.Broker(),
+		upstreamStream.OK.TrackAlias, subMsg.RequestID)
 	upstreamSub.SetFilter(filter)
 	// Match the Forward=0 sent upstream: NewUpstreamSub starts at 1, and a
 	// later §9.2 resume skips upstreams already at 1.
@@ -498,8 +498,6 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	h.relayGo(func() {
 		h.serveUpstreamStream(upstreamStream.Context(), upstreamSub)
 		h.tracks.RemoveUpstream(fullName, upstreamSub.ID)
-		// Drop the alias with the subscription, so a peer may reuse it (§11.1).
-		sess.UnregisterInboundTrackAlias(upstreamStream.OK.TrackAlias)
 	})
 
 	return entry, upstreamSub, nil

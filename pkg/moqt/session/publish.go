@@ -211,6 +211,9 @@ func (p *Publication) Done(code moqt.PublishDoneCode, reason string) error {
 // stays open for follow-ups — PUBLISH_DONE from the publisher, or a
 // REQUEST_UPDATE this side sends via [IncomingPublication.Update] to adjust
 // forwarding (§10.9). Close it to end the reception.
+//
+// Its Track Alias is released (§11.1) when the subscription is Terminated
+// (§5.1), as for a [Subscription].
 type IncomingPublication struct {
 	// requestHandle carries the PUBLISH request stream — still open for
 	// follow-up traffic (inbound PUBLISH_DONE, outbound REQUEST_UPDATE;

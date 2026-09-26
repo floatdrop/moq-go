@@ -14,7 +14,8 @@ import (
 // with [session.ErrRequestStreamClosed].
 func TestUpstreamSub_UpdateDelegatesToBroker(t *testing.T) {
 	t.Parallel()
-	sub := registry.NewUpstreamSub(1, nil, stubStream{}, 0, 7, false)
+	var sess *session.Session
+	sub := registry.NewUpstreamSub(1, nil, stubStream{}, sess.NewRequestBroker(stubStream{}), 0, 7)
 
 	sub.CloseOnDemand()
 	if !sub.IsTerminated() {

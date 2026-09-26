@@ -68,6 +68,10 @@ type RequestBroker struct {
 	// See [RequestBroker.PeerMessages].
 	noPeerUpdate bool
 	noPeerNotify bool
+
+	// handle is the typed handle this broker came from, if any: Serve and
+	// Close report the subscription's end to it (see requestHandle.terminated).
+	handle *requestHandle
 }
 
 // PeerMessages declares whether the peer may send REQUEST_UPDATE (§10.9) and
@@ -321,9 +325,14 @@ func (b *RequestBroker) closeUpdates() {
 
 // Close cancels the request (§3.3.3): pending and future Updates fail with
 // [ErrRequestStreamClosed] and both directions are reset with code, which
-// unblocks a running Serve. Serialized against in-flight writes; idempotent.
+// unblocks a running Serve. On a broker from a [Subscription] or
+// [IncomingPublication] the subscription is Terminated (§5.1) and its Track
+// Alias released (§11.1). Serialized against in-flight writes; idempotent.
 // Must not be called with locks that Serve's callback might need held.
 func (b *RequestBroker) Close(code moqt.StreamResetCode) {
+	if b.handle != nil {
+		b.handle.terminated()
+	}
 	b.closeUpdates()
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -350,8 +359,18 @@ func (b *RequestBroker) Close(code moqt.StreamResetCode) {
 // also closes the session with PROTOCOL_VIOLATION (§10). Serve returns nil on
 // a clean FIN or an onMsg stop, ctx.Err() on cancellation, and the read/token
 // error otherwise.
+//
+// On a broker from a [Subscription] or [IncomingPublication], every exit but
+// an onMsg stop Terminates the subscription (§5.1) and releases its Track
+// Alias (§11.1).
 func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) bool) error {
 	defer b.closeUpdates()
+	stopped := false // by onMsg: the stream may still carry the subscription
+	defer func() {
+		if !stopped && b.handle != nil {
+			b.handle.terminated()
+		}
+	}()
 	stop := context.AfterFunc(ctx, func() {
 		b.stream.CancelRead(uint64(moqt.StreamResetSessionClosed))
 	})
@@ -368,6 +387,9 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 			case ctx.Err() != nil:
 				return ctx.Err()
 			case errors.Is(err, io.EOF):
+				if b.handle != nil {
+					b.handle.peerFinished()
+				}
 				return nil
 			case errors.Is(err, message.ErrMalformedMessage):
 				// §10, and §10.2 for an unknown parameter.
@@ -450,6 +472,7 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 		}
 
 		if onMsg != nil && !onMsg(msg) {
+			stopped = true
 			return nil
 		}
 	}
