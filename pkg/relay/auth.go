@@ -15,6 +15,13 @@ import (
 // mutation; a non-nil return causes the relay to reply REQUEST_ERROR with
 // the [DeniedError]'s mapped code (see [DeniedError.RequestErrorCode]).
 //
+// A REQUEST_UPDATE that changes a SUBSCRIBE_NAMESPACE's or SUBSCRIBE_TRACKS's
+// TRACK_NAMESPACE_PREFIX is authorized again (§10.19, §10.20): the method
+// receives the subscription as updated: the new prefix, and the
+// AUTHORIZATION_TOKENs of the latest request or update that carried any (a
+// DELETE authorizes nothing). A denial refuses the update and ends the
+// subscription (§10.9.1).
+//
 // The interface is split per request type for two reasons:
 //
 //   - It lets a policy reject categories of request without having to
@@ -130,9 +137,9 @@ func ReasonForAuthorizerError(err error) string {
 //
 // Production deployments SHOULD replace this with a token- or
 // session-attestation-aware implementation via [Config.Authorizer]. The relay
-// only invokes the authorizer once per request before any state mutation, so
-// the cost of policy evaluation is bounded by the request rate rather than
-// the object rate.
+// invokes the authorizer once per request, and per prefix update, before any
+// state mutation, so the cost of policy evaluation is bounded by the request
+// rate rather than the object rate.
 type AllowAllAuthorizer struct{}
 
 var _ Authorizer = AllowAllAuthorizer{}

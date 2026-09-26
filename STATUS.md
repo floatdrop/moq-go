@@ -518,12 +518,6 @@ High:
 - A subscriber's cancellation does not reset the subscription's open subgroup
   streams or fill fetch streams: the relay keeps forwarding, then FINs (§5.1.1:
   "MUST reset any open streams associated with the SUBSCRIBE"; §5.1.3.1).
-- A REQUEST_UPDATE carrying TRACK_NAMESPACE_PREFIX on SUBSCRIBE_NAMESPACE or
-  SUBSCRIBE_TRACKS (§10.9.2) is applied without authorization, and its tokens
-  are dropped. §10.19 and §10.20 say "The publisher MUST ensure the subscriber
-  is authorized to perform this namespace subscription", which an updated
-  prefix changes; §10.2.2 lets a REQUEST_UPDATE carry the token that
-  authorizes it.
 - A fill stream on a subscription that omits GROUP_ORDER is written Ascending,
   ignoring DEFAULT_PUBLISHER_GROUP_ORDER (§10.2.8, §10.2.15, §12.5). A subscriber
   decoding it Descending gets wrong Group IDs (§11.4.4.1).
@@ -603,6 +597,9 @@ Relay:
 - Upstream FETCHes to a publisher whose track is found malformed are not
   cancelled (§2.4.2).
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
+- A REQUEST_UPDATE's AUTHORIZATION_TOKENs go through the TokenVerifier only on
+  SUBSCRIBE_NAMESPACE and SUBSCRIBE_TRACKS; on SUBSCRIBE, FETCH and
+  PUBLISH_NAMESPACE they are resolved but not verified (§10.2.2).
 
 Documentation:
 

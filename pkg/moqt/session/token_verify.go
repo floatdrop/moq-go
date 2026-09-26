@@ -212,10 +212,16 @@ func (s *Session) applyToken(t *message.Token) (tok ResolvedToken, ok bool, err 
 // can call it from their own request loop. It is safe to call with a req whose
 // Tokens slice is empty.
 func (s *Session) VerifyRequestTokens(ctx context.Context, req *Request) error {
-	if s.tokenVerifier == nil || len(req.Tokens) == 0 {
+	return s.VerifyTokens(ctx, req.Tokens)
+}
+
+// VerifyTokens is [Session.VerifyRequestTokens] for tokens resolved by
+// [Session.ProcessFollowupTokens], such as a REQUEST_UPDATE's (§10.2.2).
+func (s *Session) VerifyTokens(ctx context.Context, toks []ResolvedToken) error {
+	if s.tokenVerifier == nil || len(toks) == 0 {
 		return nil
 	}
-	for _, tok := range req.Tokens {
+	for _, tok := range toks {
 		if err := s.tokenVerifier.VerifyToken(ctx, s, tok); err != nil {
 			if denied, ok := errors.AsType[*TokenDeniedError](err); ok {
 				return denied
