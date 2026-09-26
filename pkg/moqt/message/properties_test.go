@@ -2,17 +2,18 @@ package message
 
 import (
 	"testing"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// ---------------------------------------------------------------------------
-// ObjectProperties round-trip
-// ---------------------------------------------------------------------------
+// immutable wraps pairs in an Immutable Properties property (§12.7).
+func immutable(pairs ...wire.KVPair) wire.KVPair {
+	return wire.KVPair{Type: PropertyImmutableProperties, ByteVal: AppendTrackProperties(pairs)}
+}
 
-// ---------------------------------------------------------------------------
-// ObjectProperties.ValidateObjectScope
-// ---------------------------------------------------------------------------
+// kv builds a varint-valued property.
+func kv(typ PropertyType, v uint64) wire.KVPair { return wire.KVPair{Type: typ, IntVal: v} }
 
 // ---------------------------------------------------------------------------
 // IsMandatoryTrackProperty
@@ -179,24 +180,13 @@ func TestFirstUnknownMandatoryTrackProperty(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// PropertyScopeOf
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Wire format: ObjectProperties length prefix correctness
-// ---------------------------------------------------------------------------
-
-// TestTrackDefaultPublisherPriority pins §12.4: an omitted property is 128, and
-// an invalid (> 255) value or malformed block is read as omitted rather than
-// truncated into a different priority. §12.7: the value is also found inside
-// Immutable Properties.
+// TestTrackDefaultPublisherPriority pins §12.4: omitted is 128, and an invalid
+// (> 255) value or malformed block reads as omitted. §12.7: Immutable
+// Properties are searched too.
 func TestTrackDefaultPublisherPriority(t *testing.T) {
-	prop := func(v uint64) []byte {
-		return AppendTrackProperties([]wire.KVPair{{Type: PropertyDefaultPublisherPriority, IntVal: v}})
-	}
-	immutable := func(inner []byte) []byte {
-		return AppendTrackProperties([]wire.KVPair{{Type: PropertyImmutableProperties, ByteVal: inner}})
+	prop := func(v uint64) []byte { return props(PropertyDefaultPublisherPriority, v) }
+	inImmutable := func(v uint64) []byte {
+		return AppendTrackProperties([]wire.KVPair{immutable(kv(PropertyDefaultPublisherPriority, v))})
 	}
 	cases := []struct {
 		name  string
@@ -208,12 +198,101 @@ func TestTrackDefaultPublisherPriority(t *testing.T) {
 		{"max", prop(255), 255},
 		{"invalid 256", prop(256), DefaultPublisherPriority},
 		{"malformed block", []byte{0x0E}, DefaultPublisherPriority},
-		{"inside Immutable Properties", immutable(prop(10)), 10},
-		{"mutable before immutable", append(prop(20), immutable(prop(10))...), 20},
+		{"inside Immutable Properties", inImmutable(10), 10},
+		{"mutable before immutable", append(prop(20), inImmutable(10)...), 20},
 	}
 	for _, tc := range cases {
 		if got := TrackDefaultPublisherPriority(tc.props); got != tc.want {
 			t.Errorf("%s: got %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestApplyObjectPropertiesSearchesImmutable: §12.7 processors search both the
+// mutable properties and Immutable Properties; the mutable value wins.
+func TestApplyObjectPropertiesSearchesImmutable(t *testing.T) {
+	track := DeliveryTimeouts{Object: 5 * time.Second, Subgroup: 5 * time.Second}
+	raw := AppendTrackProperties([]wire.KVPair{immutable(
+		kv(PropertyObjectDeliveryTimeout, 2000),
+		kv(PropertySubgroupDeliveryTimeout, 3000),
+	)})
+	want := DeliveryTimeouts{Object: 2 * time.Second, Subgroup: 3 * time.Second}
+	if got := track.ApplyObjectProperties(raw); got != want {
+		t.Errorf("got %+v, want %+v from inside Immutable Properties", got, want)
+	}
+
+	// Present in both: the mutable value wins, as for
+	// TrackDefaultPublisherPriority.
+	raw = AppendTrackProperties([]wire.KVPair{
+		kv(PropertyObjectDeliveryTimeout, 1000),
+		immutable(kv(PropertyObjectDeliveryTimeout, 2000)),
+	})
+	if got := track.ApplyObjectProperties(raw); got.Object != time.Second {
+		t.Errorf("Object = %v, want the mutable 1s over the immutable 2s", got.Object)
+	}
+}
+
+// TestCheckObjectProperties pins the per-Object malformed-track conditions of
+// §12.7–§12.9 and §2.5.1; conditions needing state across Objects are not
+// checked here.
+func TestCheckObjectProperties(t *testing.T) {
+	const group, object = 10, 5
+	for _, tc := range []struct {
+		name  string
+		raw   []byte
+		valid bool
+	}{
+		{"empty", nil, true},
+		{"ordinary properties", AppendTrackProperties([]wire.KVPair{kv(0x40, 1), kv(0x42, 2)}), true},
+		{"gaps within range", AppendTrackProperties([]wire.KVPair{
+			kv(PropertyPriorGroupIDGap, group), kv(PropertyPriorObjectIDGap, object),
+		}), true},
+		{"gap inside Immutable", AppendTrackProperties([]wire.KVPair{immutable(kv(PropertyPriorObjectIDGap, 2))}), true},
+		{"same type in both lists", AppendTrackProperties([]wire.KVPair{kv(0x40, 1), immutable(kv(0x40, 2))}), true},
+
+		// §12.7: a Key-Value-Pair cannot be parsed
+		{"unparseable", []byte{0x02}, false},
+		{"unparseable inside Immutable", AppendTrackProperties([]wire.KVPair{
+			{Type: PropertyImmutableProperties, ByteVal: []byte{0x02}},
+		}), false},
+		// §12.7: nested Immutable, or more than one instance
+		{"Immutable inside Immutable", AppendTrackProperties([]wire.KVPair{immutable(immutable(kv(0x40, 1)))}), false},
+		{"two Immutable", AppendTrackProperties([]wire.KVPair{immutable(kv(0x40, 1)), immutable(kv(0x42, 1))}), false},
+		// §12.8 / §12.9: more than one instance, or larger than the ID
+		{"two Prior Group ID Gaps", AppendTrackProperties([]wire.KVPair{
+			kv(PropertyPriorGroupIDGap, 1), kv(PropertyPriorGroupIDGap, 2),
+		}), false},
+		{"Prior Group ID Gap in both lists", AppendTrackProperties([]wire.KVPair{
+			kv(PropertyPriorGroupIDGap, 1), immutable(kv(PropertyPriorGroupIDGap, 1)),
+		}), false},
+		{"Prior Group ID Gap > Group ID", AppendTrackProperties([]wire.KVPair{
+			kv(PropertyPriorGroupIDGap, group+1),
+		}), false},
+		{"two Prior Object ID Gaps", AppendTrackProperties([]wire.KVPair{
+			kv(PropertyPriorObjectIDGap, 1), kv(PropertyPriorObjectIDGap, 1),
+		}), false},
+		{"Prior Object ID Gap > Object ID", AppendTrackProperties([]wire.KVPair{
+			immutable(kv(PropertyPriorObjectIDGap, object+1)),
+		}), false},
+		// §2.5.1: a Mandatory Track Property as an Object Property
+		{"Mandatory Track Property", AppendTrackProperties([]wire.KVPair{kv(0x4000, 1)}), false},
+		{"Mandatory inside Immutable", AppendTrackProperties([]wire.KVPair{immutable(kv(0x7FFE, 1))}), false},
+	} {
+		err := CheckObjectProperties(tc.raw, group, object)
+		if (err == nil) != tc.valid {
+			t.Errorf("%s: CheckObjectProperties = %v, want valid=%v", tc.name, err, tc.valid)
+		}
+	}
+}
+
+func BenchmarkCheckObjectProperties(b *testing.B) {
+	raw := AppendTrackProperties([]wire.KVPair{
+		kv(0x40, 1), kv(PropertyPriorObjectIDGap, 1), immutable(kv(0x42, 7)),
+	})
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := CheckObjectProperties(raw, 10, 5); err != nil {
+			b.Fatal(err)
 		}
 	}
 }

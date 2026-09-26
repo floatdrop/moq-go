@@ -277,11 +277,8 @@ func TestSubgroupObject_ParseErrors(t *testing.T) {
 	}
 }
 
-// TestSubgroupObject_StreamFINMidObject pins §11.4: a stream that ends with a
-// FIN "in the middle of a serialized Object" is not a clean end. Only a FIN
-// before an object's first byte may surface as io.EOF; every later truncation
-// must be io.ErrUnexpectedEOF, or a caller reading to io.EOF takes a torn
-// stream for a complete one.
+// TestSubgroupObject_StreamFINMidObject pins §11.4: a FIN mid-Object is
+// io.ErrUnexpectedEOF; only a FIN on an Object boundary is io.EOF.
 func TestSubgroupObject_StreamFINMidObject(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -311,9 +308,8 @@ func TestSubgroupObject_StreamFINMidObject(t *testing.T) {
 }
 
 // TestSubgroupObject_ValidateRejectsPropertiesOnStatusObject pins §11.2.1.2:
-// "If an endpoint receives properties on an Object with status that is not
-// Normal, it MUST close the session with a PROTOCOL_VIOLATION." A Properties
-// Length of 0 is no properties.
+// properties on a non-Normal status Object are a PROTOCOL_VIOLATION; a
+// Properties Length of 0 is no properties.
 func TestSubgroupObject_ValidateRejectsPropertiesOnStatusObject(t *testing.T) {
 	props := []byte{0x02, 0x01} // one even-typed KV pair
 	for _, status := range []uint64{ObjectStatusEndOfGroup, ObjectStatusEndOfTrack} {

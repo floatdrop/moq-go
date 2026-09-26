@@ -197,3 +197,114 @@ func TestMixedScopeSetID(t *testing.T) {
 		t.Error("sanity: naive MatchesObject ignores the track filter and passes objectID 150")
 	}
 }
+
+// TestRangeFiltersSearchImmutable: §12.7 filters see properties inside
+// Immutable Properties.
+func TestRangeFiltersSearchImmutable(t *testing.T) {
+	inImmutable := func(typ PropertyType, val uint64) []byte {
+		return AppendTrackProperties([]wire.KVPair{immutable(kv(typ, val))})
+	}
+	track := mustSet(t,
+		RangeFilter{Type: ParamTrackPropertyFilter, PropertyType: 0x40, Ranges: []Range{{Start: 1, End: 5}}})
+	if !track.MatchesTrack(inImmutable(0x40, 3)) {
+		t.Error("MatchesTrack: 0x40=3 inside Immutable Properties should match [1,5]")
+	}
+	if pass := track.TrackPassPerGroup(inImmutable(0x40, 3)); len(pass) != 1 || !pass[0] {
+		t.Errorf("TrackPassPerGroup = %v, want [true]", pass)
+	}
+	obj := mustSet(t,
+		RangeFilter{Type: ParamObjectPropertyFilter, PropertyType: 0x3C, Ranges: []Range{{Start: 40, End: 50}}})
+	if !obj.MatchesObject(0, 0, 0, inImmutable(0x3C, 42)) {
+		t.Error("MatchesObject: 0x3C=42 inside Immutable Properties should match [40,50]")
+	}
+}
+
+// rangeParam builds a one-range filter parameter of type typ.
+func rangeParam(typ ParamID, lo, hi uint64) Parameter {
+	return RangeFilterParam(&RangeFilter{Type: typ, Ranges: []Range{{Start: lo, End: hi}}})
+}
+
+// removeFilter builds the zero-length filter parameter that removes typ.
+func removeFilter(typ ParamID) Parameter { return BytesParam(typ, nil) }
+
+// TestRangeFiltersZeroLengthIsNoFilter: §5.1.4 outside REQUEST_UPDATE a
+// zero-length Range Filter is no filter.
+func TestRangeFiltersZeroLengthIsNoFilter(t *testing.T) {
+	t.Parallel()
+	set, err := RangeFiltersFromParams(Parameters{removeFilter(ParamSubgroupFilter)})
+	if err != nil {
+		t.Fatalf("RangeFiltersFromParams(zero-length) = %v, want no filter", err)
+	}
+	if set != nil {
+		t.Fatalf("RangeFiltersFromParams(zero-length) = %+v, want nil (no filter)", set)
+	}
+}
+
+// TestRangeFilterSetUpdate: §5.1.4 an update replaces or removes (Length 0) the
+// filter types it names and leaves the others unchanged.
+func TestRangeFilterSetUpdate(t *testing.T) {
+	t.Parallel()
+	base, err := RangeFiltersFromParams(Parameters{
+		rangeParam(ParamSubgroupFilter, 1, 1), rangeParam(ParamPriorityFilter, 0, 10),
+	})
+	if err != nil {
+		t.Fatalf("base: %v", err)
+	}
+	// passes reports whether an Object in subgroup sg at priority prio passes.
+	passes := func(s *RangeFilterSet, sg uint64, prio uint8) bool {
+		return s == nil || s.MatchesObject(sg, 0, prio, nil)
+	}
+
+	t.Run("remove one type", func(t *testing.T) {
+		got, err := base.Update(Parameters{removeFilter(ParamSubgroupFilter)})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if !passes(got, 7, 5) || passes(got, 7, 20) {
+			t.Fatal("after removing SUBGROUP_FILTER: want any subgroup, priority still 0..10")
+		}
+	})
+	t.Run("replace one type", func(t *testing.T) {
+		got, err := base.Update(Parameters{rangeParam(ParamSubgroupFilter, 2, 2)})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if passes(got, 1, 5) || !passes(got, 2, 5) || passes(got, 2, 20) {
+			t.Fatal("after replacing SUBGROUP_FILTER: want subgroup 2 only, priority still 0..10")
+		}
+	})
+	t.Run("omitted types unchanged", func(t *testing.T) {
+		got, err := base.Update(Parameters{ForwardParam(true)})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if !passes(got, 1, 5) || passes(got, 2, 5) || passes(got, 1, 20) {
+			t.Fatal("an update naming no filter changed the filters")
+		}
+	})
+	t.Run("remove every type", func(t *testing.T) {
+		got, err := base.Update(Parameters{removeFilter(ParamSubgroupFilter), removeFilter(ParamPriorityFilter)})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if got != nil {
+			t.Fatalf("Update removing every filter = %+v, want nil (no filter)", got)
+		}
+	})
+	t.Run("from no filters", func(t *testing.T) {
+		var none *RangeFilterSet
+		got, err := none.Update(Parameters{rangeParam(ParamSubgroupFilter, 3, 3)})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if passes(got, 1, 5) || !passes(got, 3, 5) {
+			t.Fatal("an update adding SUBGROUP_FILTER to no filters: want subgroup 3 only")
+		}
+	})
+	t.Run("duplicate within the update", func(t *testing.T) {
+		dup := Parameters{rangeParam(ParamSubgroupFilter, 2, 2), rangeParam(ParamSubgroupFilter, 3, 3)}
+		if _, err := base.Update(dup); err == nil {
+			t.Fatal("an update repeating (Type, SetID) was accepted; §5.1.4 wants INVALID_FILTER")
+		}
+	})
+}
