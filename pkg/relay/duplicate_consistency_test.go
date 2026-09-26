@@ -117,6 +117,18 @@ func TestRelay_DuplicateConsistency(t *testing.T) {
 		{"Normal, then End of Group", dg, with(dg, func(c *objCopy) {
 			c.status, c.payload = message.ObjectStatusEndOfGroup, ""
 		}), false},
+		// Only a Normal Object carries Properties (§11.2.1.2).
+		{"Normal with Immutable Properties, then End of Group", with(dg, func(c *objCopy) {
+			c.props = immutableProps(1)
+		}), with(dg, func(c *objCopy) {
+			c.status, c.payload = message.ObjectStatusEndOfGroup, ""
+		}), false},
+		// The late Object of §2.1.
+		{"End of Group, then Normal with Immutable Properties", with(dg, func(c *objCopy) {
+			c.status, c.payload = message.ObjectStatusEndOfGroup, ""
+		}), with(dg, func(c *objCopy) {
+			c.props = immutableProps(1)
+		}), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
