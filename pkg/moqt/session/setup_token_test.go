@@ -1,9 +1,11 @@
 package session_test
 
 import (
+	"context"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -12,34 +14,16 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// §10.3.1.4: the AUTHORIZATION TOKEN setup option is "functionally equivalent
-// to the AUTHORIZATION TOKEN message parameter" (§10.2.2), carrying tokens
-// "that the peer can use to authorize MOQT session establishment".
+// AUTHORIZATION TOKEN setup option (§10.3.1.4), which carries tokens like the
+// message parameter of the same name (§10.2.2).
 
 // tokenOption encodes tok as an AUTHORIZATION TOKEN setup option.
 func tokenOption(tok message.Token) wire.KVPair {
 	return wire.KVPair{Type: uint64(message.SetupOptionAuthorizationToken), ByteVal: tok.Bytes()}
 }
 
-// closeRecorder records the code its session closes the connection with,
-// which sessiontest does not pass to the peer.
-type closeRecorder struct {
-	session.Conn
-
-	code chan uint64
-}
-
-func (c *closeRecorder) CloseWithError(code uint64, reason string) error {
-	select {
-	case c.code <- code:
-	default:
-	}
-	return c.Conn.CloseWithError(code, reason)
-}
-
-// openWithClientOptions opens a pair whose client sends extra SETUP options,
-// and returns the server's open error alongside the sessions and the code the
-// server closed its connection with, if it did.
+// openWithClientOptions opens a pair whose client sends extra raw SETUP options, returning the
+// server's open error and the code its conn closed with, if any.
 func openWithClientOptions(
 	t *testing.T,
 	serverOpts []session.Option,
@@ -47,7 +31,7 @@ func openWithClientOptions(
 ) (cli, srv *session.Session, srvClose <-chan uint64, srvErr error) {
 	t.Helper()
 	cliConn, rawSrv := sessiontest.NewConnPair()
-	srvConn := &closeRecorder{Conn: rawSrv, code: make(chan uint64, 1)}
+	srvConn := newCloseRecorder(rawSrv)
 	cliOpts := make([]session.Option, 0, len(extra))
 	for _, kv := range extra {
 		cliOpts = append(cliOpts, session.WithSetupOptionForTest(kv))
@@ -69,19 +53,6 @@ func openWithClientOptions(
 		}
 	})
 	return cli, srv, srvConn.code, srvErr
-}
-
-// requireClosedWith checks the code a connection was closed with.
-func requireClosedWith(t *testing.T, closed <-chan uint64, want moqt.SessionErrorCode) {
-	t.Helper()
-	select {
-	case code := <-closed:
-		if code != uint64(want) {
-			t.Fatalf("closed with code %#x, want %#x", code, uint64(want))
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatalf("connection stayed open; want close with %#x", uint64(want))
-	}
 }
 
 func TestSetupTokens(t *testing.T) {
@@ -107,14 +78,9 @@ func TestSetupTokens(t *testing.T) {
 		cli, srv, _, err := openWithClientOptions(
 			t,
 			[]session.Option{session.WithMaxAuthTokenCacheSize(1024)},
-			tokenOption(
-				message.Token{
-					AliasType:  message.AliasTypeRegister,
-					TokenAlias: 3,
-					TokenType:  tokType,
-					TokenValue: value,
-				},
-			),
+			tokenOption(message.Token{
+				AliasType: message.AliasTypeRegister, TokenAlias: 3, TokenType: tokType, TokenValue: value,
+			}),
 		)
 		if err != nil {
 			t.Fatalf("server open: %v", err)
@@ -141,21 +107,14 @@ func TestSetupTokens(t *testing.T) {
 
 	t.Run("REGISTER over the cache size is used as a value", func(t *testing.T) {
 		t.Parallel()
-		// No MAX_AUTH_TOKEN_CACHE_SIZE: the default 0 prohibits aliases.
-		// §10.3.1.4: the receiver "MUST NOT fail the session with
-		// AUTH_TOKEN_CACHE_OVERFLOW. Instead, it MUST treat the option as
-		// Alias Type USE_VALUE."
+		// No MAX_AUTH_TOKEN_CACHE_SIZE: the default 0 prohibits aliases, so
+		// the option is treated as USE_VALUE, not a cache overflow (§10.3.1.4).
 		_, srv, _, err := openWithClientOptions(
 			t,
 			nil,
-			tokenOption(
-				message.Token{
-					AliasType:  message.AliasTypeRegister,
-					TokenAlias: 3,
-					TokenType:  tokType,
-					TokenValue: value,
-				},
-			),
+			tokenOption(message.Token{
+				AliasType: message.AliasTypeRegister, TokenAlias: 3, TokenType: tokType, TokenValue: value,
+			}),
 		)
 		if err != nil {
 			t.Fatalf("server open: %v", err)
@@ -169,7 +128,7 @@ func TestSetupTokens(t *testing.T) {
 	})
 }
 
-// TestSetupTokenViolations: tokens in SETUP that close the session.
+// TestSetupTokenViolations: tokens in a received SETUP that close the session.
 func TestSetupTokenViolations(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -177,42 +136,17 @@ func TestSetupTokenViolations(t *testing.T) {
 		opts []wire.KVPair
 		want moqt.SessionErrorCode
 	}{
-		// §10.2.2: "If a server receives Alias Type DELETE (0x0) or USE_ALIAS
-		// (0x2) in a SETUP message, it MUST close the session with a
-		// PROTOCOL_VIOLATION."
+		// §10.2.2: DELETE or USE_ALIAS in SETUP is a PROTOCOL_VIOLATION.
 		{"DELETE", []wire.KVPair{tokenOption(message.Token{AliasType: message.AliasTypeDelete, TokenAlias: 1})},
 			moqt.SessionProtocolViolation},
 		{"USE_ALIAS", []wire.KVPair{tokenOption(message.Token{AliasType: message.AliasTypeUseAlias, TokenAlias: 1})},
 			moqt.SessionProtocolViolation},
-		// "If the Token structure cannot be decoded, the receiver MUST close
-		// the Session with KEY_VALUE_FORMATTING_ERROR."
+		// §10.2.2: an undecodable Token is a KEY_VALUE_FORMATTING_ERROR.
 		{"undecodable", []wire.KVPair{{Type: uint64(message.SetupOptionAuthorizationToken), ByteVal: []byte{0x09}}},
 			moqt.SessionKeyValueFormattingError},
-		// "The receiver of a message attempting to register an Alias which is
-		// already registered MUST close the Session with
-		// DUPLICATE_AUTH_TOKEN_ALIAS."
-		{
-			"duplicate REGISTER",
-			[]wire.KVPair{
-				tokenOption(
-					message.Token{
-						AliasType:  message.AliasTypeRegister,
-						TokenAlias: 1,
-						TokenType:  1,
-						TokenValue: []byte("a"),
-					},
-				),
-				tokenOption(
-					message.Token{
-						AliasType:  message.AliasTypeRegister,
-						TokenAlias: 1,
-						TokenType:  1,
-						TokenValue: []byte("b"),
-					},
-				),
-			},
-			moqt.SessionDuplicateAuthTokenAlias,
-		},
+		// §10.2.2: registering an Alias twice is DUPLICATE_AUTH_TOKEN_ALIAS.
+		{"duplicate REGISTER", []wire.KVPair{tokenOption(register(1, "a")), tokenOption(register(1, "b"))},
+			moqt.SessionDuplicateAuthTokenAlias},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -223,6 +157,80 @@ func TestSetupTokenViolations(t *testing.T) {
 				t.Fatal("server opened a session whose SETUP carried an invalid token")
 			}
 			requireClosedWith(t, closed, tc.want)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Send side: a REGISTER the peer's MAX_AUTH_TOKEN_CACHE_SIZE cannot hold is
+// used as a value, so the sender purges it (§10.3.1.4).
+// ---------------------------------------------------------------------------
+
+// register builds a REGISTER token of Token Type 1.
+func register(alias uint64, value string) message.Token {
+	return message.Token{
+		AliasType:  message.AliasTypeRegister,
+		TokenAlias: alias,
+		TokenType:  1,
+		TokenValue: []byte(value),
+	}
+}
+
+// TestSetupTokensSent: the tokens reach the peer, and the sender learns which
+// REGISTERs the peer holds — those that fit its cache, in SETUP order.
+func TestSetupTokensSent(t *testing.T) {
+	small := register(1, "0123456789")             // 16+10 = 26 bytes
+	large := register(2, strings.Repeat("x", 100)) // 116 bytes: does not fit
+	tiny := register(3, "ab")                      // 18 bytes: fits after 1
+	value := message.Token{AliasType: message.AliasTypeUseValue, TokenType: 1, TokenValue: []byte("v")}
+	client, server := openPairWithOpts(t,
+		[]session.Option{
+			session.WithSetupToken(small), session.WithSetupToken(large),
+			session.WithSetupToken(tiny), session.WithSetupToken(value),
+		},
+		[]session.Option{session.WithMaxAuthTokenCacheSize(26 + 18)},
+	)
+
+	if got := client.SetupTokenAliases(); !slices.Equal(got, []uint64{1, 3}) {
+		t.Fatalf("SetupTokenAliases() = %v, want [1 3]: alias 2 did not fit the peer's cache", got)
+	}
+	if got := len(server.SetupTokens()); got != 4 {
+		t.Fatalf("server received %d setup tokens, want 4", got)
+	}
+	for alias, want := range map[uint64]bool{1: true, 2: false, 3: true} {
+		_, _, err := server.TokenCache().Resolve(alias)
+		if (err == nil) != want {
+			t.Errorf("server cache holds alias %d: %v, want %v", alias, err == nil, want)
+		}
+	}
+}
+
+// TestSetupTokensDefaultCacheIsZero: a peer that advertises no cache size has
+// the default 0, so no REGISTER is held.
+func TestSetupTokensDefaultCacheIsZero(t *testing.T) {
+	client, _ := openPairWithOpts(t, []session.Option{session.WithSetupToken(register(1, "v"))}, nil)
+	if got := client.SetupTokenAliases(); len(got) != 0 {
+		t.Fatalf("SetupTokenAliases() = %v, want none: the peer's cache size defaults to 0", got)
+	}
+}
+
+// TestSetupTokenRefused: the client refuses to send a SETUP token the server
+// must close on (DELETE, USE_ALIAS, a repeated alias; §10.2.2).
+func TestSetupTokenRefused(t *testing.T) {
+	for name, toks := range map[string][]message.Token{
+		"DELETE":          {{AliasType: message.AliasTypeDelete, TokenAlias: 1}},
+		"USE_ALIAS":       {{AliasType: message.AliasTypeUseAlias, TokenAlias: 1}},
+		"duplicate alias": {register(1, "a"), register(1, "b")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var opts []session.Option
+			for _, tok := range toks {
+				opts = append(opts, session.WithSetupToken(tok))
+			}
+			requireRefusedOpen(t, "AUTHORIZATION TOKEN", func(ctx context.Context) (*session.Session, error) {
+				clientConn, _ := sessiontest.NewConnPair()
+				return session.Client(ctx, clientConn, opts...)
+			})
 		})
 	}
 }

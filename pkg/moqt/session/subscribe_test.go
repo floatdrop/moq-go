@@ -644,10 +644,9 @@ func TestIncomingSubgroupStreamTrackKey(t *testing.T) {
 	})
 }
 
-// TestSharedTrackAliasTakesLatestProperties: when a second subscription shares
-// an alias (§5.1), its Track Properties replace the first's (§2.5: "the most
-// recent set SHOULD replace any cached values"), so its DEFAULT_PUBLISHER_PRIORITY
-// is what inheriting subgroups get.
+// TestSharedTrackAliasTakesLatestProperties: a second subscription sharing an
+// alias (§5.1) replaces the cached Track Properties (§2.5), so its
+// DEFAULT_PUBLISHER_PRIORITY is what inheriting subgroups get.
 func TestSharedTrackAliasTakesLatestProperties(t *testing.T) {
 	cli, _ := openPair(t)
 	key := track.NewKey(wire.TrackNamespace{[]byte("ns")}, []byte("t"))

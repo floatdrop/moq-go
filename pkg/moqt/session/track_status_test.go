@@ -119,14 +119,9 @@ func TestTrackStatusRejected(t *testing.T) {
 	wg.Wait()
 }
 
-// §10.15: "The bidi stream is closed with a FIN after TRACK_STATUS_OK or
-// REQUEST_ERROR are sent" — "the subscriber cannot send REQUEST_UPDATE". And
-// §3.3.2: a requester "MAY FIN immediately after sending a message if it will
-// not send a REQUEST_UPDATE".
-
-// TestTrackStatusStreamClosesBothWays: after TRACK_STATUS_OK the responder
-// FINs its side, and the requester, which can never send a REQUEST_UPDATE,
-// FINs its own.
+// TestTrackStatusStreamClosesBothWays: the responder FINs after
+// TRACK_STATUS_OK (§10.15), and the requester, which cannot send
+// REQUEST_UPDATE, FINs its side too (§3.3.2).
 func TestTrackStatusStreamClosesBothWays(t *testing.T) {
 	client, server := openPair(t)
 	accepted := make(chan session.Stream, 1)
@@ -151,87 +146,51 @@ func TestTrackStatusStreamClosesBothWays(t *testing.T) {
 	}
 }
 
-// TestTrackStatusRequestUpdateClosesSession pins §10.9: "An endpoint that
-// receives a REQUEST_UPDATE other than in the two cases above MUST close the
-// session with a PROTOCOL_VIOLATION." TRACK_STATUS is not one of them.
-func TestTrackStatusRequestUpdateClosesSession(t *testing.T) {
-	client, server := openPair(t)
-	go func() {
-		req, err := server.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		_ = req.AcceptTrackStatus(nil)
-	}()
+// TestTrackStatusFollowupClosesSession: anything the requester sends after
+// TRACK_STATUS closes the session with PROTOCOL_VIOLATION — a REQUEST_UPDATE
+// (§10.9) or an unknown message type (§10).
+func TestTrackStatusFollowupClosesSession(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		write func(session.Stream, *session.Session) error
+	}{
+		{"REQUEST_UPDATE", func(s session.Stream, client *session.Session) error {
+			return message.Marshal(s, &message.RequestUpdate{RequestID: client.AllocRequestID()})
+		}},
+		{"unknown message type", func(s session.Stream, _ *session.Session) error {
+			return wire.WriteFrame(s, 0x3F00, nil) // unassigned type
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := openPair(t)
+			go func() {
+				req, err := server.AcceptRequest(t.Context())
+				if err != nil {
+					return
+				}
+				_ = req.AcceptTrackStatus(nil)
+			}()
 
-	stream, err := session.OpenRequestForTest(client, &message.TrackStatus{
-		RequestID: client.AllocRequestID(),
-		Name:      []byte("t"),
-	})
-	if err != nil {
-		t.Fatalf("open TRACK_STATUS: %v", err)
-	}
-	if _, err := message.Parse(stream); err != nil { // TRACK_STATUS_OK
-		t.Fatalf("read TRACK_STATUS_OK: %v", err)
-	}
-	// From a goroutine: on the unbuffered test pipe the write only completes
-	// if the server reads it.
-	go func() { _ = message.Marshal(stream, &message.RequestUpdate{RequestID: client.AllocRequestID()}) }()
-	requireClosedProtocolViolation(t, server)
-}
-
-// readWithin parses one message from s, failing the wait after d.
-func readWithin(s session.Stream, d time.Duration) (message.Message, error) {
-	type result struct {
-		msg message.Message
-		err error
-	}
-	got := make(chan result, 1)
-	go func() {
-		msg, err := message.Parse(s)
-		got <- result{msg, err}
-	}()
-	select {
-	case r := <-got:
-		return r.msg, r.err
-	case <-time.After(d):
-		return nil, errors.New("timed out: the stream is still open")
+			stream, err := session.OpenRequestForTest(client, &message.TrackStatus{
+				RequestID: client.AllocRequestID(),
+				Name:      []byte("t"),
+			})
+			if err != nil {
+				t.Fatalf("open TRACK_STATUS: %v", err)
+			}
+			if _, err := message.Parse(stream); err != nil {
+				t.Fatalf("read TRACK_STATUS_OK: %v", err)
+			}
+			// From a goroutine: the write completes only as the server reads.
+			go func() { _ = tc.write(stream, client) }()
+			requireClosedProtocolViolation(t, server)
+		})
 	}
 }
 
-// TestTrackStatusMalformedFollowupClosesSession: bytes after TRACK_STATUS
-// that do not even parse — an unknown type — close the session too. "An
-// endpoint that receives an unknown message type MUST close the session"
-// (§10); only the requester's FIN, a reset or session close end quietly.
-func TestTrackStatusMalformedFollowupClosesSession(t *testing.T) {
-	client, server := openPair(t)
-	go func() {
-		req, err := server.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		_ = req.AcceptTrackStatus(nil)
-	}()
-
-	stream, err := session.OpenRequestForTest(client, &message.TrackStatus{
-		RequestID: client.AllocRequestID(),
-		Name:      []byte("t"),
-	})
-	if err != nil {
-		t.Fatalf("open TRACK_STATUS: %v", err)
-	}
-	if _, err := message.Parse(stream); err != nil {
-		t.Fatalf("read TRACK_STATUS_OK: %v", err)
-	}
-	go func() { _ = wire.WriteFrame(stream, 0x3F00, nil) }() // unassigned type
-	requireClosedProtocolViolation(t, server)
-}
-
-// TestAcceptPublishTrackPropertiesRejected pins §2.5.1 for the session's
-// PUBLISH receiver: "For PUBLISH messages: the subscriber MUST respond with
-// REQUEST_ERROR with error code UNSUPPORTED_EXTENSION" when the Track
-// Properties carry a Mandatory Track Property it does not understand. Track
-// Properties that do not parse are refused as MALFORMED_TRACK.
+// TestAcceptPublishTrackPropertiesRejected: a PUBLISH with an unknown
+// Mandatory Track Property is refused with UNSUPPORTED_EXTENSION (§2.5.1), and
+// unparseable Track Properties with MALFORMED_TRACK.
 func TestAcceptPublishTrackPropertiesRejected(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -244,7 +203,7 @@ func TestAcceptPublishTrackPropertiesRejected(t *testing.T) {
 		{"malformed", []byte{0x01}, moqt.RequestMalformedTrack},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			client, server := openTokenPair(t,
+			client, server := openPair(t,
 				session.WithKnownMandatoryTrackProperties(map[message.PropertyType]struct{}{}))
 			accepted := make(chan error, 1)
 			go func() {

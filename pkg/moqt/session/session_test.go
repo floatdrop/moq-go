@@ -16,333 +16,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-func openPair(t *testing.T) (*session.Session, *session.Session) {
-	t.Helper()
-	ctx := t.Context()
-	aConn, bConn := sessiontest.NewConnPair()
-
-	var (
-		wg           sync.WaitGroup
-		aSess, bSess *session.Session
-		aErr, bErr   error
-	)
-	wg.Go(func() {
-		aSess, aErr = session.Client(ctx, aConn,
-			session.WithImplementation("mediamesh-test/client"),
-		)
-	})
-	wg.Go(func() {
-		bSess, bErr = session.Server(ctx, bConn,
-			session.WithImplementation("mediamesh-test/server"),
-		)
-	})
-	wg.Wait()
-	if aErr != nil {
-		t.Fatalf("client Open: %v", aErr)
-	}
-	if bErr != nil {
-		t.Fatalf("server Open: %v", bErr)
-	}
-
-	// Close is idempotent (sync.Once), so tests are free to call it
-	// explicitly; this cleanup just guarantees we don't leak sessions on
-	// any code path.
-	t.Cleanup(func() {
-		if err := aSess.Close(moqt.SessionNoError, "test cleanup"); err != nil {
-			t.Errorf("client cleanup Close: %v", err)
-		}
-		if err := bSess.Close(moqt.SessionNoError, "test cleanup"); err != nil {
-			t.Errorf("server cleanup Close: %v", err)
-		}
-	})
-
-	return aSess, bSess
-}
-
-// openPairWithLimits performs the SETUP handshake over a credit-capped conn
-// pair. aBidiLimit caps the client's outbound bidi-stream credit (the SETUP
-// control stream is unidirectional, so it is unaffected by the cap). A
-// negative limit means unlimited.
-func openPairWithLimits(t *testing.T, aBidiLimit int) (*session.Session, *session.Session) {
-	t.Helper()
-	ctx := t.Context()
-	aConn, bConn := sessiontest.NewConnPairWithLimits(aBidiLimit, -1)
-
-	var (
-		wg           sync.WaitGroup
-		aSess, bSess *session.Session
-		aErr, bErr   error
-	)
-	wg.Go(func() { aSess, aErr = session.Client(ctx, aConn) })
-	wg.Go(func() { bSess, bErr = session.Server(ctx, bConn) })
-	wg.Wait()
-	if aErr != nil {
-		t.Fatalf("client Open: %v", aErr)
-	}
-	if bErr != nil {
-		t.Fatalf("server Open: %v", bErr)
-	}
-	t.Cleanup(func() {
-		_ = aSess.Close(moqt.SessionNoError, "test cleanup")
-		_ = bSess.Close(moqt.SessionNoError, "test cleanup")
-	})
-	return aSess, bSess
-}
-
-// TestClientSendsPathAndAuthority covers WithPath and WithAuthority, which had
-// no test of any kind despite internal/dial putting AUTHORITY on every
-// native-QUIC connection this repo makes.
-//
-// It asserts the option arrives under the right §15.4 codepoint, not merely
-// that some option arrived: the value travelling under the wrong key is the
-// failure a peer actually suffers, and §10.3 has it ignore the unrecognized
-// option silently rather than error. Byte-level encoding is pinned separately
-// in message.TestSetupOptionGoldenBytes.
-func TestClientSendsPathAndAuthority(t *testing.T) {
-	ctx := t.Context()
-	clientConn, serverConn := sessiontest.NewConnPair()
-
-	var (
-		wg                     sync.WaitGroup
-		clientSess, serverSess *session.Session
-		clientErr, serverErr   error
-	)
-	wg.Go(func() {
-		clientSess, clientErr = session.Client(ctx, clientConn,
-			session.WithPath("/relay?room=1"),
-			session.WithAuthority("relay.example:4433"),
-		)
-	})
-	wg.Go(func() {
-		serverSess, serverErr = session.Server(ctx, serverConn)
-	})
-	wg.Wait()
-
-	if clientErr != nil {
-		t.Fatalf("client Open: %v", clientErr)
-	}
-	if serverErr != nil {
-		t.Fatalf("server Open: %v", serverErr)
-	}
-	t.Cleanup(func() {
-		_ = clientSess.Close(moqt.SessionNoError, "test cleanup")
-		_ = serverSess.Close(moqt.SessionNoError, "test cleanup")
-	})
-
-	want := map[uint64]string{
-		uint64(message.SetupOptionPath):      "/relay?room=1",
-		uint64(message.SetupOptionAuthority): "relay.example:4433",
-	}
-	got := make(map[uint64]string)
-	for _, opt := range serverSess.PeerOptions() {
-		got[opt.Type] = string(opt.ByteVal)
-	}
-	for typ, val := range want {
-		if got[typ] != val {
-			t.Errorf("server saw option 0x%02X = %q, want %q (all: %+v)",
-				typ, got[typ], val, serverSess.PeerOptions())
-		}
-	}
-}
-
-// TestClientRejectsServerSentPathAndAuthority covers the receive side of
-// §10.3.1.1/§10.3.1.2. PATH and AUTHORITY are client-to-server only: each
-// section says the option MUST NOT be used by the server and that a session
-// receiving one from a server MUST be closed, with INVALID_PATH and
-// INVALID_AUTHORITY respectively — 0x8 and 0x19 in the §3.5 registry.
-//
-// Until this landed the client stored whatever the server sent and inspected
-// none of it, so a server could hand a client a PATH and the session carried on
-// — the four §3.5 codes for these two options sat in errors.go with no
-// reference anywhere, which is how the omission stayed invisible.
-//
-// The offending peer is hand-rolled rather than built from session.Server,
-// because a moq-go server now refuses to send these at all (see
-// TestRefusesToSendPathOrAuthority). That is the honest shape anyway: the
-// scenario under test is a non-conforming third-party server.
-func TestClientRejectsServerSentPathAndAuthority(t *testing.T) {
-	tests := []struct {
-		name string
-		opt  wire.KVPair
-	}{
-		{"PATH", message.PathOption("/relay")},
-		{"AUTHORITY", message.AuthorityOption("relay.example:4433")},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Bounded so a failure inside the hand-rolled peer below surfaces
-			// as a one-second deadline rather than parking session.Client until
-			// the package-wide 10-minute panic.
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-			t.Cleanup(cancel)
-			clientConn, serverConn := sessiontest.NewConnPair()
-
-			var wg sync.WaitGroup
-			wg.Go(func() {
-				// Both sides of SETUP are symmetric uni-streams: send ours,
-				// then drain theirs so the client's send half never blocks.
-				send, err := serverConn.OpenUniStream()
-				if err != nil {
-					t.Errorf("hand-rolled server: OpenUniStream: %v", err)
-					return
-				}
-				if err := message.Marshal(send, &message.Setup{Options: []wire.KVPair{tt.opt}}); err != nil {
-					t.Errorf("hand-rolled server: Marshal SETUP: %v", err)
-					return
-				}
-				if recv, err := serverConn.AcceptUniStream(ctx); err == nil {
-					_, _ = message.Parse(recv)
-				}
-			})
-
-			clientSess, clientErr := session.Client(ctx, clientConn)
-			wg.Wait()
-
-			if clientErr == nil {
-				_ = clientSess.Close(moqt.SessionNoError, "test cleanup")
-				t.Fatalf("client accepted a server-sent %s option; want the session refused", tt.name)
-			}
-			if clientSess != nil {
-				t.Errorf("client returned a session alongside the error: %+v", clientSess)
-			}
-			// The reason travels to the peer, so it should name the offending
-			// option rather than being a bare "protocol violation".
-			if !strings.Contains(clientErr.Error(), tt.name) {
-				t.Errorf("error %q does not name the %s option", clientErr, tt.name)
-			}
-		})
-	}
-}
-
-// webTransportConn makes a sessiontest pipe claim to be WebTransport, which is
-// all the session layer's optional-capability assertion looks for. A real
-// WebTransport session is not needed to test the guard, and wiring one up here
-// would test webtransport-go rather than this rule.
-type webTransportConn struct{ session.Conn }
-
-func (webTransportConn) IsWebTransport() bool { return true }
-
-// TestServerRejectsPathOrAuthorityOverWebTransport covers the second of the
-// three conditions §10.3.1.1/§10.3.1.2 name: an option "received while
-// WebTransport is used" MUST close the session, whichever side received it.
-//
-// A server ignores these over native QUIC because receiving them there is what
-// they are for, so the role gate alone is not enough — without the transport
-// check the relay's WebTransport listener accepts a session an interop peer
-// expects to be rejected, and nothing logs it.
-func TestServerRejectsPathOrAuthorityOverWebTransport(t *testing.T) {
-	tests := []struct {
-		name string
-		opt  wire.KVPair
-	}{
-		{"PATH", message.PathOption("/relay")},
-		{"AUTHORITY", message.AuthorityOption("relay.example:4433")},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-			t.Cleanup(cancel)
-			clientConn, serverConn := sessiontest.NewConnPair()
-
-			var wg sync.WaitGroup
-			wg.Go(func() {
-				send, err := clientConn.OpenUniStream()
-				if err != nil {
-					t.Errorf("hand-rolled client: OpenUniStream: %v", err)
-					return
-				}
-				if err := message.Marshal(send, &message.Setup{Options: []wire.KVPair{tt.opt}}); err != nil {
-					t.Errorf("hand-rolled client: Marshal SETUP: %v", err)
-					return
-				}
-				if recv, err := clientConn.AcceptUniStream(ctx); err == nil {
-					_, _ = message.Parse(recv)
-				}
-			})
-
-			sess, err := session.Server(ctx, webTransportConn{serverConn})
-			wg.Wait()
-
-			if err == nil {
-				_ = sess.Close(moqt.SessionNoError, "test cleanup")
-				t.Fatalf(
-					"server accepted a %s option over WebTransport; §10.3.1 requires the session be closed",
-					tt.name)
-			}
-			if !strings.Contains(err.Error(), "WebTransport") {
-				t.Errorf("error %q does not explain the WebTransport restriction", err)
-			}
-		})
-	}
-}
-
-// TestRefusesToSendPathOrAuthority covers the send side of §10.3.1.1/§10.3.1.2:
-// each says PATH and AUTHORITY "MUST NOT be used by the server, or when
-// WebTransport is used". Before this, nothing stopped either — a WebTransport
-// client calling WithAuthority produced a session a strict server would close,
-// and the only thing preventing it was cmd/interop-client remembering not to.
-//
-// The open fails rather than dropping the option, so a caller cannot end up
-// believing it requested an authority the peer never saw.
-func TestRefusesToSendPathOrAuthority(t *testing.T) {
-	opts := map[string]session.Option{
-		"PATH":      session.WithPath("/relay"),
-		"AUTHORITY": session.WithAuthority("relay.example:4433"),
-	}
-
-	// The guard rejects before any I/O, so a correct implementation returns
-	// instantly. The deadline exists so that if the guard is ever removed the
-	// open fails in a second with a deadline error instead of blocking forever
-	// on a handshake with a peer that does not exist.
-	openCtx := func(t *testing.T) context.Context {
-		t.Helper()
-		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-		t.Cleanup(cancel)
-		return ctx
-	}
-
-	for name, opt := range opts {
-		t.Run(name+"/server", func(t *testing.T) {
-			_, serverConn := sessiontest.NewConnPair()
-			sess, err := session.Server(openCtx(t), serverConn, opt)
-			if err == nil {
-				_ = sess.Close(moqt.SessionNoError, "test cleanup")
-				t.Fatalf("server sent a %s option; §10.3.1 says it MUST NOT", name)
-			}
-			if !strings.Contains(err.Error(), name) {
-				t.Errorf("error %q does not name the %s option", err, name)
-			}
-		})
-
-		t.Run(name+"/webtransport", func(t *testing.T) {
-			clientConn, _ := sessiontest.NewConnPair()
-			sess, err := session.Client(openCtx(t), webTransportConn{clientConn}, opt)
-			if err == nil {
-				_ = sess.Close(moqt.SessionNoError, "test cleanup")
-				t.Fatalf("client sent a %s option over WebTransport; §10.3.1 says it MUST NOT", name)
-			}
-			if !strings.Contains(err.Error(), "WebTransport") {
-				t.Errorf("error %q does not explain the WebTransport restriction", err)
-			}
-		})
-	}
-}
-
-func TestHandshakeExchangesPeerOptions(t *testing.T) {
-	client, server := openPair(t)
-
-	clientSawServer := client.PeerOptions()
-	if len(clientSawServer) != 1 || string(clientSawServer[0].ByteVal) != "mediamesh-test/server" {
-		t.Fatalf("client received wrong peer options: %+v", clientSawServer)
-	}
-	serverSawClient := server.PeerOptions()
-	if len(serverSawClient) != 1 || string(serverSawClient[0].ByteVal) != "mediamesh-test/client" {
-		t.Fatalf("server received wrong peer options: %+v", serverSawClient)
-	}
-}
-
 func TestRequestIDParity(t *testing.T) {
 	client, server := openPair(t)
 
@@ -509,10 +182,8 @@ func TestDuplicateGoawayClosesPeerSession(t *testing.T) {
 	}
 }
 
-// TestSendGoawayClientRejectsURI verifies that a client-side session rejects
-// SendGoaway with a non-empty URI per §10.4: "A client MUST send a
-// zero-length New Session URI in any GOAWAY". The server side must still be
-// allowed to include one.
+// TestSendGoawayClientRejectsURI: a client's GOAWAY carries an empty New
+// Session URI (§10.4); a server's may carry one.
 func TestSendGoawayClientRejectsURI(t *testing.T) {
 	client, server := openPair(t)
 
@@ -530,40 +201,6 @@ func TestSendGoawayClientRejectsURI(t *testing.T) {
 	// but verify explicitly that the guard doesn't fire for servers).
 	if err := server.SendGoaway(1*time.Second, "moqt://relay-2.example/"); err != nil {
 		t.Fatalf("server SendGoaway with URI: %v", err)
-	}
-}
-
-// failOpenConn wraps a working session.Conn but fails OpenUniStream
-// immediately, simulating a peer that drops before the SETUP send half can
-// finish. AcceptUniStream still delegates to the embedded conn and would
-// block forever — exactly the situation that hung the old handshake.
-type failOpenConn struct{ session.Conn }
-
-func (c *failOpenConn) OpenUniStream() (session.SendStream, error) {
-	return nil, errors.New("synthetic open failure")
-}
-
-// TestHandshakeFailFastCancelsSibling verifies that if one side of the
-// handshake fails fast, the other returns promptly via errgroup's derived
-// context — i.e. we don't deadlock waiting on a stream the peer will never
-// open.
-func TestHandshakeFailFastCancelsSibling(t *testing.T) {
-	a, _ := sessiontest.NewConnPair() // b is unused so AcceptUniStream blocks
-	conn := &failOpenConn{Conn: a}
-
-	done := make(chan error, 1)
-	go func() {
-		_, err := session.Client(t.Context(), conn)
-		done <- err
-	}()
-
-	select {
-	case err := <-done:
-		if err == nil {
-			t.Fatal("expected handshake error, got nil")
-		}
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("handshake hung; errgroup did not cancel sibling")
 	}
 }
 
@@ -594,162 +231,65 @@ func TestCloseTerminatesBothSides(t *testing.T) {
 	}
 }
 
-// TestGreaseRoundTrip verifies that a GREASE SETUP option injected via
-// WithGrease() survives the handshake: the peer receives it in PeerOptions()
-// and the handshake completes without error. This exercises the requirement
-// from §14 that recipients MUST ignore unknown SETUP option types.
-func TestGreaseRoundTrip(t *testing.T) {
-	ctx := t.Context()
-	aConn, bConn := sessiontest.NewConnPair()
-
-	var (
-		wg           sync.WaitGroup
-		aSess, bSess *session.Session
-		aErr, bErr   error
-	)
-	wg.Go(func() {
-		aSess, aErr = session.Client(ctx, aConn,
-			session.WithImplementation("grease-test/client"),
-			session.WithGrease(),
-		)
-	})
-	wg.Go(func() {
-		bSess, bErr = session.Server(ctx, bConn,
-			session.WithImplementation("grease-test/server"),
-			session.WithGrease(),
-		)
-	})
-	wg.Wait()
-	if aErr != nil {
-		t.Fatalf("client handshake: %v", aErr)
-	}
-	if bErr != nil {
-		t.Fatalf("server handshake: %v", bErr)
-	}
-	t.Cleanup(func() {
-		aSess.Close(moqt.SessionNoError, "test cleanup")
-		bSess.Close(moqt.SessionNoError, "test cleanup")
-	})
-
-	// The server should see the client's GREASE option among peer options.
-	assertHasGrease := func(name string, opts []wire.KVPair) {
-		t.Helper()
-		var found bool
-		for _, kv := range opts {
-			if kv.Type >= 0x9D && (kv.Type-0x9D)%0x7F == 0 /* GREASE pattern */ {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("%s: no GREASE option in PeerOptions %+v", name, opts)
-		}
-	}
-	assertHasGrease("server saw client GREASE", bSess.PeerOptions())
-	assertHasGrease("client saw server GREASE", aSess.PeerOptions())
-}
-
-// closeRecordingConn records the code the session closes its conn with.
-type closeRecordingConn struct {
-	session.Conn
-
-	code chan uint64
-}
-
-func (c closeRecordingConn) CloseWithError(code uint64, reason string) error {
-	select {
-	case c.code <- code:
-	default:
-	}
-	return c.Conn.CloseWithError(code, reason)
-}
-
-// TestServerClosesMalformedPathOrAuthority covers the syntax rule of
-// §10.3.1.1/§10.3.1.2: "If an AUTHORITY option does not conform to these
-// rules, the session MUST be closed with MALFORMED_AUTHORITY", and likewise
-// PATH with MALFORMED_PATH. A well-formed pair still opens. The client is
-// hand-rolled: a moq-go client refuses to send a malformed value (see
-// TestRefusesToSendMalformedPathOrAuthority).
-func TestServerClosesMalformedPathOrAuthority(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		opts []wire.KVPair
-		want moqt.SessionErrorCode // SessionNoError: the session opens
+// TestControlStreamViolationsCloseTheSession: after SETUP only GOAWAY is valid
+// on the control stream (§10, Table 5); anything else closes the session with
+// PROTOCOL_VIOLATION (§3.5) and a reason naming the rule.
+func TestControlStreamViolationsCloseTheSession(t *testing.T) {
+	tests := []struct {
+		name       string
+		offending  message.Message
+		wantReason string
 	}{
-		{"well-formed", []wire.KVPair{
-			message.AuthorityOption("relay.example:4433"), message.PathOption("/relay?room=1"),
-		}, moqt.SessionNoError},
-		{"AUTHORITY", []wire.KVPair{message.AuthorityOption("relay example")}, moqt.SessionMalformedAuthority},
-		{"AUTHORITY empty host", []wire.KVPair{message.AuthorityOption(":4433")}, moqt.SessionMalformedAuthority},
-		{"PATH", []wire.KVPair{message.PathOption("relay")}, moqt.SessionMalformedPath},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-			t.Cleanup(cancel)
-			clientConn, serverConn := sessiontest.NewConnPair()
-			rec := closeRecordingConn{Conn: serverConn, code: make(chan uint64, 1)}
+		{
+			name:       "a second SETUP",
+			offending:  &message.Setup{},
+			wantReason: "duplicate SETUP",
+		},
+		{
+			// SUBSCRIBE is legal, but only as the first message of a request
+			// stream — never on the control stream.
+			name:       "a request-stream message",
+			offending:  &message.Subscribe{Namespace: wire.Namespace("demo"), Name: []byte("cam")},
+			wantReason: "unexpected",
+		},
+	}
 
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			t.Cleanup(cancel)
+			ourConn, peerConn := sessiontest.NewConnPair()
+
+			// Complete SETUP, then send the offending message on the control stream.
 			var wg sync.WaitGroup
 			wg.Go(func() {
-				send, err := clientConn.OpenUniStream()
-				if err != nil {
-					t.Errorf("hand-rolled client: OpenUniStream: %v", err)
-					return
-				}
-				if err := message.Marshal(send, &message.Setup{Options: tc.opts}); err != nil {
-					t.Errorf("hand-rolled client: Marshal SETUP: %v", err)
-					return
-				}
-				if recv, err := clientConn.AcceptUniStream(ctx); err == nil {
-					_, _ = message.Parse(recv)
+				if send := handRolledSetup(ctx, t, peerConn); send != nil {
+					_ = message.Marshal(send, tt.offending)
 				}
 			})
-			sess, err := session.Server(ctx, rec)
-			wg.Wait()
-			if tc.want == moqt.SessionNoError {
-				if err != nil {
-					t.Fatalf("server refused well-formed PATH/AUTHORITY: %v", err)
-				}
-				_ = sess.Close(moqt.SessionNoError, "test cleanup")
-				return
-			}
-			if err == nil {
-				_ = sess.Close(moqt.SessionNoError, "test cleanup")
-				t.Fatalf("server accepted a malformed %s", tc.name)
-			}
-			select {
-			case code := <-rec.code:
-				if code != uint64(tc.want) {
-					t.Fatalf("closed with %#x, want %#x", code, uint64(tc.want))
-				}
-			default:
-				t.Fatalf("server returned %v without closing the conn", err)
-			}
-		})
-	}
-}
 
-// TestRefusesToSendMalformedPathOrAuthority: the send side of the syntax rule.
-// A server closes the session with MALFORMED_PATH / MALFORMED_AUTHORITY on a
-// value that is not RFC 3986 (§10.3.1.1–2), so the client refuses to open
-// with one rather than send it. The values are ones uri.Parse, which goes
-// through net/url, lets through.
-func TestRefusesToSendMalformedPathOrAuthority(t *testing.T) {
-	for name, opt := range map[string]session.Option{
-		"PATH":      session.WithPath("/room?tags=[a,b]"),
-		"AUTHORITY": session.WithAuthority("[fe80::1%en0]:4433"),
-	} {
-		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-			t.Cleanup(cancel)
-			clientConn, _ := sessiontest.NewConnPair()
-			sess, err := session.Client(ctx, clientConn, opt)
-			if err == nil {
-				_ = sess.Close(moqt.SessionNoError, "test cleanup")
-				t.Fatalf("client sent a malformed %s option", name)
+			sess, err := session.Client(ctx, ourConn)
+			if err != nil {
+				t.Fatalf("Client: %v", err)
 			}
-			if !strings.Contains(err.Error(), name) {
-				t.Errorf("error %q does not name the %s option", err, name)
+			wg.Wait()
+
+			select {
+			case <-sess.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("session stayed open after a control-stream violation")
+			}
+
+			closed, ok := errors.AsType[*session.ClosedError](sess.Err())
+			if !ok {
+				t.Fatalf("Err() = %v, want a *session.ClosedError", sess.Err())
+			}
+			if closed.Code != moqt.SessionProtocolViolation {
+				t.Errorf("closed with code %#x, want PROTOCOL_VIOLATION (%#x)",
+					uint64(closed.Code), uint64(moqt.SessionProtocolViolation))
+			}
+			if !strings.Contains(closed.Reason, tt.wantReason) {
+				t.Errorf("reason %q does not mention %q", closed.Reason, tt.wantReason)
 			}
 		})
 	}

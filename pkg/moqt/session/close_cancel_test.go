@@ -3,28 +3,19 @@ package session_test
 import (
 	"errors"
 	"io"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// §3.3.2: "A FIN only indicates that an endpoint will send no further messages
-// in that direction; it is not a request cancellation." §3.3.3: a request is
-// cancelled "by abruptly terminating any directions of the stream that are
-// still open, using RESET_STREAM for a direction they are sending and
-// STOP_SENDING for a direction they are receiving". Close on a handle whose
-// owner ends the request must therefore cancel, not FIN — the peer has to see
-// a reset, never a clean end.
+// Closing a request handle cancels the request with RESET_STREAM /
+// STOP_SENDING (§3.3.3); a FIN is not a cancellation (§3.3.2).
 
-// requireCancelled reads s until it fails and requires the failure to be a
-// reset rather than a clean FIN. Messages before it (e.g. a PUBLISH_DONE) are
-// skipped.
+// requireCancelled reads s until it fails, skipping messages, and requires a reset rather than a clean FIN.
 func requireCancelled(t *testing.T, s session.Stream) {
 	t.Helper()
 	got := make(chan error, 1)
@@ -89,18 +80,8 @@ func TestCloseCancelsRequest(t *testing.T) {
 			return pair{(<-inc).Close, pub.Stream}
 		}},
 		{"Publication (SUBSCRIBE answered)", func(t *testing.T, c, s *session.Session) pair {
-			pubs := make(chan *session.Publication, 1)
-			go func() {
-				r, err := s.AcceptRequest(t.Context())
-				if err != nil {
-					return
-				}
-				p, _ := r.AcceptSubscribe(nil)
-				pubs <- p
-			}()
-			sub, err := c.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
-			must(t, err)
-			return pair{(<-pubs).Close, sub.Stream}
+			sub, pub := subscribePair(t, c, s)
+			return pair{pub.Close, sub.Stream}
 		}},
 		{"FetchRequest", func(t *testing.T, c, s *session.Session) pair {
 			peer := acceptWith(t, s, func(r *session.Request) (session.Stream, error) {
@@ -150,23 +131,11 @@ func TestCloseCancelsRequest(t *testing.T) {
 	}
 }
 
-// TestPublicationCloseAfterDoneKeepsPublishDone: Done is the graceful end —
-// PUBLISH_DONE then FIN (§3.3.2). A Close after it must not reset the send
-// side and risk losing the PUBLISH_DONE; it only stops reading.
+// TestPublicationCloseAfterDoneKeepsPublishDone: after Done's PUBLISH_DONE and
+// FIN (§3.3.2), Close only stops reading and must not reset the send side.
 func TestPublicationCloseAfterDoneKeepsPublishDone(t *testing.T) {
 	client, server := openPair(t)
-	pubs := make(chan *session.Publication, 1)
-	go func() {
-		r, err := server.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		p, _ := r.AcceptSubscribe(nil)
-		pubs <- p
-	}()
-	sub, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
-	must(t, err)
-	pub := <-pubs
+	sub, pub := subscribePair(t, client, server)
 
 	// Read concurrently: on the unbuffered test pipe Done's write completes
 	// only as the subscriber reads.
@@ -198,58 +167,11 @@ func TestPublicationCloseAfterDoneKeepsPublishDone(t *testing.T) {
 	}
 }
 
-// acceptWith accepts the next request on s, answers it with accept, and
-// delivers the server side of its stream.
-func acceptWith(
-	t *testing.T,
-	s *session.Session,
-	accept func(*session.Request) (session.Stream, error),
-) <-chan session.Stream {
-	t.Helper()
-	out := make(chan session.Stream, 1)
-	go func() {
-		r, err := s.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		stream, err := accept(r)
-		if err != nil {
-			return
-		}
-		out <- stream
-	}()
-	return out
-}
-
-func must(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestFetchOKUnknownMandatoryPropertyCancels pins §2.5.1: "For FETCH_OK
-// messages: the subscriber MUST cancel the fetch (see Section 3.3.3)". A FIN
-// would leave the publisher serving the fetch (§3.3.2).
+// TestFetchOKUnknownMandatoryPropertyCancels: a FETCH_OK with an unknown
+// Mandatory Track Property makes the subscriber cancel the fetch (§2.5.1).
 func TestFetchOKUnknownMandatoryPropertyCancels(t *testing.T) {
-	aConn, bConn := sessiontest.NewConnPair()
-	var (
-		client, server *session.Session
-		cErr, sErr     error
-		wg             sync.WaitGroup
-	)
-	wg.Go(func() {
-		client, cErr = session.Client(t.Context(), aConn,
-			session.WithKnownMandatoryTrackProperties(map[message.PropertyType]struct{}{}))
-	})
-	wg.Go(func() { server, sErr = session.Server(t.Context(), bConn) })
-	wg.Wait()
-	must(t, cErr)
-	must(t, sErr)
-	t.Cleanup(func() {
-		_ = client.Close(moqt.SessionNoError, "")
-		_ = server.Close(moqt.SessionNoError, "")
-	})
+	client, server := openPairWithOpts(t,
+		[]session.Option{session.WithKnownMandatoryTrackProperties(map[message.PropertyType]struct{}{})}, nil)
 
 	peer := acceptWith(t, server, func(r *session.Request) (session.Stream, error) {
 		_, err := r.AcceptFetch(&message.FetchOK{TrackProperties: message.AppendTrackProperties(
@@ -262,9 +184,8 @@ func TestFetchOKUnknownMandatoryPropertyCancels(t *testing.T) {
 	requireCancelled(t, <-peer)
 }
 
-// TestRequestBrokerCloseCancels: RequestBroker.Close is a §3.3.3 cancel for
-// whatever stream it wraps, not only when that stream's own Close happens to
-// cancel.
+// TestRequestBrokerCloseCancels: RequestBroker.Close cancels the stream it
+// wraps (§3.3.3).
 func TestRequestBrokerCloseCancels(t *testing.T) {
 	client, server := openPair(t)
 	peer := acceptWith(t, server, func(r *session.Request) (session.Stream, error) {

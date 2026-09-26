@@ -6,22 +6,18 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// §10.2.1: "Each Message Parameter definition indicates the message types in
-// which it can appear. If it appears in some other type of message, the
-// receiving endpoint MUST close the connection with a PROTOCOL_VIOLATION."
-// §10.2: "An endpoint that receives an unknown Message Parameter MUST close
-// the session with PROTOCOL_VIOLATION", and receivers SHOULD do the same for
-// "unexpected duplicate parameters". Each receive point is covered: request
+// A Message Parameter outside the message types its definition lists
+// (§10.2.1), an unknown one, or an unexpected duplicate (§10.2) closes the
+// session with PROTOCOL_VIOLATION. Each receive point is covered: request
 // openers, their responses, REQUEST_UPDATE and its response, and
 // PUBLISH_STATE_NOTIFY.
 
-var videoNS = wire.TrackNamespace{[]byte("video")}
-
 // TestParamScopeOpeners: a request opener carrying a parameter its message
-// does not define, a duplicate, or an unknown type closes the receiver.
+// does not define, a duplicate (also inside FILL_PARAMETERS, §10.2.15), or an
+// unknown type closes the receiver. SUBSCRIBE_TRACKS takes SUBSCRIBE's
+// parameters (§10.20.1), but not response ones such as EXPIRES.
 func TestParamScopeOpeners(t *testing.T) {
 	cases := []struct {
 		name string
@@ -61,6 +57,20 @@ func TestParamScopeOpeners(t *testing.T) {
 				Name: []byte("t"), Parameters: message.Parameters{message.VarintParam(0x3E, 1)},
 			})
 		}},
+		{"duplicate inside FILL_PARAMETERS", func(c *session.Session) {
+			_, _ = c.Subscribe(t.Context(), &message.Subscribe{
+				Name: []byte("t"),
+				Parameters: message.Parameters{message.FillParametersParam(message.Parameters{
+					message.GroupOrderParam(message.GroupOrderAscending),
+					message.GroupOrderParam(message.GroupOrderDescending),
+				})},
+			})
+		}},
+		{"EXPIRES in SUBSCRIBE_TRACKS", func(c *session.Session) {
+			_, _ = c.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+				TrackNamespacePrefix: videoNS, Parameters: message.Parameters{message.ExpiresParam(time.Second)},
+			})
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,18 +80,6 @@ func TestParamScopeOpeners(t *testing.T) {
 			requireClosedProtocolViolation(t, server)
 		})
 	}
-}
-
-// answerWith replies to the first request server receives with resp.
-func answerWith(t *testing.T, server *session.Session, resp message.Message) {
-	t.Helper()
-	go func() {
-		r, err := server.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		_ = message.Marshal(r.Stream, resp)
-	}()
 }
 
 // TestParamScopeResponses: a response carrying a parameter its message form
@@ -133,21 +131,8 @@ func TestParamScopeResponses(t *testing.T) {
 // subscription it closes the receiver.
 func TestParamScopeRequestUpdate(t *testing.T) {
 	client, server := openPair(t)
-	go func() {
-		r, err := server.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		pub, err := r.AcceptSubscribe(nil)
-		if err != nil {
-			return
-		}
-		_ = pub.Broker().Serve(t.Context(), nil)
-	}()
-	sub, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
+	sub, pub := subscribePair(t, client, server)
+	go func() { _ = pub.Broker().Serve(t.Context(), nil) }()
 	go func() {
 		_, _ = sub.Update(t.Context(), message.Parameters{message.TrackNamespacePrefixParam(videoNS)})
 	}()
@@ -158,25 +143,12 @@ func TestParamScopeRequestUpdate(t *testing.T) {
 // REQUEST_UPDATE_OK; a response carrying it closes the requester.
 func TestParamScopeRequestUpdateOK(t *testing.T) {
 	client, server := openPair(t)
-	go func() {
-		r, err := server.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		pub, err := r.AcceptSubscribe(nil)
-		if err != nil {
-			return
-		}
-		b := pub.Broker()
-		b.HandleUpdates(func(*message.RequestUpdate) (*message.RequestOK, error) {
-			return &message.RequestOK{Parameters: message.Parameters{message.ForwardParam(true)}}, nil
-		})
-		_ = b.Serve(t.Context(), nil)
-	}()
-	sub, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
+	sub, pub := subscribePair(t, client, server)
+	b := pub.Broker()
+	b.HandleUpdates(func(*message.RequestUpdate) (*message.RequestOK, error) {
+		return &message.RequestOK{Parameters: message.Parameters{message.ForwardParam(true)}}, nil
+	})
+	go func() { _ = b.Serve(t.Context(), nil) }()
 	_, _ = sub.Update(t.Context(), message.Parameters{message.ForwardParam(false)})
 	requireClosedProtocolViolation(t, client)
 }
@@ -185,31 +157,18 @@ func TestParamScopeRequestUpdateOK(t *testing.T) {
 // PUBLISH_STATE_NOTIFY (§10.2.8); the subscriber closes on it.
 func TestParamScopePublishStateNotify(t *testing.T) {
 	client, server := openPair(t)
+	sub, pub := subscribePair(t, client, server)
 	go func() {
-		r, err := server.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		pub, err := r.AcceptSubscribe(nil)
-		if err != nil {
-			return
-		}
 		_ = message.Marshal(pub.Stream, &message.PublishStateNotify{
 			Parameters: message.Parameters{message.GroupOrderParam(message.GroupOrderAscending)},
 		})
 	}()
-	sub, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
 	go func() { _ = sub.Broker().Serve(t.Context(), nil) }()
 	requireClosedProtocolViolation(t, client)
 }
 
-// TestParamScopeRepeatedAuthorizationTokenAccepted: "The AUTHORIZATION TOKEN
-// parameter MAY be repeated within a message as long as the combination of
-// Token Type and Token Value are unique after resolving any aliases"
-// (§10.2.2), so it is exempt from the duplicate rule.
+// TestParamScopeRepeatedAuthorizationTokenAccepted: AUTHORIZATION TOKEN may
+// repeat with distinct Type and Value (§10.2.2), exempt from the duplicate rule.
 func TestParamScopeRepeatedAuthorizationTokenAccepted(t *testing.T) {
 	client, server := openPair(t)
 	tok := func(v string) message.Parameter {
@@ -227,28 +186,9 @@ func TestParamScopeRepeatedAuthorizationTokenAccepted(t *testing.T) {
 	}
 }
 
-// TestParamScopeDuplicateInsideFillParameters: FILL_PARAMETERS is "encoded as
-// if they were Parameters for a separate message" (§10.2.15), so §10.2's
-// duplicate rule applies inside it.
-func TestParamScopeDuplicateInsideFillParameters(t *testing.T) {
-	client, server := openPair(t)
-	go func() {
-		_, _ = client.Subscribe(t.Context(), &message.Subscribe{
-			Name: []byte("t"),
-			Parameters: message.Parameters{message.FillParametersParam(message.Parameters{
-				message.GroupOrderParam(message.GroupOrderAscending),
-				message.GroupOrderParam(message.GroupOrderDescending),
-			})},
-		})
-	}()
-	_, _ = server.AcceptRequest(t.Context())
-	requireClosedProtocolViolation(t, server)
-}
-
-// TestParamScopeSubscribeTracksTakesSubscribeParameters: "Any Parameter that
-// can be specified on a Subscription (ie: in SUBSCRIBE) is valid in
-// SUBSCRIBE_TRACKS, unless otherwise specified" (§10.20.1) — including a
-// Location Filter and FILL_PARAMETERS, which it names.
+// TestParamScopeSubscribeTracksTakesSubscribeParameters: SUBSCRIBE's
+// parameters are valid in SUBSCRIBE_TRACKS (§10.20.1), including a Location
+// Filter and FILL_PARAMETERS.
 func TestParamScopeSubscribeTracksTakesSubscribeParameters(t *testing.T) {
 	for _, p := range []message.Parameter{
 		message.SubgroupDeliveryTimeoutParam(time.Second),
@@ -270,23 +210,8 @@ func TestParamScopeSubscribeTracksTakesSubscribeParameters(t *testing.T) {
 	}
 }
 
-// TestParamScopeSubscribeTracksStillScoped: §10.20.1 widens SUBSCRIBE_TRACKS by
-// SUBSCRIBE's parameters only; EXPIRES, a response parameter, still closes.
-func TestParamScopeSubscribeTracksStillScoped(t *testing.T) {
-	client, server := openPair(t)
-	go func() {
-		_, _ = client.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-			TrackNamespacePrefix: videoNS, Parameters: message.Parameters{message.ExpiresParam(time.Second)},
-		})
-	}()
-	_, _ = server.AcceptRequest(t.Context())
-	requireClosedProtocolViolation(t, server)
-}
-
-// TestIncludePropertiesOutOfRangeCloses: §10.2.21 "The allowed values are 0
-// (do not send Properties) or 1 (send Properties) [...] If an endpoint
-// receives a value outside this range, it MUST close the session with
-// PROTOCOL_VIOLATION." Checked for each message that may carry it.
+// TestIncludePropertiesOutOfRangeCloses: INCLUDE_PROPERTIES other than 0 or 1
+// is a PROTOCOL_VIOLATION (§10.2.21), in each message that may carry it.
 func TestIncludePropertiesOutOfRangeCloses(t *testing.T) {
 	t.Parallel()
 	bad := message.Parameters{message.ByteParam(message.ParamIncludeProperties, 2)}

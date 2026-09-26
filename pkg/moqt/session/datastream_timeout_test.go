@@ -15,12 +15,9 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// TestObjectDeliveryTimeoutObjectPropertyOverride verifies the §12.2
-// first-object override: the Track-level OBJECT_DELIVERY_TIMEOUT is long, but
-// the first object of the subgroup carries an OBJECT_DELIVERY_TIMEOUT Object
-// Property that shortens it, so a later write past the short (overridden)
-// timeout resets the stream. If the override were ignored, the long Track-level
-// timeout would let the second write through.
+// TestObjectDeliveryTimeoutObjectPropertyOverride: an OBJECT_DELIVERY_TIMEOUT
+// Object Property on the subgroup's first Object overrides the Track value
+// (§12.2), so a write past the shorter timeout resets the stream.
 func TestObjectDeliveryTimeoutObjectPropertyOverride(t *testing.T) {
 	client, server := openPair(t)
 
@@ -77,15 +74,9 @@ func TestObjectDeliveryTimeoutObjectPropertyOverride(t *testing.T) {
 	}
 }
 
-// TestObjectDeliveryTimeoutIsPerObjectNotPerStream pins the §8 clock, which
-// starts at "the last header byte of every object" and is checked "before
-// attempting to pass it to the underlying transport". Objects that arrive fresh keep passing however long the stream has
-// been open — the timeout bounds an object's age, not a stream's lifetime.
-//
-// The distinction is invisible to any test that stalls the sender, because a
-// stall breaches both readings at once. It shows up only here, where nothing is
-// ever late: a per-stream clock resets this stream partway through, a per-object
-// clock delivers every object.
+// TestObjectDeliveryTimeoutIsPerObjectNotPerStream: the §8 clock runs per
+// Object, so fresh Objects keep passing however long the stream is open. Only a
+// sender that is never late tells this apart from a per-stream clock.
 func TestObjectDeliveryTimeoutIsPerObjectNotPerStream(t *testing.T) {
 	client, server := openPair(t)
 
@@ -142,18 +133,9 @@ func TestObjectDeliveryTimeoutIsPerObjectNotPerStream(t *testing.T) {
 	}
 }
 
-// TestObjectDeliveryTimeoutOverrideCannotOutrankSubscriber pins §8's resolution
-// ORDER, which is not symmetric: "the publisher's value is the Object Property
-// when present on the first object of the subgroup, and the Track Property
-// otherwise. If both the publisher's value and the subscriber's value are
-// non-zero, the smaller of the two is used."
-//
-// So the first-object override replaces the publisher's Track-level value and
-// nothing else — the subscriber's value is then compared against the result. A
-// publisher cannot lengthen a subscriber's timeout by overriding its own. An
-// implementation that merges the two halves first and applies the override to
-// the merged value gets this backwards, and silently hands the publisher a veto
-// over every subscriber's deadline.
+// TestObjectDeliveryTimeoutOverrideCannotOutrankSubscriber: the first-object
+// override replaces only the publisher's value, and the smaller of that and the
+// subscriber's is used (§8), so a publisher cannot lengthen a subscriber's timeout.
 func TestObjectDeliveryTimeoutOverrideCannotOutrankSubscriber(t *testing.T) {
 	client, server := openPair(t)
 
@@ -211,17 +193,9 @@ func TestObjectDeliveryTimeoutOverrideCannotOutrankSubscriber(t *testing.T) {
 	}
 }
 
-// TestObjectDeliveryTimeoutOverrideIgnoredOnReplayStream pins §12.2's "it is
-// ignored on any other object in the subgroup" across a stream boundary.
-//
-// The override belongs to the first object of the SUBGROUP, which is not the
-// same as the first object on a STREAM. A relay reaches the difference on two
-// routine paths: a subscriber that joins while the subgroup is already in
-// flight, and a §11.4.3 gap-reopen. Both open a stream with the §11.4.2
-// FIRST_OBJECT bit clear (ReplayingSubgroup), starting at whatever object comes
-// next — and if that object happens to carry a timeout property, honouring it
-// lets a publisher stretch, shrink or disable the timeout from the middle of a
-// subgroup. Here the stray property would extend 50 ms to 10 s.
+// TestObjectDeliveryTimeoutOverrideIgnoredOnReplayStream: the override applies
+// only to the subgroup's first Object (§12.2), not the first Object of a replay
+// stream (FIRST_OBJECT clear, §11.4.2). Here it would stretch 50 ms to 10 s.
 func TestObjectDeliveryTimeoutOverrideIgnoredOnReplayStream(t *testing.T) {
 	client, server := openPair(t)
 
@@ -291,16 +265,9 @@ func TestObjectDeliveryTimeoutOverrideIgnoredOnReplayStream(t *testing.T) {
 // OBJECT_DELIVERY_TIMEOUT: Write() enforcement
 // ---------------------------------------------------------------------------
 
-// TestObjectDeliveryTimeoutWriteRawIsNotEnforced pins a deliberate gap: the raw
-// Write escape hatch does NOT enforce OBJECT_DELIVERY_TIMEOUT.
-//
-// §8 measures the timeout per object, from the moment that object was received.
-// Write takes bytes with no object boundaries in them and no receipt time, so
-// it has neither input the check needs. It used to enforce a stream-lifetime
-// cap instead — first Write starts a clock, later Writes fail once it elapses —
-// which reset healthy senders for no reason beyond having kept the stream open,
-// and let a genuinely stale object through on a stream that had just reopened.
-// Callers that want the timeout use WriteObjectReceivedAt.
+// TestObjectDeliveryTimeoutWriteRawIsNotEnforced: raw Write carries no Object
+// boundaries or receipt time, so it does not enforce the per-Object §8 timeout;
+// WriteObjectReceivedAt does.
 func TestObjectDeliveryTimeoutWriteRawIsNotEnforced(t *testing.T) {
 	client, server := openPair(t)
 
@@ -447,20 +414,15 @@ func TestObjectDeliveryTimeoutDisabled(t *testing.T) {
 // SUBGROUP_DELIVERY_TIMEOUT: Close() enforcement
 // ---------------------------------------------------------------------------
 
-// TestSubgroupDeliveryTimeoutReset pins the §8 reset: once the subgroup is
-// closed, a stream the peer has not finished acknowledging within
-// SUBGROUP_DELIVERY_TIMEOUT is reset with DELIVERY_TIMEOUT.
-//
-// The stream's Context ends at Close, as quic-go's does, so only the
-// [session.DeliveryTrackingSendStream] signal can tell delivery apart from the
-// FIN being queued. Waiting on Context instead pre-empts the timer on every
-// real transport, and the reset never fires.
+// TestSubgroupDeliveryTimeoutReset: a closed subgroup the peer has not fully
+// acknowledged within SUBGROUP_DELIVERY_TIMEOUT is reset with DELIVERY_TIMEOUT
+// (§8). Only the DeliveryTrackingSendStream signal reports delivery.
 func TestSubgroupDeliveryTimeoutReset(t *testing.T) {
 	t.Parallel()
 	fake := newFinishingSendStream()
 
 	const timeout = 20 * time.Millisecond
-	ds := newOutgoingDataStreamForTest(fake)
+	ds := session.NewOutgoingSubgroupStream(fake)
 	ds = ds.WithDeliveryTimeouts(message.DeliveryTimeouts{Subgroup: timeout}, message.DeliveryTimeouts{})
 
 	if _, err := ds.Write([]byte("payload")); err != nil {
@@ -488,7 +450,7 @@ func TestSubgroupDeliveryTimeoutNoReset(t *testing.T) {
 	fake := newFinishingSendStream()
 
 	const timeout = 100 * time.Millisecond
-	ds := newOutgoingDataStreamForTest(fake)
+	ds := session.NewOutgoingSubgroupStream(fake)
 	ds = ds.WithDeliveryTimeouts(message.DeliveryTimeouts{Subgroup: timeout}, message.DeliveryTimeouts{})
 
 	if _, err := ds.Write([]byte("payload")); err != nil {
@@ -509,17 +471,15 @@ func TestSubgroupDeliveryTimeoutNoReset(t *testing.T) {
 	}
 }
 
-// TestSubgroupDeliveryTimeoutNotEnforcedWithoutDeliverySignal pins the
-// documented gap: a transport that cannot report delivery (quic-go and
-// webtransport-go today) gets no SUBGROUP_DELIVERY_TIMEOUT reset. Resetting on
-// the timer alone would reset streams the peer already has in full, and a
-// peer that has not read them yet would drop that data.
+// TestSubgroupDeliveryTimeoutNotEnforcedWithoutDeliverySignal: without a delivery
+// signal (quic-go, webtransport-go) there is no SUBGROUP_DELIVERY_TIMEOUT reset,
+// which could otherwise drop data the peer already has.
 func TestSubgroupDeliveryTimeoutNotEnforcedWithoutDeliverySignal(t *testing.T) {
 	t.Parallel()
 	fake := newFakeSendStream()
 
 	const timeout = 20 * time.Millisecond
-	ds := newOutgoingDataStreamForTest(fake)
+	ds := session.NewOutgoingSubgroupStream(fake)
 	ds = ds.WithDeliveryTimeouts(message.DeliveryTimeouts{Subgroup: timeout}, message.DeliveryTimeouts{})
 
 	if _, err := ds.Write([]byte("payload")); err != nil {
@@ -543,7 +503,7 @@ func TestSubgroupDeliveryTimeoutDisabled(t *testing.T) {
 	t.Parallel()
 	fake := newFinishingSendStream()
 
-	ds := newOutgoingDataStreamForTest(fake)
+	ds := session.NewOutgoingSubgroupStream(fake)
 	// No subgroup timeout.
 	ds = ds.WithDeliveryTimeouts(message.DeliveryTimeouts{}, message.DeliveryTimeouts{})
 
@@ -634,6 +594,7 @@ type fakeSendStream struct {
 	mu         sync.Mutex
 }
 
+// newFakeSendStream returns an empty fakeSendStream.
 func newFakeSendStream() *fakeSendStream {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &fakeSendStream{buf: &bytes.Buffer{}, ctx: ctx, cancel: cancel}
@@ -677,19 +638,9 @@ type finishingSendStream struct {
 	finished chan struct{}
 }
 
+// newFinishingSendStream returns a finishingSendStream whose peer has not acknowledged yet.
 func newFinishingSendStream() *finishingSendStream {
 	return &finishingSendStream{fakeSendStream: newFakeSendStream(), finished: make(chan struct{})}
 }
 
 func (f *finishingSendStream) Finished() <-chan struct{} { return f.finished }
-
-// newOutgoingDataStreamForTest constructs an OutgoingSubgroupStream backed by
-// the given SendStream. This bypasses the session layer so we can unit-test
-// the timeout logic in isolation.
-//
-// It uses the exported session.NewOutgoingSubgroupStream constructor (see
-// export_test.go). The timeout tests exercise Write (raw bytes) rather than
-// WriteObject, so no header fields are needed.
-func newOutgoingDataStreamForTest(dst session.SendStream) *session.OutgoingSubgroupStream {
-	return session.NewOutgoingSubgroupStream(dst)
-}

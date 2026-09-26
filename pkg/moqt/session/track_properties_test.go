@@ -9,42 +9,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
-
-// openPairWithOpts creates a client/server session pair where each side can
-// receive custom session.Option values. This is needed to test
-// WithKnownMandatoryTrackProperties.
-func openPairWithOpts(t *testing.T, clientOpts, serverOpts []session.Option) (*session.Session, *session.Session) {
-	t.Helper()
-	ctx := t.Context()
-	aConn, bConn := sessiontest.NewConnPair()
-
-	var (
-		wg           sync.WaitGroup
-		aSess, bSess *session.Session
-		aErr, bErr   error
-	)
-	wg.Go(func() {
-		aSess, aErr = session.Client(ctx, aConn, clientOpts...)
-	})
-	wg.Go(func() {
-		bSess, bErr = session.Server(ctx, bConn, serverOpts...)
-	})
-	wg.Wait()
-	if aErr != nil {
-		t.Fatalf("client Open: %v", aErr)
-	}
-	if bErr != nil {
-		t.Fatalf("server Open: %v", bErr)
-	}
-	t.Cleanup(func() {
-		aSess.Close(moqt.SessionNoError, "test cleanup")
-		bSess.Close(moqt.SessionNoError, "test cleanup")
-	})
-	return aSess, bSess
-}
 
 // mandatoryTrackProps builds raw Track Properties bytes containing a single
 // mandatory track property with the given type and varint value.
@@ -109,17 +75,9 @@ func TestValidateTrackProperties_Empty(t *testing.T) {
 	}
 }
 
-// TestValidateTrackProperties_MalformedBytes covers the parse-failure branch.
-// A truncated pair must surface as a parse error rather than as
-// *ErrUnsupportedMandatoryTrackProperty: §2.5.1 attaches specific remedies to
-// the latter — REQUEST_ERROR / UNSUPPORTED_EXTENSION when it arrives on
-// PUBLISH, cancelling the subscription or fetch (§3.3.3) when it arrives on
-// SUBSCRIBE_OK or FETCH_OK — none of which fit Track Properties that simply
-// would not decode.
-//
-// 0x02 is a one-byte Delta Type varint (§1.4.3). It resolves to Type 2 because
-// this is the first pair and the running type total starts at zero, and an even
-// Type carries a varint value — truncated off the end here.
+// TestValidateTrackProperties_MalformedBytes: a truncated pair is a parse error,
+// not *ErrUnsupportedMandatoryTrackProperty, whose §2.5.1 remedies do not fit.
+// 0x02 is Delta Type 2 (§1.4.3), an even Type whose varint value is missing.
 func TestValidateTrackProperties_MalformedBytes(t *testing.T) {
 	pairs, err := session.ValidateTrackProperties([]byte{0x02}, nil, "SUBSCRIBE_OK")
 	if err == nil {
@@ -137,12 +95,9 @@ func TestValidateTrackProperties_MalformedBytes(t *testing.T) {
 	}
 }
 
-// TestValidateTrackProperties_InsideImmutable: §12.7 "When looking for the
-// value of a property, processors MUST search both the mutable properties and
-// the contents of Immutable Properties", so a Mandatory Track Property there
-// is screened like one in the mutable list (§2.5.1), and Immutable
-// Properties whose contents do not parse make the Track Properties malformed
-// ("A Key-Value-Pair cannot be parsed").
+// TestValidateTrackProperties_InsideImmutable: Immutable Properties are searched
+// too (§12.7), so a Mandatory Track Property inside is screened (§2.5.1) and
+// unparseable contents make the Track Properties malformed.
 func TestValidateTrackProperties_InsideImmutable(t *testing.T) {
 	wrap := func(nested []byte) []byte {
 		return message.AppendTrackProperties([]wire.KVPair{
@@ -164,17 +119,8 @@ func TestValidateTrackProperties_InsideImmutable(t *testing.T) {
 	}
 }
 
-// TestErrUnsupportedMandatoryTrackPropertyError pins the rendered message of
-// the exported error, which nothing else formats — the other tests all match it
-// by type, so the string itself went unchecked despite being public and
-// log-facing.
-//
-// It asserts the parts a reader depends on rather than the whole line: the
-// package prefix, the offending type in hex, the caller's context, and the
-// §2.5.1 reference. Full-string equality was the first cut and is worse — it
-// breaks on any behaviour-neutral rewording, and it cannot catch the stale
-// section number it appears to guard, since the expected text is a copy of the
-// format string and a renumbering would edit both together.
+// TestErrUnsupportedMandatoryTrackPropertyError pins the parts of the error text
+// a reader depends on: package prefix, type in hex, context, and §2.5.1.
 func TestErrUnsupportedMandatoryTrackPropertyError(t *testing.T) {
 	err := &session.ErrUnsupportedMandatoryTrackProperty{
 		PropertyType: 0x5000,

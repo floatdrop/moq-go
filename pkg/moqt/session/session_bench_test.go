@@ -31,6 +31,7 @@ var (
 	benchSinkU64 uint64
 )
 
+// benchPayload returns n bytes of a repeating pattern.
 func benchPayload(n int) []byte {
 	b := make([]byte, n)
 	for i := range b {
