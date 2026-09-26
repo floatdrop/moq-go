@@ -3,6 +3,7 @@ package registry_test
 import (
 	"context"
 
+	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
@@ -13,6 +14,11 @@ func ns(parts ...string) wire.TrackNamespace {
 		out[i] = []byte(p)
 	}
 	return out
+}
+
+// newTestTrackName returns a FullTrackName for name in a fixed test namespace.
+func newTestTrackName(name string) track.FullTrackName {
+	return track.FullTrackName{Namespace: ns("test"), Name: []byte(name)}
 }
 
 // stubStream is a no-op session.Stream; the registry never reads from one.
