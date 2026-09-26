@@ -536,8 +536,6 @@ Session layer:
 - A rejected request sends STOP_SENDING with INTERNAL_ERROR (§3.3.4 SHOULD use a
   relevant code).
 - Mandatory Track Property enforcement is off unless configured (§2.5.1).
-- FETCH Serialization Flags ≥ 128 are read as field bits before being rejected,
-  so a reset or oversized length avoids the PROTOCOL_VIOLATION (§11.4.4).
 - SETUP options are sorted unstably, so with more than 12 the Token order on the
   wire can differ from the order `heldSetupAliases` replays (§10.3.1.4).
 

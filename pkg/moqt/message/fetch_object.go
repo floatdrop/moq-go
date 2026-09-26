@@ -154,6 +154,10 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 		return err
 	}
 	o.SerializationFlags = flags
+	// Decided on the flags alone: their bits must not be read as fields.
+	if err := checkFetchFlags(flags); err != nil {
+		return err
+	}
 
 	// End-of-range markers: Group ID and Object ID follow (§11.4.4.2).
 	if isEndOfRange(flags) {
@@ -267,20 +271,20 @@ func (o *FetchObject) SubgroupMode() FetchSubgroupIDMode {
 
 // Validate checks the fetch object for protocol violations.
 func (o *FetchObject) Validate() error {
-	flags := o.SerializationFlags
-
-	// End-of-range markers are always valid structurally.
-	if isEndOfRange(flags) {
-		return nil
-	}
-
-	// Values >= 128 that are not end-of-range markers are PROTOCOL_VIOLATION.
 	// Note: 0x40 with non-zero subgroup-mode LSBs stays valid — the publisher
 	// only SHOULD zero them and the subscriber MUST ignore them (§11.4.4.1),
 	// so rejecting the combination would itself be non-conformant.
-	if flags >= 128 {
-		return fmt.Errorf("moqt/message: fetch object has invalid serialization flags 0x%X", flags)
-	}
+	return checkFetchFlags(o.SerializationFlags)
+}
 
+// ErrInvalidFetchFlags is a Serialization Flags value of 128 or more that is
+// not an End of Range marker: "Any other value is a PROTOCOL_VIOLATION"
+// (§11.4.4). [FetchObject.Parse] returns it right after the flags.
+var ErrInvalidFetchFlags = errors.New("moqt/message: invalid fetch object serialization flags")
+
+func checkFetchFlags(flags uint64) error {
+	if flags >= 128 && !isEndOfRange(flags) {
+		return fmt.Errorf("%w 0x%X", ErrInvalidFetchFlags, flags)
+	}
 	return nil
 }
