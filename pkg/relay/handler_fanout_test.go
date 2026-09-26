@@ -732,9 +732,10 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 	defer subReq.Close()
 	go drainAll(t.Context(), subSess)
 
-	// Phase 1: publish three objects (absIDs 0, 1, 2) on group 4. After
-	// this the relay's TrackEntry.LargestObject must be {Group: 4,
-	// Object: 2}.
+	// Phase 1: publish absIDs 0 and 2 on group 4. After this the relay's
+	// TrackEntry.LargestObject must be {Group: 4, Object: 2}. Object 1 is
+	// left for phase 3: sending it twice with another Payload or Subgroup
+	// would make the track malformed (§9.1).
 	sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,
 		TrackAlias:     publisherAlias,
@@ -744,12 +745,9 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSubgroup: %v", err)
 	}
-	for i := range 3 {
-		if err := sg.WriteObject(&message.SubgroupObject{
-			ObjectIDDelta: 0,
-			Payload:       []byte{byte('A' + i)},
-		}); err != nil {
-			t.Fatalf("WriteObject #%d: %v", i, err)
+	for _, id := range []uint64{0, 2} {
+		if err := sg.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte{byte('A' + id)}}); err != nil {
+			t.Fatalf("WriteObjectAt %d: %v", id, err)
 		}
 	}
 	if err := sg.Close(); err != nil {

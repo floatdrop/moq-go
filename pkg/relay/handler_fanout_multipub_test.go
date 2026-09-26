@@ -123,7 +123,7 @@ func TestFanout_MultiPublisher_DeduplicatesObjects(t *testing.T) {
 	for i := range 3 {
 		if err := bSg.WriteObject(&message.SubgroupObject{
 			ObjectIDDelta: 0,
-			Payload:       []byte{byte('a' + i)},
+			Payload:       []byte{byte('A' + i)}, // the same Object: §9.1 forbids another Payload
 		}); err != nil {
 			t.Fatalf("B WriteObject #%d: %v", i, err)
 		}
@@ -208,7 +208,7 @@ func TestFanout_MultiPublisher_DedupSurvivesCacheEviction(t *testing.T) {
 	for i := range n {
 		if err := bSg.WriteObject(&message.SubgroupObject{
 			ObjectIDDelta: 0,
-			Payload:       []byte{byte('a' + i)},
+			Payload:       []byte{byte('A' + i)}, // the same Object: §9.1 forbids another Payload
 		}); err != nil {
 			t.Fatalf("B WriteObject #%d: %v", i, err)
 		}
