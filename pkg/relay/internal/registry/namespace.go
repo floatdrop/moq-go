@@ -122,7 +122,7 @@ type SubscriberEntry struct {
 	outbox   []queuedMessage
 	stopped  bool
 	outReady chan struct{}
-	// writing is the message RunWriter is sending now (zero at when idle);
+	// writing is the message RunWriter is sending now (zero when idle);
 	// guarded by outMu. Together with outbox it is what is still unsent.
 	writing queuedMessage
 	// writerDone is closed when RunWriter returns; see

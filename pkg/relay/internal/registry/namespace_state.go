@@ -186,7 +186,9 @@ func (e *SubscriberEntry) enqueue(m message.Message) { e.push(m, false) }
 // maxUnsentWait — whether the subscriber stopped reading or reads too slowly
 // to keep up. A burst (seeding a subscription, a prefix update, a Discovery
 // resync) that a reading subscriber drains within maxUnsentWait does not
-// count. The check runs when a message is queued: a stream that is stuck
+// count; one it needs longer for does, on the next message queued — so a
+// subscriber on a slow link under a prefix with thousands of namespaces can be
+// reset while it is still draining the seed. The check runs when a message is queued: a stream that is stuck
 // while nothing new arrives is left alone, its queue not growing. The same
 // bound holds a SUBSCRIBE_TRACKS stream's PUBLISH_SKIPPEDs.
 const (
@@ -266,7 +268,15 @@ func (e *SubscriberEntry) RunWriter() {
 		for {
 			e.outMu.Lock()
 			if len(e.outbox) == 0 {
+				stopped := e.stopped
 				e.outMu.Unlock()
+				if stopped {
+					// Only the queue bound's reset leaves the queue empty
+					// and stopped (Finish queues a marker; a failed write
+					// returns below): the stream is gone, and the owner
+					// may be waiting on WriterDone.
+					return
+				}
 				break
 			}
 			q := e.outbox[0]
