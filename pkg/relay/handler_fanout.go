@@ -513,6 +513,9 @@ type subgroupWriter struct {
 	// past the filtered Objects read after it; zero once the relay drops
 	// one. Only touched by admit and publish, under sg.Mu.
 	lastPos inboundPos
+	// withProps: the streams run opens set PROPERTIES (§11.4.2). Only
+	// touched by run.
+	withProps bool
 }
 
 // admit decides whether w takes the Object at objectID of the subgroup hdr
@@ -682,9 +685,11 @@ func (w *subgroupWriter) run() {
 		// next is not known to follow it.
 		dropped bool
 	)
+	w.withProps = w.hdr.Properties
 
 	// reopen resets the current outbound stream (if any) and opens a fresh
-	// one, for the lazy first open and after a §11.4.3 gap. first sets the
+	// one, for the lazy first open, after a §11.4.3 gap, and to carry Object
+	// Properties the old header could not. first sets the
 	// §11.4.2 FIRST_OBJECT bit; otherwise the stream is a replay. All its
 	// blocking I/O is bounded by w.ctx.
 	reopen := func(first bool) bool {
@@ -694,6 +699,7 @@ func (w *subgroupWriter) run() {
 		}
 		w.closeOut(false, w.resetCode())
 		hdr := w.hdr
+		hdr.Properties = w.withProps
 		hdr.ReplayingSubgroup = !first
 		if !first && hdr.SubgroupIDMode == message.SubgroupIDImplicitFirstObject {
 			// A replay stream's first object would imply the wrong ID.
@@ -751,6 +757,8 @@ func (w *subgroupWriter) run() {
 			continue
 		}
 
+		cause, stale := w.reopenCause(fwd, prevID, hasWritten, dropped)
+
 		// Lazy first open, off sg.Mu (see openWriterForSub).
 		if w.out == nil {
 			if !reopen(fwd.first) {
@@ -759,9 +767,8 @@ func (w *subgroupWriter) run() {
 			}
 		}
 
-		// §11.4.3: only "the next Object" may go on an existing stream.
-		if hasWritten && !isNextObject(fwd, prevID, dropped) {
-			w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseGap)
+		if stale {
+			w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, cause)
 			if !reopen(fwd.first) {
 				failWrites()
 				continue
@@ -868,6 +875,31 @@ func (w *subgroupWriter) run() {
 	}
 
 	w.closeOut(true, 0)
+}
+
+// reopenCause reports whether fwd needs a fresh outbound stream after one
+// whose last Object is prevID, and why. §11.4.3: only "the next Object" may go
+// on an existing stream. And the header is the first contributor's (§9.3), so
+// a later one's Object Properties, which MUST be forwarded (§2.5), turn
+// PROPERTIES on for this and every later stream.
+func (w *subgroupWriter) reopenCause(
+	fwd fwdObject,
+	prevID uint64,
+	hasWritten, dropped bool,
+) (ResetCause, bool) {
+	needProps := !w.withProps && len(fwd.obj.Properties) > 0
+	if needProps {
+		w.withProps = true
+	}
+	switch {
+	case !hasWritten:
+		return 0, false
+	case needProps:
+		return ResetCauseProperties, true
+	case !isNextObject(fwd, prevID, dropped):
+		return ResetCauseGap, true
+	}
+	return 0, false
 }
 
 // isNextObject reports whether fwd is "the next Object" (§11.4.3) on a stream
