@@ -97,32 +97,6 @@ func firstObjectTopology(
 	return pub, sub
 }
 
-// writeSubgroupObjects opens one subgroup on the publisher and writes the
-// given absolute object IDs (ascending), then FINs.
-func writeSubgroupObjects(t *testing.T, pub *session.Publication, hdr message.SubgroupHeader, ids []uint64) {
-	t.Helper()
-	sg, err := pub.OpenSubgroup(hdr)
-	if err != nil {
-		t.Fatalf("OpenSubgroup: %v", err)
-	}
-	prev, has := uint64(0), false
-	for _, id := range ids {
-		obj := &message.SubgroupObject{Payload: []byte{byte('a' + id)}}
-		if !has {
-			obj.ObjectIDDelta = id
-		} else {
-			obj.ObjectIDDelta = id - prev - 1
-		}
-		if err := sg.WriteObject(obj); err != nil {
-			t.Fatalf("WriteObject(%d): %v", id, err)
-		}
-		prev, has = id, true
-	}
-	if err := sg.Close(); err != nil {
-		t.Fatalf("subgroup Close: %v", err)
-	}
-}
-
 // TestFanout_FirstObjectBitOnPlainForward pins the §11.4.2 baseline: a
 // forwarded subgroup that begins with the subgroup's true first object
 // carries the FIRST_OBJECT bit (ReplayingSubgroup false).

@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"runtime"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
 	"github.com/floatdrop/moq-go/pkg/relay"
+	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
 
 // The in-process relay harness: a [relay.Listener] over [sessiontest] pipes,
@@ -314,4 +316,98 @@ func dialRaw(t *testing.T, l *pipeListener) (*session.Session, session.Conn) {
 	}
 	t.Cleanup(func() { _ = sess.Close(moqt.SessionNoError, "") })
 	return sess, conn
+}
+
+// testRelay is a relay on its own pipeListener, for tests that wire several
+// relays together through a Dialer or stop one mid-test.
+type testRelay struct {
+	r        *relay.Relay
+	l        *pipeListener
+	addr     string // cfg.RelayAddr
+	startErr chan error
+}
+
+// startTestRelay starts a relay on its own pipeListener; its stop is the
+// caller's. GoawayTimeout defaults to 50ms.
+func startTestRelay(ctx context.Context, cfg relay.Config) *testRelay {
+	if cfg.GoawayTimeout == 0 {
+		cfg.GoawayTimeout = 50 * time.Millisecond
+	}
+	l := newPipeListener()
+	r := relay.New(l, cfg)
+	se := make(chan error, 1)
+	go func() { se <- r.Start(ctx) }()
+	return &testRelay{r: r, l: l, addr: cfg.RelayAddr, startErr: se}
+}
+
+// stop stops the relay and requires Start to return cleanly.
+func (tr *testRelay) stop(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = tr.r.Stop(ctx)
+	tr.requireStartReturned(t)
+}
+
+// requireStartReturned requires Start to return nil within 2s.
+func (tr *testRelay) requireStartReturned(t *testing.T) {
+	t.Helper()
+	select {
+	case err := <-tr.startErr:
+		if err != nil {
+			t.Errorf("Start returned: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("Start did not return after Stop")
+	}
+}
+
+// dialClient connects a fresh client session into tr's listener.
+func dialClient(t *testing.T, tr *testRelay) *session.Session {
+	t.Helper()
+	conn, err := tr.l.Dial()
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	sess, err := session.Client(t.Context(), conn)
+	if err != nil {
+		t.Fatalf("session.Client: %v", err)
+	}
+	return sess
+}
+
+// dialerTo is a [relay.Config] Dialer reaching each of relays by its RelayAddr
+// and failing any other address. onDial, when non-nil, sees every address it
+// reaches.
+func dialerTo(onDial func(addr string), relays ...*testRelay) func(context.Context, string) (session.Conn, error) {
+	return func(_ context.Context, addr string) (session.Conn, error) {
+		for _, tr := range relays {
+			if tr.addr == addr {
+				if onDial != nil {
+					onDial(addr)
+				}
+				return tr.l.Dial()
+			}
+		}
+		return nil, fmt.Errorf("no relay at %q", addr)
+	}
+}
+
+// publishOnRelay dials a publisher into tr that advertises video, so Discovery
+// routes the namespace to tr, and PUBLISHes video/<name> on alias.
+func publishOnRelay(t *testing.T, tr *testRelay, name string, alias uint64) (*session.Session, *session.Publication) {
+	t.Helper()
+	sess := dialClient(t, tr)
+	publishNS(t, sess, "video")
+	return sess, publishVideoTrack(t, sess, name, alias)
+}
+
+// startRelayPair starts relay-B, and relay-A dialling it for what the shared
+// Discovery store routes there.
+func startRelayPair(ctx context.Context, store discovery.DiscoveryStore) (relayA, relayB *testRelay) {
+	relayB = startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
+	relayA = startTestRelay(ctx, relay.Config{
+		Discovery: store, RelayAddr: "relay-A", Dialer: dialerTo(nil, relayB),
+	})
+	return relayA, relayB
 }
