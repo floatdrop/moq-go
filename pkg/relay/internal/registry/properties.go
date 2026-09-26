@@ -35,6 +35,10 @@ type decodedProperties struct {
 	// property decodes to — so the zero DeliveryTimeouts is the correct
 	// reading of a track that declares neither.
 	deliveryTimeouts message.DeliveryTimeouts
+
+	// groupOrder is DEFAULT_PUBLISHER_GROUP_ORDER (§12.5) when it holds an
+	// allowed value, else zero.
+	groupOrder message.GroupOrder
 }
 
 // decodeTrackProperties parses the raw Track Properties block once and pulls
@@ -61,6 +65,11 @@ func decodeTrackProperties(raw []byte) decodedProperties {
 			d.deliveryTimeouts.Object = message.MillisecondTimeout(kv.IntVal)
 		case message.PropertySubgroupDeliveryTimeout:
 			d.deliveryTimeouts.Subgroup = message.MillisecondTimeout(kv.IntVal)
+		case message.PropertyDefaultPublisherGroupOrder:
+			d.groupOrder = 0
+			if kv.IntVal == uint64(message.GroupOrderAscending) || kv.IntVal == uint64(message.GroupOrderDescending) {
+				d.groupOrder = message.GroupOrder(kv.IntVal)
+			}
 		}
 	}
 	return d
@@ -111,4 +120,17 @@ func (e *TrackEntry) DeliveryTimeouts() message.DeliveryTimeouts {
 		return message.DeliveryTimeouts{}
 	}
 	return e.decoded.deliveryTimeouts
+}
+
+// DefaultGroupOrder is the publisher's Group Order preference, its
+// DEFAULT_PUBLISHER_GROUP_ORDER Track Property (§12.5): Ascending when it is
+// omitted ("If omitted, the publisher's preference is Ascending"), and when
+// it is not an allowed value or the Properties are malformed.
+func (e *TrackEntry) DefaultGroupOrder() message.GroupOrder {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.decoded.parseErr != nil || e.decoded.groupOrder == 0 {
+		return message.GroupOrderAscending
+	}
+	return e.decoded.groupOrder
 }

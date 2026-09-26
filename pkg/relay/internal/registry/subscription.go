@@ -423,9 +423,9 @@ type DownstreamSub struct {
 	// 0x1 = ascending, 0x2 = descending. It drives the group-order
 	// tie-breaker in both reorder-capable paths (FETCH responses) and the
 	// §7.2 rule-3 GroupKey of the subgroup-stream scheduling priority.
-	// Default per §7.1: the publisher's preference, which the relay does not
-	// currently track, so an unset GroupOrder is left at zero and treated as
-	// Ascending.
+	// Default per §7.1: the publisher's preference, which the relay fills in
+	// from the Track Properties before registering the subscription; zero
+	// until then, read as Ascending.
 	GroupOrder uint8
 
 	// omitProperties records INCLUDE_PROPERTIES=0; see
@@ -673,8 +673,7 @@ func (d *DownstreamSub) EffectiveStreamPriority(
 	// §7.2 rule 3: Descending order means higher Group IDs are scheduled
 	// first. Complementing the Group ID flips the numeric comparison so the
 	// same "lower GroupKey is higher priority" rule yields that direction.
-	// An unset GROUP_ORDER (zero value) defaults to Ascending — §7.1 says
-	// the publisher's preference applies, which the relay does not track.
+	// An unresolved GROUP_ORDER (zero value) is read as Ascending.
 	groupKey := groupID
 	if order == message.GroupOrderDescending {
 		groupKey = ^groupID

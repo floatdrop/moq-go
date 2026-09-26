@@ -85,6 +85,7 @@ func (h *sessionHandler) serveForwardedPublish(
 	sub.OpenedByPublish()
 	// handleSubscribeTracks already refused parameters this would reject.
 	_ = installSubscribeParams(sub, params)
+	resolveGroupOrder(sub, te)
 	_, largest, has, added := h.tracks.AddDownstreamSnapshotLargest(fullName, sub)
 	registered()
 	if !added {
