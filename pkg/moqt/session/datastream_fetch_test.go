@@ -218,7 +218,12 @@ func TestIncomingFetchStream_ReadDecoded(t *testing.T) {
 		},
 	}
 
+	// A marker carries only its Location: its other fields are not the
+	// draft's to define.
 	view := func(d *session.DecodedFetchObject) string {
+		if d.EndOfNonExistentRange {
+			return fmt.Sprintf("{G=%d O=%d endOfNonExistentRange}", d.GroupID, d.ObjectID)
+		}
 		return fmt.Sprintf("{G=%d O=%d Sub=%d Pri=%d payload=%q endOfNonExistentRange=%t}",
 			d.GroupID, d.ObjectID, d.SubgroupID, d.PublisherPriority, d.Payload, d.EndOfNonExistentRange)
 	}
