@@ -2,7 +2,6 @@ package relay_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"io"
 	"maps"
@@ -16,54 +15,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
-
-// objEvent is one decoded object (or a per-stream/accept error) emitted by the
-// subgroup reader used in the multi-publisher tests below.
-type objEvent struct {
-	stream int    // 1-based index of the outbound stream it arrived on
-	absID  uint64 // §11.4.2 delta resolved to an absolute Object ID
-	err    error  // non-nil marks a stream end (io.EOF = FIN, else reset) or accept error
-}
-
-// readSubgroups emits every Object of every subgroup stream sub accepts, with
-// its absolute Object ID, and each stream's end as an event with err set
-// (io.EOF for a FIN). It returns when AcceptDataStream fails.
-func readSubgroups(ctx context.Context, sub *session.Session, out chan<- objEvent) {
-	streamIdx := 0
-	for {
-		ds, err := sub.AcceptDataStream(ctx)
-		if err != nil {
-			out <- objEvent{err: err}
-			return
-		}
-		sg, ok := ds.(*session.IncomingSubgroupStream)
-		if !ok {
-			continue
-		}
-		streamIdx++
-		idx := streamIdx
-		var (
-			prev uint64
-			have bool
-		)
-		for {
-			obj, err := sg.ReadObject()
-			if err != nil {
-				out <- objEvent{stream: idx, err: err}
-				break
-			}
-			var absID uint64
-			if !have {
-				absID = obj.ObjectIDDelta
-				have = true
-			} else {
-				absID = prev + obj.ObjectIDDelta + 1
-			}
-			prev = absID
-			out <- objEvent{stream: idx, absID: absID}
-		}
-	}
-}
 
 // TestFanout_MultiPublisher_DeduplicatesObjects: two publishers sending the
 // same Objects of one track reach the subscriber as one stream with each Object

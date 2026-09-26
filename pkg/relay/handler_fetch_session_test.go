@@ -1,6 +1,7 @@
 package relay_test
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
@@ -26,9 +27,9 @@ func TestFetch_RejectsUnknownTrack(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
 }
 
-// TestTrackStatus_ReplyForKnownTrack: a publisher claims a track via PUBLISH,
-// which populates the TrackRegistry entry's Properties. A separate session's
-// TRACK_STATUS for the same name must echo those Properties in TRACK_STATUS_OK.
+// TestTrackStatus_ReplyForKnownTrack: the Track Properties a PUBLISH carried
+// are echoed byte for byte in TRACK_STATUS_OK to another session's
+// TRACK_STATUS for the track.
 func TestTrackStatus_ReplyForKnownTrack(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -38,7 +39,7 @@ func TestTrackStatus_ReplyForKnownTrack(t *testing.T) {
 		Namespace:       ns("video"),
 		Name:            []byte("cam1"),
 		TrackAlias:      1,
-		TrackProperties: []byte("rtp-h265"),
+		TrackProperties: opaqueProps("rtp-h265"),
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -55,8 +56,8 @@ func TestTrackStatus_ReplyForKnownTrack(t *testing.T) {
 	}
 	defer tsStream.Close()
 
-	if got := string(tsStream.OK.TrackProperties); got != "rtp-h265" {
-		t.Fatalf("TrackProperties = %q, want %q", got, "rtp-h265")
+	if got, want := tsStream.OK.TrackProperties, opaqueProps("rtp-h265"); !bytes.Equal(got, want) {
+		t.Fatalf("TrackProperties = %x, want %x", got, want)
 	}
 }
 

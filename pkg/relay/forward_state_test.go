@@ -1,7 +1,6 @@
 package relay_test
 
 import (
-	"context"
 	"errors"
 	"io"
 	"slices"
@@ -161,29 +160,6 @@ func TestRelay_ForwardStateOmissionResetsStream(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("the subgroup stream never ended")
-	}
-}
-
-// readUntilEnd reads the subscriber's next subgroup stream to its end and
-// returns the Object IDs it carried and how it ended.
-func readUntilEnd(t *testing.T, subSess *session.Session) (ids []uint64, end error) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	ds, err := subSess.AcceptDataStream(ctx)
-	if err != nil {
-		t.Fatalf("AcceptDataStream: %v", err)
-	}
-	in, ok := ds.(*session.IncomingSubgroupStream)
-	if !ok {
-		t.Fatalf("AcceptDataStream = %T, want a subgroup stream", ds)
-	}
-	for {
-		o, err := in.ReadDecoded()
-		if err != nil {
-			return ids, err
-		}
-		ids = append(ids, o.ObjectID)
 	}
 }
 

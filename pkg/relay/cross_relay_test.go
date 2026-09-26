@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,181 +17,60 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
-	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
-// testRelay is a relay started on its own in-process pipeListener, used by the
-// cross-relay tests that need direct control over two relay instances and a
-// Dialer wiring one to the other.
-type testRelay struct {
-	r        *relay.Relay
-	l        *pipeListener
-	startErr chan error
+// Cross-relay routing: which remote relays a SUBSCRIBE with no local upstream
+// is sent to, found through Discovery and reached through the Dialer.
+
+// dialLog counts a Dialer's dials per address.
+type dialLog struct {
+	mu sync.Mutex
+	n  map[string]int
 }
 
-// startTestRelay starts a relay on its own pipeListener; its Stop is the
-// caller's.
-func startTestRelay(ctx context.Context, cfg relay.Config) *testRelay {
-	if cfg.GoawayTimeout == 0 {
-		cfg.GoawayTimeout = 50 * time.Millisecond
+func (d *dialLog) record(addr string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.n == nil {
+		d.n = map[string]int{}
 	}
-	l := newPipeListener()
-	r := relay.New(l, cfg)
-	se := make(chan error, 1)
-	go func() { se <- r.Start(ctx) }()
-	return &testRelay{r: r, l: l, startErr: se}
+	d.n[addr]++
 }
 
-func (tr *testRelay) stop(t *testing.T) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = tr.r.Stop(ctx)
-	select {
-	case err := <-tr.startErr:
-		if err != nil {
-			t.Errorf("Start returned: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Error("Start did not return after Stop")
-	}
-}
-
-// dialClient connects a fresh client session into tr's listener.
-func dialClient(t *testing.T, tr *testRelay) *session.Session {
-	t.Helper()
-	conn, err := tr.l.Dial()
-	if err != nil {
-		t.Fatalf("Dial: %v", err)
-	}
-	sess, err := session.Client(t.Context(), conn)
-	if err != nil {
-		t.Fatalf("session.Client: %v", err)
-	}
-	return sess
+func (d *dialLog) counts() map[string]int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return maps.Clone(d.n)
 }
 
 // TestCrossRelay_OnDemandSubscribe: a subscriber on relay A receives Objects
 // published to relay B, which A finds through Discovery and dials.
 func TestCrossRelay_OnDemandSubscribe(t *testing.T) {
 	t.Parallel()
-
 	store := discovery.NewMemoryStore()
 	defer store.Close()
+	relayA, relayB := startRelayPair(t.Context(), store)
 
-	ctx := t.Context()
-
-	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
-	relayA := startTestRelay(ctx, relay.Config{
-		Discovery: store,
-		RelayAddr: "relay-A",
-		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
-			if addr == "relay-B" {
-				return relayB.l.Dial()
-			}
-			return nil, fmt.Errorf("no relay at %q", addr)
-		},
-	})
-
-	// Publisher connects to B, advertises the namespace (so FindNamespace can
-	// route here) and PUBLISHes the track (so B has an established upstream).
-	pubSess := dialClient(t, relayB)
-	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
-	if err != nil {
-		t.Fatalf("PublishNamespace: %v", err)
-	}
-	const pubAlias = uint64(7)
-	pubReq, err := pubSess.Publish(ctx, &message.Publish{
-		Namespace:  ns("video"),
-		Name:       []byte("cam1"),
-		TrackAlias: pubAlias,
-	})
-	if err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-
-	// Subscriber connects to A and subscribes. Subscribe returns only after A
-	// has established its upstream to B (which established B's upstream to the
-	// publisher), so the full chain is live by the time we push objects.
+	pubSess, _ := publishOnRelay(t, relayB, "cam1", 7)
+	// Subscribe returns only once A's upstream to B, and B's to the publisher,
+	// are established, so the whole chain is live before anything is written.
 	subSess := dialClient(t, relayA)
-	subReq, err := subSess.Subscribe(ctx, &message.Subscribe{
-		Namespace: ns("video"),
-		Name:      []byte("cam1"),
-	})
-	if err != nil {
-		t.Fatalf("cross-relay Subscribe: %v", err)
-	}
+	subReq := subscribeCam1(t, subSess)
 
-	type subgroupResult struct {
-		header  message.SubgroupHeader
-		objects []*message.SubgroupObject
-	}
-	subgroupCh := make(chan subgroupResult, 1)
-	go func() {
-		ds, err := subSess.AcceptDataStream(ctx)
-		if err != nil {
-			return
-		}
-		sg, ok := ds.(*session.IncomingSubgroupStream)
-		if !ok {
-			return
-		}
-		var objs []*message.SubgroupObject
-		for {
-			obj, err := sg.ReadObject()
-			if err != nil {
-				subgroupCh <- subgroupResult{header: sg.Header, objects: objs}
-				return
-			}
-			objs = append(objs, obj)
-		}
-	}()
-
-	pubSg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
-		SubgroupIDMode: message.SubgroupIDExplicit,
-		TrackAlias:     pubAlias,
-		GroupID:        0,
-		SubgroupID:     0,
-	})
-	if err != nil {
-		t.Fatalf("OpenSubgroup: %v", err)
-	}
+	reads := readNextSubgroup(t, subSess)
 	const sgCount = 5
-	for i := range sgCount {
-		if err := pubSg.WriteObject(&message.SubgroupObject{
-			ObjectIDDelta: 0,
-			Payload:       []byte{byte('A' + i)},
-		}); err != nil {
-			t.Fatalf("WriteObject #%d: %v", i, err)
-		}
+	publishObjects(t, pubSess, 7, 0, sgCount)
+	r := awaitSubgroupRead(t, reads)
+	if len(r.ids) != sgCount {
+		t.Fatalf("subscriber received %d objects, want %d", len(r.ids), sgCount)
 	}
-	if err := pubSg.Close(); err != nil {
-		t.Fatalf("pubSg.Close: %v", err)
+	if r.header.TrackAlias != subReq.OK.TrackAlias {
+		t.Errorf("subgroup TrackAlias = %d, want %d (subscriber's outbound alias)",
+			r.header.TrackAlias, subReq.OK.TrackAlias)
 	}
 
-	select {
-	case res := <-subgroupCh:
-		if len(res.objects) != sgCount {
-			t.Fatalf("subscriber received %d objects, want %d", len(res.objects), sgCount)
-		}
-		if res.header.TrackAlias != subReq.OK.TrackAlias {
-			t.Errorf("subgroup TrackAlias = %d, want %d (subscriber's outbound alias)",
-				res.header.TrackAlias, subReq.OK.TrackAlias)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("objects did not cross the relay boundary within deadline")
-	}
-
-	// Teardown: close clients, then stop A (tears down its upstream to B),
-	// then B.
-	_ = subReq.Close()
-	_ = pubSg.Close()
-	_ = pubReq.Close()
-	_ = pns.Close()
 	_ = subSess.Close(0, "done")
 	_ = pubSess.Close(0, "done")
 	relayA.stop(t)
@@ -201,51 +82,21 @@ func TestCrossRelay_OnDemandSubscribe(t *testing.T) {
 // relay found through Discovery.
 func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
 	t.Parallel()
-
 	store := discovery.NewMemoryStore()
 	defer store.Close()
+	relayA, relayB := startRelayPair(t.Context(), store)
 
-	ctx := t.Context()
+	pubB, _ := publishOnRelay(t, relayB, "cam1", 9)
 
-	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
-	relayA := startTestRelay(ctx, relay.Config{
-		Discovery: store,
-		RelayAddr: "relay-A",
-		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
-			if addr == "relay-B" {
-				return relayB.l.Dial()
-			}
-			return nil, fmt.Errorf("no relay at %q", addr)
-		},
-	})
-
-	// Healthy publisher on B serves video/cam1.
-	pubB := dialClient(t, relayB)
-	pnsB, err := pubB.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
-	if err != nil {
-		t.Fatalf("B PublishNamespace: %v", err)
-	}
-	const pubAlias = uint64(9)
-	pubReqB, err := pubB.Publish(
-		ctx,
-		&message.Publish{Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: pubAlias},
-	)
-	if err != nil {
-		t.Fatalf("B Publish: %v", err)
-	}
-
-	// A local publisher on A advertises the same namespace but REJECTS every
-	// upstream SUBSCRIBE — the relay must try it, fail, then fall back to B.
+	// A local publisher of the same namespace on A refuses every upstream
+	// SUBSCRIBE, so A must try it, fail, and fall back to B.
 	pLocal := dialClient(t, relayA)
-	pnsLocal, err := pLocal.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
-	if err != nil {
-		t.Fatalf("local PublishNamespace: %v", err)
-	}
+	publishNS(t, pLocal, "video")
 	rejectDone := make(chan struct{})
 	go func() {
 		defer close(rejectDone)
 		for {
-			req, err := pLocal.AcceptRequest(ctx)
+			req, err := pLocal.AcceptRequest(t.Context())
 			if err != nil {
 				return
 			}
@@ -253,63 +104,16 @@ func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
 		}
 	}()
 
-	// Subscriber on A: the local publisher rejects, so A must reach B.
 	subSess := dialClient(t, relayA)
-	subReq, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
-	if err != nil {
-		t.Fatalf("Subscribe should have fallen back to Discovery, got: %v", err)
-	}
+	subscribeCam1(t, subSess)
 
-	objects := make(chan int, 1)
-	go func() {
-		ds, err := subSess.AcceptDataStream(ctx)
-		if err != nil {
-			return
-		}
-		sg, ok := ds.(*session.IncomingSubgroupStream)
-		if !ok {
-			return
-		}
-		n := 0
-		for {
-			if _, err := sg.ReadObject(); err != nil {
-				objects <- n
-				return
-			}
-			n++
-		}
-	}()
-
-	sgB, err := pubB.OpenSubgroup(message.SubgroupHeader{
-		SubgroupIDMode: message.SubgroupIDExplicit,
-		TrackAlias:     pubAlias,
-		GroupID:        0,
-		SubgroupID:     0,
-	})
-	if err != nil {
-		t.Fatalf("OpenSubgroup: %v", err)
-	}
+	reads := readNextSubgroup(t, subSess)
 	const sgCount = 3
-	for i := range sgCount {
-		if err := sgB.WriteObject(&message.SubgroupObject{Payload: []byte{byte('A' + i)}}); err != nil {
-			t.Fatalf("WriteObject #%d: %v", i, err)
-		}
-	}
-	_ = sgB.Close()
-
-	select {
-	case n := <-objects:
-		if n != sgCount {
-			t.Fatalf("received %d objects via Discovery fallback, want %d", n, sgCount)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("no objects after the local publisher failed and Discovery fallback should have served")
+	publishObjects(t, pubB, 9, 0, sgCount)
+	if r := awaitSubgroupRead(t, reads); len(r.ids) != sgCount {
+		t.Fatalf("received %d objects via Discovery fallback, want %d", len(r.ids), sgCount)
 	}
 
-	_ = subReq.Close()
-	_ = pnsLocal.Close()
-	_ = pnsB.Close()
-	_ = pubReqB.Close()
 	_ = subSess.Close(0, "done")
 	_ = pLocal.Close(0, "done")
 	_ = pubB.Close(0, "done")
@@ -323,91 +127,37 @@ func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
 // §2.1).
 func TestCrossRelay_MultiRemoteFanIn(t *testing.T) {
 	t.Parallel()
-
 	store := discovery.NewMemoryStore()
 	defer store.Close()
-
 	ctx := t.Context()
 
 	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
 	relayC := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-C"})
-
-	var dialsB, dialsC atomic.Int64
+	var dials dialLog
 	relayA := startTestRelay(ctx, relay.Config{
-		Discovery: store,
-		RelayAddr: "relay-A",
-		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
-			switch addr {
-			case "relay-B":
-				dialsB.Add(1)
-				return relayB.l.Dial()
-			case "relay-C":
-				dialsC.Add(1)
-				return relayC.l.Dial()
-			default:
-				return nil, fmt.Errorf("no relay at %q", addr)
-			}
-		},
+		Discovery: store, RelayAddr: "relay-A", Dialer: dialerTo(dials.record, relayB, relayC),
 	})
 
-	// A redundant publisher on each of B and C: same track, same namespace.
-	startPub := func(tr *testRelay) (*session.Session, *session.Publication) {
-		ps := dialClient(t, tr)
-		if _, err := ps.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")}); err != nil {
-			t.Fatalf("PublishNamespace: %v", err)
-		}
-		p, err := ps.Publish(ctx, &message.Publish{Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: 7})
-		if err != nil {
-			t.Fatalf("Publish: %v", err)
-		}
-		return ps, p
-	}
-	pubBSess, pubB := startPub(relayB)
-	pubCSess, pubC := startPub(relayC)
+	// A redundant publisher of the same track on each of B and C.
+	pubBSess, _ := publishOnRelay(t, relayB, "cam1", 7)
+	pubCSess, _ := publishOnRelay(t, relayC, "cam1", 7)
 
-	// Subscriber on A. Subscribe returns only after A has established BOTH
-	// upstreams (to B and C), so both Dialer calls have happened by here.
+	// Subscribe returns only once A has established both upstreams.
 	subSess := dialClient(t, relayA)
-	subReq, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
-	if err != nil {
-		t.Fatalf("cross-relay Subscribe: %v", err)
-	}
-
-	if got := dialsB.Load(); got != 1 {
-		t.Errorf("Dialer fired %d times for relay-B; want 1 (dial-all)", got)
-	}
-	if got := dialsC.Load(); got != 1 {
-		t.Errorf("Dialer fired %d times for relay-C; want 1 (dial-all)", got)
+	subscribeCam1(t, subSess)
+	if got, want := dials.counts(), map[string]int{"relay-B": 1, "relay-C": 1}; !maps.Equal(got, want) {
+		t.Errorf("Dialer calls %v, want %v (dial-all)", got, want)
 	}
 
 	events := make(chan objEvent, 64)
 	go readSubgroups(ctx, subSess, events)
 
-	// Both remotes push the same objects 0,1,2 on the same (group, subgroup).
-	push := func(p *session.Publication) {
-		sg, err := p.OpenSubgroup(message.SubgroupHeader{
-			SubgroupIDMode: message.SubgroupIDExplicit, TrackAlias: 7, GroupID: 0, SubgroupID: 0,
-		})
-		if err != nil {
-			t.Errorf("OpenSubgroup: %v", err)
-			return
-		}
-		for i := range 3 {
-			if err := sg.WriteObject(&message.SubgroupObject{
-				ObjectIDDelta: 0,
-				Payload:       []byte{byte('A' + i)},
-			}); err != nil {
-				t.Errorf("WriteObject #%d: %v", i, err)
-				return
-			}
-		}
-		_ = sg.Close()
-	}
-	push(pubB)
-	push(pubC)
+	// Both remotes push the same Objects 0,1,2 on the same (group, subgroup).
+	publishObjects(t, pubBSess, 7, 0, 3)
+	publishObjects(t, pubCSess, 7, 0, 3)
 
-	// Collect with a quiet-period idle timeout: each of 0,1,2 must arrive exactly
-	// once across however many outbound streams the merge produced.
+	// Each of 0,1,2 must arrive exactly once across however many outbound
+	// streams the merge produced; collect until 500ms of quiet.
 	seen := map[uint64]int{}
 	hard := time.After(3 * time.Second)
 collect:
@@ -423,18 +173,10 @@ collect:
 			break collect
 		}
 	}
-	for _, id := range []uint64{0, 1, 2} {
-		if seen[id] != 1 {
-			t.Fatalf("object %d delivered %d times across two remotes, want exactly 1 (dedup): %v", id, seen[id], seen)
-		}
-	}
-	if len(seen) != 3 {
-		t.Fatalf("delivered set = %v, want {0,1,2}", seen)
+	if want := map[uint64]int{0: 1, 1: 1, 2: 1}; !maps.Equal(seen, want) {
+		t.Fatalf("delivered Object counts %v across two remotes, want each of 0,1,2 exactly once (dedup)", seen)
 	}
 
-	_ = subReq.Close()
-	_ = pubB.Close()
-	_ = pubC.Close()
 	_ = subSess.Close(0, "done")
 	_ = pubBSess.Close(0, "done")
 	_ = pubCSess.Close(0, "done")
@@ -447,10 +189,8 @@ collect:
 // RelayAddr is never dialled; the subscriber is refused.
 func TestCrossRelay_SelfExclusion(t *testing.T) {
 	t.Parallel()
-
 	store := discovery.NewMemoryStore()
 	defer store.Close()
-
 	ctx := t.Context()
 
 	var dials atomic.Int64
@@ -462,24 +202,17 @@ func TestCrossRelay_SelfExclusion(t *testing.T) {
 			return nil, fmt.Errorf("unexpected dial to %q", addr)
 		},
 	})
-
-	// Seed the store with a namespace advertised by relay-A itself.
-	if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
-		Prefix:    ns("video"),
-		RelayAddr: "relay-A",
-	}); err != nil {
+	if err := store.PublishNamespace(
+		ctx,
+		discovery.NamespaceInfo{Prefix: ns("video"), RelayAddr: "relay-A"},
+	); err != nil {
 		t.Fatalf("seed PublishNamespace: %v", err)
 	}
 
 	subSess := dialClient(t, relayA)
-	_, err := subSess.Subscribe(ctx, &message.Subscribe{
-		Namespace: ns("video"),
-		Name:      []byte("cam1"),
-	})
-	if err == nil {
+	if _, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")}); err == nil {
 		t.Fatal("Subscribe succeeded; want rejection (no remote relay, self excluded)")
 	}
-
 	if got := dials.Load(); got != 0 {
 		t.Errorf("Dialer fired %d times; want 0 (self must not be dialled)", got)
 	}
@@ -488,441 +221,53 @@ func TestCrossRelay_SelfExclusion(t *testing.T) {
 	relayA.stop(t)
 }
 
-// TestCrossRelay_PoolReuse pins that two cross-relay SUBSCRIBEs to the same
-// remote relay share a single dialled session: subscribing to two distinct
-// tracks in the same remote namespace dials once and reuses the pooled session.
+// TestCrossRelay_PoolReuse: SUBSCRIBEs to two tracks on the same remote relay
+// share one dialled session.
 func TestCrossRelay_PoolReuse(t *testing.T) {
 	t.Parallel()
-
 	store := discovery.NewMemoryStore()
 	defer store.Close()
-
 	ctx := t.Context()
 
 	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
-
-	var dials atomic.Int64
+	var dials dialLog
 	relayA := startTestRelay(ctx, relay.Config{
-		Discovery: store,
-		RelayAddr: "relay-A",
-		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
-			if addr != "relay-B" {
-				return nil, fmt.Errorf("no relay at %q", addr)
-			}
-			dials.Add(1)
-			return relayB.l.Dial()
-		},
+		Discovery: store, RelayAddr: "relay-A", Dialer: dialerTo(dials.record, relayB),
 	})
 
-	// Publisher on B advertises the namespace and PUBLISHes two tracks.
-	pubSess := dialClient(t, relayB)
-	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
-	if err != nil {
-		t.Fatalf("PublishNamespace: %v", err)
-	}
-	pub1, err := pubSess.Publish(ctx, &message.Publish{Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: 1})
-	if err != nil {
-		t.Fatalf("Publish cam1: %v", err)
-	}
-	pub2, err := pubSess.Publish(ctx, &message.Publish{Namespace: ns("video"), Name: []byte("cam2"), TrackAlias: 2})
-	if err != nil {
-		t.Fatalf("Publish cam2: %v", err)
-	}
+	pubSess, _ := publishOnRelay(t, relayB, "cam1", 1)
+	publishVideoTrack(t, pubSess, "cam2", 2)
 
 	subSess := dialClient(t, relayA)
-	sub1, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
-	if err != nil {
-		t.Fatalf("Subscribe cam1: %v", err)
-	}
-	sub2, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam2")})
-	if err != nil {
+	subscribeCam1(t, subSess)
+	if _, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam2")}); err != nil {
 		t.Fatalf("Subscribe cam2: %v", err)
 	}
-
-	if got := dials.Load(); got != 1 {
-		t.Errorf("Dialer fired %d times for two tracks on one relay; want 1 (pool reuse)", got)
+	if got, want := dials.counts(), map[string]int{"relay-B": 1}; !maps.Equal(got, want) {
+		t.Errorf("Dialer calls %v for two tracks on one relay, want %v (pool reuse)", got, want)
 	}
 
-	_ = sub1.Close()
-	_ = sub2.Close()
-	_ = pub1.Close()
-	_ = pub2.Close()
-	_ = pns.Close()
 	_ = subSess.Close(0, "done")
 	_ = pubSess.Close(0, "done")
 	relayA.stop(t)
 	relayB.stop(t)
 }
 
-// TestCrossRelay_WatchNamespacesForward pins the consume side of
-// WatchNamespaces: a namespace advertised by a *remote* relay is reflected to a
-// local SUBSCRIBE_NAMESPACE holder as a NAMESPACE message.
-func TestCrossRelay_WatchNamespacesForward(t *testing.T) {
-	t.Parallel()
-
-	store := discovery.NewMemoryStore()
-	defer store.Close()
-
-	ctx := t.Context()
-
-	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
-
-	subSess := dialClient(t, relayA)
-	nsReq, err := subSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: ns("video"),
-	})
-	if err != nil {
-		t.Fatalf("SubscribeNamespace: %v", err)
-	}
-
-	// A remote relay advertises ["video","cam1"] into the shared store. A's
-	// WatchNamespaces consumer should forward it to our SUBSCRIBE_NAMESPACE
-	// holder as a NAMESPACE carrying the suffix ["cam1"].
-	//
-	// runNamespaceWatch only sees events emitted AFTER it registered its
-	// watcher (MemoryStore does not replay history to new watchers), and that
-	// registration happens asynchronously in Start. So re-advertise on a ticker
-	// until the subscriber observes it — PublishNamespace re-emits OpPublish on
-	// every call. The injector is stopped once we've read the NAMESPACE.
-	stopInject := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(20 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			_ = store.PublishNamespace(ctx, discovery.NamespaceInfo{
-				Prefix:    ns("video", "cam1"),
-				RelayAddr: "relay-C",
-			})
-			select {
-			case <-stopInject:
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	defer close(stopInject)
-
-	got := relaytest.ReadNextMessage(t, nsReq, time.After(2*time.Second))
-	nsMsg, ok := got.(*message.Namespace)
-	if !ok {
-		t.Fatalf("got %T, want *message.Namespace", got)
-	}
-	if len(nsMsg.TrackNamespaceSuffix) != 1 || string(nsMsg.TrackNamespaceSuffix[0]) != "cam1" {
-		t.Fatalf("NAMESPACE suffix = %v, want [cam1]", nsMsg.TrackNamespaceSuffix)
-	}
-
-	_ = nsReq.Close()
-	_ = subSess.Close(0, "done")
-	relayA.stop(t)
-}
-
-// TestCrossRelay_WatchNamespacesForwardsUnpublish: a remote relay's withdrawn
-// namespace reaches the local SUBSCRIBE_NAMESPACE holder as NAMESPACE_DONE.
-func TestCrossRelay_WatchNamespacesForwardsUnpublish(t *testing.T) {
-	t.Parallel()
-
-	store := discovery.NewMemoryStore()
-	defer store.Close()
-
-	ctx := t.Context()
-
-	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
-
-	subSess := dialClient(t, relayA)
-	nsReq, err := subSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: ns("video"),
-	})
-	if err != nil {
-		t.Fatalf("SubscribeNamespace: %v", err)
-	}
-
-	remoteNS := ns("video", "cam1")
-
-	// Same re-advertise ticker as TestCrossRelay_WatchNamespacesForward, and for
-	// the same reason: the watcher registers asynchronously in Start and
-	// MemoryStore does not replay history to new watchers. Reading the NAMESPACE
-	// back is what proves the watch is live, which is in turn what makes the
-	// single Unpublish below observable.
-	stopInject := make(chan struct{})
-	var stopOnce sync.Once
-	stopInjector := func() { stopOnce.Do(func() { close(stopInject) }) }
-	go func() {
-		ticker := time.NewTicker(20 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			_ = store.PublishNamespace(ctx, discovery.NamespaceInfo{
-				Prefix:    remoteNS,
-				RelayAddr: "relay-C",
-			})
-			select {
-			case <-stopInject:
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	defer stopInjector()
-
-	if got := relaytest.ReadNextMessage(t, nsReq, time.After(2*time.Second)); !isNamespace(got) {
-		t.Fatalf("got %T, want *message.Namespace before the retraction", got)
-	}
-	stopInjector()
-
-	// The advertisement has to still be in the store for the retraction to emit
-	// anything — UnpublishNamespace on a missing entry is a silent no-op, which
-	// would leave this test hanging on a NAMESPACE_DONE that was never sent.
-	if err := store.UnpublishNamespace(ctx, remoteNS, "relay-C"); err != nil {
-		t.Fatalf("UnpublishNamespace: %v", err)
-	}
-
-	// Ticks queued before the injector stopped may still be in flight, so skip
-	// any duplicate NAMESPACE sitting ahead of the NAMESPACE_DONE.
-	var done *message.NamespaceDone
-	for range 32 {
-		switch got := relaytest.ReadNextMessage(t, nsReq, time.After(2*time.Second)).(type) {
-		case *message.Namespace:
-			continue
-		case *message.NamespaceDone:
-			done = got
-		default:
-			t.Fatalf("got %T, want *message.NamespaceDone", got)
-		}
-		break
-	}
-	if done == nil {
-		t.Fatal("no NAMESPACE_DONE within 32 messages")
-	}
-	if len(done.TrackNamespaceSuffix) != 1 || string(done.TrackNamespaceSuffix[0]) != "cam1" {
-		t.Fatalf("NAMESPACE_DONE suffix = %v, want [cam1]", done.TrackNamespaceSuffix)
-	}
-
-	_ = nsReq.Close()
-	_ = subSess.Close(0, "done")
-	relayA.stop(t)
-}
-
-// TestCrossRelay_WatchNamespacesSkipsTrackSubscribers: a remote relay's
-// namespace is not sent to a SUBSCRIBE_TRACKS holder (§6.1, §10.20). The
-// SUBSCRIBE_NAMESPACE holder is the control that shows it was delivered at all.
-func TestCrossRelay_WatchNamespacesSkipsTrackSubscribers(t *testing.T) {
-	t.Parallel()
-
-	store := discovery.NewMemoryStore()
-	defer store.Close()
-
-	ctx := t.Context()
-
-	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
-
-	// Both holders register on the same prefix before any event is injected, so
-	// each tick below is offered to both and only the skip separates them.
-	nsSess := dialClient(t, relayA)
-	nsReq, err := nsSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: ns("video"),
-	})
-	if err != nil {
-		t.Fatalf("SubscribeNamespace: %v", err)
-	}
-
-	trSess := dialClient(t, relayA)
-	trSub, err := trSess.SubscribeTracks(ctx, &message.SubscribeTracks{
-		TrackNamespacePrefix: ns("video"),
-	})
-	if err != nil {
-		t.Fatalf("SubscribeTracks: %v", err)
-	}
-
-	stopInject := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(20 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			_ = store.PublishNamespace(ctx, discovery.NamespaceInfo{
-				Prefix:    ns("video", "cam1"),
-				RelayAddr: "relay-C",
-			})
-			select {
-			case <-stopInject:
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	defer close(stopInject)
-
-	got := relaytest.ReadNextMessage(t, nsReq, time.After(2*time.Second))
-	nsMsg, ok := got.(*message.Namespace)
-	if !ok {
-		t.Fatalf("got %T, want *message.Namespace", got)
-	}
-	if len(nsMsg.TrackNamespaceSuffix) != 1 || string(nsMsg.TrackNamespaceSuffix[0]) != "cam1" {
-		t.Fatalf("NAMESPACE suffix = %v, want [cam1]", nsMsg.TrackNamespaceSuffix)
-	}
-
-	// The event was delivered and the ticker keeps re-delivering it, so anything
-	// on the SUBSCRIBE_TRACKS stream now is the skip having been dropped.
-	//
-	// A Parse error fails as loudly as a message: a dead stream was not
-	// correctly skipped. The reader unblocks when the test closes the stream.
-	type parsed struct {
-		msg message.Message
-		err error
-	}
-	quiet := make(chan parsed, 1)
-	go func() {
-		msg, err := message.Parse(trSub)
-		quiet <- parsed{msg: msg, err: err}
-	}()
-	select {
-	case p := <-quiet:
-		if p.err != nil {
-			t.Fatalf("SUBSCRIBE_TRACKS stream failed instead of staying quiet: %v", p.err)
-		}
-		t.Fatalf("unexpected %T on the SUBSCRIBE_TRACKS stream", p.msg)
-	case <-time.After(300 * time.Millisecond):
-	}
-
-	_ = nsReq.Close()
-	_ = trSub.Close()
-	_ = nsSess.Close(0, "done")
-	_ = trSess.Close(0, "done")
-	relayA.stop(t)
-}
-
-// TestCrossRelay_SubscribeNamespaceSeedsRemote: a SUBSCRIBE_NAMESPACE holder
-// learns of a namespace a remote relay advertised before either existed.
-func TestCrossRelay_SubscribeNamespaceSeedsRemote(t *testing.T) {
-	t.Parallel()
-
-	store := discovery.NewMemoryStore()
-	defer store.Close()
-
-	ctx := t.Context()
-
-	// Remote advertisement exists before the subscriber (and before relay A).
-	if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
-		Prefix:    ns("video", "cam1"),
-		RelayAddr: "relay-C",
-	}); err != nil {
-		t.Fatalf("seed PublishNamespace: %v", err)
-	}
-
-	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
-
-	subSess := dialClient(t, relayA)
-	nsReq, err := subSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: ns("video"),
-	})
-	if err != nil {
-		t.Fatalf("SubscribeNamespace: %v", err)
-	}
-
-	got := relaytest.ReadNextMessage(t, nsReq, time.After(2*time.Second))
-	nsMsg, ok := got.(*message.Namespace)
-	if !ok {
-		t.Fatalf("got %T, want *message.Namespace", got)
-	}
-	if len(nsMsg.TrackNamespaceSuffix) != 1 || string(nsMsg.TrackNamespaceSuffix[0]) != "cam1" {
-		t.Fatalf("seeded NAMESPACE suffix = %v, want [cam1]", nsMsg.TrackNamespaceSuffix)
-	}
-
-	_ = nsReq.Close()
-	_ = subSess.Close(0, "done")
-	relayA.stop(t)
-}
-
-// TestCrossRelay_ConcurrentSubscriberWrites: a local PUBLISH_NAMESPACE and a
-// remote advertisement write one SUBSCRIBE_NAMESPACE stream from two
-// goroutines; run under -race.
-func TestCrossRelay_ConcurrentSubscriberWrites(t *testing.T) {
-	t.Parallel()
-
-	store := discovery.NewMemoryStore()
-	defer store.Close()
-
-	ctx := t.Context()
-
-	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
-
-	// Subscriber S subscribes to a prefix and continuously drains its stream so
-	// writes never block.
-	subSess := dialClient(t, relayA)
-	nsReq, err := subSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: ns("room"),
-	})
-	if err != nil {
-		t.Fatalf("SubscribeNamespace: %v", err)
-	}
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		for {
-			if _, err := message.Parse(nsReq); err != nil {
-				return
-			}
-		}
-	}()
-
-	const rounds = 50
-	var wg sync.WaitGroup
-
-	// Writer 1: a local publisher repeatedly advertises namespaces under "room";
-	// each PUBLISH_NAMESPACE forwards a NAMESPACE to S (and its Close a
-	// NAMESPACE_DONE) from relayA's publisher-handler goroutine.
-	pubSess := dialClient(t, relayA)
-	wg.Go(func() {
-		for i := range rounds {
-			pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{
-				Namespace: wire.TrackNamespace{[]byte("room"), fmt.Appendf(nil, "local%d", i)},
-			})
-			if err != nil {
-				return
-			}
-			_ = pns.Close()
-		}
-	})
-
-	// Writer 2: remote advertisements injected into the shared store; each fires
-	// the relay-level watch goroutine to forward a NAMESPACE to the same S.
-	wg.Go(func() {
-		for i := range rounds {
-			_ = store.PublishNamespace(ctx, discovery.NamespaceInfo{
-				Prefix:    wire.TrackNamespace{[]byte("room"), fmt.Appendf(nil, "remote%d", i)},
-				RelayAddr: "relay-C",
-			})
-		}
-	})
-
-	wg.Wait()
-
-	_ = nsReq.Close()
-	_ = subSess.Close(0, "done")
-	_ = pubSess.Close(0, "done")
-	relayA.stop(t)
-	<-drained
-}
-
 // TestCrossRelay_DialerWithoutRelayAddrWarns: New warns when a Dialer is set
 // without a RelayAddr, and not when one is set.
 func TestCrossRelay_DialerWithoutRelayAddrWarns(t *testing.T) {
 	t.Parallel()
-
 	dialer := func(_ context.Context, _ string) (session.Conn, error) {
 		return nil, errors.New("unused")
 	}
-
 	newWith := func(relayAddr string) string {
 		var buf bytes.Buffer
 		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
 		store := discovery.NewMemoryStore()
 		defer store.Close()
-		// New logs synchronously and starts no goroutines, so the buffer is
-		// fully written by the time New returns.
+		// New logs synchronously and starts no goroutines.
 		_ = relay.New(newPipeListener(), relay.Config{
-			Discovery: store,
-			RelayAddr: relayAddr,
-			Dialer:    dialer,
-			Logger:    logger,
+			Discovery: store, RelayAddr: relayAddr, Dialer: dialer, Logger: logger,
 		})
 		return buf.String()
 	}
@@ -935,26 +280,21 @@ func TestCrossRelay_DialerWithoutRelayAddrWarns(t *testing.T) {
 	}
 }
 
-// TestCrossRelay_NoDialerNoop pins back-compat: with Discovery but no Dialer, a
-// SUBSCRIBE with no local publisher is cleanly rejected (no cross-relay
-// routing), exactly as a single-instance relay behaves.
+// TestCrossRelay_NoDialerNoop: with Discovery but no Dialer, a SUBSCRIBE with
+// no local publisher is refused exactly as on a single-instance relay.
 func TestCrossRelay_NoDialerNoop(t *testing.T) {
 	t.Parallel()
-
 	store := discovery.NewMemoryStore()
 	defer store.Close()
-
 	ctx := t.Context()
 
-	// Seed a remote namespace; without a Dialer the relay must not try to use
-	// it.
-	if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
-		Prefix:    ns("video"),
-		RelayAddr: "relay-B",
-	}); err != nil {
+	// A remote namespace the relay must not try to use without a Dialer.
+	if err := store.PublishNamespace(
+		ctx,
+		discovery.NamespaceInfo{Prefix: ns("video"), RelayAddr: "relay-B"},
+	); err != nil {
 		t.Fatalf("seed PublishNamespace: %v", err)
 	}
-
 	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
 
 	subSess := dialClient(t, relayA)
@@ -962,8 +302,6 @@ func TestCrossRelay_NoDialerNoop(t *testing.T) {
 	if err == nil {
 		t.Fatal("Subscribe succeeded; want rejection (no Dialer, no local publisher)")
 	}
-	// Sanity: the rejection is the protocol-level REQUEST_ERROR, not a
-	// transport error.
 	if _, ok := errors.AsType[*session.RequestRejectedError](err); !ok {
 		t.Logf("Subscribe error (non-RequestRejectedError is acceptable): %v", err)
 	}
@@ -977,105 +315,49 @@ func TestCrossRelay_NoDialerNoop(t *testing.T) {
 // one.
 func TestCrossRelay_UpstreamFanInCapConverges(t *testing.T) {
 	t.Parallel()
-
 	store := discovery.NewMemoryStore()
 	defer store.Close()
-
 	ctx := t.Context()
 
-	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
-	relayC := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-C"})
-	relayD := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-D"})
-	remotes := map[string]*testRelay{"relay-B": relayB, "relay-C": relayC, "relay-D": relayD}
-
-	// A publisher on every remote so whichever the leaves converge on can serve
-	// cam1 (establishment, and thus the dial, only completes against a relay that
-	// actually hosts the track).
+	var remotes []*testRelay
 	var pubSessions []*session.Session
-	for addr, tr := range remotes {
-		ps := dialClient(t, tr)
-		if _, err := ps.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")}); err != nil {
-			t.Fatalf("%s PublishNamespace: %v", addr, err)
-		}
-		if _, err := ps.Publish(
-			ctx,
-			&message.Publish{Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: 7},
-		); err != nil {
-			t.Fatalf("%s Publish: %v", addr, err)
-		}
+	for _, addr := range []string{"relay-B", "relay-C", "relay-D"} {
+		tr := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: addr})
+		remotes = append(remotes, tr)
+		// Every remote hosts cam1, so whichever the leaves converge on can
+		// establish the upstream.
+		ps, _ := publishOnRelay(t, tr, "cam1", 7)
 		pubSessions = append(pubSessions, ps)
 	}
 
-	// A per-leaf dialer that records only successful dials into known remotes.
-	// A candidate a leaf cannot reach (e.g. the other leaf, should it re-advertise
-	// the namespace) misses the lookup and is not counted — resolveUpstreams
-	// treats it as skip-and-fall-through, so the log holds exactly the leaf's
-	// established upstreams.
-	makeDialer := func(mu *sync.Mutex, log map[string]int) func(context.Context, string) (session.Conn, error) {
-		return func(_ context.Context, addr string) (session.Conn, error) {
-			tr, ok := remotes[addr]
-			if !ok {
-				return nil, fmt.Errorf("no relay at %q", addr)
-			}
-			mu.Lock()
-			log[addr]++
-			mu.Unlock()
-			return tr.l.Dial()
-		}
-	}
-	dialed := func(mu *sync.Mutex, log map[string]int) (addrs []string, total int) {
-		mu.Lock()
-		defer mu.Unlock()
-		for a, n := range log {
-			if n > 0 {
-				addrs = append(addrs, a)
-				total += n
-			}
-		}
-		return addrs, total
-	}
-
-	var muA1 sync.Mutex
-	logA1 := map[string]int{}
+	// Each leaf's log holds only dials into known remotes: resolveUpstreams
+	// skips an unreachable candidate (such as the other leaf) and falls
+	// through, so it is exactly the leaf's established upstreams.
+	var logA1, logA2 dialLog
 	relayA1 := startTestRelay(ctx, relay.Config{
-		Discovery: store, RelayAddr: "relay-A1", UpstreamFanIn: 1,
-		Dialer: makeDialer(&muA1, logA1),
+		Discovery: store, RelayAddr: "relay-A1", UpstreamFanIn: 1, Dialer: dialerTo(logA1.record, remotes...),
 	})
-	var muA2 sync.Mutex
-	logA2 := map[string]int{}
 	relayA2 := startTestRelay(ctx, relay.Config{
-		Discovery: store, RelayAddr: "relay-A2", UpstreamFanIn: 1,
-		Dialer: makeDialer(&muA2, logA2),
+		Discovery: store, RelayAddr: "relay-A2", UpstreamFanIn: 1, Dialer: dialerTo(logA2.record, remotes...),
 	})
 
-	// Subscribe blocks until the (single) upstream is established, so the dial
-	// logs are settled by the time each call returns.
+	// Subscribe blocks until the upstream is established, so the logs are
+	// settled when it returns.
 	sub1 := dialClient(t, relayA1)
-	req1, err := sub1.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
-	if err != nil {
-		t.Fatalf("A1 Subscribe: %v", err)
-	}
+	subscribeCam1(t, sub1)
 	sub2 := dialClient(t, relayA2)
-	req2, err := sub2.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
-	if err != nil {
-		t.Fatalf("A2 Subscribe: %v", err)
+	subscribeCam1(t, sub2)
+
+	a1, a2 := logA1.counts(), logA2.counts()
+	for leaf, log := range map[string]map[string]int{"A1": a1, "A2": a2} {
+		if len(log) != 1 || slices.Max(slices.Collect(maps.Values(log))) != 1 {
+			t.Errorf("%s dialed %v; want exactly one upstream, once (UpstreamFanIn=1)", leaf, log)
+		}
+	}
+	if len(a1) == 1 && len(a2) == 1 && !maps.Equal(a1, a2) {
+		t.Errorf("leaves diverged: A1 dialed %v, A2 dialed %v; rendezvous ranking must converge", a1, a2)
 	}
 
-	a1Addrs, a1Total := dialed(&muA1, logA1)
-	a2Addrs, a2Total := dialed(&muA2, logA2)
-
-	if len(a1Addrs) != 1 || a1Total != 1 {
-		t.Errorf("A1 dialed %v (total %d); want exactly one upstream (UpstreamFanIn=1)", a1Addrs, a1Total)
-	}
-	if len(a2Addrs) != 1 || a2Total != 1 {
-		t.Errorf("A2 dialed %v (total %d); want exactly one upstream (UpstreamFanIn=1)", a2Addrs, a2Total)
-	}
-	if len(a1Addrs) == 1 && len(a2Addrs) == 1 && a1Addrs[0] != a2Addrs[0] {
-		t.Errorf("leaves diverged: A1 chose %q, A2 chose %q; rendezvous ranking must converge", a1Addrs[0], a2Addrs[0])
-	}
-
-	_ = req1.Close()
-	_ = req2.Close()
 	_ = sub1.Close(0, "done")
 	_ = sub2.Close(0, "done")
 	for _, ps := range pubSessions {
@@ -1083,296 +365,7 @@ func TestCrossRelay_UpstreamFanInCapConverges(t *testing.T) {
 	}
 	relayA1.stop(t)
 	relayA2.stop(t)
-	relayB.stop(t)
-	relayC.stop(t)
-	relayD.stop(t)
-}
-
-// TestCrossRelay_GoawayPrecedesUpstreamTeardown: on Stop the relay sends GOAWAY
-// before it unsubscribes from upstream publishers (§3.6). Reliably fails a
-// wrong ordering only at GOMAXPROCS=1.
-func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
-	t.Parallel()
-
-	store := discovery.NewMemoryStore()
-	defer store.Close()
-
-	ctx := t.Context()
-
-	// Stand in for a peer relay: advertise a namespace at "peer" so the relay
-	// resolves it as an upstream, and serve the far end of the dialled pipe here.
-	const peerAddr = "peer:4433"
-	if err := store.PublishNamespace(ctx,
-		discovery.NamespaceInfo{Prefix: ns("video"), RelayAddr: peerAddr}); err != nil {
-		t.Fatalf("PublishNamespace: %v", err)
-	}
-
-	peerSessions := make(chan *session.Session, 1)
-	r := startTestRelay(ctx, relay.Config{
-		GoawayTimeout: 2 * time.Second, // long enough that the drain is observable
-		Discovery:     store,
-		RelayAddr:     "relay-under-test:4433",
-		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
-			if addr != peerAddr {
-				return nil, fmt.Errorf("no relay at %q", addr)
-			}
-			relaySide, peerSide := sessiontest.NewConnPair()
-			go func() {
-				// The relay dials as a client, so this end completes SETUP as
-				// the server.
-				sess, err := session.Server(context.Background(), peerSide)
-				if err != nil {
-					close(peerSessions)
-					return
-				}
-				peerSessions <- sess
-			}()
-			return relaySide, nil
-		},
-	})
-
-	// A downstream SUBSCRIBE with no local publisher drives the upstream dial.
-	// Issued in the background: the relay does not answer it until the upstream
-	// does, and this peer deliberately never replies — the dial is all we need.
-	subSess := dialClient(t, r)
-	go func() {
-		_, _ = subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
-	}()
-
-	var peer *session.Session
-	select {
-	case peer = <-peerSessions:
-		if peer == nil {
-			t.Fatal("upstream peer SETUP failed")
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("relay never dialled the advertised upstream")
-	}
-
-	stopDone := make(chan struct{})
-	go func() {
-		defer close(stopDone)
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = r.r.Stop(stopCtx)
-	}()
-
-	// The upstream peer must be told the relay is going away before its session
-	// is torn down.
-	select {
-	case <-peer.GoawayReceived():
-	case <-peer.Done():
-		t.Fatal("upstream session was torn down without ever receiving a GOAWAY;" +
-			" §3.6 requires the GOAWAY first")
-	case <-time.After(5 * time.Second):
-		t.Fatal("upstream peer received no GOAWAY")
-	}
-
-	<-stopDone
-	select {
-	case err := <-r.startErr:
-		if err != nil {
-			t.Errorf("Start returned: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Error("Start did not return after Stop")
-	}
-}
-
-// TestCrossRelay_FetchBackfillsPublishOnceTrack: relay A's LARGEST_OBJECT
-// includes the one its upstream sent in SUBSCRIBE_OK (§10.2.17, §9.4), so a
-// track published once, like an MSF catalog, can be FETCHed from A later.
-func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
-	t.Parallel()
-
-	store := discovery.NewMemoryStore()
-	defer store.Close()
-
-	ctx := t.Context()
-
-	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
-	relayA := startTestRelay(ctx, relay.Config{
-		Discovery: store,
-		RelayAddr: "relay-A",
-		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
-			if addr == "relay-B" {
-				return relayB.l.Dial()
-			}
-			return nil, fmt.Errorf("no relay at %q", addr)
-		},
-	})
-
-	// Publisher on B publishes the whole track, then stops. Nothing is written
-	// after the subscriber joins, so live delivery cannot cover any of it.
-	pubSess := dialClient(t, relayB)
-	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
-	if err != nil {
-		t.Fatalf("PublishNamespace: %v", err)
-	}
-	const pubAlias = uint64(7)
-	pubReq, err := pubSess.Publish(ctx, &message.Publish{
-		Namespace:  ns("video"),
-		Name:       []byte("catalog"),
-		TrackAlias: pubAlias,
-	})
-	if err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-	pubSg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
-		SubgroupIDMode: message.SubgroupIDExplicit,
-		TrackAlias:     pubAlias,
-		GroupID:        0,
-		SubgroupID:     0,
-	})
-	if err != nil {
-		t.Fatalf("OpenSubgroup: %v", err)
-	}
-	const sgCount = 3
-	for i := range sgCount {
-		if err := pubSg.WriteObject(&message.SubgroupObject{
-			ObjectIDDelta: 0,
-			Payload:       []byte{byte('A' + i)},
-		}); err != nil {
-			t.Fatalf("WriteObject #%d: %v", i, err)
-		}
-	}
-	if err := pubSg.Close(); err != nil {
-		t.Fatalf("pubSg.Close: %v", err)
-	}
-
-	// Let B's fanout observe the objects, so B has a watermark to report in its
-	// SUBSCRIBE_OK. Without this the test could pass for the wrong reason: B
-	// omitting LARGEST_OBJECT because it genuinely knows nothing yet is not the
-	// bug under test.
-	time.Sleep(100 * time.Millisecond)
-
-	// Subscriber joins on A, which has no local publisher and follows Discovery
-	// to B. Bind the message so its assigned Request ID can anchor the Joining
-	// FETCH below (Subscribe mutates RequestID via AllocRequestID).
-	subSess := dialClient(t, relayA)
-	subMsg := &message.Subscribe{Namespace: ns("video"), Name: []byte("catalog")}
-	subReq, err := subSess.Subscribe(ctx, subMsg)
-	if err != nil {
-		t.Fatalf("cross-relay Subscribe: %v", err)
-	}
-
-	// §10.2.17: "If Objects have been published on this Track the Publisher MUST
-	// include this parameter." A is the publisher for this subscriber, and B has
-	// told it objects exist, so its SUBSCRIBE_OK has to carry the watermark.
-	// This is the assertion the fix turns green on the wire.
-	if _, ok := subReq.OK.Parameters.Find(message.ParamLargestObject); !ok {
-		t.Fatalf("A's SUBSCRIBE_OK omitted LARGEST_OBJECT; it learned no Joining "+
-			"Location from B's SUBSCRIBE_OK (params=%v)", subReq.OK.Parameters)
-	}
-
-	// A FETCH is the only way this subscriber can reach content published before
-	// it arrived. A's own cache is empty — its upstream uses the §9.4 Next Object
-	// filter — so answering means stitching from B (§9.4).
-	//
-	// StartGroup=1 is the relative one-field form (§5.1.2): the current group
-	// up to Largest Object.
-	fetchReq, err := subSess.Fetch(ctx, &message.Fetch{
-		Namespace: subMsg.Namespace,
-		Name:      subMsg.Name,
-		Parameters: message.Parameters{
-			message.GroupOrderParam(message.GroupOrderAscending),
-			message.RelativeStartFilter(1),
-		},
-	})
-	if err != nil {
-		t.Fatalf("FETCH rejected, so the backfill is unreachable: %v", err)
-	}
-	defer fetchReq.Close()
-
-	type fetchResult struct {
-		n   int
-		err error
-	}
-	done := make(chan fetchResult, 1)
-	go func() {
-		ds, err := subSess.AcceptDataStream(ctx)
-		if err != nil {
-			done <- fetchResult{err: err}
-			return
-		}
-		fs, ok := ds.(*session.IncomingFetchStream)
-		if !ok {
-			done <- fetchResult{err: fmt.Errorf("got %T, want *session.IncomingFetchStream", ds)}
-			return
-		}
-		var n int
-		for {
-			if _, err := fs.ReadObject(); err != nil {
-				done <- fetchResult{n: n}
-				return
-			}
-			n++
-		}
-	}()
-
-	select {
-	case res := <-done:
-		if res.err != nil {
-			t.Fatalf("reading the joining FETCH response: %v", res.err)
-		}
-		if res.n != sgCount {
-			t.Errorf("joining FETCH returned %d objects, want %d — the backfill "+
-				"did not cover the group published before the subscriber joined",
-				res.n, sgCount)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("joining FETCH response did not arrive within deadline")
-	}
-
-	_ = subReq.Close()
-	_ = pubReq.Close()
-	_ = pns.Close()
-	_ = subSess.Close(0, "done")
-	_ = pubSess.Close(0, "done")
-	relayA.stop(t)
-	relayB.stop(t)
-}
-
-// TestCrossRelay_PublishDoneCodeCrossesRelays: a PUBLISH_DONE code about the
-// track reaches a subscriber two relays away unchanged (§10.12).
-func TestCrossRelay_PublishDoneCodeCrossesRelays(t *testing.T) {
-	t.Parallel()
-	store := discovery.NewMemoryStore()
-	defer store.Close()
-	ctx := t.Context()
-
-	relayB := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-B"})
-	defer relayB.stop(t)
-	relayA := startTestRelay(ctx, relay.Config{
-		Discovery: store,
-		RelayAddr: "relay-A",
-		Dialer: func(_ context.Context, addr string) (session.Conn, error) {
-			if addr == "relay-B" {
-				return relayB.l.Dial()
-			}
-			return nil, fmt.Errorf("no relay at %q", addr)
-		},
-	})
-	defer relayA.stop(t)
-
-	pubSess := dialClient(t, relayB)
-	defer func() { _ = pubSess.Close(0, "done") }()
-	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
-	if err != nil {
-		t.Fatalf("PublishNamespace: %v", err)
-	}
-	defer func() { _ = pns.Close() }()
-	pub := publishVideoTrack(t, pubSess, "cam1", 7)
-
-	subSess := dialClient(t, relayA)
-	defer func() { _ = subSess.Close(0, "done") }()
-	subReq := subscribeCam1(t, subSess)
-
-	if err := pub.Done(moqt.PublishDoneMalformedTrack, "bad track"); err != nil {
-		t.Fatalf("Done: %v", err)
-	}
-	if pd := awaitPublishDone(t, subReq); pd.StatusCode != moqt.PublishDoneMalformedTrack {
-		t.Fatalf("PUBLISH_DONE across two relays %#x, want MALFORMED_TRACK %#x",
-			pd.StatusCode, moqt.PublishDoneMalformedTrack)
+	for _, tr := range remotes {
+		tr.stop(t)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
+	"github.com/floatdrop/moq-go/pkg/relay/discovery"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
 // Shared helpers for the relay_test package: they drive clients of a relay
@@ -35,6 +38,12 @@ func trackProp(typ, v uint64) []wire.KVPair {
 // dynamicGroupsProperties is Track Properties carrying DYNAMIC_GROUPS = value.
 func dynamicGroupsProperties(value uint64) []byte {
 	return message.AppendTrackProperties(trackProp(message.PropertyDynamicGroups, value))
+}
+
+// opaqueProps is well-formed Track Properties holding one property of a type
+// the relay does not interpret, so it must pass through byte for byte.
+func opaqueProps(v string) []byte {
+	return message.AppendTrackProperties([]wire.KVPair{{Type: 0x101, ByteVal: []byte(v)}})
 }
 
 // Publishing.
@@ -168,6 +177,32 @@ func publishSubgroupWith(t *testing.T, pub *session.Publication, group uint64, o
 	}()
 }
 
+// writeSubgroupObjects opens one subgroup on the publisher and writes the
+// given absolute object IDs (ascending), then FINs.
+func writeSubgroupObjects(t *testing.T, pub *session.Publication, hdr message.SubgroupHeader, ids []uint64) {
+	t.Helper()
+	sg, err := pub.OpenSubgroup(hdr)
+	if err != nil {
+		t.Fatalf("OpenSubgroup: %v", err)
+	}
+	prev, has := uint64(0), false
+	for _, id := range ids {
+		obj := &message.SubgroupObject{Payload: []byte{byte('a' + id)}}
+		if !has {
+			obj.ObjectIDDelta = id
+		} else {
+			obj.ObjectIDDelta = id - prev - 1
+		}
+		if err := sg.WriteObject(obj); err != nil {
+			t.Fatalf("WriteObject(%d): %v", id, err)
+		}
+		prev, has = id, true
+	}
+	if err := sg.Close(); err != nil {
+		t.Fatalf("subgroup Close: %v", err)
+	}
+}
+
 // openSubgroupWaiting opens a subgroup stream, waiting up to 5s out
 // [session.ErrNoStreamCredit]: sessiontest's bounded stream queue reports a
 // full queue that way, and the relay drains it on its own.
@@ -188,6 +223,63 @@ func openSubgroupWaiting(
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
+}
+
+// Namespaces.
+
+// publishNS sends PUBLISH_NAMESPACE for the namespace fields from sess.
+func publishNS(t *testing.T, sess *session.Session, fields ...string) *session.NamespacePublication {
+	t.Helper()
+	p, err := sess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns(fields...)})
+	if err != nil {
+		t.Fatalf("PublishNamespace %v: %v", fields, err)
+	}
+	return p
+}
+
+// subscribeNS sends SUBSCRIBE_NAMESPACE for the prefix fields and returns the
+// subscription with the messages read from its stream.
+func subscribeNS(
+	t *testing.T,
+	sess *session.Session,
+	fields ...string,
+) (*session.NamespaceSubscription, <-chan message.Message) {
+	t.Helper()
+	s, err := sess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{TrackNamespacePrefix: ns(fields...)})
+	if err != nil {
+		t.Fatalf("SubscribeNamespace %v: %v", fields, err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s, streamMessages(t, s.Stream)
+}
+
+// readvertise publishes info into store every 20ms until the returned stop,
+// which waits for the last publish, is called (it also runs at cleanup). A
+// relay's Discovery watch registers asynchronously in Start and MemoryStore
+// does not replay history to new watchers, so one publish can go unseen.
+func readvertise(t *testing.T, store *discovery.MemoryStore, info discovery.NamespaceInfo) (stop func()) {
+	t.Helper()
+	quit := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		tick := time.NewTicker(20 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			_ = store.PublishNamespace(t.Context(), info)
+			select {
+			case <-quit:
+				return
+			case <-tick.C:
+			}
+		}
+	}()
+	stop = sync.OnceFunc(func() {
+		close(quit)
+		<-exited
+	})
+	t.Cleanup(stop)
+	return stop
 }
 
 // Subscribing.
@@ -364,6 +456,117 @@ func tryAcceptDataStream(t *testing.T, sess *session.Session, d time.Duration) (
 	return ds, true
 }
 
+// subgroupRead is one subgroup stream as a subscriber read it to its end.
+type subgroupRead struct {
+	header   message.SubgroupHeader
+	ids      []uint64 // absolute Object IDs (§11.4.2)
+	payloads []string
+	end      error // io.EOF for a FIN, otherwise a reset
+	err      error // no subgroup stream was accepted
+}
+
+// readNextSubgroup reads the next subgroup stream sess accepts to its end, off
+// the test goroutine so it can start before the Objects are published.
+func readNextSubgroup(t *testing.T, sess *session.Session) <-chan subgroupRead {
+	t.Helper()
+	out := make(chan subgroupRead, 1)
+	go func() {
+		ds, err := sess.AcceptDataStream(t.Context())
+		if err != nil {
+			out <- subgroupRead{err: fmt.Errorf("AcceptDataStream: %w", err)}
+			return
+		}
+		in, ok := ds.(*session.IncomingSubgroupStream)
+		if !ok {
+			out <- subgroupRead{err: fmt.Errorf("AcceptDataStream = %T, want a subgroup stream", ds)}
+			return
+		}
+		r := subgroupRead{header: in.Header}
+		for {
+			o, err := in.ReadDecoded()
+			if err != nil {
+				r.end = err
+				out <- r
+				return
+			}
+			r.ids = append(r.ids, o.ObjectID)
+			r.payloads = append(r.payloads, string(o.Payload))
+		}
+	}()
+	return out
+}
+
+// awaitSubgroupRead waits up to 5s for [readNextSubgroup]'s stream to end.
+func awaitSubgroupRead(t *testing.T, reads <-chan subgroupRead) subgroupRead {
+	t.Helper()
+	select {
+	case r := <-reads:
+		if r.err != nil {
+			t.Fatal(r.err)
+		}
+		return r
+	case <-time.After(5 * time.Second):
+		t.Fatal("no subgroup stream reached its end within 5s")
+		return subgroupRead{}
+	}
+}
+
+// readUntilEnd reads the subscriber's next subgroup stream to its end and
+// returns the Object IDs it carried and how it ended.
+func readUntilEnd(t *testing.T, subSess *session.Session) (ids []uint64, end error) {
+	t.Helper()
+	r := awaitSubgroupRead(t, readNextSubgroup(t, subSess))
+	return r.ids, r.end
+}
+
+// objEvent is one Object, or the end of a stream (or of accepting), as
+// [readSubgroups] emits it.
+type objEvent struct {
+	stream int    // 1-based index of the outbound stream it arrived on
+	absID  uint64 // §11.4.2 delta resolved to an absolute Object ID
+	err    error  // non-nil marks a stream end (io.EOF = FIN, else reset) or accept error
+}
+
+// readSubgroups emits every Object of every subgroup stream sub accepts, with
+// its absolute Object ID, and each stream's end as an event with err set
+// (io.EOF for a FIN). It returns when AcceptDataStream fails.
+func readSubgroups(ctx context.Context, sub *session.Session, out chan<- objEvent) {
+	streamIdx := 0
+	for {
+		ds, err := sub.AcceptDataStream(ctx)
+		if err != nil {
+			out <- objEvent{err: err}
+			return
+		}
+		sg, ok := ds.(*session.IncomingSubgroupStream)
+		if !ok {
+			continue
+		}
+		streamIdx++
+		idx := streamIdx
+		var (
+			prev uint64
+			have bool
+		)
+		for {
+			obj, err := sg.ReadObject()
+			if err != nil {
+				out <- objEvent{stream: idx, err: err}
+				break
+			}
+			var absID uint64
+			if !have {
+				absID = obj.ObjectIDDelta
+				have = true
+			} else {
+				absID = prev + obj.ObjectIDDelta + 1
+			}
+			prev = absID
+			out <- objEvent{stream: idx, absID: absID}
+		}
+	}
+}
+
 // drainAll reads and discards every data stream on sess until ctx ends, so the
 // relay never blocks on an unread subscriber.
 func drainAll(ctx context.Context, sess *session.Session) {
@@ -433,6 +636,37 @@ func isNamespace(m message.Message) bool {
 func isNamespaceDone(m message.Message) bool {
 	_, ok := m.(*message.NamespaceDone)
 	return ok
+}
+
+// requireQuiet fails if a message arrives on msgs within 300ms.
+func requireQuiet(t *testing.T, msgs <-chan message.Message, what string) {
+	t.Helper()
+	select {
+	case m := <-msgs:
+		t.Fatalf("%s: unexpected %T %+v", what, m, m)
+	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// requireNamespace requires the next message to be NAMESPACE for suffix.
+func requireNamespace(t *testing.T, msgs <-chan message.Message, suffix ...string) {
+	t.Helper()
+	m := nextMessage(t, msgs)
+	n, ok := m.(*message.Namespace)
+	if !ok || relaytest.FormatNamespace(n.TrackNamespaceSuffix) != relaytest.FormatNamespace(ns(suffix...)) {
+		t.Fatalf("got %T %+v, want NAMESPACE %v", m, m, suffix)
+	}
+}
+
+// requireNamespaceDone requires the next message to be NAMESPACE_DONE for
+// suffix.
+func requireNamespaceDone(t *testing.T, msgs <-chan message.Message, suffix ...string) {
+	t.Helper()
+	m := nextMessage(t, msgs)
+	d, ok := m.(*message.NamespaceDone)
+	if !ok || relaytest.FormatNamespace(d.TrackNamespaceSuffix) != relaytest.FormatNamespace(ns(suffix...)) {
+		t.Fatalf("got %T %+v, want NAMESPACE_DONE %v", m, m, suffix)
+	}
 }
 
 // awaitPublishDone reads the next message on a subscription's request stream

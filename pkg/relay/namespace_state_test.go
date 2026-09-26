@@ -21,63 +21,6 @@ import (
 // NAMESPACE_DONE never precedes its NAMESPACE (§10.18, §10.19);
 // TRACK_NAMESPACE_PREFIX updates follow §10.9.2.
 
-// requireQuiet fails if a message arrives on msgs within 300ms.
-func requireQuiet(t *testing.T, msgs <-chan message.Message, what string) {
-	t.Helper()
-	select {
-	case m := <-msgs:
-		t.Fatalf("%s: unexpected %T %+v", what, m, m)
-	case <-time.After(300 * time.Millisecond):
-	}
-}
-
-// requireNamespace requires the next message to be NAMESPACE for suffix.
-func requireNamespace(t *testing.T, msgs <-chan message.Message, suffix ...string) {
-	t.Helper()
-	m := nextMessage(t, msgs)
-	n, ok := m.(*message.Namespace)
-	if !ok || relaytest.FormatNamespace(n.TrackNamespaceSuffix) != relaytest.FormatNamespace(ns(suffix...)) {
-		t.Fatalf("got %T %+v, want NAMESPACE %v", m, m, suffix)
-	}
-}
-
-// requireNamespaceDone requires the next message to be NAMESPACE_DONE for
-// suffix.
-func requireNamespaceDone(t *testing.T, msgs <-chan message.Message, suffix ...string) {
-	t.Helper()
-	m := nextMessage(t, msgs)
-	d, ok := m.(*message.NamespaceDone)
-	if !ok || relaytest.FormatNamespace(d.TrackNamespaceSuffix) != relaytest.FormatNamespace(ns(suffix...)) {
-		t.Fatalf("got %T %+v, want NAMESPACE_DONE %v", m, m, suffix)
-	}
-}
-
-// publishNS sends PUBLISH_NAMESPACE for the namespace fields from sess.
-func publishNS(t *testing.T, sess *session.Session, fields ...string) *session.NamespacePublication {
-	t.Helper()
-	p, err := sess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns(fields...)})
-	if err != nil {
-		t.Fatalf("PublishNamespace %v: %v", fields, err)
-	}
-	return p
-}
-
-// subscribeNS sends SUBSCRIBE_NAMESPACE for the prefix fields and returns the
-// subscription with the messages read from its stream.
-func subscribeNS(
-	t *testing.T,
-	sess *session.Session,
-	fields ...string,
-) (*session.NamespaceSubscription, <-chan message.Message) {
-	t.Helper()
-	s, err := sess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{TrackNamespacePrefix: ns(fields...)})
-	if err != nil {
-		t.Fatalf("SubscribeNamespace %v: %v", fields, err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s, streamMessages(t, s.Stream)
-}
-
 // TestNamespace_SecondPublisherKeepsNamespaceAlive: two publishers of one
 // namespace announce it once, and it is done only when both have withdrawn.
 func TestNamespace_SecondPublisherKeepsNamespaceAlive(t *testing.T) {
@@ -283,22 +226,9 @@ func TestNamespace_RemoteAndLocalSourcesShareOneAnnouncement(t *testing.T) {
 	subSess := dialClient(t, relayA)
 	_, msgs := subscribeNS(t, subSess, "video")
 	remote := discovery.NamespaceInfo{Prefix: ns("video", "cam"), RelayAddr: "relay-C"}
-	// The watch starts asynchronously; re-advertise until it is seen.
-	stop := make(chan struct{})
-	go func() {
-		tick := time.NewTicker(20 * time.Millisecond)
-		defer tick.Stop()
-		for {
-			_ = store.PublishNamespace(ctx, remote)
-			select {
-			case <-stop:
-				return
-			case <-tick.C:
-			}
-		}
-	}()
+	stop := readvertise(t, store, remote)
 	requireNamespace(t, msgs, "cam")
-	close(stop)
+	stop()
 	// A subscriber arriving now is seeded from the remote state, and counts
 	// it as a source too.
 	_, late := subscribeNS(t, dialClient(t, relayA), "video")
