@@ -135,11 +135,9 @@ type TrackEntry struct {
 	// identity). It lives on the entry (not on a SharedSubgroup) so peers whose
 	// streams do not temporally overlap — e.g. one origin's subgroup FINs before
 	// the redundant origin's arrives — still dedup. Memory is bounded by
-	// [deliveredGroupWindow]: state for a group more than that many groups behind
-	// the largest seen group is pruned, and a stray object from such an aged-out
-	// group is treated as already-delivered (a peer lagging by that many groups
-	// is beyond any useful reorder window). deliveredMax/HasMax track the largest
-	// group seen, for the pruning window.
+	// [deliveredGroupWindow]: it holds that many Groups, the lowest ID pruned
+	// first, and an Object of a pruned or lower Group is [ClaimAgedOut].
+	// deliveredFloor is the lowest Group held, while delivered is non-empty.
 	//
 	// It also holds the Prior Group and Object ID Gaps (§12.8, §12.9) seen:
 	// each Group its Object ID gaps and Group gap value, and groupGaps the Group
@@ -148,10 +146,9 @@ type TrackEntry struct {
 	groupGaps []idRange
 	// trackEnd is where the Track ends, its END_OF_TRACK (§2.4.2), if
 	// hasTrackEnd; kept past the window.
-	trackEnd        message.Location
-	hasTrackEnd     bool
-	deliveredMax    uint64
-	deliveredHasMax bool
+	trackEnd       message.Location
+	hasTrackEnd    bool
+	deliveredFloor uint64
 
 	// subgroups holds the shared outbound fan-out state for each
 	// (GroupID, SubgroupID) currently being produced by one or more upstreams.
@@ -224,27 +221,46 @@ func (e *TrackEntry) CopySubgroups() []*SharedSubgroup {
 	return slices.Collect(maps.Values(e.subgroups))
 }
 
-// deliveredGroupWindow bounds the §2.1 dedup ledger ([TrackEntry.delivered]):
-// dedup state is retained for the most recent deliveredGroupWindow groups. An
-// object whose group is more than this many groups behind the largest group
-// seen is assumed already delivered. The window must comfortably exceed any
-// realistic inter-publisher group lag (a redundant origin or relay running a
-// few groups behind) while keeping per-track dedup memory bounded.
+// deliveredGroupWindow bounds the §2.1 dedup ledger ([TrackEntry.delivered])
+// to that many distinct Groups, counted rather than spanned by ID, since Group
+// IDs need not be consecutive (§2.3.1, §12.8). The window must comfortably
+// exceed any realistic inter-publisher group lag (a redundant origin or relay
+// running a few groups behind) while keeping per-track dedup memory bounded.
+//
+// It assumes Group IDs mostly increase, as §2.3.1 lets a publisher choose:
+// the lowest ID is pruned first, and a Group below all 32 held is taken as
+// old. A publisher whose IDs decrease loses its Objects past the first 32
+// Groups to [ClaimAgedOut].
 const deliveredGroupWindow = 32
+
+// Claim is [TrackEntry.ClaimDelivered]'s verdict on an Object.
+type Claim int
+
+const (
+	// ClaimFresh: the first copy; forward it.
+	ClaimFresh Claim = iota
+	// ClaimRedundant: a copy of an Object already forwarded, or one inside a
+	// gap announced earlier; drop it.
+	ClaimRedundant
+	// ClaimAgedOut: its Group is older than every Group the window holds, so
+	// whether it was forwarded is unknown, and nothing is recorded. The
+	// caller forwards it only where it cannot be a repeat.
+	ClaimAgedOut
+)
 
 // ClaimDelivered is the dedup gate across multiple upstream publishers (§9.3).
 // It records (group, object) as forwarded and reports whether the caller is
-// the first to do so (true → forward it) or it was already forwarded by a peer
-// upstream (false → drop it). The ledger persists on the entry (not on a
+// the first to do so ([ClaimFresh]) or it was already forwarded by a peer
+// upstream ([ClaimRedundant]). The ledger persists on the entry (not on a
 // per-Subgroup structure) and is independent of the size-bounded Object Cache,
 // so redundant streams that do not temporally overlap, or peers lagging by more
-// than the cache capacity, still dedup correctly. Memory is bounded to the most
-// recent [deliveredGroupWindow] groups.
+// than the cache capacity, still dedup correctly. Memory is bounded to
+// [deliveredGroupWindow] Groups; an Object of an older one is [ClaimAgedOut].
 //
 // gaps are the Object's Prior Group and Object ID Gaps (§12.8, §12.9), which
 // the ledger records for the whole track. An Object inside a gap announced
-// earlier is known not to exist, and that is permanent (§2.1): false, since a
-// caching relay "SHOULD NOT cache or forward" it (§9.1). A gap covering an
+// earlier is known not to exist, and that is permanent (§2.1): ClaimRedundant,
+// since a caching relay "SHOULD NOT cache or forward" it (§9.1). A gap covering an
 // Object already received is accepted: an Object may go from existing to not
 // existing (§2.1).
 //
@@ -258,56 +274,60 @@ const deliveredGroupWindow = 32
 // carrying two Prior Group ID Gap values (§12.8). An Object ClaimDelivered
 // rejects leaves no state in the ledger, and a duplicate records only its
 // gaps, since the caller's §9.1 check may still reject it.
-func (e *TrackEntry) ClaimDelivered(o ObjectInfo) (bool, error) {
+func (e *TrackEntry) ClaimDelivered(o ObjectInfo) (Claim, error) {
 	group, object, gaps := o.Group, o.Object, o.Gaps
 	e.deliveredMu.Lock()
 	defer e.deliveredMu.Unlock()
 
-	// An object from a group already aged out of the window is treated as
-	// already delivered — a peer lagging that far behind is past any useful
-	// reorder window, and re-forwarding it would be a large out-of-order break.
-	if e.deliveredHasMax && group <= e.deliveredMax && e.deliveredMax-group >= deliveredGroupWindow {
-		return false, nil
-	}
 	g := e.delivered[group]
+	if g == nil && len(e.delivered) >= deliveredGroupWindow && group < e.deliveredFloor {
+		return ClaimAgedOut, nil
+	}
 	if gaps.HasGroup && g != nil && g.hasGroupGap && g.groupGap != gaps.Group {
-		return false, fmt.Errorf("%w: Group %d carries Prior Group ID Gaps %d and %d (§12.8)",
+		return ClaimRedundant, fmt.Errorf("%w: Group %d carries Prior Group ID Gaps %d and %d (§12.8)",
 			session.ErrMalformedTrack, group, g.groupGap, gaps.Group)
 	}
 	if err := e.checkEndsLocked(g, o); err != nil {
-		return false, err
+		return ClaimRedundant, err
 	}
 	if e.announcedAbsentLocked(g, group, object) {
-		return false, nil
-	}
-
-	if e.delivered == nil {
-		e.delivered = make(map[uint64]*deliveredGroup)
-	}
-	// Advance the window when a newer group appears, pruning groups that have
-	// fallen out of it.
-	if !e.deliveredHasMax || group > e.deliveredMax {
-		e.deliveredMax = group
-		e.deliveredHasMax = true
-		maps.DeleteFunc(e.delivered, func(id uint64, _ *deliveredGroup) bool {
-			return e.deliveredMax-id >= deliveredGroupWindow
-		})
-		e.groupGaps = slices.DeleteFunc(e.groupGaps, func(r idRange) bool {
-			return e.deliveredMax-r.hi >= deliveredGroupWindow
-		})
+		return ClaimRedundant, nil
 	}
 
 	if g == nil {
 		g = &deliveredGroup{objects: make(map[uint64]struct{})}
-		e.delivered[group] = g
+		e.addDeliveredGroupLocked(group, g)
 	}
 	e.recordGapsLocked(g, group, object, gaps)
 	if _, ok := g.objects[object]; ok {
-		return false, nil
+		return ClaimRedundant, nil
 	}
 	e.recordEndsLocked(g, o)
 	g.objects[object] = struct{}{}
-	return true, nil
+	return ClaimFresh, nil
+}
+
+// addDeliveredGroupLocked adds group's ledger entry g, first pruning the
+// lowest Group, and the gaps announced below the new lowest, when the window
+// is full. Runs once per Group, so its scan of the window is not per Object.
+func (e *TrackEntry) addDeliveredGroupLocked(group uint64, g *deliveredGroup) {
+	if e.delivered == nil {
+		e.delivered = make(map[uint64]*deliveredGroup, deliveredGroupWindow)
+	}
+	if len(e.delivered) >= deliveredGroupWindow {
+		delete(e.delivered, e.deliveredFloor)
+		e.deliveredFloor = math.MaxUint64
+		for id := range e.delivered {
+			e.deliveredFloor = min(e.deliveredFloor, id)
+		}
+		e.groupGaps = slices.DeleteFunc(e.groupGaps, func(r idRange) bool {
+			return r.hi < e.deliveredFloor
+		})
+	}
+	if len(e.delivered) == 0 || group < e.deliveredFloor {
+		e.deliveredFloor = group
+	}
+	e.delivered[group] = g
 }
 
 // ObjectInfo is what [TrackEntry.ClaimDelivered] checks of an Object against

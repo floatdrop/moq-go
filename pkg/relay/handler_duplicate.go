@@ -7,7 +7,20 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay/cache"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
+
+// recordRedundant handles dup, a copy [registry.TrackEntry.ClaimDelivered]
+// found redundant, described to the ledger by info: it is checked against the
+// first copy ([checkDuplicate]) and then recorded
+// ([registry.TrackEntry.RecordDuplicate]). An error wraps
+// [session.ErrMalformedTrack].
+func recordRedundant(entry *registry.TrackEntry, info registry.ObjectInfo, dup *cache.CachedObject) error {
+	if err := checkDuplicate(entry.Cache, dup); err != nil {
+		return err
+	}
+	return entry.RecordDuplicate(info)
+}
 
 // checkDuplicate compares dup, a copy that lost the §9.3 dedup claim, with the
 // first copy in c. A different Forwarding Preference, Subgroup ID, Priority or

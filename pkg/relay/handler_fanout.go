@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -71,6 +72,11 @@ type subgroupWriterSet struct {
 	// within the ledger's window.
 	lowest    uint64
 	forwarded bool
+	// runLo and runHi are the lowest and highest Object IDs forwarded
+	// through this set, if hasRun; unbroken reports that every ID between
+	// them was (see [subgroupWriterSet.admitAgedOut]).
+	runLo, runHi     uint64
+	hasRun, unbroken bool
 
 	// sawClean records that some contributor ended cleanly, so the merged
 	// stream FINs even if a peer reset; resetCode is used only when every
@@ -87,7 +93,61 @@ func (s *subgroupWriterSet) claimFirst(objectID uint64, claimed bool) bool {
 	if lowest {
 		s.lowest, s.forwarded = objectID, true
 	}
+	switch {
+	case !s.hasRun:
+		s.runLo, s.runHi, s.hasRun, s.unbroken = objectID, objectID, true, true
+	case s.runHi < math.MaxUint64 && objectID == s.runHi+1:
+		s.runHi = objectID
+	case s.runLo > 0 && objectID == s.runLo-1:
+		s.runLo = objectID
+	default:
+		s.runLo, s.runHi, s.unbroken = min(s.runLo, objectID), max(s.runHi, objectID), false
+	}
 	return claimed && lowest
+}
+
+// admitAgedOut reports whether an Object at objectID of the Subgroup hdr
+// names, which [registry.TrackEntry.ClaimDelivered] returned as claim, may be
+// forwarded. Only a [registry.ClaimAgedOut] one may not: with its Group out of
+// the dedup window, it goes on only above every Object forwarded through this
+// set, where it can neither repeat one nor arrive out of order (§2.2). That
+// covers a single upstream's open stream. One this set is known to have
+// forwarded (an end of its run, or inside an unbroken one) is a redundant
+// copy, dropped as [registry.ClaimRedundant] would be.
+//
+// Any other is dropped, and each stream it would have gone on is marked
+// incomplete as [subgroupWriter.admit] would mark it, so it resets rather
+// than FIN (§11.4.3). Deviation: §9.4 says a relay "MUST NOT reorder or drop
+// objects received on a multi-object stream"; the relay drops such an Object
+// rather than risk forwarding a duplicate it can no longer detect (§9.3). A
+// Subgroup whose Object IDs are not consecutive (its Group split across
+// Subgroups) has no unbroken run, so there a redundant copy resets too.
+// Callers hold sg.Mu.
+func (s *subgroupWriterSet) admitAgedOut(
+	claim registry.Claim,
+	hdr message.SubgroupHeader,
+	objectID uint64,
+	props []byte,
+) bool {
+	switch {
+	case claim != registry.ClaimAgedOut, s.hasRun && objectID > s.runHi:
+		return true
+	case s.hasRun && (objectID == s.runLo || objectID == s.runHi ||
+		s.unbroken && s.runLo < objectID && objectID < s.runHi):
+		return false
+	}
+	for _, w := range s.writers {
+		if w == nil {
+			continue
+		}
+		v := w.sub.ForwardDecision(hdr.GroupID, objectID, hdr.SubgroupID, hdr.PublisherPriority, props)
+		if v == registry.Forward {
+			w.markIncomplete(moqt.StreamResetInternalError)
+		} else {
+			w.skip(v, objectID)
+		}
+	}
+	return false
 }
 
 // resolveImplicitSubgroupID handles §11.4.2 SUBGROUP_ID_MODE 0b01 (Subgroup ID
@@ -362,13 +422,13 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			Status:   obj.ObjectStatus,
 			Gaps:     message.ObjectPriorGaps(obj.Properties),
 		}
-		fresh, err := entry.ClaimDelivered(info)
+		claim, err := entry.ClaimDelivered(info)
 		if err != nil {
 			malformed(err)
 			return
 		}
-		if !fresh {
-			if err := checkDuplicate(entry.Cache, &cache.CachedObject{
+		if claim == registry.ClaimRedundant {
+			if err := recordRedundant(entry, info, &cache.CachedObject{
 				GroupID:           hdr.GroupID,
 				ObjectID:          objectID,
 				SubgroupID:        hdr.SubgroupID,
@@ -381,19 +441,19 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 				malformed(err)
 				return
 			}
-			if err := entry.RecordDuplicate(info); err != nil {
-				malformed(err)
-				return
-			}
 			continue // redundant copy already forwarded by a peer upstream.
 		}
-
-		// Counted after the dedup claim, so redundant copies don't count.
-		h.metrics.ObjectReceived(ref, hdr.SubgroupID)
 
 		// Under sg.Mu: joiner detection, writer open and publish are atomic
 		// against other contributors and the last-contributor teardown.
 		sg.Mu.Lock()
+		if !set.admitAgedOut(claim, hdr, objectID, obj.Properties) {
+			sg.Mu.Unlock()
+			continue
+		}
+
+		// Counted after the dedup claim, so redundant copies don't count.
+		h.metrics.ObjectReceived(ref, hdr.SubgroupID)
 
 		// Cache before bumping LARGEST_OBJECT, so a FETCH that snapshots the
 		// new watermark finds the object cached.
@@ -580,9 +640,11 @@ type subgroupWriter struct {
 	inboundReset     bool                 // set under dropsMu inside close
 	inboundResetCode moqt.StreamResetCode // §3.3.4 reset code when inboundReset; set inside close
 	// incomplete records that this subscription skipped an Object after its
-	// Start Location (filter, Forward State 0, overflow or expiry), so its
-	// streams end with a reset, not a FIN (§11.4.3), with incompleteCode:
-	// EXCESSIVE_LOAD after any overflow, else CANCELLED. Set under dropsMu.
+	// Start Location (filter, Forward State 0, overflow, expiry, or an Object
+	// dropped as aged out of the dedup window), so its streams end with a
+	// reset, not a FIN (§11.4.3), with incompleteCode: EXCESSIVE_LOAD after any
+	// overflow, else the first recorded (INTERNAL_ERROR for an aged-out drop,
+	// else CANCELLED). Set under dropsMu.
 	//
 	// Interpretation: Objects published before the subscription joined count
 	// as before its Start Location, so a joiner's stream may still FIN.
@@ -612,11 +674,26 @@ func (w *subgroupWriter) admit(
 	props []byte,
 ) (take, follows bool) {
 	follows = w.lastPos.src == pos.src && w.lastPos.seq+1 == pos.seq
-	switch w.sub.ForwardDecision(hdr.GroupID, objectID, hdr.SubgroupID, hdr.PublisherPriority, props) {
-	case registry.Forward:
+	v := w.sub.ForwardDecision(hdr.GroupID, objectID, hdr.SubgroupID, hdr.PublisherPriority, props)
+	if v == registry.Forward {
 		w.lastAdmitted, w.hasAdmitted = objectID, true
 		w.lastPos = pos
 		return true, follows
+	}
+	w.skip(v, objectID)
+	// §11.4.3: an Object that "did not pass the subscriber's filters" does
+	// not separate the ones either side of it. Forward State is one of them
+	// (§5.1.5).
+	if follows {
+		w.lastPos = pos
+	}
+	return false, false
+}
+
+// skip records that w omits the Object at objectID for verdict v, other than
+// [registry.Forward], closing w when it will take none again.
+func (w *subgroupWriter) skip(v registry.ForwardVerdict, objectID uint64) {
+	switch v {
 	case registry.SkipObject, registry.SkipPaused:
 		// The stream stays open for later Objects, but the Subgroup is now
 		// incomplete (§11.4.3).
@@ -631,14 +708,8 @@ func (w *subgroupWriter) admit(
 		if w.hasAdmitted && objectID > w.lastAdmitted {
 			w.markIncomplete(moqt.StreamResetCancelled)
 		}
+	case registry.Forward:
 	}
-	// §11.4.3: an Object that "did not pass the subscriber's filters" does
-	// not separate the ones either side of it. Forward State is one of them
-	// (§5.1.5).
-	if follows {
-		w.lastPos = pos
-	}
-	return false, false
 }
 
 // markIncomplete sets subgroupWriter.incomplete; the first code recorded

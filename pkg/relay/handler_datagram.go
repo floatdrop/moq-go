@@ -72,13 +72,15 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		EndOfGroup: d.HasEndOfGroup(),
 		Gaps:       message.ObjectPriorGaps(d.Properties),
 	}
-	fresh, err := entry.ClaimDelivered(info)
+	claim, err := entry.ClaimDelivered(info)
 	if err != nil {
 		h.endMalformedTrack(ctx, entry, h.sess, err)
 		return
 	}
-	if !fresh {
-		if err := checkDuplicate(entry.Cache, &cache.CachedObject{
+	// An aged-out datagram is dropped like a redundant one: it has no stream
+	// to reset (§9.4 covers multi-object streams).
+	if claim != registry.ClaimFresh {
+		if err := recordRedundant(entry, info, &cache.CachedObject{
 			GroupID:           d.GroupID,
 			ObjectID:          d.ObjectID,
 			PublisherPriority: d.PublisherPriority,
@@ -87,10 +89,6 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 			Properties:        d.Properties,
 			Payload:           d.ObjectPayload,
 		}); err != nil {
-			h.endMalformedTrack(ctx, entry, h.sess, err)
-			return
-		}
-		if err := entry.RecordDuplicate(info); err != nil {
 			h.endMalformedTrack(ctx, entry, h.sess, err)
 		}
 		return

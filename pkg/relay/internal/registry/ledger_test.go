@@ -15,11 +15,11 @@ func newTestEntry(name string) *registry.TrackEntry {
 	return registry.NewTrackRegistry().GetOrCreate(newTestTrackName(name))
 }
 
-// mustClaim claims o and fails unless ClaimDelivered returns (wantFresh, nil).
-func mustClaim(t *testing.T, e *registry.TrackEntry, o registry.ObjectInfo, wantFresh bool) {
+// mustClaim claims o and fails unless ClaimDelivered returns (want, nil).
+func mustClaim(t *testing.T, e *registry.TrackEntry, o registry.ObjectInfo, want registry.Claim) {
 	t.Helper()
-	if fresh, err := e.ClaimDelivered(o); err != nil || fresh != wantFresh {
-		t.Fatalf("ClaimDelivered(%+v) = (%v, %v), want (%v, nil)", o, fresh, err, wantFresh)
+	if got, err := e.ClaimDelivered(o); err != nil || got != want {
+		t.Fatalf("ClaimDelivered(%+v) = (%v, %v), want (%v, nil)", o, got, err, want)
 	}
 }
 
@@ -40,30 +40,72 @@ func cacheAndClaim(t *testing.T, e *registry.TrackEntry, objs ...registry.Object
 }
 
 // TestTrackEntry_ClaimDelivered pins the §2.1 dedup ledger: the first claim of a
-// {GroupID, ObjectID} wins, a repeat loses, distinct objects/groups are
-// independent, and a group that has aged out of the window is treated as already
-// delivered.
+// {GroupID, ObjectID} wins, a repeat loses, and distinct objects/groups are
+// independent.
 func TestTrackEntry_ClaimDelivered(t *testing.T) {
 	t.Parallel()
 	e := newTestEntry("dedup")
 	for _, c := range []struct {
 		group, object uint64
-		fresh         bool
+		want          registry.Claim
 	}{
-		{0, 5, true},
-		{0, 5, false},
-		{0, 2, true}, // a distinct Object in a Group already seen
-		{1, 5, true}, // a distinct Group
-		// Group 1000 moves the window past Group 0, so a late straggler from
-		// Group 0 counts as already delivered.
-		{1000, 0, true},
-		{0, 9, false},
-		// The current Group still dedups after the window advanced.
-		{1000, 1, true},
-		{1000, 1, false},
+		{0, 5, registry.ClaimFresh},
+		{0, 5, registry.ClaimRedundant},
+		{0, 2, registry.ClaimFresh}, // a distinct Object in a Group already seen
+		{1, 5, registry.ClaimFresh}, // a distinct Group
+		{1, 5, registry.ClaimRedundant},
 	} {
-		mustClaim(t, e, registry.ObjectInfo{Group: c.group, Object: c.object}, c.fresh)
+		mustClaim(t, e, registry.ObjectInfo{Group: c.group, Object: c.object}, c.want)
 	}
+}
+
+// TestTrackEntry_ClaimDeliveredWindow: the ledger holds 32 Groups, counted
+// rather than spanned by ID (Group IDs need not be consecutive, §2.3.1). A
+// jump in Group ID keeps the older Group; an Object of a Group older than the
+// 32 held is ClaimAgedOut, not taken for a duplicate.
+func TestTrackEntry_ClaimDeliveredWindow(t *testing.T) {
+	t.Parallel()
+	e := newTestEntry("window")
+	mustClaim(t, e, registry.ObjectInfo{Group: 0, Object: 0}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1000, Object: 0}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 0, Object: 1}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 0, Object: 1}, registry.ClaimRedundant)
+
+	// 30 more Groups fill the window; the next pushes out Group 0.
+	for g := uint64(2000); g < 2030; g++ {
+		mustClaim(t, e, registry.ObjectInfo{Group: g, Object: 0}, registry.ClaimFresh)
+	}
+	mustClaim(t, e, registry.ObjectInfo{Group: 0, Object: 2}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 2030, Object: 0}, registry.ClaimFresh)
+	for _, o := range []registry.ObjectInfo{
+		{Group: 0, Object: 1}, // held before, now pruned
+		{Group: 0, Object: 3},
+		{Group: 5, Object: 0}, // never held, below the window
+	} {
+		mustClaim(t, e, o, registry.ClaimAgedOut)
+	}
+	// Group 1000 is now the lowest held, and still dedups.
+	mustClaim(t, e, registry.ObjectInfo{Group: 1000, Object: 0}, registry.ClaimRedundant)
+	// A new Group between those held pushes out the lowest, Group 1000.
+	mustClaim(t, e, registry.ObjectInfo{Group: 1500, Object: 0}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1000, Object: 0}, registry.ClaimAgedOut)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1500, Object: 0}, registry.ClaimRedundant)
+}
+
+// TestTrackEntry_ClaimDeliveredWindowNotFull: until the window holds 32
+// Groups, a Group below every one held is added, and is then the first pruned.
+func TestTrackEntry_ClaimDeliveredWindowNotFull(t *testing.T) {
+	t.Parallel()
+	e := newTestEntry("window-low")
+	mustClaim(t, e, registry.ObjectInfo{Group: 10, Object: 0}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 3, Object: 0}, registry.ClaimFresh)
+	for g := uint64(11); g < 41; g++ { // 30 more fill the window
+		mustClaim(t, e, registry.ObjectInfo{Group: g, Object: 0}, registry.ClaimFresh)
+	}
+	mustClaim(t, e, registry.ObjectInfo{Group: 3, Object: 0}, registry.ClaimRedundant)
+	mustClaim(t, e, registry.ObjectInfo{Group: 41, Object: 0}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 3, Object: 0}, registry.ClaimAgedOut)
+	mustClaim(t, e, registry.ObjectInfo{Group: 10, Object: 0}, registry.ClaimRedundant)
 }
 
 // TestTrackEntry_ClaimDeliveredGapProperties pins how the ledger treats the
@@ -111,7 +153,7 @@ func TestTrackEntry_ClaimDeliveredGapProperties(t *testing.T) {
 			e := newTestEntry("gaps")
 			last := len(tc.claims) - 1
 			for i, c := range tc.claims {
-				fresh, err := e.ClaimDelivered(registry.ObjectInfo{Group: c.group, Object: c.object, Gaps: c.gaps})
+				claim, err := e.ClaimDelivered(registry.ObjectInfo{Group: c.group, Object: c.object, Gaps: c.gaps})
 				got := forwarded
 				switch {
 				case err != nil:
@@ -119,7 +161,7 @@ func TestTrackEntry_ClaimDeliveredGapProperties(t *testing.T) {
 					if !errors.Is(err, session.ErrMalformedTrack) {
 						t.Fatalf("claim %d %+v: %v, want it to wrap session.ErrMalformedTrack", i, c, err)
 					}
-				case !fresh:
+				case claim != registry.ClaimFresh:
 					got = dropped
 				}
 				want := forwarded
@@ -142,23 +184,28 @@ func TestTrackEntry_ClaimDeliveredMalformedLeavesNoTrace(t *testing.T) {
 	e := newTestEntry("gaps")
 	groupGap := func(n uint64) message.PriorGaps { return message.PriorGaps{Group: n, HasGroup: true} }
 
-	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 0, Gaps: groupGap(2)}, true) // Groups 7-8 absent
+	mustClaim(
+		t,
+		e,
+		registry.ObjectInfo{Group: 9, Object: 0, Gaps: groupGap(2)},
+		registry.ClaimFresh,
+	) // Groups 7-8 absent
 	if _, err := e.ClaimDelivered(registry.ObjectInfo{Group: 9, Object: 1, Gaps: groupGap(3)}); err == nil {
 		t.Fatal("a second Prior Group ID Gap value in Group 9 is not malformed")
 	}
-	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 1}, true) // Object 1 was not recorded
-	mustClaim(t, e, registry.ObjectInfo{Group: 6, Object: 0}, true) // nor the gap of 3 (Groups 6-8)
-	mustClaim(t, e, registry.ObjectInfo{Group: 8, Object: 0}, false)
+	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 1}, registry.ClaimFresh) // Object 1 was not recorded
+	mustClaim(t, e, registry.ObjectInfo{Group: 6, Object: 0}, registry.ClaimFresh) // nor the gap of 3 (Groups 6-8)
+	mustClaim(t, e, registry.ObjectInfo{Group: 8, Object: 0}, registry.ClaimRedundant)
 
 	if _, err := e.ClaimDelivered(registry.ObjectInfo{Group: 9, Object: 5, Priority: 7}); err == nil {
 		t.Fatal("another Publisher Priority in Subgroup 0 of Group 9 is not malformed")
 	}
-	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 5}, true)
+	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 5}, registry.ClaimFresh)
 
 	// A duplicate records no Subgroup state: the §9.1 check may still reject
 	// it (the caller's), so Subgroup 3 keeps no priority from it.
-	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 5, Subgroup: 3, Priority: 9}, false)
-	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 6, Subgroup: 3, Priority: 1}, true)
+	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 5, Subgroup: 3, Priority: 9}, registry.ClaimRedundant)
+	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 6, Subgroup: 3, Priority: 1}, registry.ClaimFresh)
 }
 
 // TestTrackEntry_FinalObjects pins the §2.4.2 conditions that need earlier
@@ -174,8 +221,8 @@ func TestTrackEntry_FinalObjects(t *testing.T) {
 	// passed, is recorded too.
 	claim := func(o registry.ObjectInfo) step {
 		return func(e *registry.TrackEntry) error {
-			fresh, err := e.ClaimDelivered(o)
-			if err == nil && !fresh {
+			claim, err := e.ClaimDelivered(o)
+			if err == nil && claim != registry.ClaimFresh {
 				err = e.RecordDuplicate(o)
 			}
 			return err
@@ -358,10 +405,15 @@ func TestTrackEntry_FinalObjects(t *testing.T) {
 func TestTrackEntry_RecordDuplicateChecksAgain(t *testing.T) {
 	t.Parallel()
 	e := newTestEntry("race")
-	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 2}, true)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 2}, registry.ClaimFresh)
 	eog := registry.ObjectInfo{Group: 1, Object: 2, Status: message.ObjectStatusEndOfGroup}
-	mustClaim(t, e, eog, false)                                     // a duplicate; the caller's §9.1 check runs now
-	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 5}, true) // meanwhile, another upstream
+	mustClaim(
+		t,
+		e,
+		eog,
+		registry.ClaimRedundant,
+	) // a duplicate; the caller's §9.1 check runs now
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 5}, registry.ClaimFresh) // meanwhile, another upstream
 	if err := e.RecordDuplicate(eog); !errors.Is(err, session.ErrMalformedTrack) {
 		t.Fatalf("RecordDuplicate = %v, want the Group ending below Object 5 to be malformed", err)
 	}
@@ -458,11 +510,16 @@ func TestTrackEntry_LowestForwarded(t *testing.T) {
 	if _, ok := e.LowestForwarded(1, 0); ok {
 		t.Fatal("a Subgroup nothing was forwarded in has a lowest Object")
 	}
-	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 5}, true)
-	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 3}, true)
-	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 1, Datagram: true}, true)
-	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 0, Subgroup: 1}, true)
-	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 9, Subgroup: 2, Status: message.ObjectStatusEndOfGroup}, true)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 5}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 3}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 1, Datagram: true}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 0, Subgroup: 1}, registry.ClaimFresh)
+	mustClaim(
+		t,
+		e,
+		registry.ObjectInfo{Group: 1, Object: 9, Subgroup: 2, Status: message.ObjectStatusEndOfGroup},
+		registry.ClaimFresh,
+	)
 	for _, tc := range []struct{ subgroup, want uint64 }{{0, 3}, {1, 0}, {2, 9}} {
 		if low, ok := e.LowestForwarded(1, tc.subgroup); !ok || low != tc.want {
 			t.Errorf("LowestForwarded(1, %d) = (%d, %v), want (%d, true)", tc.subgroup, low, ok, tc.want)
