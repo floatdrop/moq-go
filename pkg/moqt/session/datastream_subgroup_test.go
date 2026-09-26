@@ -10,7 +10,7 @@ import (
 
 // TestSubgroupObjectReadRejectsInvalidStatus: ReadObject validates each decoded
 // object, so an empty payload with a status that is not
-// Normal/EndOfGroup/EndOfTrack is a §11 protocol violation, not a valid object.
+// Normal/EndOfGroup/EndOfTrack is a protocol violation (§11.2.1.1), not a valid object.
 func TestSubgroupObjectReadRejectsInvalidStatus(t *testing.T) {
 	cli, srv := openPair(t)
 	hdr := message.SubgroupHeader{TrackAlias: 42, GroupID: 7, SubgroupIDMode: message.SubgroupIDImplicitZero}
