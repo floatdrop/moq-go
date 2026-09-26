@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -466,6 +467,9 @@ func (h *sessionHandler) fetchUpstreamRange(
 	// deltas (§11.4.4.1); the upstream serves in the order our FETCH asked
 	// for.
 	fs.GroupOrder = order
+	// §10.2.5: the budget covers the response too; when it runs out, what
+	// has arrived is kept and the rest reported Timed-Out.
+	defer context.AfterFunc(fctx, func() { fs.Cancel(moqt.StreamResetCancelled) })()
 
 	var prev *message.Location
 	for {
@@ -478,6 +482,18 @@ func (h *sessionHandler) fetchUpstreamRange(
 			// resets the downstream stream.
 			fs.Cancel(moqt.StreamResetMalformedTrack)
 			return upstreamAnswer{}, err
+		}
+		if err != nil && fctx.Err() != nil {
+			// Without a FIN its gaps assert nothing (§10.13): all of the span
+			// it did not send or mark is Timed-Out.
+			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH response timed out mid-read")
+			known := slices.Concat(ans.unknown, ans.timedOut)
+			for _, o := range ans.objs {
+				loc := message.Location{Group: o.GroupID, Object: o.ObjectID}
+				known = append(known, registry.LocRange{Lo: loc, Hi: loc})
+			}
+			ans.timedOut = append(ans.timedOut, uncovered(span.Lo, span.Hi, known)...)
+			return ans, nil
 		}
 		if err != nil {
 			// No FIN (or a FIN mid-object), so the gaps in what arrived
