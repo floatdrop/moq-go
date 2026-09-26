@@ -105,6 +105,12 @@ const (
 	// stream — the subscriber's session is in trouble, not the relay's
 	// scheduling.
 	ResetCauseWriteError
+
+	// ResetCauseProperties is a reopen to carry Object Properties (§2.5):
+	// the outbound stream's SUBGROUP_HEADER had PROPERTIES clear (§11.4.2),
+	// taken from another upstream of the same Subgroup (§9.3), so a fresh
+	// stream with the bit set was opened. No Object is lost.
+	ResetCauseProperties
 )
 
 // String returns a stable, lowercase name suitable for use as a metric label
@@ -123,6 +129,8 @@ func (c ResetCause) String() string {
 		return "inbound_reset"
 	case ResetCauseWriteError:
 		return "write_error"
+	case ResetCauseProperties:
+		return "properties"
 	default:
 		return "unknown"
 	}

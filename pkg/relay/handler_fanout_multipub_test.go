@@ -1,6 +1,7 @@
 package relay_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -424,5 +426,115 @@ func awaitStreamEnd(t *testing.T, events <-chan objEvent) objEvent {
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for stream end")
 		return objEvent{}
+	}
+}
+
+// TestFanout_MultiPublisher_ForwardsEveryContributorsProperties: Object
+// Properties MUST be forwarded (§2.5), whichever contributor's SUBGROUP_HEADER
+// set the merged stream's PROPERTIES bit (§11.4.2).
+func TestFanout_MultiPublisher_ForwardsEveryContributorsProperties(t *testing.T) {
+	t.Parallel()
+	props := message.AppendTrackProperties([]wire.KVPair{{Type: 0x40, IntVal: 7}})
+	for _, tc := range []struct {
+		name string
+		// first and second: whether each contributor's header has PROPERTIES;
+		// the second writes Object 1 with props.
+		first, second bool
+		reopens       int // ResetCauseProperties reopens
+	}{
+		{"first without, second with", false, true, 1},
+		{"first with, second with", true, true, 0},
+		{"first with, second without", true, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rec := &recordingMetrics{}
+			pubA, teardown := connectRelay(t, relay.Config{Metrics: rec})
+			defer teardown()
+			pubB := dialAnotherClient(t, pubA)
+			subSess := dialAnotherClient(t, pubA)
+			aPub := publishVideoTrack(t, pubA, "cam1", 1)
+			bPub := publishVideoTrack(t, pubB, "cam1", 2)
+			subscribeCam1(t, subSess)
+
+			type received struct {
+				id    uint64
+				props []byte
+			}
+			got := make(chan received, 8)
+			go func() {
+				for {
+					ds, err := subSess.AcceptDataStream(t.Context())
+					if err != nil {
+						return
+					}
+					sg, ok := ds.(*session.IncomingSubgroupStream)
+					if !ok {
+						return
+					}
+					go func() {
+						for {
+							o, err := sg.ReadDecoded()
+							if err != nil {
+								return
+							}
+							got <- received{o.ObjectID, o.Properties}
+						}
+					}()
+				}
+			}()
+			await := func(id uint64) received {
+				t.Helper()
+				select {
+				case r := <-got:
+					if r.id != id {
+						t.Fatalf("received Object %d, want %d", r.id, id)
+					}
+					return r
+				case <-time.After(2 * time.Second):
+					t.Fatalf("Object %d not forwarded", id)
+					return received{}
+				}
+			}
+
+			hdr := message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit}
+			aHdr, bHdr := hdr, hdr
+			aHdr.Properties, bHdr.Properties = tc.first, tc.second
+			a, err := aPub.OpenSubgroup(aHdr)
+			if err != nil {
+				t.Fatalf("A OpenSubgroup: %v", err)
+			}
+			if err := a.WriteObjectAt(0, &message.SubgroupObject{Payload: []byte("a")}); err != nil {
+				t.Fatalf("A WriteObjectAt 0: %v", err)
+			}
+			await(0) // A's header is now the merged stream's
+			b, err := bPub.OpenSubgroup(bHdr)
+			if err != nil {
+				t.Fatalf("B OpenSubgroup: %v", err)
+			}
+			var bProps []byte
+			if tc.second {
+				bProps = props
+			}
+			if err := b.WriteObjectAt(
+				1,
+				&message.SubgroupObject{Properties: bProps, Payload: []byte("b")},
+			); err != nil {
+				t.Fatalf("B WriteObjectAt 1: %v", err)
+			}
+			if r := await(1); !bytes.Equal(r.props, bProps) {
+				t.Fatalf("Object 1 Properties = %x, want %x", r.props, bProps)
+			}
+			// A contributor without the bit still reaches the subscriber.
+			if err := a.WriteObjectAt(2, &message.SubgroupObject{Payload: []byte("a")}); err != nil {
+				t.Fatalf("A WriteObjectAt 2: %v", err)
+			}
+			if r := await(2); len(r.props) != 0 {
+				t.Fatalf("Object 2 Properties = %x, want none", r.props)
+			}
+			if got := rec.resetCount(relay.ResetCauseProperties); got != tc.reopens {
+				t.Fatalf("properties reopens = %d, want %d", got, tc.reopens)
+			}
+		})
 	}
 }

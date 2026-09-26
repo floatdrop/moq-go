@@ -231,6 +231,7 @@ func TestMetricsHooks(t *testing.T) {
 		relay.ResetCauseDeliveryTimeout,
 		relay.ResetCauseWriteError,
 		relay.ResetCauseInboundReset,
+		relay.ResetCauseProperties,
 	} {
 		if got := rec.resetCount(c); got != 0 {
 			t.Errorf("SubgroupStreamReset(%s) = %d on a clean subgroup, want 0", c, got)
@@ -321,6 +322,7 @@ func TestResetCauseString(t *testing.T) {
 		relay.ResetCauseExcessiveLoad:   "excessive_load",
 		relay.ResetCauseInboundReset:    "inbound_reset",
 		relay.ResetCauseWriteError:      "write_error",
+		relay.ResetCauseProperties:      "properties",
 		relay.ResetCause(99):            "unknown",
 	} {
 		if got := cause.String(); got != want {
