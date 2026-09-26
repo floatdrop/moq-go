@@ -163,12 +163,11 @@ func TestPublish_ForwardedAliasDoesNotCollide(t *testing.T) {
 		Name:       []byte("rtp"),
 		TrackAlias: subReq.OK.TrackAlias, // the alias the subscriber already holds for cam1
 	})
-	// cam1 is already published, so its PUBLISH may be forwarded too
-	// (§10.20), in either order: register each forwarded alias until the rtp
-	// one's. This is the alias
-	// registration AcceptPublish performs, without its REQUEST_OK write: the
-	// relay does not yet read its end of a forwarded PUBLISH stream, so on the
-	// unbuffered in-process pipe that write would never complete.
+	// cam1 is already published, so its PUBLISH is forwarded too (§10.20), in
+	// either order: register each forwarded alias until the rtp one's. This is
+	// the alias registration AcceptPublish performs, without its REQUEST_OK
+	// write: the relay does not yet read its end of a forwarded PUBLISH stream,
+	// so on the unbuffered in-process pipe that write would never complete.
 	for range 2 {
 		fwd := nextForwardedPublish(t, subSess)
 		if err := subSess.RegisterInboundTrackAlias(fwd.TrackAlias, track.NewKey(fwd.Namespace, fwd.Name)); err != nil {

@@ -218,8 +218,8 @@ func TestIncomingFetchStream_ReadDecoded(t *testing.T) {
 		},
 	}
 
-	// A marker carries only its Location: its other fields are not the
-	// draft's to define.
+	// Subgroup ID and Priority are not present on an End of Range
+	// (§11.4.4.2), so a marker compares by Location only.
 	view := func(d *session.DecodedFetchObject) string {
 		if d.EndOfNonExistentRange {
 			return fmt.Sprintf("{G=%d O=%d endOfNonExistentRange}", d.GroupID, d.ObjectID)
