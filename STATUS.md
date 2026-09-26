@@ -457,12 +457,6 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
 
 ### Draft-20 compliance review backlog
 
-A full review against draft-ietf-moq-transport-20 (dated August 2026) found
-the gaps below, which are still open. Items are grouped by area; each names the
-rule it misses.
-
-Relay:
-
-- Namespace subscriptions:
-  - a subscriber whose stream is blocked by flow control grows its message
-    queue without bound; §10.19 lets the relay reset the stream instead.
+A full review against draft-ietf-moq-transport-20 (dated August 2026) found a
+backlog of gaps. All of them have since been fixed, or recorded above as
+accepted Limitations.
