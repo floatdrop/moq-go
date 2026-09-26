@@ -203,8 +203,8 @@ By package, bottom-up along the dependency stack:
 | 10.16   | PUBLISH_NAMESPACE             | 0x06   | DONE   | |
 | 10.17   | NAMESPACE                     | 0x08   | DONE   | Per namespace, counted over local and remote sources. |
 | 10.18   | NAMESPACE_DONE                | 0x0E   | DONE   | Never before its NAMESPACE. |
-| 10.19   | SUBSCRIBE_NAMESPACE           | 0x50   | DONE   | |
-| 10.20   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | §10.20.1: its SUBSCRIBE parameters become each forwarded PUBLISH's subscription; an out-of-range value closes the session (§10.2.8/§10.2.18). A REQUEST_UPDATE merges into them for later PUBLISHes (§10.2.18: "Existing subscriptions are unaffected"), and existing tracks that newly match by prefix or Range Filter are forwarded then. |
+| 10.19   | SUBSCRIBE_NAMESPACE           | 0x50   | DONE   | A first response other than REQUEST_OK / REQUEST_ERROR, a GOAWAY included, closes the session with PROTOCOL_VIOLATION. |
+| 10.20   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | A first response other than REQUEST_OK / REQUEST_ERROR, a GOAWAY included, closes the session with PROTOCOL_VIOLATION. §10.20.1: its SUBSCRIBE parameters become each forwarded PUBLISH's subscription; an out-of-range value closes the session (§10.2.8/§10.2.18). A REQUEST_UPDATE merges into them for later PUBLISHes (§10.2.18: "Existing subscriptions are unaffected"), and existing tracks that newly match by prefix or Range Filter are forwarded then. |
 | 10.21   | PUBLISH_SKIPPED               | 0x0F   | DONE   | Prohibition scoped to a single PUBLISH (§6.1) — not sticky across re-PUBLISHes. |
 
 ## §11 Data streams and datagrams
@@ -523,11 +523,11 @@ Session layer:
   PUBLISH_OK), so a Connect URI in one does not close the session as
   `RequestBroker.Serve` does (§10.6.1). The draft does not define such a
   REQUEST_ERROR.
-- A GOAWAY on a request stream before its initial response, or on a
-  SUBSCRIBE_TRACKS stream read with `ReadPublishSkipped`, is an error rather
-  than a legal message checked against §10.4.
-- A first response other than REQUEST_OK / REQUEST_ERROR to SUBSCRIBE_NAMESPACE or
-  SUBSCRIBE_TRACKS does not close the session (§10.19, §10.20).
+- A GOAWAY on a request stream before its initial response (other than to
+  SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS, where §10.19/§10.20 make it a
+  PROTOCOL_VIOLATION), or on a SUBSCRIBE_TRACKS stream read with
+  `ReadPublishSkipped`, is an error rather than a legal message checked
+  against §10.4.
 - `Publication`'s automatic PUBLISH_DONE UPDATE_FAILED is sent while its subgroup
   streams are open, `WriteObject` still succeeds after `Done`, and a subgroup
   opened concurrently with `Done` is missing from the Stream Count (§10.12).
