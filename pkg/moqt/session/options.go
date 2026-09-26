@@ -38,8 +38,7 @@ type config struct {
 	// prohibits Range Filters entirely.
 	maxFilterRanges uint64
 
-	// setupTokens are the tokens WithSetupToken added to SETUP, in order, for
-	// the checks before the handshake and the purge after it (§10.3.1.4).
+	// setupTokens are the tokens WithSetupToken added to SETUP, in order.
 	setupTokens []message.Token
 
 	// tokenVerifier is the optional application policy that turns a resolved
@@ -49,17 +48,12 @@ type config struct {
 	tokenVerifier TokenVerifier
 }
 
-// WithSetupToken adds an AUTHORIZATION TOKEN setup option (§10.3.1.4): a
-// token "that the peer can use to authorize MOQT session establishment".
-// Repeat it for several tokens; they are sent in order.
+// WithSetupToken adds an AUTHORIZATION TOKEN setup option (§10.3.1.4). Repeat
+// it for several tokens; they are sent in order.
 //
-// Only REGISTER and USE_VALUE make sense in SETUP: a server receiving DELETE
-// or USE_ALIAS "MUST close the session with a PROTOCOL_VIOLATION" (§10.2.2),
-// and a repeated REGISTER alias would close it with
-// DUPLICATE_AUTH_TOKEN_ALIAS, so opening the session fails on any of those.
-// A REGISTER that does not fit the peer's MAX_AUTH_TOKEN_CACHE_SIZE is used
-// once by the peer and not held; [Session.SetupTokenAliases] reports the
-// aliases the peer does hold.
+// Opening the session fails on DELETE, USE_ALIAS or a repeated REGISTER alias
+// (§10.2.2). [Session.SetupTokenAliases] reports which REGISTERed aliases fit
+// the peer's cache.
 func WithSetupToken(t message.Token) Option {
 	return func(c *config) {
 		c.setupTokens = append(c.setupTokens, t)
@@ -169,15 +163,12 @@ func WithGrease() Option {
 // Property types (range 0x4000–0x7FFF per §2.5.1) that this endpoint
 // understands. When the session receives Track Properties (in SUBSCRIBE_OK,
 // FETCH_OK, or TRACK_STATUS_OK) containing a mandatory property not in this
-// set, it returns *ErrUnsupportedMandatoryTrackProperty; an inbound PUBLISH
-// carrying one is refused by [Request.AcceptPublish] with REQUEST_ERROR
-// UNSUPPORTED_EXTENSION (§2.5.1).
+// set, it returns *ErrUnsupportedMandatoryTrackProperty; [Request.AcceptPublish]
+// refuses such a PUBLISH with UNSUPPORTED_EXTENSION.
 //
-// If this option is never called, mandatory track property enforcement is
-// disabled and all properties pass through without inspection. §2.5.1 says an
-// endpoint that does not understand a Mandatory Track Property MUST NOT
-// process or forward the track, so leave it unset only when the application
-// checks the properties itself. pkg/relay always sets it from its Config.
+// If this option is never called, enforcement is disabled and all properties
+// pass through. Leave it unset only when the application checks the
+// properties itself (§2.5.1).
 //
 // End subscribers that interpret track data should call this option to opt
 // in to enforcement. Pass an empty (non-nil) map to reject all mandatory

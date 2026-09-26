@@ -53,8 +53,7 @@ type Suite struct {
 //   - A send stream's Context ends once it is closed. It does not track
 //     acknowledgement: quic-go cancels it when Close queues the FIN.
 //   - CancelWrite unblocks the peer's Read rather than leaving it parked.
-//   - A send stream's Context also ends on the peer's STOP_SENDING, which is
-//     how the relay learns a requester cancelled after FINning (§3.3.2).
+//   - A send stream's Context also ends on the peer's STOP_SENDING (§3.3.3).
 //   - OpenStream reports an exhausted peer limit as ErrNoStreamCredit. This
 //     one is a documented MUST on the interface, and PUBLISH_SKIPPED (§10.21)
 //     is built on it: the relay reacts to the sentinel instead of blocking.
@@ -206,11 +205,8 @@ func RunSuite(t *testing.T, s Suite) {
 	})
 }
 
-// runStopSendingSubtests pins that a send stream's Context also ends when the
-// peer stops reading it (STOP_SENDING). MoQT cancels a request with
-// STOP_SENDING (§3.3.3), and after a requester's FIN (§3.3.2: "not a request
-// cancellation") that is the only way the responder learns of a later cancel,
-// so the relay waits on exactly this signal.
+// runStopSendingSubtests pins that a send stream's Context ends when the peer
+// sends STOP_SENDING, the only cancel signal after a requester's FIN (§3.3.3).
 func runStopSendingSubtests(t *testing.T, s Suite) {
 	t.Helper()
 	for _, tc := range []struct {

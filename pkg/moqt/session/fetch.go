@@ -41,8 +41,7 @@ type FetchRequest struct {
 func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, error) {
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.FetchOK) (*FetchRequest, error) {
-			// §2.5.1: reject tracks with unknown mandatory track properties.
-			// "the subscriber MUST cancel the fetch" (§2.5.1).
+			// §2.5.1: "the subscriber MUST cancel the fetch".
 			if err := s.validateTrackProperties(ok.TrackProperties, "FETCH_OK"); err != nil {
 				cancelRequest(stream)
 				return nil, err
@@ -51,9 +50,8 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 				cancelRequest(stream)
 				return nil, s.closeProtocolViolation(err)
 			}
-			// The responder may send neither REQUEST_UPDATE (it did not
-			// send the request) nor PUBLISH_STATE_NOTIFY (not a
-			// subscription): §10.9, §10.10.
+			// The responder may send neither REQUEST_UPDATE (§10.9) nor
+			// PUBLISH_STATE_NOTIFY (§10.10).
 			return &FetchRequest{
 				Stream:    stream,
 				s:         s,
@@ -63,22 +61,16 @@ func (s *Session) Fetch(ctx context.Context, m *message.Fetch) (*FetchRequest, e
 		})
 }
 
-// checkFetchOKEnd enforces §10.14: "If End Location is smaller than the Start
-// Location in the corresponding FETCH the receiver MUST close the session with
-// a PROTOCOL_VIOLATION."
+// checkFetchOKEnd enforces §10.14: an End Location "smaller than the Start
+// Location" is a PROTOCOL_VIOLATION.
 //
-// An absolute Start compares directly. A Start relative to the Largest Object
-// is not known here, but a FETCH without an End Location ends at the Largest
-// Object (§5.1.2), and FETCH_OK's End never goes beyond it (§10.14). The Next
-// Object ({Largest.Group, Largest.Object + 1}) and a relative StartGroup of 0
-// ({Largest.Group + 1, 0}) start past it, so any End precedes them, except an
-// End of {0, 0}: with no content yet both Starts are {0, 0} as well, and the
-// two cases look the same. A relative StartGroup of 1 or more starts at or
-// before the Largest Object, which End cannot precede.
+// A relative Start is not known here, but FETCH_OK's End never passes the
+// Largest Object (§10.14). Next Object and a relative StartGroup of 0 start
+// past it, so any End but {0, 0} (no content yet) precedes them; a larger
+// relative StartGroup starts at or before it.
 func checkFetchOKEnd(m *message.Fetch, ok *message.FetchOK) error {
-	// m is our own FETCH, whose filter parses; without one the range starts
-	// at {0, 0}, which no End precedes. Parsed into a local value: this runs
-	// for every FETCH, and a *LocationFilter would be one more allocation.
+	// Without a filter the range starts at {0, 0}. Parsed into a local value
+	// to avoid an allocation per FETCH.
 	p, found := m.Parameters.Find(message.ParamLocationFilter)
 	if !found {
 		return nil

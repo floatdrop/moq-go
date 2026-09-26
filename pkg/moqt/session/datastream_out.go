@@ -55,8 +55,7 @@ var writerPool = sync.Pool{
 //     and ErrDeliveryTimeout is returned.
 //   - SUBGROUP_DELIVERY_TIMEOUT: a timer is started when Close() is called.
 //     If the timer fires before the peer acknowledges all data, the stream is
-//     reset. This needs a transport that reports acknowledgement (see
-//     [DeliveryTrackingSendStream]); on one that does not, it is not enforced.
+//     reset. Enforced only on a [DeliveryTrackingSendStream].
 type OutgoingSubgroupStream struct {
 	header message.SubgroupHeader
 
@@ -86,13 +85,10 @@ type OutgoingSubgroupStream struct {
 	encPrevObject uint64
 	encHavePrev   bool
 
-	// onObject, when set (by [Publication.OpenSubgroup]), is told the
-	// absolute Location of each object written, for LARGEST_OBJECT.
+	// Set by [Publication.OpenSubgroup]: onObject is told each written
+	// object's Location, and paused reports a Forward State of 0 (§11.4.3).
 	onObject func(group, object uint64)
-
-	// paused, when set (by [Publication.OpenSubgroup]), reports a Forward
-	// State of 0; a write then resets the stream (§11.4.3).
-	paused func() bool
+	paused   func() bool
 }
 
 // WithDeliveryTimeouts returns a shallow copy of s configured with the §8
@@ -172,9 +168,7 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	}
 	s.sawFirstObject = true
 
-	// §5.1: no Objects while the Forward State is 0. §11.4.3 lists
-	// "Omitting a Subgroup Object due to the subscriber's Forward State"
-	// among the reasons to reset the stream.
+	// §5.1: no Objects while the Forward State is 0; §11.4.3: reset.
 	if s.paused != nil && s.paused() {
 		s.dst.CancelWrite(uint64(moqt.StreamResetCancelled))
 		return ErrForwardPaused
@@ -190,7 +184,7 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	if err != nil {
 		return err
 	}
-	// Track the absolute Object ID (§11.4.2: delta + 1 after the first).
+	// §11.4.2: delta + 1 after the first.
 	objectID := obj.ObjectIDDelta
 	if s.encHavePrev {
 		objectID = s.encPrevObject + obj.ObjectIDDelta + 1
@@ -240,18 +234,13 @@ func (s *OutgoingSubgroupStream) WriteObjectAt(objectID uint64, obj *message.Sub
 // begins — bytes handed to Write carry no such boundary. A caller that wants
 // the timeout enforced should use
 // [OutgoingSubgroupStream.WriteObjectReceivedAt], which has both facts.
-// SUBGROUP_DELIVERY_TIMEOUT still applies where the transport supports it,
-// since Close enforces it.
+// SUBGROUP_DELIVERY_TIMEOUT still applies, since Close enforces it.
 func (s *OutgoingSubgroupStream) Write(p []byte) (int, error) {
 	return s.dst.Write(p)
 }
 
-// checkObjectTimeout enforces OBJECT_DELIVERY_TIMEOUT against one object's
-// receipt time, per §8: "For subgroups, the implementation MUST check the time
-// elapsed before attempting to pass it to the underlying transport for
-// transmission; if the time elapsed exceeds OBJECT_DELIVERY_TIMEOUT, it MUST
-// reset the underlying transport stream with the reset stream code
-// DELIVERY_TIMEOUT". The clock starts at the object's last header byte.
+// checkObjectTimeout enforces OBJECT_DELIVERY_TIMEOUT (§8) against one
+// object's receipt time, resetting the stream with DELIVERY_TIMEOUT.
 func (s *OutgoingSubgroupStream) checkObjectTimeout(receivedAt time.Time) error {
 	if s.objectTimeout <= 0 {
 		return nil
@@ -268,10 +257,9 @@ func (s *OutgoingSubgroupStream) checkObjectTimeout(receivedAt time.Time) error 
 // Close FINs the send side cleanly. Callers must have no concurrent Writes
 // in flight.
 //
-// If SUBGROUP_DELIVERY_TIMEOUT is set and the transport reports
-// acknowledgement ([DeliveryTrackingSendStream]), Close starts a background
-// goroutine that resets the stream if the peer has not acknowledged all data
-// within the timeout (§8: the timer runs until "all data committed").
+// If SUBGROUP_DELIVERY_TIMEOUT is set and the stream is a
+// [DeliveryTrackingSendStream], Close starts a goroutine that resets the
+// stream if the peer has not acknowledged all data within the timeout (§8).
 func (s *OutgoingSubgroupStream) Close() error {
 	err := s.dst.Close()
 	tracked, ok := s.dst.(DeliveryTrackingSendStream)

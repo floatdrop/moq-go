@@ -30,22 +30,11 @@ type SendStream interface {
 	CancelWrite(code uint64)
 
 	// Context returns a context that is cancelled when this side's send
-	// direction ends: Close (FIN) or CancelWrite is called, or the peer stops
-	// reading it (STOP_SENDING). It does NOT track acknowledgement — quic-go
-	// cancels it as soon as Close queues the FIN.
-	//
-	// While this side's send direction is still open, a done Context
-	// therefore means the peer sent STOP_SENDING. That is how a responder
-	// observes a requester cancelling after it FINned its own side (§3.3.2: a
-	// FIN "is not a request cancellation"; §3.3.3: such a requester cancels
-	// with STOP_SENDING). Once this side has closed its send direction, the
-	// Context is already done and carries no further signal.
-	//
-	// For quic-go (and webtransport-go, which wraps it) this maps directly to
-	// quic.SendStream.Context(): "canceled as soon as the write-side of the
-	// stream is closed. This happens when [SendStream.Close] or
-	// [SendStream.CancelWrite] is called, or when the peer cancels the
-	// read-side of their stream." In-process test streams match it.
+	// direction ends: Close (FIN), CancelWrite, or the peer's STOP_SENDING.
+	// It does not track acknowledgement. While the send direction is open, a
+	// done Context means STOP_SENDING, which is how a responder sees a
+	// requester that already FINned cancel the request (§3.3.3). It matches
+	// quic.SendStream.Context.
 	Context() context.Context
 }
 
@@ -129,22 +118,14 @@ type ReliableResetStream interface {
 
 // DeliveryTrackingSendStream is optionally implemented by [SendStream]
 // implementations whose transport reports when the peer has acknowledged the
-// stream. §8 SUBGROUP_DELIVERY_TIMEOUT needs that signal: once the subgroup is
-// closed, a stream that has not reached "all data committed" within the
-// timeout MUST be reset. [SendStream.Context] cannot stand in for it, since it
-// ends when Close queues the FIN.
+// stream, which §8 SUBGROUP_DELIVERY_TIMEOUT needs.
 //
-// None of the bundled adapters implement it — quic-go tracks acknowledgement
-// internally but exposes no API for it (quic-go#3291), and webtransport-go
-// wraps quic-go — so on them SUBGROUP_DELIVERY_TIMEOUT is not enforced.
-// Resetting on the timer alone is not a substitute: it would reset streams the
-// peer already holds in full, and a peer that has not read them yet would drop
-// that data.
+// None of the bundled adapters implement it (quic-go exposes no such API), so
+// on them SUBGROUP_DELIVERY_TIMEOUT is not enforced. Resetting on the timer
+// alone would drop data the peer already holds.
 type DeliveryTrackingSendStream interface {
-	// Finished returns a channel that is closed once the send side is done
-	// for good: the peer has acknowledged every byte written and the FIN, or
-	// the stream has been reset. Close alone never closes it. An
-	// implementation may also close it when the connection ends.
+	// Finished returns a channel closed once the peer has acknowledged all
+	// data and the FIN, or the stream was reset (or the connection ended).
 	Finished() <-chan struct{}
 }
 

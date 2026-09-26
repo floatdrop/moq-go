@@ -22,8 +22,7 @@ type NamespacePublication struct {
 	OK *message.RequestOK
 }
 
-// Close withdraws the namespace. §6.2: a PUBLISH_NAMESPACE "is withdrawn by
-// cancelling the request" — a FIN alone would not (§3.3.2).
+// Close withdraws the namespace by cancelling the request (§6.2, §3.3.3).
 func (p *NamespacePublication) Close() error {
 	cancelRequest(p.Stream)
 	return nil
@@ -31,10 +30,9 @@ func (p *NamespacePublication) Close() error {
 
 // NamespaceSubscription is an established SUBSCRIBE_NAMESPACE request (§10.19).
 // It embeds the still-open request stream and carries the peer's REQUEST_OK;
-// NAMESPACE / NAMESPACE_DONE notifications arrive by reading the embedded
-// stream. Read it with [Session.NewRequestBroker] and [RequestBroker.Serve],
-// which enforce the session-level rules on what arrives (§10, §10.2.1); a
-// caller that reads it with message.Parse must apply them itself.
+// NAMESPACE / NAMESPACE_DONE notifications arrive on the embedded stream.
+// Read it with [RequestBroker.Serve], which enforces the session-level rules
+// (§10, §10.2.1); a caller using message.Parse must apply them itself.
 type NamespaceSubscription struct {
 	// Stream is the SUBSCRIBE_NAMESPACE request stream, still open to receive
 	// NAMESPACE / NAMESPACE_DONE notifications. [NamespaceSubscription.Close]
@@ -45,9 +43,7 @@ type NamespaceSubscription struct {
 	OK *message.RequestOK
 }
 
-// Close ends the subscription. §6.1: "A SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS
-// is cancelled as described in Section 3.3.3, by resetting or sending
-// STOP_SENDING on the stream"; a FIN alone would not (§3.3.2).
+// Close ends the subscription by cancelling the request (§6.1, §3.3.3).
 func (n *NamespaceSubscription) Close() error {
 	cancelRequest(n.Stream)
 	return nil
@@ -69,8 +65,7 @@ type TrackSubscription struct {
 	s *Session
 }
 
-// Close ends the subscription by cancelling the request (§6.1, §3.3.3); a FIN
-// alone would not (§3.3.2).
+// Close ends the subscription by cancelling the request (§6.1, §3.3.3).
 func (t *TrackSubscription) Close() error {
 	cancelRequest(t.Stream)
 	return nil
@@ -127,10 +122,9 @@ func (s *Session) SubscribeTracks(ctx context.Context, m *message.SubscribeTrack
 // IncomingNamespacePublication is an accepted inbound PUBLISH_NAMESPACE (§10.16)
 // — the receiving side of [Session.PublishNamespace]'s [NamespacePublication],
 // returned by [Request.AcceptPublishNamespace]. REQUEST_OK has been sent; the
-// announcer's follow-ups arrive by reading the embedded stream, best with
-// [Session.NewRequestBroker] and [RequestBroker.Serve], which enforce the
-// session-level rules on what arrives (§10, §10.2.1). Close it to end the
-// publication.
+// announcer's follow-ups arrive on the embedded stream; read it with
+// [RequestBroker.Serve], which enforces the session-level rules (§10,
+// §10.2.1). Close it to end the publication.
 type IncomingNamespacePublication struct {
 	// Stream is the PUBLISH_NAMESPACE request stream, still open to receive
 	// NAMESPACE / NAMESPACE_DONE notifications. Close it to end the publication.

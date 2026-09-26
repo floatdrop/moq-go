@@ -21,9 +21,8 @@ const paddingDatagramType uint64 = 0x132B3E29
 // unwrapped so the caller can distinguish them from parse failures.
 //
 // An Object whose Properties make its track malformed is returned together
-// with an error wrapping [ErrMalformedTrack], so the caller knows which
-// track (TrackAlias) to cancel; the session stays up and the next call
-// reads on.
+// with an error wrapping [ErrMalformedTrack], so the caller knows which track
+// to cancel; the session stays up.
 func (s *Session) ReceiveDatagram(ctx context.Context) (*message.ObjectDatagram, error) {
 	for {
 		raw, err := s.conn.ReceiveDatagram(ctx)
