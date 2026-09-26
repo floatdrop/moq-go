@@ -237,6 +237,7 @@ func TestAcceptRequestDuplicateID(t *testing.T) {
 	if dupErr.RequestID != 0 {
 		t.Errorf("ErrDuplicateRequestID.RequestID = %d, want 0", dupErr.RequestID)
 	}
+	requireClosedCode(t, server, moqt.SessionInvalidRequestID)
 }
 
 // TestAcceptRequestOutOfOrderID verifies §10.1's receiver rules under
@@ -330,6 +331,7 @@ func TestAcceptRequestOutOfOrderID(t *testing.T) {
 	if dupErr.MaxSeen != 4 {
 		t.Errorf("ErrDuplicateRequestID.MaxSeen = %d, want 4", dupErr.MaxSeen)
 	}
+	requireClosedCode(t, server, moqt.SessionInvalidRequestID)
 }
 
 // TestAcceptRequestMonotonicHappyPath verifies that multiple requests with
@@ -428,6 +430,7 @@ func TestAcceptRequestParityViolation_ServerReceivesOddID(t *testing.T) {
 	if !parityErr.ExpectedEven {
 		t.Errorf("ErrRequestIDParityViolation.ExpectedEven = false, want true (server expects even IDs from client)")
 	}
+	requireClosedCode(t, server, moqt.SessionInvalidRequestID)
 }
 
 // TestAcceptRequestParityViolation_ClientReceivesEvenID verifies that when the
@@ -476,6 +479,7 @@ func TestAcceptRequestParityViolation_ClientReceivesEvenID(t *testing.T) {
 	if parityErr.ExpectedEven {
 		t.Errorf("ErrRequestIDParityViolation.ExpectedEven = true, want false (client expects odd IDs from server)")
 	}
+	requireClosedCode(t, client, moqt.SessionInvalidRequestID)
 }
 
 // TestAcceptRequestParityHappyPath verifies that correct-parity IDs are

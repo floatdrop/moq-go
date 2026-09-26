@@ -15,9 +15,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 )
 
-// ErrRequestIDParityViolation is returned by AcceptRequest when the peer sends
-// a Request ID whose parity does not match the expected value per §10.1.
-// The caller MUST close the session with SessionInvalidRequestID.
+// ErrRequestIDParityViolation is returned by [Session.CheckPeerRequestID] when
+// the peer sends a Request ID whose parity does not match the expected value
+// per §10.1. [Session.AcceptRequest] has already closed the session with
+// INVALID_REQUEST_ID; another caller of CheckPeerRequestID MUST.
 type ErrRequestIDParityViolation struct {
 	RequestID    uint64
 	ExpectedEven bool // true = expected even (peer is client), false = expected odd (peer is server)
@@ -40,7 +41,8 @@ func (e *ErrRequestIDParityViolation) Error() string {
 // Request ID" MUST close the session with INVALID_REQUEST_ID). Cross-stream
 // delivery reordering is tolerated — an ID below the high-water mark counts
 // as a duplicate only once every unseen ID it could have been is accounted
-// for. The caller MUST close the session with SessionInvalidRequestID.
+// for. [Session.AcceptRequest] has already closed the session with
+// INVALID_REQUEST_ID; another caller of CheckPeerRequestID MUST.
 type ErrDuplicateRequestID struct {
 	RequestID uint64
 	MaxSeen   uint64
@@ -239,8 +241,11 @@ type Request struct {
 // malformed (§10, wrapping [message.ErrMalformedMessage]), closes the session
 // with PROTOCOL_VIOLATION; the error is *ErrUnexpectedRequestOpener,
 // *ErrUnexpectedRequestUpdate, ErrUnexpectedPublishStateNotify or the parse
-// error. A stream that ends before its first message is complete only resets
-// that stream.
+// error. A Request ID violation (§10.1) closes it with INVALID_REQUEST_ID and
+// returns *ErrRequestIDParityViolation or *ErrDuplicateRequestID, and a token
+// cache fault (§10.2.2) with the *TokenCacheError's Code. A stream that ends
+// or is reset before its first message is complete fails only that request
+// (§3.3.2, §3.3.3): it is reset and AcceptRequest moves on.
 func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 	for {
 		stream, err := s.conn.AcceptStream(ctx)
@@ -252,16 +257,24 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 		// accept loop past cancellation.
 		msg, err := s.readResponse(ctx, stream)
 		if err != nil {
-			resetStream(stream)
 			if ctx.Err() != nil {
+				resetStream(stream)
 				return nil, ctx.Err()
 			}
 			// §3.3: readResponse already closed the session; this only shapes
 			// the error.
 			if typ, ok := errors.AsType[message.ErrUnknownType](err); ok {
+				resetStream(stream)
 				return nil, s.closeProtocolViolation(&ErrUnexpectedRequestOpener{Type: message.Type(typ)})
 			}
-			return nil, fmt.Errorf("moqt/session: parse request first message: %w", err)
+			if errors.Is(err, message.ErrMalformedMessage) {
+				resetStream(stream)
+				return nil, fmt.Errorf("moqt/session: parse request first message: %w", err)
+			}
+			// §3.3.2, §3.3.3: the peer ended or reset the stream first, which
+			// fails that request only. A closed session fails AcceptStream.
+			cancelRequest(stream)
+			continue
 		}
 
 		// §10.9, §3.3: REQUEST_UPDATE never opens a stream.
@@ -295,16 +308,20 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 		if m, ok := msg.(message.WithRequestID); ok {
 			if err := s.CheckPeerRequestID(m.GetRequestID()); err != nil {
 				resetStream(stream)
+				_ = s.Close(moqt.SessionInvalidRequestID, err.Error())
 				return nil, err
 			}
 		}
 
 		// §10.2.2: REGISTER tokens commit before any rejection, so the alias
 		// persists even if the request fails. A *TokenCacheError is
-		// session-fatal; the caller closes the session with its Code.
+		// session-fatal.
 		tokens, err := s.processRequestTokens(msg)
 		if err != nil {
 			resetStream(stream)
+			if tce, ok := errors.AsType[*TokenCacheError](err); ok {
+				_ = s.Close(tce.Code, tce.Error())
+			}
 			return nil, err
 		}
 
@@ -350,8 +367,7 @@ func evictLowestGapsLocked(gaps map[uint64]struct{}, n int) {
 // for those).
 //
 // Two violations are session-fatal per §10.1, and the caller MUST close the
-// session with [moqt.SessionInvalidRequestID] (AcceptRequest instead returns
-// the error to its caller, which owns that decision):
+// session with [moqt.SessionInvalidRequestID] (AcceptRequest does so itself):
 //
 //   - wrong parity for the sender (*ErrRequestIDParityViolation);
 //   - a duplicate ID (*ErrDuplicateRequestID).

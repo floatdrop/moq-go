@@ -65,8 +65,9 @@ func (f TokenVerifierFunc) VerifyToken(ctx context.Context, sess *Session, tok R
 // inbound request's AUTHORIZATION_TOKEN parameters fails at the cache layer
 // (§10.2.2). These are session-level faults: a malformed token, a duplicate
 // REGISTER alias, a cache overflow, or a USE_ALIAS / DELETE referencing an
-// unknown alias. Code is the SESSION_ERROR the caller should close the
-// session with.
+// unknown alias. Code is the SESSION_ERROR the session is closed with:
+// AcceptRequest has already done so, and a caller of
+// [Session.ProcessFollowupTokens] MUST.
 type TokenCacheError struct {
 	// Code is the §10.2.2 SESSION_ERROR code to terminate the session with.
 	Code moqt.SessionErrorCode

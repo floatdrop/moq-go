@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -223,4 +224,64 @@ func (a *denyAuthorizer) AuthorizeSubscribeTracks(context.Context, *session.Sess
 func (a *denyAuthorizer) AuthorizeTrackStatus(context.Context, *session.Session, *message.TrackStatus) error {
 	a.trackStatusCalls.Add(1)
 	return a.err
+}
+
+// TestSessionHandler_TruncatedOpenerKeepsServing: a request stream that ends
+// or is reset before its first message is complete fails that request only
+// (§3.3.2, §3.3.3); the relay goes on serving the session.
+func TestSessionHandler_TruncatedOpenerKeepsServing(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		end  func(session.Stream)
+	}{
+		{"FIN", func(s session.Stream) { _ = s.Close() }},
+		{"reset", func(s session.Stream) { s.CancelWrite(0) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			l := newPipeListener()
+			_, teardown := connectRelayOn(t, relay.Config{}, l)
+			defer teardown()
+			peer, conn := dialRaw(t, l)
+			stream, err := conn.OpenStream()
+			if err != nil {
+				t.Fatalf("OpenStream: %v", err)
+			}
+			// Type SUBSCRIBE, Length 16, then only two body bytes.
+			_, _ = stream.Write([]byte{byte(message.TypeSubscribe), 0x00, 0x10, 0x00, 0x00})
+			tc.end(stream)
+
+			// The pipe transport blocks the opener's write until the relay
+			// reads it, which no context bounds, so wait here instead.
+			errc := make(chan error, 1)
+			go func() {
+				_, err := peer.Subscribe(t.Context(), &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
+				errc <- err
+			}()
+			select {
+			case err := <-errc:
+				requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
+			case <-time.After(2 * time.Second):
+				t.Fatal("relay stopped reading requests after the truncated one")
+			}
+		})
+	}
+}
+
+// TestSessionHandler_BadRequestIDClosesSession: a request opener with a
+// wrong-parity Request ID closes the session (§10.1).
+func TestSessionHandler_BadRequestIDClosesSession(t *testing.T) {
+	t.Parallel()
+	l := newPipeListener()
+	_, teardown := connectRelayOn(t, relay.Config{}, l)
+	defer teardown()
+	peer, conn := dialRaw(t, l)
+	stream, err := conn.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	// A client's Request IDs are even.
+	_ = message.Marshal(stream, &message.Subscribe{RequestID: 1, Namespace: ns("video"), Name: []byte("cam1")})
+	requireSessionClosed(t, peer, "a SUBSCRIBE with an odd Request ID from a client")
 }

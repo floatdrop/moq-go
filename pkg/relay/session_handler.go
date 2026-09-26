@@ -250,22 +250,11 @@ func (h *sessionHandler) run(ctx context.Context) error {
 //   - the session emits an unrecoverable error from AcceptRequest,
 //   - a non-shutdown read failure occurs.
 //
-// Per-request failures (auth, rejected requests) do NOT terminate the loop.
-// A stream opened by anything but a request message is session-fatal (§3.3);
-// AcceptRequest has already closed the session.
+// Per-request failures (auth, rejected requests, a stream ended before its
+// request) do NOT terminate the loop. A protocol violation does, and
+// AcceptRequest has already closed the session with its code.
 func (h *sessionHandler) runRequestLoop(ctx context.Context) error {
-	err := h.requestMux(ctx).Run(ctx, h.sess)
-	// A malformed / duplicate / overflowing / unknown AUTHORIZATION_TOKEN alias
-	// surfaces from AcceptRequest as a session-level fault per §10.2.2: close the
-	// session with the mapped SESSION_ERROR code rather than just tearing down
-	// the request loop.
-	if tce, ok := errors.AsType[*session.TokenCacheError](err); ok {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "relay closing session on token cache error",
-			slog.String("err", err.Error()),
-			slog.Uint64("code", uint64(tce.Code)))
-		_ = h.sess.Close(tce.Code, tce.Error())
-	}
-	return err
+	return h.requestMux(ctx).Run(ctx, h.sess)
 }
 
 // runDataLoop accepts inbound data streams and routes each by type: subgroup

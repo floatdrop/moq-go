@@ -137,6 +137,7 @@ func TestAcceptRequestDuplicateAliasIsSessionError(t *testing.T) {
 	if tce.Code != moqt.SessionDuplicateAuthTokenAlias {
 		t.Errorf("Code = 0x%X, want SessionDuplicateAuthTokenAlias", uint64(tce.Code))
 	}
+	requireClosedCode(t, server, moqt.SessionDuplicateAuthTokenAlias)
 }
 
 // TestAcceptRequestUnknownAliasIsSessionError verifies that USE_ALIAS for an
@@ -159,6 +160,7 @@ func TestAcceptRequestUnknownAliasIsSessionError(t *testing.T) {
 	if tce.Code != moqt.SessionUnknownAuthTokenAlias {
 		t.Errorf("Code = 0x%X, want SessionUnknownAuthTokenAlias", uint64(tce.Code))
 	}
+	requireClosedCode(t, server, moqt.SessionUnknownAuthTokenAlias)
 }
 
 // TestAcceptRequestRegisterPersistsWhenAliasingProhibited verifies that with
@@ -184,6 +186,7 @@ func TestAcceptRequestRegisterProhibitedIsOverflow(t *testing.T) {
 	if tce.Code != moqt.SessionAuthTokenCacheOverflow {
 		t.Errorf("Code = 0x%X, want SessionAuthTokenCacheOverflow", uint64(tce.Code))
 	}
+	requireClosedCode(t, server, moqt.SessionAuthTokenCacheOverflow)
 }
 
 // TestVerifyRequestTokensAllow verifies that a verifier returning nil

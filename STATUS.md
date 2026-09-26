@@ -510,11 +510,6 @@ High:
   Group 32 or more IDs below the newest is dropped as already delivered and the
   downstream stream then FINs. §9.4: "MUST NOT reorder or drop objects received on
   a multi-object stream"; §11.4.3 requires a reset when Objects were not delivered.
-- A request stream reset or FINed before its first message is complete ends the
-  relay's request loop without closing the session (§3.3.2, §3.3.3: that request
-  fails or is cancelled, nothing more).
-  A bad Request ID on an opener takes the same path instead of closing the session
-  with INVALID_REQUEST_ID (§10.1).
 - A subscriber's cancellation does not reset the subscription's open subgroup
   streams or fill fetch streams: the relay keeps forwarding, then FINs (§5.1.1:
   "MUST reset any open streams associated with the SUBSCRIBE"; §5.1.3.1).
