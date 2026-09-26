@@ -190,7 +190,7 @@ By package, bottom-up along the dependency stack:
 | 10.3.1.7| MAX_REQUEST_UPDATES           | 0x08   | DONE   | `WithMaxRequestUpdates` advertises the per-stream limit; enforced on inbound follow-ups via `RequestUpdateLimiter`, closing with `TOO_MANY_REQUEST_UPDATES` on overflow. |
 | 10.4    | GOAWAY                        | 0x10   | DONE   | Same encoding on control and request streams (draft-19 dropped the Request ID field); callback. As recipient the relay initiates no new SUBSCRIBE, FETCH or PUBLISH to the peer and leaves closing the session to the sender. On a request stream (`RequestBroker.Serve` and the relay's readers after the response; `session.RequestGoaways` for callers that read one themselves) a second GOAWAY, or one with a New Session URI received by a server, closes the session with PROTOCOL_VIOLATION; a single one is handed to the reader, and neither side migrates the request. |
 | 10.5    | REQUEST_OK                    | 0x07   | DONE   | Shared OK for PUBLISH/UPDATE/TRACK_STATUS/namespace reqs. Track Properties where they must be empty close the session on receipt and are refused on send (`ErrTrackPropertiesNotAllowed`). |
-| 10.6    | REQUEST_ERROR (+ Redirect)    | 0x05   | DONE   | Redirect required only when code==REDIRECT. `Request.Reject` sends a Retry Interval; the relay invites a jittered ~1 s retry on EXCESSIVE_LOAD and passes an upstream SUBSCRIBE rejection on by meaning, Retry Interval kept. |
+| 10.6    | REQUEST_ERROR (+ Redirect)    | 0x05   | DONE   | Redirect required only when code==REDIRECT, and exposed as `RequestRejectedError.Redirect`; `Request.Reject` sends one. A Connect URI received by a server, or a Track Name for SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE / SUBSCRIBE_TRACKS, closes the session (§10.6.1), and `Reject` refuses to send either; on a REQUEST_UPDATE's answer only the Connect URI is checked, as the reader does not know the request, and an update handler's REDIRECT is sent as INTERNAL_ERROR (§10.6.2 does not list REQUEST_UPDATE). The relay does not follow a Redirect: an upstream REDIRECT becomes INTERNAL_ERROR downstream. `Request.Reject` sends a Retry Interval; the relay invites a jittered ~1 s retry on EXCESSIVE_LOAD and passes an upstream SUBSCRIBE rejection on by meaning, Retry Interval kept. |
 | 10.7    | SUBSCRIBE                     | 0x03   | DONE   | |
 | 10.8    | SUBSCRIBE_OK                  | 0x04   | DONE   | Registers inbound track alias. |
 | 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | A REQUEST_UPDATE opening a request stream closes the session with PROTOCOL_VIOLATION (`ErrUnexpectedRequestUpdate`). |
@@ -518,12 +518,14 @@ already listed as Limitations above are not repeated here.
 
 Session layer:
 
+- The relay's `readRequestStream` does not check a REQUEST_ERROR arriving on a
+  request stream after the response (e.g. on a forwarded PUBLISH after
+  PUBLISH_OK), so a Connect URI in one does not close the session as
+  `RequestBroker.Serve` does (§10.6.1). The draft does not define such a
+  REQUEST_ERROR.
 - A GOAWAY on a request stream before its initial response, or on a
   SUBSCRIBE_TRACKS stream read with `ReadPublishSkipped`, is an error rather
   than a legal message checked against §10.4.
-- A REQUEST_ERROR Redirect is dropped after parsing: a server receiving a Connect
-  URI, or a Track Name on a namespace-scoped request, does not close the session,
-  and the application cannot follow it (§10.6.1).
 - A first response other than REQUEST_OK / REQUEST_ERROR to SUBSCRIBE_NAMESPACE or
   SUBSCRIBE_TRACKS does not close the session (§10.19, §10.20).
 - `Publication`'s automatic PUBLISH_DONE UPDATE_FAILED is sent while its subgroup
