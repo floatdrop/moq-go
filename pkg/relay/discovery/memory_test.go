@@ -3,7 +3,9 @@ package discovery_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -244,6 +246,7 @@ func TestMemoryStore_WatchTracksReceivesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchTracks: %v", err)
 	}
+	requireTrackSnapshotDone(t, ch)
 
 	key := newKey([]string{"video"}, "cam1")
 	_ = s.PublishTrack(ctx, discovery.TrackInfo{Key: key, RelayAddr: "relay-A"})
@@ -305,6 +308,7 @@ func TestMemoryStore_ClosedRejectsOperations(t *testing.T) {
 	s := discovery.NewMemoryStore()
 
 	ch, _ := s.WatchTracks(t.Context())
+	requireTrackSnapshotDone(t, ch)
 
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -351,6 +355,7 @@ func TestMemoryStore_WatchNamespacesReceivesEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchNamespaces: %v", err)
 	}
+	requireNamespaceSnapshotDone(t, ch)
 
 	_ = s.PublishNamespace(ctx, discovery.NamespaceInfo{Prefix: ns("chat"), RelayAddr: "relay-A"})
 	_ = s.UnpublishNamespace(ctx, ns("chat"), "relay-A")
@@ -448,6 +453,7 @@ func TestMemoryStore_WatchSeedsSnapshot(t *testing.T) {
 	if !seen["relay-A"] || !seen["relay-B"] {
 		t.Errorf("track snapshot addrs = %v, want relay-A and relay-B", seen)
 	}
+	requireTrackSnapshotDone(t, trackCh)
 
 	nsEv, ok := receiveNamespace(nsCh, 2*time.Second)
 	if !ok {
@@ -456,6 +462,7 @@ func TestMemoryStore_WatchSeedsSnapshot(t *testing.T) {
 	if nsEv.Op != discovery.OpPublish || nsEv.Info.RelayAddr != "relay-A" {
 		t.Errorf("namespace snapshot = %+v, want publish/relay-A", nsEv)
 	}
+	requireNamespaceSnapshotDone(t, nsCh)
 
 	// Follow: a live publish after the snapshot is delivered too.
 	key2 := newKey([]string{"video"}, "cam2")
@@ -468,6 +475,22 @@ func TestMemoryStore_WatchSeedsSnapshot(t *testing.T) {
 	}
 	if live.Op != discovery.OpPublish || live.Info.Key != key2 {
 		t.Errorf("live event = %+v, want publish of cam2", live)
+	}
+}
+
+// requireTrackSnapshotDone reads the OpSnapshotDone that ends a watch's
+// snapshot.
+func requireTrackSnapshotDone(t *testing.T, ch <-chan discovery.TrackEvent) {
+	t.Helper()
+	if ev, ok := receiveTrack(ch, 2*time.Second); !ok || ev.Op != discovery.OpSnapshotDone {
+		t.Fatalf("got %+v (ok %v), want OpSnapshotDone", ev, ok)
+	}
+}
+
+func requireNamespaceSnapshotDone(t *testing.T, ch <-chan discovery.NamespaceEvent) {
+	t.Helper()
+	if ev, ok := receiveNamespace(ch, 2*time.Second); !ok || ev.Op != discovery.OpSnapshotDone {
+		t.Fatalf("got %+v (ok %v), want OpSnapshotDone", ev, ok)
 	}
 }
 
@@ -508,6 +531,7 @@ func TestMemoryStoreWithdraw(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchTracks: %v", err)
 	}
+	requireTrackSnapshotDone(t, events)
 
 	for _, addr := range []string{leaving, staying} {
 		if err := s.PublishTrack(t.Context(), discovery.TrackInfo{Key: key, RelayAddr: addr}); err != nil {
@@ -576,5 +600,90 @@ func TestMemoryStoreWithdraw(t *testing.T) {
 	}
 	if err := s.Withdraw(t.Context(), leaving); err != nil {
 		t.Errorf("second Withdraw = %v, want nil (idempotent)", err)
+	}
+}
+
+// TestMemoryStore_WatchMarksSnapshotEnd: a watch delivers the snapshot, then
+// one OpSnapshotDone, then live events, so a consumer that restarts a watch
+// can reconcile against the snapshot rather than start over.
+func TestMemoryStore_WatchMarksSnapshotEnd(t *testing.T) {
+	s := discovery.NewMemoryStore()
+	defer s.Close()
+	ctx := t.Context()
+	for _, a := range []string{"relay-A", "relay-B"} {
+		if err := s.PublishNamespace(
+			ctx,
+			discovery.NamespaceInfo{Prefix: wire.TrackNamespace{[]byte("x")}, RelayAddr: a},
+		); err != nil {
+			t.Fatalf("PublishNamespace: %v", err)
+		}
+	}
+	ch, err := s.WatchNamespaces(ctx)
+	if err != nil {
+		t.Fatalf("WatchNamespaces: %v", err)
+	}
+	if err := s.PublishNamespace(
+		ctx,
+		discovery.NamespaceInfo{Prefix: wire.TrackNamespace{[]byte("y")}, RelayAddr: "relay-C"},
+	); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	var ops []discovery.Op
+	for range 4 {
+		ev, ok := receiveNamespace(ch, 2*time.Second)
+		if !ok {
+			t.Fatalf("watch ended after %v", ops)
+		}
+		ops = append(ops, ev.Op)
+	}
+	want := []discovery.Op{discovery.OpPublish, discovery.OpPublish, discovery.OpSnapshotDone, discovery.OpPublish}
+	if !slices.Equal(ops, want) {
+		t.Fatalf("ops = %v, want %v", ops, want)
+	}
+
+	tracks, err := s.WatchTracks(ctx)
+	if err != nil {
+		t.Fatalf("WatchTracks: %v", err)
+	}
+	select {
+	case ev := <-tracks:
+		if ev.Op != discovery.OpSnapshotDone {
+			t.Fatalf("empty track snapshot: first event %v, want OpSnapshotDone", ev.Op)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no OpSnapshotDone on an empty track watch")
+	}
+}
+
+// TestMemoryStore_OverflowClosesWatch: a watcher too slow for a live event is
+// not silently skipped; its channel is closed, so the consumer notices and
+// restarts the watch, reconciling from the new snapshot.
+func TestMemoryStore_OverflowClosesWatch(t *testing.T) {
+	s := discovery.NewMemoryStore(discovery.WithWatchBufferSize(2))
+	defer s.Close()
+	ctx := t.Context()
+	ch, err := s.WatchNamespaces(ctx)
+	if err != nil {
+		t.Fatalf("WatchNamespaces: %v", err)
+	}
+	for i := range 5 {
+		_ = s.PublishNamespace(ctx, discovery.NamespaceInfo{
+			Prefix: wire.TrackNamespace{[]byte(strconv.Itoa(i))}, RelayAddr: "relay-C",
+		})
+	}
+	n := 0
+	for {
+		select {
+		case _, ok := <-ch:
+			if !ok {
+				if n >= 6 { // OpSnapshotDone + 5 publishes: nothing overflowed
+					t.Fatalf("all %d events arrived before the close; want it closed on overflow", n)
+				}
+				return
+			}
+			n++
+		case <-time.After(2 * time.Second):
+			t.Fatalf("watch still open after %d events; an overflowing watcher must be closed", n)
+		}
 	}
 }

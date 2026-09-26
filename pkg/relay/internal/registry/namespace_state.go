@@ -4,6 +4,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
+	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
 
 // A SUBSCRIBE_NAMESPACE subscriber's view of the namespaces announced to it.
@@ -248,17 +249,52 @@ func (r *NamespaceRegistry) PublishSkipped(e *SubscriberEntry, ns wire.TrackName
 	return true
 }
 
-// ResetRemote forgets every remote namespace, withdrawing each from the
-// subscribers counting it, for a Discovery watch that restarts: its new
-// snapshot re-adds what still exists.
-func (r *NamespaceRegistry) ResetRemote() {
+// ReplaceRemote makes the remote namespaces exactly those in ads, for a
+// Discovery watch's snapshot (see [discovery.DiscoveryStore.WatchNamespaces]).
+// Only differences reach subscribers: a namespace some relay still advertises
+// causes nothing, one no longer advertised is done, one newly advertised is
+// announced. Sources are added before any is removed, so a namespace whose
+// only advertising relay changed is not done and announced again.
+func (r *NamespaceRegistry) ReplaceRemote(ads []discovery.NamespaceInfo) {
+	want := make(map[string]*remoteNamespace)
+	for _, ad := range ads {
+		k := namespaceWireKey(ad.Prefix)
+		w := want[k]
+		if w == nil {
+			w = &remoteNamespace{ns: ad.Prefix, relays: make(map[string]struct{})}
+			want[k] = w
+		}
+		w.relays[ad.RelayAddr] = struct{}{}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for k, w := range want {
+		rn := r.remote[k]
+		if rn == nil {
+			rn = &remoteNamespace{ns: w.ns, relays: make(map[string]struct{})}
+			r.remote[k] = rn
+		}
+		for addr := range w.relays {
+			if _, have := rn.relays[addr]; !have {
+				rn.relays[addr] = struct{}{}
+				r.addSourceLocked(rn.ns)
+			}
+		}
+	}
 	for k, rn := range r.remote {
-		for range rn.relays {
+		w := want[k]
+		for addr := range rn.relays {
+			if w != nil {
+				if _, keep := w.relays[addr]; keep {
+					continue
+				}
+			}
+			delete(rn.relays, addr)
 			r.removeSourceLocked(rn.ns)
 		}
-		delete(r.remote, k)
+		if len(rn.relays) == 0 {
+			delete(r.remote, k)
+		}
 	}
 }
 

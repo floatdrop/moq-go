@@ -27,9 +27,11 @@ import (
 // namespaces advertised before it started, not just later ones. Each event is
 // recorded in the namespace registry, which also seeds a SUBSCRIBE_NAMESPACE
 // holder that registers later. A watch that fails to start is retried, and one
-// whose channel closes is restarted, its snapshot replacing the remote state.
-// An event the store drops (MemoryStore does, for a slow consumer) is not
-// recovered until the next restart.
+// whose channel closes is restarted — which is how a store tells a consumer it
+// fell behind, rather than dropping an event. Each watch's snapshot, up to its
+// OpSnapshotDone, is reconciled against what the relay already knew
+// ([registry.NamespaceRegistry.ReplaceRemote]), so a restart changes only the
+// namespaces that did change.
 func (r *Relay) runNamespaceWatch(ctx context.Context) {
 	backoff := namespaceWatchBackoffInitial
 	for first := true; ; first = false {
@@ -52,23 +54,22 @@ func (r *Relay) runNamespaceWatch(ctx context.Context) {
 			continue
 		}
 		backoff = namespaceWatchBackoffInitial
-		if !first {
-			// A restarted watch begins with a fresh snapshot; drop what the
-			// old one reported so namespaces withdrawn in between do not
-			// linger. Subscribers see NAMESPACE_DONE then NAMESPACE again
-			// for every remote namespace that still exists.
-			r.names.ResetRemote()
-		}
-		r.log.LogAttrs(ctx, slog.LevelDebug, "discovery namespace watch started")
+		r.log.LogAttrs(ctx, slog.LevelDebug, "discovery namespace watch started", slog.Bool("restart", !first))
 		if !r.consumeNamespaceWatch(ctx, ch) {
 			return
 		}
 	}
 }
 
-// consumeNamespaceWatch forwards events from ch until it closes, reporting
-// true, or ctx is cancelled, reporting false.
+// consumeNamespaceWatch applies events from ch until it closes, reporting
+// true, or ctx is cancelled, reporting false. The snapshot is collected and
+// applied as a whole at its OpSnapshotDone; a watch that ends before then
+// applies nothing, and the next one's snapshot takes over.
 func (r *Relay) consumeNamespaceWatch(ctx context.Context, ch <-chan discovery.NamespaceEvent) bool {
+	var (
+		snapshot []discovery.NamespaceInfo
+		synced   bool
+	)
 	for {
 		select {
 		case <-ctx.Done():
@@ -77,7 +78,17 @@ func (r *Relay) consumeNamespaceWatch(ctx context.Context, ch <-chan discovery.N
 			if !ok {
 				return true
 			}
-			r.forwardNamespaceEvent(ctx, ev)
+			switch {
+			case synced:
+				r.forwardNamespaceEvent(ctx, ev)
+			case ev.Op == discovery.OpSnapshotDone:
+				r.names.ReplaceRemote(snapshot)
+				snapshot, synced = nil, true
+			case ev.Op == discovery.OpPublish && ev.Info.RelayAddr != r.cfg.RelayAddr:
+				// Own-relay advertisements are counted locally; see
+				// forwardNamespaceEvent.
+				snapshot = append(snapshot, ev.Info)
+			}
 		}
 	}
 }
@@ -104,5 +115,7 @@ func (r *Relay) forwardNamespaceEvent(_ context.Context, ev discovery.NamespaceE
 		r.names.RemoteNamespace(ev.Info.Prefix, ev.Info.RelayAddr, true)
 	case discovery.OpUnpublish:
 		r.names.RemoteNamespace(ev.Info.Prefix, ev.Info.RelayAddr, false)
+	case discovery.OpSnapshotDone:
+		// Only the snapshot's end carries it; consumeNamespaceWatch handles it.
 	}
 }

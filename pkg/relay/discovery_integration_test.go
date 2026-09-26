@@ -28,6 +28,7 @@ func TestDiscovery_PublishOnFirstUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchTracks: %v", err)
 	}
+	skipTrackSnapshot(t, events)
 
 	clientSess, teardown := connectRelay(t, relay.Config{Discovery: store, RelayAddr: "relay-A"})
 	defer teardown()
@@ -77,6 +78,7 @@ func TestDiscovery_UnpublishOnLastUpstream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchTracks: %v", err)
 	}
+	skipTrackSnapshot(t, events)
 
 	clientSess, teardown := connectRelay(t, relay.Config{Discovery: store, RelayAddr: "relay-A"})
 	defer teardown()
@@ -127,6 +129,7 @@ func TestDiscovery_PublishNamespaceOnFirstAdvertise(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchNamespaces: %v", err)
 	}
+	skipNamespaceSnapshot(t, events)
 
 	pubSess1, teardown := connectRelay(t, relay.Config{Discovery: store, RelayAddr: "relay-A"})
 	defer teardown()
@@ -182,6 +185,7 @@ func TestDiscovery_UnpublishNamespaceOnLastWithdraw(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchNamespaces: %v", err)
 	}
+	skipNamespaceSnapshot(t, events)
 
 	pubSess1, teardown := connectRelay(t, relay.Config{Discovery: store, RelayAddr: "relay-A"})
 	defer teardown()
@@ -267,5 +271,32 @@ func receiveNamespaceEvent(ch <-chan discovery.NamespaceEvent, d time.Duration) 
 		return ev, ok
 	case <-time.After(d):
 		return discovery.NamespaceEvent{}, false
+	}
+}
+
+// skipTrackSnapshot reads a watch's snapshot up to its OpSnapshotDone.
+func skipTrackSnapshot(t *testing.T, ch <-chan discovery.TrackEvent) {
+	t.Helper()
+	for {
+		ev, ok := receiveTrackEvent(ch, 2*time.Second)
+		if !ok {
+			t.Fatal("watch ended before its OpSnapshotDone")
+		}
+		if ev.Op == discovery.OpSnapshotDone {
+			return
+		}
+	}
+}
+
+func skipNamespaceSnapshot(t *testing.T, ch <-chan discovery.NamespaceEvent) {
+	t.Helper()
+	for {
+		ev, ok := receiveNamespaceEvent(ch, 2*time.Second)
+		if !ok {
+			t.Fatal("watch ended before its OpSnapshotDone")
+		}
+		if ev.Op == discovery.OpSnapshotDone {
+			return
+		}
 	}
 }

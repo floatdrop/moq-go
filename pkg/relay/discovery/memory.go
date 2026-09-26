@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -25,9 +26,9 @@ var ErrClosed = errors.New("discovery: store closed")
 // relay is shutting down, and re-advertising it would undo the withdrawal.
 var ErrWithdrawn = errors.New("discovery: relay withdrawn")
 
-// defaultWatchBufferSize bounds the per-watcher event channel. A slow
-// consumer can drop up to this many events before the backend stops
-// trying to deliver. The size is a compromise between burst tolerance
+// defaultWatchBufferSize bounds the per-watcher event channel: how many live
+// events a watcher may fall behind before its watch is ended (see
+// [DiscoveryStore.WatchTracks]). The size is a compromise between burst tolerance
 // and memory pressure under a misbehaving subscriber; 32 is large enough
 // to absorb typical bursty publish patterns and small enough that a
 // stalled consumer is noticed within a few seconds at typical event
@@ -130,7 +131,7 @@ func (s *MemoryStore) PublishTrack(_ context.Context, info TrackInfo) error {
 	// channel close (lifecycle / Close, which close under the same lock).
 	// Count the drops and log AFTER unlocking — a slow logger must not stall
 	// other store operations while s.mu is held.
-	dropped := fanout(s.trackWatch, TrackEvent{Op: OpPublish, Info: info})
+	dropped := fanout(&s.trackWatch, TrackEvent{Op: OpPublish, Info: info})
 	s.mu.Unlock()
 	s.warnDropped(dropped, OpPublish, "key", info.Key)
 	return nil
@@ -152,7 +153,7 @@ func (s *MemoryStore) UnpublishTrack(_ context.Context, key track.Key, relayAddr
 	}
 	delete(s.tracks, idx)
 	// Send under the lock, log after — see [MemoryStore.PublishTrack].
-	dropped := fanout(s.trackWatch, TrackEvent{Op: OpUnpublish, Info: info})
+	dropped := fanout(&s.trackWatch, TrackEvent{Op: OpUnpublish, Info: info})
 	s.mu.Unlock()
 	s.warnDropped(dropped, OpUnpublish, "key", key)
 	return nil
@@ -190,7 +191,7 @@ func (s *MemoryStore) PublishNamespace(_ context.Context, info NamespaceInfo) er
 	}
 	s.namespaces[namespaceEntryKey{prefix: namespaceWireKey(info.Prefix), addr: info.RelayAddr}] = info
 	// Send under the lock, log after — see [MemoryStore.PublishTrack].
-	dropped := fanout(s.nsWatch, NamespaceEvent{Op: OpPublish, Info: info})
+	dropped := fanout(&s.nsWatch, NamespaceEvent{Op: OpPublish, Info: info})
 	s.mu.Unlock()
 	s.warnDropped(dropped, OpPublish, "prefix", info.Prefix)
 	return nil
@@ -211,7 +212,7 @@ func (s *MemoryStore) UnpublishNamespace(_ context.Context, prefix wire.TrackNam
 	}
 	delete(s.namespaces, idx)
 	// Send under the lock, log after — see [MemoryStore.PublishTrack].
-	dropped := fanout(s.nsWatch, NamespaceEvent{Op: OpUnpublish, Info: info})
+	dropped := fanout(&s.nsWatch, NamespaceEvent{Op: OpUnpublish, Info: info})
 	s.mu.Unlock()
 	s.warnDropped(dropped, OpUnpublish, "prefix", prefix)
 	return nil
@@ -265,10 +266,11 @@ func (s *MemoryStore) WatchTracks(ctx context.Context) (<-chan TrackEvent, error
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
-	ch := make(chan TrackEvent, len(s.tracks)+s.bufferSize)
+	ch := make(chan TrackEvent, len(s.tracks)+1+s.bufferSize)
 	for _, v := range s.tracks {
-		ch <- TrackEvent{Op: OpPublish, Info: v} // fits: capacity includes len(tracks)
+		ch <- TrackEvent{Op: OpPublish, Info: v} // fits: capacity includes the snapshot
 	}
+	ch <- TrackEvent{Op: OpSnapshotDone}
 	s.trackWatch = append(s.trackWatch, ch)
 	s.mu.Unlock()
 
@@ -283,10 +285,11 @@ func (s *MemoryStore) WatchNamespaces(ctx context.Context) (<-chan NamespaceEven
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
-	ch := make(chan NamespaceEvent, len(s.namespaces)+s.bufferSize)
+	ch := make(chan NamespaceEvent, len(s.namespaces)+1+s.bufferSize)
 	for _, v := range s.namespaces {
-		ch <- NamespaceEvent{Op: OpPublish, Info: v} // fits: capacity includes len(namespaces)
+		ch <- NamespaceEvent{Op: OpPublish, Info: v} // fits: capacity includes the snapshot
 	}
+	ch <- NamespaceEvent{Op: OpSnapshotDone}
 	s.nsWatch = append(s.nsWatch, ch)
 	s.mu.Unlock()
 
@@ -315,14 +318,14 @@ func (s *MemoryStore) Withdraw(_ context.Context, relayAddr string) error {
 			continue
 		}
 		delete(s.tracks, idx)
-		dropped += fanout(s.trackWatch, TrackEvent{Op: OpUnpublish, Info: info})
+		dropped += fanout(&s.trackWatch, TrackEvent{Op: OpUnpublish, Info: info})
 	}
 	for idx, info := range s.namespaces {
 		if idx.addr != relayAddr {
 			continue
 		}
 		delete(s.namespaces, idx)
-		dropped += fanout(s.nsWatch, NamespaceEvent{Op: OpUnpublish, Info: info})
+		dropped += fanout(&s.nsWatch, NamespaceEvent{Op: OpUnpublish, Info: info})
 	}
 	s.mu.Unlock()
 	s.warnDropped(dropped, OpUnpublish, "relay_addr", relayAddr)
@@ -352,35 +355,39 @@ func (s *MemoryStore) Close() error {
 	return nil
 }
 
-// fanout delivers ev to each watcher with a non-blocking send and returns the
-// number of watchers whose buffer was full (so the event was dropped). It MUST
-// be called with s.mu held: the sends are then mutually exclusive with watcher
-// channel closes (lifecycle / Close), which would otherwise race a send and
-// panic. The publish path still never blocks on a slow watcher (sends are
-// non-blocking); the caller logs the returned drop count AFTER releasing s.mu
-// so a slow log sink cannot stall other store operations under the lock.
-func fanout[T any](watchers []chan T, ev T) int {
-	dropped := 0
-	for _, ch := range watchers {
+// fanout delivers ev to each watcher with a non-blocking send. A watcher whose
+// buffer is full is removed and its channel closed rather than skipped: a
+// dropped event would leave it silently out of date, while a closed watch is
+// noticed and re-watched (see [DiscoveryStore.WatchTracks]). It returns how
+// many watchers were closed. It MUST be called with s.mu held: the sends and
+// closes are then mutually exclusive with the lifecycle goroutines' closes.
+// The publish path still never blocks on a slow watcher; the caller logs the
+// count AFTER releasing s.mu so a slow log sink cannot stall the store.
+func fanout[T any](watchers *[]chan T, ev T) int {
+	closed := 0
+	*watchers = slices.DeleteFunc(*watchers, func(ch chan T) bool {
 		select {
 		case ch <- ev:
+			return false
 		default:
-			dropped++
+			close(ch)
+			closed++
+			return true
 		}
-	}
-	return dropped
+	})
+	return closed
 }
 
-// warnDropped logs that n events were dropped to slow watchers, if any. Called
+// warnDropped logs that n slow watchers had their watch ended, if any. Called
 // after s.mu is released so the (potentially blocking) log sink never contends
-// the store lock. keyAttr/keyVal carry the identifying field of the dropped
-// event (e.g. "key"/track.Key or "prefix"/wire.TrackNamespace).
+// the store lock. keyAttr/keyVal carry the identifying field of the event that
+// overflowed (e.g. "key"/track.Key or "prefix"/wire.TrackNamespace).
 func (s *MemoryStore) warnDropped(n int, op Op, keyAttr string, keyVal any) {
 	if n == 0 {
 		return
 	}
-	s.log.Warn("discovery: dropped events on slow watcher(s)",
-		"op", op.String(), keyAttr, keyVal, "dropped", n)
+	s.log.Warn("discovery: ended the watch of slow watcher(s)",
+		"op", op.String(), keyAttr, keyVal, "watchers", n)
 }
 
 // watchTrackLifecycle removes ch from the watch list when ctx is
@@ -393,12 +400,11 @@ func (s *MemoryStore) watchTrackLifecycle(ctx context.Context, ch chan TrackEven
 		// Close already shut us down; channel already closed.
 		return
 	}
-	for i, w := range s.trackWatch {
-		if w == ch {
-			s.trackWatch = append(s.trackWatch[:i], s.trackWatch[i+1:]...)
-			break
-		}
+	i := slices.Index(s.trackWatch, ch)
+	if i < 0 {
+		return // fanout already ended it on overflow
 	}
+	s.trackWatch = slices.Delete(s.trackWatch, i, i+1)
 	// Close under the lock so it cannot race a concurrent fanout send (which
 	// also holds s.mu). Once removed from s.trackWatch above, no later fanout
 	// will reference ch.
@@ -412,12 +418,11 @@ func (s *MemoryStore) watchNamespaceLifecycle(ctx context.Context, ch chan Names
 	if s.closed {
 		return
 	}
-	for i, w := range s.nsWatch {
-		if w == ch {
-			s.nsWatch = append(s.nsWatch[:i], s.nsWatch[i+1:]...)
-			break
-		}
+	i := slices.Index(s.nsWatch, ch)
+	if i < 0 {
+		return // fanout already ended it on overflow
 	}
+	s.nsWatch = slices.Delete(s.nsWatch, i, i+1)
 	// Close under the lock — see [MemoryStore.watchTrackLifecycle].
 	close(ch)
 }
