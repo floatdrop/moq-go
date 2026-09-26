@@ -201,7 +201,7 @@ func (h *sessionHandler) handleSubscribeNamespace(
 	h.spawn(entry.RunWriter)
 
 	// Replies share the entry's queue, keeping their order with NAMESPACE.
-	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.namespaceUpdate(entry, &prefix))
+	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.namespaceUpdate(entry, &prefix, msg))
 }
 
 // handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.20):
@@ -265,7 +265,7 @@ func (h *sessionHandler) handleSubscribeTracks(
 	}
 	// Replies share the entry's queue with PUBLISH_SKIPPED, so each
 	// PUBLISH_SKIPPED suffix matches the prefix the subscriber last saw.
-	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.tracksUpdate(entry, &prefix))
+	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.tracksUpdate(entry, &prefix, msg))
 }
 
 // subscribeTracksForwarding resolves a SUBSCRIBE_TRACKS's FORWARD (§10.2.18,
@@ -290,15 +290,15 @@ func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder 
 }
 
 // serveNamespaceFollowups holds a namespace request stream open and answers
-// each REQUEST_UPDATE (§10.9), validating its Request ID (§10.1) and tokens.
-// The subscriptions pass update, which applies it and replies; with update
-// nil (PUBLISH_NAMESPACE) write sends a plain REQUEST_OK. Other follow-ups
-// are ignored.
+// each REQUEST_UPDATE (§10.9), validating its Request ID (§10.1) and resolving
+// its tokens. The subscriptions pass update, which authorizes and applies it
+// and replies; with update nil (PUBLISH_NAMESPACE) write sends a plain
+// REQUEST_OK. Other follow-ups are ignored.
 func (h *sessionHandler) serveNamespaceFollowups(
 	ctx context.Context,
 	req *session.Request,
 	write func(message.Message) error,
-	update func(context.Context, *message.RequestUpdate) bool,
+	update func(context.Context, *message.RequestUpdate, []session.ResolvedToken) bool,
 ) {
 	stream := req.Stream
 	scope := message.ScopeOfUpdate(req.First.Type())
@@ -323,12 +323,13 @@ func (h *sessionHandler) serveNamespaceFollowups(
 		if !h.handleRequestUpdateLimit(ctx, updates) {
 			return false
 		}
-		if !h.handleFollowupTokens(ctx, upd) {
+		toks, ok := h.handleFollowupTokens(ctx, upd)
+		if !ok {
 			return false
 		}
 		// false from update ends the request.
 		if update != nil {
-			if !update(ctx, upd) {
+			if !update(ctx, upd, toks) {
 				return false
 			}
 			updates.Responded()
@@ -376,18 +377,33 @@ func (h *sessionHandler) updatePrefixParam(upd *message.RequestUpdate) (prefix w
 	return prefix, true, true
 }
 
-// namespaceUpdate answers a REQUEST_UPDATE on a SUBSCRIBE_NAMESPACE: a
-// TRACK_NAMESPACE_PREFIX is applied (§10.9.2); anything else is acknowledged.
+// namespaceUpdate answers a REQUEST_UPDATE on the SUBSCRIBE_NAMESPACE msg: a
+// TRACK_NAMESPACE_PREFIX is authorized and applied (§10.9.2); anything else is
+// acknowledged. A refused update ends the request (see [endAfterFinish]).
 func (h *sessionHandler) namespaceUpdate(
 	e *registry.SubscriberEntry,
 	cur *wire.TrackNamespace,
-) func(context.Context, *message.RequestUpdate) bool {
+	msg *message.SubscribeNamespace,
+) func(context.Context, *message.RequestUpdate, []session.ResolvedToken) bool {
 	updatePrefix := h.prefixUpdater(e, &h.nsPrefixes, cur)
-	return func(ctx context.Context, upd *message.RequestUpdate) bool {
+	tokens := authorizingTokens(msg.Parameters)
+	return func(ctx context.Context, upd *message.RequestUpdate, toks []session.ResolvedToken) bool {
 		prefix, found, ok := h.updatePrefixParam(upd)
 		if !ok {
 			return false
 		}
+		updTokens := updatedTokens(tokens, upd.Parameters)
+		if rej := h.refuseUpdate(ctx, toks, found, func() error {
+			return h.auth.AuthorizeSubscribeNamespace(ctx, h.sess, &message.SubscribeNamespace{
+				RequestID:            msg.RequestID,
+				TrackNamespacePrefix: prefix,
+				Parameters:           withTokens(msg.Parameters, updTokens),
+			})
+		}); rej != nil {
+			e.Finish(rej)
+			return endAfterFinish(ctx, e)
+		}
+		tokens = updTokens
 		if !found {
 			e.Enqueue(&message.RequestOK{})
 			return true
@@ -409,14 +425,29 @@ func (h *sessionHandler) namespaceUpdate(
 func (h *sessionHandler) tracksUpdate(
 	e *registry.SubscriberEntry,
 	cur *wire.TrackNamespace,
-) func(context.Context, *message.RequestUpdate) bool {
-	return func(ctx context.Context, upd *message.RequestUpdate) bool {
+	msg *message.SubscribeTracks,
+) func(context.Context, *message.RequestUpdate, []session.ResolvedToken) bool {
+	tokens := authorizingTokens(msg.Parameters)
+	return func(ctx context.Context, upd *message.RequestUpdate, toks []session.ResolvedToken) bool {
 		prefix, hasPrefix, ok := h.updatePrefixParam(upd)
 		if !ok {
 			return false
 		}
 		before := e.TracksParams()
-		params, err := h.resolveTracksParams(mergeTracksUpdate(before.Params, upd.Parameters))
+		merged := mergeTracksUpdate(before.Params, upd.Parameters)
+		updTokens := updatedTokens(tokens, upd.Parameters)
+		if rej := h.refuseUpdate(ctx, toks, hasPrefix, func() error {
+			return h.auth.AuthorizeSubscribeTracks(ctx, h.sess, &message.SubscribeTracks{
+				RequestID:            msg.RequestID,
+				TrackNamespacePrefix: prefix,
+				Parameters:           withTokens(merged, updTokens),
+			})
+		}); rej != nil {
+			e.Finish(rej)
+			return endAfterFinish(ctx, e)
+		}
+		tokens = updTokens
+		params, err := h.resolveTracksParams(merged)
 		if err != nil {
 			if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
 				_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
@@ -455,6 +486,69 @@ func (h *sessionHandler) tracksUpdate(
 		}
 		return true
 	}
+}
+
+// refuseUpdate authorizes a REQUEST_UPDATE on a namespace subscription,
+// returning the REQUEST_ERROR that refuses it, or nil. Its tokens (§10.2.2)
+// go through the TokenVerifier as an opener's do. When it changes the prefix,
+// authorize runs the Authorizer on the subscription it would become: §10.19
+// and §10.20 require that "the subscriber is authorized to perform this
+// namespace subscription".
+func (h *sessionHandler) refuseUpdate(
+	ctx context.Context,
+	toks []session.ResolvedToken,
+	prefixChanged bool,
+	authorize func() error,
+) *message.RequestError {
+	if err := h.sess.VerifyTokens(ctx, toks); err != nil {
+		code, reason := tokenDenial(err)
+		return &message.RequestError{ErrorCode: code, ErrorReason: reason}
+	}
+	if !prefixChanged {
+		return nil
+	}
+	if err := authorize(); err != nil {
+		return &message.RequestError{
+			ErrorCode:   CodeForAuthorizerError(err),
+			ErrorReason: ReasonForAuthorizerError(err),
+		}
+	}
+	return nil
+}
+
+// authorizingTokens is the AUTHORIZATION_TOKENs in ps that can authorize a
+// request: all but DELETEs, which only retire an alias (§10.2.2).
+func authorizingTokens(ps message.Parameters) message.Parameters {
+	var out message.Parameters
+	for _, p := range ps {
+		if p.Type != message.ParamAuthorizationToken {
+			continue
+		}
+		var tok message.Token
+		if tok.Parse(p.Bytes) == nil && tok.AliasType != message.AliasTypeDelete {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// updatedTokens is the tokens a namespace subscription holds after an update
+// carrying upd: its authorizing tokens replace cur when it has any; otherwise
+// cur "remains unchanged" (§10.9).
+func updatedTokens(cur, upd message.Parameters) message.Parameters {
+	if toks := authorizingTokens(upd); len(toks) > 0 {
+		return toks
+	}
+	return cur
+}
+
+// withTokens is ps with its AUTHORIZATION_TOKENs replaced by toks: the
+// subscription an update's Authorizer call judges.
+func withTokens(ps, toks message.Parameters) message.Parameters {
+	out := slices.DeleteFunc(slices.Clone(ps), func(p message.Parameter) bool {
+		return p.Type == message.ParamAuthorizationToken
+	})
+	return append(out, toks...)
 }
 
 // mergeTracksUpdate applies a REQUEST_UPDATE's parameters to a

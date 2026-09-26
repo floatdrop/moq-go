@@ -456,20 +456,25 @@ func (h *sessionHandler) rejectExcessiveLoad(ctx context.Context, req *session.R
 // [moqt.RequestUnauthorized] — maps straight onto the wire reply. Like
 // rejectAuth, a write failure is logged and otherwise swallowed.
 func (h *sessionHandler) rejectTokenDenied(ctx context.Context, req *session.Request, denyErr error) {
-	code := moqt.RequestUnauthorized
-	reason := denyErr.Error()
-	if denied, ok := errors.AsType[*session.TokenDeniedError](denyErr); ok {
-		code = denied.RequestErrorCode()
-		if denied.Reason != "" {
-			reason = denied.Reason
-		}
-	}
+	code, reason := tokenDenial(denyErr)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "relay rejecting request on token verification",
 		slog.String("err", denyErr.Error()), slog.Uint64("code", uint64(code)))
 	if err := req.RejectError(code, reason); err != nil && !errors.Is(err, context.Canceled) {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "relay token-denied reject write failed",
 			slog.String("err", err.Error()))
 	}
+}
+
+// tokenDenial is the REQUEST_ERROR code and reason for a token-verification
+// denial (see [sessionHandler.rejectTokenDenied]).
+func tokenDenial(denyErr error) (moqt.RequestErrorCode, string) {
+	if denied, ok := errors.AsType[*session.TokenDeniedError](denyErr); ok {
+		if denied.Reason != "" {
+			return denied.RequestErrorCode(), denied.Reason
+		}
+		return denied.RequestErrorCode(), denyErr.Error()
+	}
+	return moqt.RequestUnauthorized, denyErr.Error()
 }
 
 // handleFollowupRequestID validates a peer REQUEST_UPDATE's Request ID —
@@ -509,24 +514,27 @@ func (h *sessionHandler) handleRequestUpdateLimit(ctx context.Context, lim *sess
 // handleFollowupTokens routes a follow-up message's AUTHORIZATION_TOKEN
 // parameters through the session token cache — §10.2.2 allows REQUEST_UPDATE
 // to REGISTER or DELETE aliases, and the readers that parse follow-ups
-// directly bypass AcceptRequest's processing. Returns false when a token
-// fault closed the session, in which case the caller's read loop should
-// stop.
-func (h *sessionHandler) handleFollowupTokens(ctx context.Context, msg message.Message) bool {
-	_, err := h.sess.ProcessFollowupTokens(msg)
+// directly bypass AcceptRequest's processing. It returns the resolved tokens,
+// and ok false when a token fault closed the session, in which case the
+// caller's read loop should stop.
+func (h *sessionHandler) handleFollowupTokens(
+	ctx context.Context,
+	msg message.Message,
+) (toks []session.ResolvedToken, ok bool) {
+	toks, err := h.sess.ProcessFollowupTokens(msg)
 	if err == nil {
-		return true
+		return toks, true
 	}
 	if tce, ok := errors.AsType[*session.TokenCacheError](err); ok {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "relay closing session on follow-up token cache error",
 			slog.String("err", err.Error()),
 			slog.Uint64("code", uint64(tce.Code)))
 		_ = h.sess.Close(tce.Code, tce.Error())
-		return false
+		return nil, false
 	}
 	h.log.LogAttrs(ctx, slog.LevelDebug, "follow-up token processing failed",
 		slog.String("err", err.Error()))
-	return false
+	return nil, false
 }
 
 // readRequestStream owns all reads on an established request stream: it

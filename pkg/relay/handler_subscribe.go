@@ -206,7 +206,7 @@ func (h *sessionHandler) readSubscribeUpdates(
 			}
 			// §10.2.2: an update may REGISTER/DELETE token aliases;
 			// a cache fault there is session-fatal.
-			if !h.handleFollowupTokens(ctx, upd) {
+			if _, ok := h.handleFollowupTokens(ctx, upd); !ok {
 				return false
 			}
 			h.handleSubscribeUpdate(ctx, sub, fullName, upd)
