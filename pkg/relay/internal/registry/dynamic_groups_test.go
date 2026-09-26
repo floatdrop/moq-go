@@ -165,7 +165,7 @@ func TestTrackEntry_PropertiesInsideImmutable(t *testing.T) {
 	if got := e.DeliveryTimeouts(); got.Object != 2*time.Second || got.Subgroup != 3*time.Second {
 		t.Errorf("DeliveryTimeouts() = %+v, want Object 2s, Subgroup 3s", got)
 	}
-	if got := e.MaxCacheDuration(); got != 4*time.Second {
-		t.Errorf("MaxCacheDuration() = %v, want 4s", got)
+	if got, ok := message.TrackMaxCacheDuration(e.GetProperties()); !ok || got != 4*time.Second {
+		t.Errorf("TrackMaxCacheDuration = (%v, %v), want (4s, true)", got, ok)
 	}
 }

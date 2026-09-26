@@ -762,7 +762,7 @@ func (h *sessionHandler) streamFetchRange(
 		})
 	}
 
-	written, err := streamFetchObjects(out, objs)
+	written, err := streamFetchObjects(out, objs, entry.Cache.Expired)
 	h.metrics.FetchServed(h.trackRef(fullName), written)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fetch stream write failed",

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
@@ -137,6 +138,23 @@ func parseSearchable(raw []byte) ([]wire.KVPair, error) {
 		return nil, err
 	}
 	return ExpandImmutable(pairs)
+}
+
+// TrackMaxCacheDuration returns the MAX_CACHE_DURATION (§12.3) in a raw Track
+// Properties block and whether it is present, searching Immutable Properties
+// too with the mutable value winning (§12.7). A block that does not parse
+// reads as having none.
+func TrackMaxCacheDuration(trackProperties []byte) (time.Duration, bool) {
+	pairs, err := parseSearchable(trackProperties)
+	if err != nil {
+		return 0, false
+	}
+	for _, kv := range pairs {
+		if kv.Type == PropertyMaxCacheDuration {
+			return MillisecondTimeout(kv.IntVal), true
+		}
+	}
+	return 0, false
 }
 
 // MandatoryTrackPropertyMin and MandatoryTrackPropertyMax define the range of
