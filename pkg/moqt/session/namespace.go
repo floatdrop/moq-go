@@ -30,45 +30,54 @@ func (p *NamespacePublication) Close() error {
 
 // NamespaceSubscription is an established SUBSCRIBE_NAMESPACE request (§10.19).
 // It embeds the still-open request stream and carries the peer's REQUEST_OK;
-// NAMESPACE / NAMESPACE_DONE notifications arrive on the embedded stream.
-// Read it with [RequestBroker.Serve], which enforces the session-level rules
-// (§10, §10.2.1); a caller using message.Parse must apply them itself.
+// NAMESPACE / NAMESPACE_DONE notifications arrive on the embedded stream. Read
+// it with its [NamespaceSubscription.Broker]'s [RequestBroker.Serve], which
+// enforces the session-level rules: §10 and §10.2.1, a NAMESPACE_DONE only
+// after its NAMESPACE (§10.19), and no PUBLISH_STATE_NOTIFY or REQUEST_UPDATE
+// from the publisher (§10.9, §10.10). The NAMESPACE_DONE check follows a
+// TRACK_NAMESPACE_PREFIX update from the REQUEST_OK that accepts it (§10.9.2).
+// A caller using message.Parse must apply these rules itself.
+// [NamespaceSubscription.Update] modifies the subscription (§10.9); Close ends
+// it (§6.1, §3.3.3).
 type NamespaceSubscription struct {
-	// Stream is the SUBSCRIBE_NAMESPACE request stream, still open to receive
-	// NAMESPACE / NAMESPACE_DONE notifications. [NamespaceSubscription.Close]
-	// ends the subscription.
-	Stream
+	// requestHandle carries the SUBSCRIBE_NAMESPACE request stream, still
+	// open to receive NAMESPACE / NAMESPACE_DONE notifications.
+	requestHandle
 
 	// OK is the REQUEST_OK the peer replied with.
 	OK *message.RequestOK
-}
-
-// Close ends the subscription by cancelling the request (§6.1, §3.3.3).
-func (n *NamespaceSubscription) Close() error {
-	cancelRequest(n.Stream)
-	return nil
 }
 
 // TrackSubscription is an established SUBSCRIBE_TRACKS request (§10.20). It
 // embeds the still-open request stream and carries the peer's REQUEST_OK.
 // Follow-up PUBLISH_SKIPPED notifications are read via
-// [TrackSubscription.ReadPublishSkipped].
+// [TrackSubscription.ReadPublishSkipped], or its [TrackSubscription.Broker]'s
+// [RequestBroker.Serve], never both at once. Both close the session on a
+// PUBLISH_STATE_NOTIFY or REQUEST_UPDATE from the publisher (§10.9, §10.10).
+// [TrackSubscription.Update] modifies the subscription (§10.9); Close ends it
+// (§6.1, §3.3.3).
 type TrackSubscription struct {
-	// Stream is the SUBSCRIBE_TRACKS request stream, still open to receive
-	// PUBLISH_SKIPPED follow-ups. [TrackSubscription.Close] ends the
-	// subscription.
-	Stream
+	// requestHandle carries the SUBSCRIBE_TRACKS request stream, still open
+	// to receive PUBLISH_SKIPPED follow-ups.
+	requestHandle
 
 	// OK is the REQUEST_OK the peer replied with.
 	OK *message.RequestOK
-
-	s *Session
 }
 
-// Close ends the subscription by cancelling the request (§6.1, §3.3.3).
-func (t *TrackSubscription) Close() error {
-	cancelRequest(t.Stream)
-	return nil
+// Update sends a REQUEST_UPDATE (§10.9), e.g. a new TRACK_NAMESPACE_PREFIX
+// (§10.9.2), through the subscription's [NamespaceSubscription.Broker], whose
+// Serve must be running to deliver the answer. Reading the answer directly
+// would take a NAMESPACE for it.
+func (n *NamespaceSubscription) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
+	return n.Broker().Update(ctx, params)
+}
+
+// Update sends a REQUEST_UPDATE (§10.9) through the subscription's
+// [TrackSubscription.Broker], whose Serve must be running to deliver the
+// answer, as for [NamespaceSubscription.Update].
+func (t *TrackSubscription) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
+	return t.Broker().Update(ctx, params)
 }
 
 // PublishNamespace opens a PUBLISH_NAMESPACE request stream (§10.16) and
@@ -102,7 +111,10 @@ func (s *Session) SubscribeNamespace(
 ) (*NamespaceSubscription, error) {
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.RequestOK) (*NamespaceSubscription, error) {
-			return &NamespaceSubscription{Stream: stream, OK: ok}, nil
+			return &NamespaceSubscription{
+				Stream: stream, s: s, requestID: m.RequestID,
+				namespaces: true, nsPrefix: m.TrackNamespacePrefix, OK: ok,
+			}, nil
 		})
 }
 
@@ -121,7 +133,7 @@ func (s *Session) SubscribeTracks(ctx context.Context, m *message.SubscribeTrack
 				cancelRequest(stream)
 				return nil, err
 			}
-			return &TrackSubscription{Stream: stream, OK: ok, s: s}, nil
+			return &TrackSubscription{Stream: stream, s: s, requestID: m.RequestID, OK: ok}, nil
 		})
 }
 
@@ -226,20 +238,43 @@ func (r *Request) AcceptSubscribeTracks() (*IncomingTrackSubscription, error) {
 // message names the track the publisher couldn't push; the caller's sanctioned
 // recovery is to issue an explicit SUBSCRIBE for it.
 //
-// It blocks until a message arrives or the stream ends. A non-PUBLISH_SKIPPED
-// message is reported as an error, as is the underlying read error (e.g.
+// It cannot be combined with [TrackSubscription.Update], whose answer only the
+// broker's Serve delivers.
+//
+// It blocks until a PUBLISH_SKIPPED arrives or the stream ends. A single
+// GOAWAY is skipped (§10.4); a caller that would re-issue the request at its
+// New Session URI reads with the broker instead, whose Serve hands it over. A
+// second GOAWAY, and a PUBLISH_STATE_NOTIFY or REQUEST_UPDATE from the
+// publisher (§10.9, §10.10), close the session with PROTOCOL_VIOLATION. Any
+// other message is reported as an error, as is the underlying read error (e.g.
 // io.EOF when the publisher FINs the SUBSCRIBE_TRACKS stream).
 func (t *TrackSubscription) ReadPublishSkipped() (*message.PublishSkipped, error) {
-	m, err := message.Parse(t.Stream)
-	if errors.Is(err, message.ErrMalformedMessage) {
-		return nil, t.s.closeProtocolViolation(fmt.Errorf("moqt/session: read SUBSCRIBE_TRACKS follow-up: %w", err))
+	for {
+		m, err := message.Parse(t)
+		if errors.Is(err, message.ErrMalformedMessage) {
+			return nil, t.s.closeProtocolViolation(fmt.Errorf("moqt/session: read SUBSCRIBE_TRACKS follow-up: %w", err))
+		}
+		if err != nil {
+			return nil, fmt.Errorf("moqt/session: read SUBSCRIBE_TRACKS follow-up: %w", err)
+		}
+		switch m := m.(type) {
+		case *message.PublishSkipped:
+			return m, nil
+		case *message.Goaway:
+			// §10.4: legal once; the request is not migrated.
+			if err := t.goaways.Received(t.s, m); err != nil {
+				return nil, err
+			}
+		case *message.PublishStateNotify, *message.RequestUpdate:
+			// §10.10: PUBLISH_STATE_NOTIFY "applies only to subscriptions";
+			// §10.9: the publisher did not send this request.
+			return nil, t.s.closeProtocolViolation(
+				fmt.Errorf("moqt/session: %s on a SUBSCRIBE_TRACKS stream", m.Type()))
+		default:
+			return nil, fmt.Errorf(
+				"moqt/session: unexpected %s on SUBSCRIBE_TRACKS stream, want PUBLISH_SKIPPED",
+				m.Type(),
+			)
+		}
 	}
-	if err != nil {
-		return nil, fmt.Errorf("moqt/session: read SUBSCRIBE_TRACKS follow-up: %w", err)
-	}
-	pb, ok := m.(*message.PublishSkipped)
-	if !ok {
-		return nil, fmt.Errorf("moqt/session: unexpected %s on SUBSCRIBE_TRACKS stream, want PUBLISH_SKIPPED", m.Type())
-	}
-	return pb, nil
 }

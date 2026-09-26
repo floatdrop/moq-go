@@ -10,6 +10,8 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/track"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
 // RequestBroker owns an established request stream's read side and
@@ -34,6 +36,8 @@ import (
 //     [Session.Publish], a REQUEST_OK / REQUEST_ERROR before any Update, or a
 //     SUBSCRIBE_OK on a Subscription, is a second response to the request and
 //     closes the session (§5.1).
+//   - On a [NamespaceSubscription]'s broker, a NAMESPACE_DONE for a suffix no
+//     NAMESPACE announced closes the session (§10.19).
 //   - A second GOAWAY on the stream, or one with a New Session URI received
 //     by a server, closes the session (§10.4; see [RequestGoaways]).
 //   - Everything else (PUBLISH_DONE, other unsolicited responses, …) is
@@ -53,7 +57,7 @@ type RequestBroker struct {
 	// arrive in request order, so the waiter queue order must match the
 	// write order.
 	mu      sync.Mutex
-	waiters []chan updateResult
+	waiters []updateWaiter
 	// updatesClosed is latched when the stream's reader exits (or Close is
 	// called); subsequent Update calls fail immediately instead of queueing
 	// a waiter nothing will ever answer. Plain WriteMessage stays allowed —
@@ -81,6 +85,18 @@ type RequestBroker struct {
 	// handle is the typed handle this broker came from, if any: Serve and
 	// Close report the subscription's end to it (see requestHandle.terminated).
 	handle *requestHandle
+
+	// Serve's per-stream state, kept across calls: the stream's GOAWAYs
+	// (§10.4) when there is no handle to keep them, and on a
+	// SUBSCRIBE_NAMESPACE the current prefix and the full namespaces a
+	// NAMESPACE announced and no NAMESPACE_DONE withdrew (§10.19, §10.9.2).
+	goaways    RequestGoaways
+	nsPrefix   wire.TrackNamespace
+	namespaces map[track.Key]struct{}
+	// nsPrefixLost is set, under mu, once any Update gave up: responses no
+	// longer pair reliably, so the prefix is unknown and NAMESPACE_DONEs go
+	// unchecked.
+	nsPrefixLost bool
 }
 
 // PeerMessages declares whether the peer may send REQUEST_UPDATE (§10.9) and
@@ -159,6 +175,47 @@ func (b *RequestBroker) answerUpdate(upd *message.RequestUpdate) (bool, error) {
 	return false, nil
 }
 
+// goawayState is the stream's GOAWAY checker: the handle's, shared with its
+// other readers (e.g. [TrackSubscription.ReadPublishSkipped]), or the
+// broker's own.
+func (b *RequestBroker) goawayState() *RequestGoaways {
+	if b.handle != nil {
+		return &b.handle.goaways
+	}
+	return &b.goaways
+}
+
+// namespaceFollowup tracks a NAMESPACE or NAMESPACE_DONE on a
+// SUBSCRIBE_NAMESPACE's broker: "If a subscriber receives a NAMESPACE_DONE
+// before the corresponding NAMESPACE, it MUST close the session with a
+// 'PROTOCOL_VIOLATION'" (§10.19). Other brokers do not track them.
+func (b *RequestBroker) namespaceFollowup(m message.Message) error {
+	if b.handle == nil || !b.handle.namespaces {
+		return nil
+	}
+	b.mu.Lock()
+	lost := b.nsPrefixLost
+	b.mu.Unlock()
+	if lost {
+		return nil
+	}
+	switch m := m.(type) {
+	case *message.Namespace:
+		if b.namespaces == nil {
+			b.namespaces = make(map[track.Key]struct{})
+		}
+		b.namespaces[track.NewKey(slices.Concat(b.nsPrefix, m.TrackNamespaceSuffix), nil)] = struct{}{}
+	case *message.NamespaceDone:
+		key := track.NewKey(slices.Concat(b.nsPrefix, m.TrackNamespaceSuffix), nil)
+		if _, ok := b.namespaces[key]; !ok {
+			return b.sess.closeProtocolViolation(fmt.Errorf(
+				"moqt/session: NAMESPACE_DONE for %v before its NAMESPACE", m.TrackNamespaceSuffix))
+		}
+		delete(b.namespaces, key)
+	}
+	return nil
+}
+
 // answered is the request type (SUBSCRIBE or PUBLISH) of a broker on this
 // side's request, whose response the peer has sent; zero otherwise.
 func (b *RequestBroker) answered() message.Type {
@@ -166,6 +223,15 @@ func (b *RequestBroker) answered() message.Type {
 		return 0
 	}
 	return b.handle.answered
+}
+
+// updateWaiter is one sent REQUEST_UPDATE awaiting its §10.9 response and,
+// when the update sets TRACK_NAMESPACE_PREFIX, the prefix it switches a
+// namespace subscription to once accepted (§10.9.2).
+type updateWaiter struct {
+	ch         chan updateResult
+	prefix     wire.TrackNamespace
+	setsPrefix bool
 }
 
 // updateResult carries one §10.9 response to a waiting Update call.
@@ -241,7 +307,12 @@ func (b *RequestBroker) Update(ctx context.Context, params message.Parameters) (
 		Parameters: params,
 	})
 	if err == nil {
-		b.waiters = append(b.waiters, ch)
+		w := updateWaiter{ch: ch}
+		if p, ok := params.Find(message.ParamTrackNamespacePrefix); ok {
+			prefix, perr := message.TrackNamespacePrefixFromParam(p)
+			w.prefix, w.setsPrefix = prefix, perr == nil
+		}
+		b.waiters = append(b.waiters, w)
 		b.updated = true
 	}
 	b.mu.Unlock()
@@ -254,7 +325,13 @@ func (b *RequestBroker) Update(ctx context.Context, params message.Parameters) (
 		return res.ok, res.err
 	case <-ctx.Done():
 		b.mu.Lock()
-		if i := slices.Index(b.waiters, ch); i >= 0 {
+		if i := slices.IndexFunc(b.waiters, func(w updateWaiter) bool { return w.ch == ch }); i >= 0 {
+			// Its late answer will pair with the next update, so on a
+			// SUBSCRIBE_NAMESPACE where a prefix update's REQUEST_OK falls
+			// among the NAMESPACEs (§10.9.2) is no longer known.
+			if b.handle != nil && b.handle.namespaces {
+				b.nsPrefixLost = true
+			}
 			b.waiters = slices.Delete(b.waiters, i, i+1)
 		}
 		b.mu.Unlock()
@@ -313,7 +390,7 @@ func (b *RequestBroker) route(msg message.Message) bool {
 		b.mu.Unlock()
 		return false
 	}
-	var recipients []chan updateResult
+	var recipients []updateWaiter
 	if _, isErr := msg.(*message.RequestError); isErr {
 		recipients, b.waiters = b.waiters, nil
 	} else {
@@ -322,9 +399,14 @@ func (b *RequestBroker) route(msg message.Message) bool {
 	b.mu.Unlock()
 
 	ok, err := b.sess.mapUpdateResponse(msg)
+	if err == nil && recipients[0].setsPrefix {
+		// §10.9.2: suffixes after this REQUEST_OK are relative to the new
+		// prefix. Only Serve's goroutine reads nsPrefix.
+		b.nsPrefix = recipients[0].prefix
+	}
 	res := updateResult{ok: ok, err: err}
-	for _, ch := range recipients {
-		ch <- res
+	for _, w := range recipients {
+		w.ch <- res
 	}
 	return true
 }
@@ -338,8 +420,8 @@ func (b *RequestBroker) closeUpdates() {
 	b.waiters = nil
 	b.updatesClosed = true
 	b.mu.Unlock()
-	for _, ch := range waiters {
-		ch <- updateResult{err: ErrRequestStreamClosed}
+	for _, w := range waiters {
+		w.ch <- updateResult{err: ErrRequestStreamClosed}
 	}
 }
 
@@ -401,6 +483,29 @@ func (b *RequestBroker) receiveUpdate(m *message.RequestUpdate, updates *Request
 	return nil
 }
 
+// readFailed ends Serve on a read error: nil on the peer's FIN, ctx.Err() on
+// cancellation, and err otherwise, after resetting the read side.
+func (b *RequestBroker) readFailed(ctx context.Context, err error) error {
+	switch {
+	case ctx.Err() != nil:
+		return ctx.Err()
+	case errors.Is(err, io.EOF):
+		if b.handle != nil {
+			b.handle.peerFinished()
+		}
+		return nil
+	case errors.Is(err, message.ErrMalformedMessage):
+		// §10, and §10.2 for an unknown parameter.
+		b.stream.CancelRead(uint64(moqt.StreamResetInternalError))
+		return b.sess.closeProtocolViolation(err)
+	default:
+		// Covers peer resets too (a STOP_SENDING on an already-reset stream
+		// is a transport no-op).
+		b.stream.CancelRead(uint64(moqt.StreamResetInternalError))
+		return err
+	}
+}
+
 // Serve owns every read on the request stream until the peer tears it down
 // (EOF / reset), ctx is cancelled (the read side is then reset to unblock
 // the parse), or onMsg returns false. On exit, pending and future Update
@@ -437,29 +542,11 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 	// §10.3.1.7: per-stream MAX_REQUEST_UPDATES enforcement. One limiter per
 	// stream, since the limit is scoped to a single request stream.
 	updates := b.sess.NewRequestUpdateLimiter()
-	var goaways RequestGoaways
 
 	for {
 		msg, err := message.Parse(b.stream)
 		if err != nil {
-			switch {
-			case ctx.Err() != nil:
-				return ctx.Err()
-			case errors.Is(err, io.EOF):
-				if b.handle != nil {
-					b.handle.peerFinished()
-				}
-				return nil
-			case errors.Is(err, message.ErrMalformedMessage):
-				// §10, and §10.2 for an unknown parameter.
-				b.stream.CancelRead(uint64(moqt.StreamResetInternalError))
-				return b.sess.closeProtocolViolation(err)
-			default:
-				// Covers peer resets too (a STOP_SENDING on an
-				// already-reset stream is a transport no-op).
-				b.stream.CancelRead(uint64(moqt.StreamResetInternalError))
-				return err
-			}
+			return b.readFailed(ctx, err)
 		}
 
 		// §10.2.2: follow-ups may REGISTER/DELETE token aliases; skipping
@@ -517,7 +604,11 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 			}
 			// Unsolicited response — surface via onMsg below.
 		case *message.Goaway:
-			if err := goaways.Received(b.sess, m); err != nil {
+			if err := b.goawayState().Received(b.sess, m); err != nil {
+				return err
+			}
+		case *message.Namespace, *message.NamespaceDone:
+			if err := b.namespaceFollowup(m); err != nil {
 				return err
 			}
 		case *message.PublishStateNotify:
