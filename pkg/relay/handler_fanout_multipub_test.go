@@ -546,3 +546,116 @@ func TestFanout_MultiPublisher_ForwardsEveryContributorsProperties(t *testing.T)
 		})
 	}
 }
+
+// streamHeaders emits the header of each subgroup stream sess accepts, and
+// drains the stream so the relay can open the next.
+func streamHeaders(t *testing.T, sess *session.Session) <-chan message.SubgroupHeader {
+	ch := make(chan message.SubgroupHeader, 4)
+	go func() {
+		for {
+			ds, err := sess.AcceptDataStream(t.Context())
+			if err != nil {
+				return
+			}
+			sg, ok := ds.(*session.IncomingSubgroupStream)
+			if !ok {
+				return
+			}
+			select {
+			case ch <- sg.Header:
+			case <-t.Context().Done():
+				return
+			}
+			go func() {
+				for {
+					if _, err := sg.ReadObject(); err != nil {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	return ch
+}
+
+// awaitHeader waits for the next header from [streamHeaders].
+func awaitHeader(t *testing.T, ch <-chan message.SubgroupHeader) message.SubgroupHeader {
+	t.Helper()
+	select {
+	case h := <-ch:
+		return h
+	case <-time.After(2 * time.Second):
+		t.Fatal("no subgroup stream forwarded")
+		return message.SubgroupHeader{}
+	}
+}
+
+// TestFanout_MultiPublisher_FirstObjectOnlyForSubgroupsFirst: Objects are
+// published in ascending ID order (§2.2), so a contributor's FIRST_OBJECT
+// claim holds unless an Object with a lower ID was forwarded (§11.4.2, §2.2),
+// whether or not a given subscriber got it.
+func TestFanout_MultiPublisher_FirstObjectOnlyForSubgroupsFirst(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// A writes aID first, then B, whose header claims FIRST_OBJECT,
+		// writes bID; the subscriber's stream beginning with bID must have
+		// FIRST_OBJECT clear iff replay.
+		aID, bID uint64
+		aReplay  bool
+		filter   *message.RangeFilter // the subscriber's, hiding A's Object
+		replay   bool
+	}{
+		{
+			name: "lower Object forwarded first, filtered out",
+			aID:  0, bID: 1,
+			filter: &message.RangeFilter{
+				Type: message.ParamObjectIDFilter, Ranges: []message.Range{{Start: 1, End: 1}},
+			},
+			replay: true,
+		},
+		{name: "higher Object forwarded first", aID: 5, bID: 0, aReplay: true, replay: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pubA, teardown := connectRelay(t, relay.Config{})
+			defer teardown()
+			pubB := dialAnotherClient(t, pubA)
+			aPub := publishVideoTrack(t, pubA, "cam1", 1)
+			bPub := publishVideoTrack(t, pubB, "cam1", 2)
+			witness := newCam1Subscriber(t, pubA) // sees A's Object reach the relay
+			var params []message.Parameter
+			if tc.filter != nil {
+				params = append(params, message.RangeFilterParam(tc.filter))
+			}
+			sub := newCam1Subscriber(t, pubA, params...)
+			witnessed, got := streamHeaders(t, witness), streamHeaders(t, sub)
+
+			hdr := message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit}
+			aHdr := hdr
+			aHdr.ReplayingSubgroup = tc.aReplay
+			a, err := aPub.OpenSubgroup(aHdr)
+			if err != nil {
+				t.Fatalf("A OpenSubgroup: %v", err)
+			}
+			if err := a.WriteObjectAt(tc.aID, &message.SubgroupObject{Payload: []byte("a")}); err != nil {
+				t.Fatalf("A WriteObjectAt %d: %v", tc.aID, err)
+			}
+			awaitHeader(t, witnessed)
+			if tc.filter == nil {
+				awaitHeader(t, got) // A's stream; B's comes next
+			}
+			b, err := bPub.OpenSubgroup(hdr) // FIRST_OBJECT set
+			if err != nil {
+				t.Fatalf("B OpenSubgroup: %v", err)
+			}
+			if err := b.WriteObjectAt(tc.bID, &message.SubgroupObject{Payload: []byte("b")}); err != nil {
+				t.Fatalf("B WriteObjectAt %d: %v", tc.bID, err)
+			}
+			if h := awaitHeader(t, got); h.ReplayingSubgroup != tc.replay {
+				t.Fatalf("stream beginning with Object %d: FIRST_OBJECT clear = %v, want %v",
+					tc.bID, h.ReplayingSubgroup, tc.replay)
+			}
+		})
+	}
+}
