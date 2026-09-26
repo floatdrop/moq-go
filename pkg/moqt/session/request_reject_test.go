@@ -100,9 +100,9 @@ func TestRejectSendsRetryInterval(t *testing.T) {
 	}
 }
 
-// TestRejectRefusesRedirect: a REDIRECT needs a Redirect structure (§10.6.2)
-// that RequestRejectedError cannot carry, so Reject refuses without writing
-// and the request can still be refused another way.
+// TestRejectRefusesRedirect: a REDIRECT needs a Redirect structure (§10.6.2),
+// so Reject refuses one without it and writes nothing, and the request can
+// still be refused another way.
 func TestRejectRefusesRedirect(t *testing.T) {
 	client, server := openPair(t)
 	refused := make(chan error, 1)

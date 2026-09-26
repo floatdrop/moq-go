@@ -170,6 +170,44 @@ type RequestRejectedError struct {
 	// RetryInterval is the raw Retry Interval (§10.6.2); see
 	// [RequestRejectedError.RetryAfter].
 	RetryInterval uint64
+	// Redirect is where to retry the request (§10.6.1), present exactly when
+	// Code is REDIRECT: an empty ConnectURI means this session's URI.
+	Redirect *message.Redirect
+}
+
+// rejection converts a REQUEST_ERROR answering a message of type req into a
+// *RequestRejectedError; for a REQUEST_UPDATE the request it updates is not
+// known, so only the Connect URI is checked. A Redirect that §10.6.1 makes
+// session-fatal closes the session with PROTOCOL_VIOLATION, and that error is
+// returned instead.
+func (s *Session) rejection(m *message.RequestError, req message.Type) error {
+	if err := redirectViolation(m.Redirect, req, s.role == roleServer); err != nil {
+		return s.closeProtocolViolation(fmt.Errorf("moqt/session: received %w", err))
+	}
+	return &RequestRejectedError{
+		Code:          m.ErrorCode,
+		Reason:        m.ErrorReason,
+		RetryInterval: m.RetryInterval,
+		Redirect:      m.Redirect,
+	}
+}
+
+// redirectViolation reports a Redirect for a request of type req that the
+// receiver, a server when atServer, MUST close the session for (§10.6.1): "If
+// a server receives a Redirect with a non-zero Connect URI Length", or a
+// non-empty Track Name "in a Redirect for a namespace-scoped request".
+func redirectViolation(rd *message.Redirect, req message.Type, atServer bool) error {
+	switch {
+	case rd == nil:
+		return nil
+	case atServer && len(rd.ConnectURI) > 0:
+		return errors.New("a Redirect with a Connect URI at a server (§10.6.1)")
+	case len(rd.TrackName) > 0 &&
+		(req == message.TypeSubscribeNamespace || req == message.TypePublishNamespace ||
+			req == message.TypeSubscribeTracks):
+		return fmt.Errorf("a Redirect with a Track Name for %s (§10.6.1)", req)
+	}
+	return nil
 }
 
 // RetryAfter decodes RetryInterval (§10.6.2): whether the request may be
@@ -695,11 +733,7 @@ func awaitRequestResponse[OK message.Message, R any](
 	}
 	_ = stream.Close()
 	if rerr, isErr := resp.(*message.RequestError); isErr {
-		return zero, &RequestRejectedError{
-			Code:          rerr.ErrorCode,
-			Reason:        rerr.ErrorReason,
-			RetryInterval: rerr.RetryInterval,
-		}
+		return zero, s.rejection(rerr, m.Type())
 	}
 	return zero, fmt.Errorf("moqt/session: unexpected %s in %s response", resp.Type(), m.Type())
 }
@@ -823,18 +857,28 @@ func (r *Request) RejectError(code moqt.RequestErrorCode, reason string) error {
 	return r.Reject(&RequestRejectedError{Code: code, Reason: reason})
 }
 
-// Reject is [Request.RejectError] with rej's Code, Reason and RetryInterval
-// (§10.6.2). REDIRECT is refused and nothing is written, since Reject has no
-// Redirect structure to send.
+// Reject is [Request.RejectError] with rej's Code, Reason, RetryInterval and,
+// for REDIRECT, Redirect (§10.6.2). Nothing is written, and an error returned,
+// when the Redirect does not match the code, or is one the peer MUST close the
+// session for (§10.6.1): a Connect URI sent to a server, or a Track Name for a
+// namespace-scoped request.
 func (r *Request) Reject(rej *RequestRejectedError) error {
-	if rej.Code == moqt.RequestRedirect {
-		return errors.New("moqt/session: Reject cannot send REDIRECT: it has no Redirect structure (§10.6.2)")
-	}
-	if err := message.Marshal(r.Stream, &message.RequestError{
+	m := &message.RequestError{
 		ErrorCode:     rej.Code,
 		RetryInterval: rej.RetryInterval,
 		ErrorReason:   rej.Reason,
-	}); err != nil {
+		Redirect:      rej.Redirect,
+	}
+	if err := m.ValidateRedirect(); err != nil {
+		return fmt.Errorf("moqt/session: Reject: %w", err)
+	}
+	// Refuse what the peer would have to close the session for.
+	if rej.Redirect != nil {
+		if err := redirectViolation(rej.Redirect, r.First.Type(), r.s.role == roleClient); err != nil {
+			return fmt.Errorf("moqt/session: Reject: %w", err)
+		}
+	}
+	if err := message.Marshal(r.Stream, m); err != nil {
 		resetStream(r.Stream)
 		return err
 	}

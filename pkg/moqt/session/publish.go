@@ -291,7 +291,7 @@ func (s *Session) AwaitPublishOK(ctx context.Context, stream Stream) (*message.R
 		}
 		return m, nil
 	case *message.RequestError:
-		return nil, &RequestRejectedError{Code: m.ErrorCode, Reason: m.ErrorReason, RetryInterval: m.RetryInterval}
+		return nil, s.rejection(m, message.TypePublish)
 	default:
 		return nil, fmt.Errorf("moqt/session: unexpected %s in PUBLISH response", resp.Type())
 	}

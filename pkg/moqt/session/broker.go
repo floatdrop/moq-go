@@ -94,7 +94,8 @@ func (b *RequestBroker) UpdateScope(s message.ParamScope) { b.updateScope = s }
 // UpdateHandler decides a peer's REQUEST_UPDATE (§10.9). It returns the
 // REQUEST_OK to send, or an error: a *[RequestRejectedError] is sent as
 // REQUEST_ERROR with its code, reason and Retry Interval, any other error as
-// INTERNAL_ERROR.
+// INTERNAL_ERROR. So is a REDIRECT, which cannot answer a REQUEST_UPDATE
+// (§10.6.2).
 type UpdateHandler func(upd *message.RequestUpdate) (*message.RequestOK, error)
 
 // HandleUpdates installs the handler that decides peer REQUEST_UPDATEs,
@@ -138,7 +139,7 @@ func (b *RequestBroker) answerUpdate(upd *message.RequestUpdate) (bool, error) {
 		return true, nil
 	}
 	rej, isRej := errors.AsType[*RequestRejectedError](err)
-	if !isRej {
+	if !isRej || rej.Code == moqt.RequestRedirect {
 		rej = &RequestRejectedError{Code: moqt.RequestInternalError, Reason: err.Error()}
 	}
 	if werr := b.WriteMessage(&message.RequestError{
@@ -184,7 +185,7 @@ func (s *Session) mapUpdateResponse(msg message.Message) (*message.RequestOK, er
 		}
 		return m, nil
 	case *message.RequestError:
-		return nil, &RequestRejectedError{Code: m.ErrorCode, Reason: m.ErrorReason, RetryInterval: m.RetryInterval}
+		return nil, s.rejection(m, message.TypeRequestUpdate)
 	default:
 		return nil, fmt.Errorf("moqt/session: unexpected %s in REQUEST_UPDATE response", msg.Type())
 	}
@@ -460,6 +461,17 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 			// (§10.5), even one whose Update gave up.
 			if err := b.sess.checkRequestOKTrackProperties(nil, m); err != nil {
 				return err
+			}
+			// §10.6.1, before routing: an unsolicited REQUEST_ERROR reaches
+			// onMsg instead of an Update.
+			if e, isErr := m.(*message.RequestError); isErr {
+				if err := redirectViolation(
+					e.Redirect,
+					message.TypeRequestUpdate,
+					b.sess.role == roleServer,
+				); err != nil {
+					return b.sess.closeProtocolViolation(fmt.Errorf("moqt/session: received %w", err))
+				}
 			}
 			if err := b.sess.CheckPeerParams(message.ScopeRequestUpdateOK, m); err != nil {
 				return err
