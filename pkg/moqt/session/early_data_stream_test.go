@@ -213,3 +213,46 @@ func TestHandshakeSkipsPaddingAndAbortedStreams(t *testing.T) {
 		t.Fatalf("AcceptDataStream = %T, want the subgroup for alias 5", ds)
 	}
 }
+
+// TestHandshakeFailsOnStreamFINedBeforeType: a uni stream FINed before a whole
+// type varint is no valid stream of any kind; if it was the control stream,
+// closing it "results in the session being closed as a PROTOCOL_VIOLATION"
+// (§3.3). Only a stream reset before its type is skipped (see
+// TestHandshakeSkipsPaddingAndAbortedStreams).
+func TestHandshakeFailsOnStreamFINedBeforeType(t *testing.T) {
+	for name, prefix := range map[string][]byte{
+		"empty":          nil,
+		"partial varint": {0x80}, // announces a 2-byte varint, then FIN
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			clientConn, serverConn := sessiontest.NewConnPair()
+			rec := &closeRecorder{Conn: serverConn, code: make(chan uint64, 1)}
+			go func() {
+				st, err := clientConn.OpenUniStream()
+				if err != nil {
+					return
+				}
+				_, _ = st.Write(prefix)
+				_ = st.Close()
+			}()
+			sess, err := session.Server(ctx, rec)
+			if err == nil {
+				_ = sess.Close(moqt.SessionNoError, "test cleanup")
+				t.Fatal("handshake succeeded past a stream FINed before its type")
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("the handshake waited out its deadline; want it to fail on the FINed stream")
+			}
+			select {
+			case code := <-rec.code:
+				if code != uint64(moqt.SessionProtocolViolation) {
+					t.Fatalf("closed with %#x, want PROTOCOL_VIOLATION", code)
+				}
+			default:
+				t.Fatalf("handshake failed (%v) without closing the conn", err)
+			}
+		})
+	}
+}
