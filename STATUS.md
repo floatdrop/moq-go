@@ -454,9 +454,3 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   the first copy of each {Group, Object} is forwarded and later ones are
   dropped unread. Comparing them would detect a malformed track (§2.4.2
   condition 6), at a cost on every Object.
-
-### Draft-20 compliance review backlog
-
-A full review against draft-ietf-moq-transport-20 (dated August 2026) found a
-backlog of gaps. All of them have since been fixed, or recorded above as
-accepted Limitations.
