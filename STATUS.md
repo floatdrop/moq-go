@@ -483,6 +483,13 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   reads only the mutable list, so a LOC Timestamp and the like placed inside
   Immutable Properties is not found. Filling the fields from there would make
   `Append` re-emit them in the mutable list, changing what a relay forwards.
+- **A Group Order the subscriber cannot learn (§10.2.8, §10.2.21)** — a
+  SUBSCRIBE that omits GROUP_ORDER takes the publisher's
+  DEFAULT_PUBLISHER_GROUP_ORDER, and its fill fetch stream is written in that
+  order (§11.4.4.1). With INCLUDE_PROPERTIES=0 the subscriber gets no Track
+  Properties, and neither SUBSCRIBE_OK nor the FETCH_HEADER carries a Group
+  Order, so it cannot tell a Descending fill from an Ascending one. A gap in the
+  draft; a subscriber that asks for a fill avoids it by sending GROUP_ORDER.
 - **Fill streams are not scheduled against their subscription (§7.2 rules 3
   and 4)** — a subscription-delivered Object should go first when the fill's
   Group Order differs, and the fill-delivered one first within a Group. The
@@ -506,9 +513,6 @@ High:
   a reset subgroup stream or a subgroup still in flight leaves such holes. §10.13:
   a relay that meets an uncached Object of unknown status "MUST pause subsequent
   delivery until it has confirmed the object's status upstream".
-- A fill stream on a subscription that omits GROUP_ORDER is written Ascending,
-  ignoring DEFAULT_PUBLISHER_GROUP_ORDER (§10.2.8, §10.2.15, §12.5). A subscriber
-  decoding it Descending gets wrong Group IDs (§11.4.4.1).
 
 Session layer:
 

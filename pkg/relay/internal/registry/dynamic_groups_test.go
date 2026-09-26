@@ -67,6 +67,43 @@ func TestTrackEntry_DynamicGroups(t *testing.T) {
 	})
 }
 
+// TestTrackEntry_DefaultGroupOrder pins the §12.5 DEFAULT_PUBLISHER_GROUP_ORDER
+// decode: Ascending when omitted, the value when allowed, and Ascending for a
+// value outside {1, 2} or a malformed block, including one that would
+// truncate to an allowed byte.
+func TestTrackEntry_DefaultGroupOrder(t *testing.T) {
+	t.Parallel()
+	order := func(v uint64) []byte {
+		return message.AppendTrackProperties([]wire.KVPair{
+			{Type: message.PropertyDefaultPublisherGroupOrder, IntVal: v},
+		})
+	}
+	for _, tc := range []struct {
+		name  string
+		props []byte
+		want  message.GroupOrder
+	}{
+		{"absent", nil, message.GroupOrderAscending},
+		{"Ascending", order(1), message.GroupOrderAscending},
+		{"Descending", order(2), message.GroupOrderDescending},
+		{"out of range", order(3), message.GroupOrderAscending},
+		{"truncates to Descending", order(0x102), message.GroupOrderAscending},
+		{"malformed block", []byte{0x40}, message.GroupOrderAscending},
+		{"inside Immutable Properties", message.AppendTrackProperties([]wire.KVPair{
+			{Type: message.PropertyImmutableProperties, ByteVal: order(2)},
+		}), message.GroupOrderDescending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := &registry.TrackEntry{}
+			e.SetProperties(tc.props)
+			if got := e.DefaultGroupOrder(); got != tc.want {
+				t.Fatalf("DefaultGroupOrder() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestConsiderNewGroupRequest pins the §10.2.19 relay decision and its
 // outstanding-request bookkeeping.
 func TestConsiderNewGroupRequest(t *testing.T) {

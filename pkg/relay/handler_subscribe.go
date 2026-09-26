@@ -94,6 +94,11 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE serving from existing upstream")
 		}
 
+		// Before registration, so the first stream opened for it already
+		// schedules in its Group Order (§7.2).
+		if cur, ok := h.tracks.Get(fullName.Key()); ok {
+			resolveGroupOrder(sub, cur)
+		}
 		// Register and snapshot Largest atomically, so no object falls between
 		// live delivery and the fill fetch stream.
 		entry, snapshotLargest, snapshotHas, added = h.tracks.AddDownstreamSnapshotLargest(fullName, sub)
@@ -555,6 +560,18 @@ func hasEstablishedUpstream(entry *registry.TrackEntry) bool {
 func anyDownstreamForwards(entry *registry.TrackEntry) bool {
 	return entry != nil && slices.ContainsFunc(entry.CopyDownstream(),
 		func(d *registry.DownstreamSub) bool { return d.ForwardState() == 1 })
+}
+
+// resolveGroupOrder gives sub, when its request omitted GROUP_ORDER, the
+// publisher's preference from entry's Track Properties (§10.2.8: "If omitted
+// from SUBSCRIBE or SUBSCRIBE_TRACKS, the publisher's preference from the
+// Track is used"; §12.5). Its fills (§10.2.15) and stream scheduling (§7.2)
+// then follow it. GROUP_ORDER cannot appear in REQUEST_UPDATE, so this holds
+// for the subscription's life.
+func resolveGroupOrder(sub *registry.DownstreamSub, entry *registry.TrackEntry) {
+	if sub.GroupOrder == 0 {
+		sub.SetGroupOrder(uint8(entry.DefaultGroupOrder()))
+	}
 }
 
 // installSubscribeParams records the subscription parameters present in ps
