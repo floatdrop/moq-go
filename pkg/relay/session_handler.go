@@ -526,6 +526,19 @@ func (h *sessionHandler) handleFollowupTokens(
 	return nil, false
 }
 
+// errRequestCancelled is the cancellation cause of a context bound to a
+// request its peer cancelled (§3.3.3); see [ctxResetCode].
+var errRequestCancelled = errors.New("relay: request cancelled")
+
+// ctxResetCode is the §3.3.4 code for a stream reset because ctx ended:
+// CANCELLED for a cancelled request, SESSION_CLOSED otherwise.
+func ctxResetCode(ctx context.Context) moqt.StreamResetCode {
+	if errors.Is(context.Cause(ctx), errRequestCancelled) {
+		return moqt.StreamResetCancelled
+	}
+	return moqt.StreamResetSessionClosed
+}
+
 // readRequestStream owns all reads on an established request stream: it
 // parses follow-up messages off the stream and dispatches each to onMsg
 // until the peer ends its side (FIN or reset), onMsg returns false,
@@ -658,10 +671,20 @@ func (h *sessionHandler) streamFetchRange(
 		// stream closes (§10.12).
 		defer sub.StreamClosed()
 	}
+	// ctx ending resets the stream rather than completing it: CANCELLED when
+	// its cause is errRequestCancelled (a fill's cancelled subscription,
+	// §5.1.3.1), else SESSION_CLOSED (§3.3.4).
+	cancelOut := func() { out.Cancel(ctxResetCode(ctx)) }
+	unwatch := context.AfterFunc(ctx, cancelOut)
+	defer unwatch()
 
 	// Gather cached objects, stitching the below-floor portion from upstream
 	// when the cache doesn't cover the whole range (§9.4).
 	objs, refusal := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
+	if ctx.Err() != nil {
+		cancelOut() // before the deferred StreamClosed (§10.12)
+		return false
+	}
 	if refusal != nil {
 		// §2.5.1: with FETCH_OK (or SUBSCRIBE_OK) already sent, only a
 		// reset is left (an interpretation: no Object was forwarded yet).
@@ -695,6 +718,10 @@ func (h *sessionHandler) streamFetchRange(
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fetch stream write failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))
 		out.Cancel(moqt.StreamResetInternalError)
+		return false
+	}
+	if !unwatch() {
+		cancelOut() // ctx ended first; reset before the deferred StreamClosed
 		return false
 	}
 	_ = out.Close()

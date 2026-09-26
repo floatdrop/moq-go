@@ -120,6 +120,9 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	defer h.metrics.SubscriptionClosed(subRef)
 
 	defer h.tracks.RemoveDownstream(fullName, sub.ID)
+	// §5.1.1: once the subscriber cancels, or the session ends, reset the
+	// streams still open for it.
+	defer sub.Cancel()
 
 	// §10.2.17: "If Objects have been published on this Track the Publisher
 	// MUST include this parameter."

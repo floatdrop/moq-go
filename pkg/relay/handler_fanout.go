@@ -576,12 +576,14 @@ func (h *sessionHandler) openWriterForSub(
 		subHdr.InlinePriority = true
 	}
 	// cancelIO unblocks a writer wedged on a subscriber that stopped
-	// reading (see [joinWriters]).
+	// reading (see [joinWriters]), and resets the open stream of one that
+	// cancelled (§5.1.1).
 	ioCtx, cancelIO := context.WithCancel(ctx)
 	w := &subgroupWriter{
 		sub:                 sub,
 		ctx:                 ioCtx,
 		cancelIO:            cancelIO,
+		unwatchSub:          context.AfterFunc(sub.Cancelled(), cancelIO),
 		hdr:                 subHdr,
 		inbox:               make(chan fwdObject, h.sendQueueSize),
 		done:                make(chan struct{}),
@@ -615,15 +617,17 @@ type subgroupWriter struct {
 	sub *registry.DownstreamSub
 	// ctx bounds every blocking stream operation; cancelIO resets the
 	// in-flight stream, unwedging a writer blocked on a stalled subscriber.
-	ctx      context.Context
-	cancelIO context.CancelFunc
-	hdr      message.SubgroupHeader          // template; TrackAlias already remapped
-	out      *session.OutgoingSubgroupStream // nil until run opens it lazily
-	unbridge func() bool                     // stops the current stream's ctx→Cancel bridge
-	inbox    chan fwdObject
-	done     chan struct{}
-	log      *slog.Logger
-	metrics  Metrics
+	// The subscriber's cancellation calls it too (§5.1.1), until unwatchSub.
+	ctx        context.Context
+	cancelIO   context.CancelFunc
+	unwatchSub func() bool
+	hdr        message.SubgroupHeader          // template; TrackAlias already remapped
+	out        *session.OutgoingSubgroupStream // nil until run opens it lazily
+	unbridge   func() bool                     // stops the current stream's ctx→Cancel bridge
+	inbox      chan fwdObject
+	done       chan struct{}
+	log        *slog.Logger
+	metrics    Metrics
 	// ref labels every Metrics call; built once, since it allocates.
 	ref                 TrackRef
 	maxDropsBeforeReset int
@@ -831,6 +835,7 @@ func (w *subgroupWriter) dropOut() {
 // draining, so publish never blocks.
 func (w *subgroupWriter) run() {
 	defer close(w.done)
+	defer w.unwatchSub()
 
 	var (
 		prevID      uint64

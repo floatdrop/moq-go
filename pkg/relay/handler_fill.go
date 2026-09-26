@@ -104,14 +104,15 @@ func (h *sessionHandler) maybeServeFill(
 	}
 
 	h.relayGo(func() {
-		h.serveFill(ctx, sub, requestID, entry, fullName, start, end, order, fillTimeout, rangeFilters)
+		// §5.1.3.1: "When the subscription is cancelled, the publisher MUST
+		// reset any open fill fetch streams".
+		fillCtx, cancel := context.WithCancelCause(ctx)
+		defer cancel(nil)
+		defer context.AfterFunc(sub.Cancelled(), func() { cancel(errRequestCancelled) })()
+		h.serveFill(fillCtx, sub, requestID, entry, fullName, start, end, order, fillTimeout, rangeFilters)
 	})
 	return nil
 }
-
-// TODO(draft-20): §5.1.3.1 "When the subscription is cancelled, the publisher
-// MUST reset any open fill fetch streams" needs a watchdog on ctx cancellation
-// mid-write.
 
 // serveFill writes one fill fetch stream; the FIN signals completion
 // (§5.1.3.1), and [sessionHandler.streamFetchRange] resets it on a write error.

@@ -443,6 +443,10 @@ type DownstreamSub struct {
 	// datagramsSending counts datagram sends in flight.
 	datagramsSending int
 	pendingDone      *pendingPublishDone
+
+	// cancelled is done once the request ends; see [DownstreamSub.Cancel].
+	cancelled context.Context
+	cancel    context.CancelFunc
 }
 
 // pendingPublishDone is a termination's PUBLISH_DONE, held until the last of
@@ -533,7 +537,10 @@ func (d *DownstreamSub) takeReadyDoneLocked() (*pendingPublishDone, uint64) {
 // installSubscribeParams overrides this to 0 only when the peer explicitly
 // sends FORWARD=0, and REQUEST_UPDATE can flip it later (§9.2 / §10.9).
 func NewDownstreamSub(id uint64, sess *session.Session, stream session.Stream, trackAlias uint64) *DownstreamSub {
+	cancelled, cancel := context.WithCancel(context.Background())
 	return &DownstreamSub{
+		cancelled:    cancelled,
+		cancel:       cancel,
 		state:        SubEstablished,
 		ID:           id,
 		Session:      sess,
@@ -772,6 +779,24 @@ func GroupOutOfRange(group uint64, f *message.LocationFilter) bool {
 	end, ok := f.End()
 	return ok && group > end.Group
 }
+
+// Cancel ends the subscription once its request has ended: the subscriber
+// cancelled it (§3.3.3), or the session is ending. [DownstreamSub.Cancelled]
+// is done, so the streams still open for it are reset ("It MUST reset any open
+// streams associated with the SUBSCRIBE", §5.1.1; its fill fetch streams,
+// §5.1.3.1). No new PUBLISH_DONE follows; one a termination left pending still
+// goes out once those streams close, since it may be the request's only
+// response (§3.3.2). Safe to call more than once, and after another
+// termination.
+func (d *DownstreamSub) Cancel() {
+	d.mu.Lock()
+	d.state = SubTerminated
+	d.mu.Unlock()
+	d.cancel()
+}
+
+// Cancelled is done once [DownstreamSub.Cancel] has run.
+func (d *DownstreamSub) Cancelled() context.Context { return d.cancelled }
 
 // TerminateWithPublishDone ends this downstream subscription (§10.12): the
 // relay writes PUBLISH_DONE on the subscriber's request stream and FINs the
