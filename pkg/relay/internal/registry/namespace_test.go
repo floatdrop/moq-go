@@ -4,22 +4,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
-
-// ns is a tiny constructor for namespaces from string components, used to
-// keep the test tables readable.
-func ns(parts ...string) wire.TrackNamespace {
-	out := make(wire.TrackNamespace, len(parts))
-	for i, p := range parts {
-		out[i] = []byte(p)
-	}
-	return out
-}
 
 // TestNamespaceRegistry_RegisterUnregisterPublisher exercises the basic
 // happy path: register, snapshot, unregister, observe empty.
@@ -230,6 +222,48 @@ func TestNamespaceRegistry_ConcurrentRegisterMatch(t *testing.T) {
 	}
 }
 
+// stallingStream's first Write blocks until release and then succeeds, whatever
+// CancelWrite said meanwhile; later Writes succeed at once.
+type stallingStream struct {
+	stubStream
+
+	started, release chan struct{}
+	writes           int
+}
+
+func (s *stallingStream) Write(p []byte) (int, error) {
+	if s.writes++; s.writes == 1 {
+		close(s.started)
+		<-s.release
+	}
+	return len(p), nil
+}
+
+// TestSubscriberEntry_WriterEndsAfterQueueReset: when the §10.19 queue bound
+// resets the stream while a write is in progress and that write completes
+// anyway, the writer still ends rather than parking on the emptied queue.
+func TestSubscriberEntry_WriterEndsAfterQueueReset(t *testing.T) {
+	st := &stallingStream{started: make(chan struct{}), release: make(chan struct{})}
+	r := registry.NewNamespaceRegistry()
+	e := r.RegisterSubscriber(ns("video"), nil, st, true, nil, nil)
+	go e.RunWriter()
+
+	e.Enqueue(&message.RequestOK{})
+	<-st.started // the writer is in its first write
+	for range 1024 {
+		e.Enqueue(&message.RequestOK{})
+	}
+	time.Sleep(1100 * time.Millisecond) // the oldest unsent is over a second old
+	e.Finish(&message.RequestError{})   // this push resets the stream
+	close(st.release)                   // ...and the stalled write succeeds anyway
+
+	select {
+	case <-e.WriterDone():
+	case <-time.After(2 * time.Second):
+		t.Fatal("the writer parked on the emptied queue after the reset")
+	}
+}
+
 // ----- helpers ---------------------------------------------------------
 
 // sameSet reports whether a and b contain the same elements, ignoring
@@ -250,6 +284,7 @@ func sameSet[T comparable](a, b []T) bool {
 	return true
 }
 
+// formatPublishers renders the publishers' namespaces for failure messages.
 func formatPublishers(s []*registry.PublisherEntry) string {
 	var out strings.Builder
 	out.WriteString("[")
@@ -262,6 +297,7 @@ func formatPublishers(s []*registry.PublisherEntry) string {
 	return out.String() + "]"
 }
 
+// formatSubscribers renders the subscribers' prefixes for failure messages.
 func formatSubscribers(s []*registry.SubscriberEntry) string {
 	var out strings.Builder
 	out.WriteString("[")

@@ -9,6 +9,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
+// dynamicGroupsProps encodes Track Properties carrying DYNAMIC_GROUPS = value.
 func dynamicGroupsProps(t *testing.T, value uint64) []byte {
 	t.Helper()
 	return message.AppendTrackProperties([]wire.KVPair{
@@ -143,10 +144,8 @@ func TestConsiderNewGroupRequest(t *testing.T) {
 	})
 }
 
-// TestTrackEntry_PropertiesInsideImmutable: §12.7 "When looking for the value
-// of a property, processors MUST search both the mutable properties and the
-// contents of Immutable Properties." Every Track Property the relay decodes
-// is found there too.
+// TestTrackEntry_PropertiesInsideImmutable: every Track Property the relay
+// decodes is also found inside Immutable Properties (§12.7).
 func TestTrackEntry_PropertiesInsideImmutable(t *testing.T) {
 	t.Parallel()
 	nested := message.AppendTrackProperties([]wire.KVPair{
