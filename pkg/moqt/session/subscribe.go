@@ -13,6 +13,12 @@ import (
 // publisher-assigned Track Alias — so the caller can send REQUEST_UPDATE via
 // [Subscription.Update] without holding them separately. It is returned by
 // [Session.Subscribe].
+//
+// The Track Alias stays registered while the subscription is Established and
+// is released (§11.1) once it is Terminated (§5.1): on [Subscription.Close] or
+// its broker's [RequestBroker.Close], when the publisher's FIN is read through
+// the Subscription or by its broker's [RequestBroker.Serve], or when Serve
+// cancels the stream.
 type Subscription struct {
 	// requestHandle carries the SUBSCRIBE request stream — still open for
 	// follow-up traffic (REQUEST_UPDATE and inbound PUBLISH_DONE; Close it
@@ -55,11 +61,13 @@ func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscri
 			// The publisher may send PUBLISH_STATE_NOTIFY (§10.10) but not
 			// REQUEST_UPDATE (§10.9).
 			return &Subscription{
-				Stream:     stream,
-				s:          s,
-				requestID:  m.RequestID,
-				peerNotify: true,
-				OK:         ok,
+				Stream:       stream,
+				s:            s,
+				requestID:    m.RequestID,
+				peerNotify:   true,
+				inboundAlias: ok.TrackAlias,
+				holdsAlias:   true,
+				OK:           ok,
 			}, nil
 		})
 }

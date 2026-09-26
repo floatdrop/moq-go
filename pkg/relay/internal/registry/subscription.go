@@ -322,20 +322,16 @@ func (u *UpstreamSub) Cancel(code moqt.StreamResetCode) {
 // The Forward State starts at 1: an omitted FORWARD means 1 (§10.2.18), and
 // the relay's upstream requests never carry it.
 //
-// peerMayUpdate says whether the upstream publisher may send REQUEST_UPDATE:
-// §10.9 allows it only from "The sender of a request", so true for an
-// accepted PUBLISH and false for the relay's own SUBSCRIBE.
+// broker owns the request stream's reads, set up by the caller: the
+// [session.Subscription]'s own for the relay's SUBSCRIBE, so the session
+// releases its Track Alias when it ends (§11.1).
 func NewUpstreamSub(
 	id uint64,
 	sess *session.Session,
 	stream session.Stream,
+	broker *session.RequestBroker,
 	trackAlias, requestID uint64,
-	peerMayUpdate bool,
 ) *UpstreamSub {
-	broker := sess.NewRequestBroker(stream)
-	broker.PeerMessages(peerMayUpdate, true)
-	// Only an accepted PUBLISH's publisher may update here (§10.9).
-	broker.UpdateScope(message.ScopeUpdateFromPublisher)
 	return &UpstreamSub{
 		state:        SubEstablished,
 		ID:           id,

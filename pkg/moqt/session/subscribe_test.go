@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -345,6 +346,209 @@ func TestDuplicateTrackAliasCloses(t *testing.T) {
 			requireClosedCode(t, cli, moqt.SessionDuplicateTrackAlias)
 		})
 	}
+}
+
+// aliasHandle is the receiving side of a subscription: a [session.Subscription]
+// or a [session.IncomingPublication].
+type aliasHandle interface {
+	io.Reader
+	Close() error
+	Broker() *session.RequestBroker
+}
+
+// finishPublication has pub end with PUBLISH_DONE and FIN, and h consume them:
+// through its broker when served, else by reading h itself.
+func finishPublication(t *testing.T, h aliasHandle, pub *session.Publication, served bool) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- pub.Done(moqt.PublishDoneTrackEnded, "") }()
+	var err error
+	if served {
+		err = h.Broker().Serve(t.Context(), nil)
+	} else {
+		for err == nil {
+			_, err = message.Parse(h)
+		}
+		if errors.Is(err, io.EOF) {
+			err = nil
+		}
+	}
+	if err != nil {
+		t.Fatalf("consuming PUBLISH_DONE and FIN: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("Done: %v", err)
+	}
+}
+
+// establishOnAlias establishes a subscription to ns/name whose publisher, srv,
+// assigns alias: cli's SUBSCRIBE answered with SUBSCRIBE_OK, or srv's PUBLISH
+// accepted by cli. It returns both ends.
+func establishOnAlias(
+	t *testing.T, cli, srv *session.Session, viaPublish bool, name string, alias uint64,
+) (aliasHandle, *session.Publication) {
+	t.Helper()
+	ns := wire.TrackNamespace{[]byte("ns")}
+	pubs := make(chan *session.Publication, 1)
+	if viaPublish {
+		go func() {
+			p, err := srv.Publish(t.Context(), &message.Publish{Namespace: ns, Name: []byte(name), TrackAlias: alias})
+			if err != nil {
+				t.Errorf("Publish: %v", err)
+			}
+			pubs <- p
+		}()
+		r, err := cli.AcceptRequest(t.Context())
+		if err != nil {
+			t.Fatalf("AcceptRequest: %v", err)
+		}
+		in, err := r.AcceptPublish()
+		if err != nil {
+			t.Fatalf("AcceptPublish: %v", err)
+		}
+		return in, <-pubs
+	}
+	go func() {
+		r, err := srv.AcceptRequest(t.Context())
+		if err != nil {
+			t.Errorf("AcceptRequest: %v", err)
+			pubs <- nil
+			return
+		}
+		p, err := r.AcceptSubscribe(&message.SubscribeOK{TrackAlias: alias})
+		if err != nil {
+			t.Errorf("AcceptSubscribe: %v", err)
+		}
+		pubs <- p
+	}()
+	sub, err := cli.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte(name)})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	return sub, <-pubs
+}
+
+// TestAliasReleasedWhenTerminated: a Subscription or IncomingPublication
+// releases its Track Alias once the subscription is Terminated (§5.1), so the
+// publisher may then use it for a different Track (§11.1) without the session
+// closing with DUPLICATE_TRACK_ALIAS.
+func TestAliasReleasedWhenTerminated(t *testing.T) {
+	const alias = uint64(7)
+	for _, tc := range []struct {
+		name      string
+		terminate func(t *testing.T, h aliasHandle, pub *session.Publication)
+	}{
+		{"subscriber Close", func(_ *testing.T, h aliasHandle, _ *session.Publication) { _ = h.Close() }},
+		{"subscriber Broker Close", func(_ *testing.T, h aliasHandle, _ *session.Publication) {
+			h.Broker().Close(moqt.StreamResetCancelled)
+		}},
+		{"PUBLISH_DONE and FIN, served", func(t *testing.T, h aliasHandle, pub *session.Publication) {
+			finishPublication(t, h, pub, true)
+		}},
+		{"PUBLISH_DONE and FIN, read", func(t *testing.T, h aliasHandle, pub *session.Publication) {
+			finishPublication(t, h, pub, false)
+		}},
+		{"Serve cancelled", func(t *testing.T, h aliasHandle, _ *session.Publication) {
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			_ = h.Broker().Serve(ctx, nil)
+		}},
+	} {
+		for _, viaPublish := range []bool{false, true} {
+			name := tc.name + ", SUBSCRIBE_OK"
+			if viaPublish {
+				name = tc.name + ", PUBLISH"
+			}
+			t.Run(name, func(t *testing.T) {
+				cli, srv := openPair(t)
+				h, pub := establishOnAlias(t, cli, srv, viaPublish, "trackA", alias)
+				tc.terminate(t, h, pub)
+
+				establishOnAlias(t, cli, srv, false, "trackB", alias)
+				if err := cli.Err(); err != nil {
+					t.Fatalf("reusing a Terminated subscription's alias closed the session: %v", err)
+				}
+			})
+		}
+	}
+}
+
+// TestCloseAfterPublisherFinFINs: once the publisher has ended the
+// subscription with PUBLISH_DONE and its FIN, Close FINs this side rather than
+// resetting it (§3.3.2: the requester SHOULD FIN), whether the FIN was read
+// through the handle or by its broker.
+func TestCloseAfterPublisherFinFINs(t *testing.T) {
+	for _, served := range []bool{false, true} {
+		for _, viaPublish := range []bool{false, true} {
+			t.Run(fmt.Sprintf("served=%v publish=%v", served, viaPublish), func(t *testing.T) {
+				cli, srv := openPair(t)
+				h, pub := establishOnAlias(t, cli, srv, viaPublish, "trackA", 7)
+				finishPublication(t, h, pub, served)
+				if err := h.Close(); err != nil {
+					t.Fatalf("Close: %v", err)
+				}
+				if _, err := message.Parse(pub); !errors.Is(err, io.EOF) {
+					t.Fatalf("publisher read after Close: %v, want io.EOF (a FIN)", err)
+				}
+			})
+		}
+	}
+}
+
+// TestAcceptPublishWriteFailureReleasesAlias: a PUBLISH whose REQUEST_OK
+// cannot be written never becomes Established (§5.1), so its alias is free for
+// a different Track (§11.1).
+func TestAcceptPublishWriteFailureReleasesAlias(t *testing.T) {
+	const alias = uint64(7)
+	cli, srv := openPair(t)
+	streams := make(chan session.Stream, 1)
+	go func() {
+		stream, err := srv.OpenPublish(&message.Publish{
+			Namespace: wire.TrackNamespace{[]byte("ns")}, Name: []byte("trackA"), TrackAlias: alias,
+		})
+		if err != nil {
+			t.Errorf("OpenPublish: %v", err)
+		}
+		streams <- stream
+	}()
+	r, err := cli.AcceptRequest(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptRequest: %v", err)
+	}
+	(<-streams).CancelRead(uint64(moqt.StreamResetCancelled))
+	if _, err := r.AcceptPublish(); err == nil {
+		t.Fatal("AcceptPublish wrote REQUEST_OK to a stream the publisher stopped reading")
+	}
+
+	establishOnAlias(t, cli, srv, false, "trackB", alias)
+	if err := cli.Err(); err != nil {
+		t.Fatalf("reusing the alias of a PUBLISH never accepted closed the session: %v", err)
+	}
+}
+
+// TestAliasReleasedOncePerSubscription: two subscriptions to one Track share an
+// alias (§5.1). Terminating one twice releases only its own registration, so
+// the other keeps the alias Established and a different Track reusing it still
+// closes the session (§11.1).
+func TestAliasReleasedOncePerSubscription(t *testing.T) {
+	const alias = uint64(7)
+	cli, srv := openPair(t)
+	first, _ := establishOnAlias(t, cli, srv, false, "trackA", alias)
+	establishOnAlias(t, cli, srv, false, "trackA", alias)
+
+	_ = first.Close()
+	first.Broker().Close(moqt.StreamResetCancelled)
+	_ = first.Broker().Serve(t.Context(), nil)
+
+	go func() {
+		if r, err := srv.AcceptRequest(t.Context()); err == nil {
+			_ = r.Reply(&message.SubscribeOK{TrackAlias: alias})
+		}
+	}()
+	_, _ = cli.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: wire.TrackNamespace{[]byte("ns")}, Name: []byte("trackB"),
+	})
+	requireClosedCode(t, cli, moqt.SessionDuplicateTrackAlias)
 }
 
 // TestSubscribeSameTrackAliasShared verifies that subscribing to the same

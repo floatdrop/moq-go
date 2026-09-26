@@ -273,6 +273,36 @@ func TestSubscribe_LastDownstreamTearsDownUpstream(t *testing.T) {
 	}
 }
 
+// TestSubscribe_UpstreamAliasReusableAfterTeardown: once the relay ends its
+// upstream subscription, the publisher may use its Track Alias for a different
+// Track (§11.1) without the relay closing the session with
+// DUPLICATE_TRACK_ALIAS.
+func TestSubscribe_UpstreamAliasReusableAfterTeardown(t *testing.T) {
+	t.Parallel()
+	pubSess := namespacePublisher(t, relay.Config{})
+	subscriptionEnded := acceptUpstreamSubscribe(t, pubSess, 77)
+
+	subSess := dialAnotherClient(t, pubSess)
+	_ = subscribeCam1(t, subSess).Close()
+	select {
+	case <-subscriptionEnded:
+	case <-time.After(2 * time.Second):
+		t.Fatal("publisher's subscription still open 2s after the last downstream left")
+	}
+
+	acceptUpstreamSubscribe(t, pubSess, 77)
+	if _, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: ns("video"), Name: []byte("cam2"),
+	}); err != nil {
+		t.Fatalf("Subscribe cam2 on the reused alias: %v", err)
+	}
+	select {
+	case <-pubSess.Done():
+		t.Fatal("relay closed the publisher's session on a reused alias")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 // TestSubscribe_UpstreamRejects_PropagatesRejection: an upstream REQUEST_ERROR
 // code about the track passes downstream; one about the relay's own hop becomes
 // INTERNAL_ERROR (§10.6.2). The Retry Interval is kept either way.

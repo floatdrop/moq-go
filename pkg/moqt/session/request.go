@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"slices"
 	"sync"
@@ -484,15 +485,62 @@ type requestHandle struct {
 	// its REQUEST_UPDATEs; applied to the broker on creation.
 	peerUpdate, peerNotify bool
 	updateScope            message.ParamScope
+
+	// inboundAlias is the inbound Track Alias this request registered
+	// (§11.1), when holdsAlias: the receiving side of a subscription. It is
+	// released once the subscription is Terminated (§5.1); see terminated.
+	inboundAlias uint64
+	holdsAlias   bool
+	released     atomic.Bool
+	// peerDone records that the publisher's FIN was read.
+	peerDone atomic.Bool
+}
+
+// Read reads the request stream. On the receiving side of a subscription
+// ([Subscription], [IncomingPublication]) the publisher's FIN ends it — "by
+// sending PUBLISH_DONE and closing the stream" (§5.1) — which releases the
+// Track Alias (§11.1).
+func (h *requestHandle) Read(p []byte) (int, error) {
+	n, err := h.Stream.Read(p)
+	if errors.Is(err, io.EOF) {
+		h.peerFinished()
+	}
+	return n, err
+}
+
+// peerFinished records the publisher's FIN on the receiving side of a
+// subscription, which Terminates it (§5.1).
+func (h *requestHandle) peerFinished() {
+	if h.holdsAlias {
+		h.peerDone.Store(true)
+		h.terminated()
+	}
+}
+
+// terminated releases the inbound Track Alias the first time the subscription
+// is Terminated: a handle can see that more than once (Close after the FIN),
+// and a second release would take a registration another subscription
+// sharing the alias holds (§5.1).
+func (h *requestHandle) terminated() {
+	if h.holdsAlias && h.released.CompareAndSwap(false, true) {
+		h.s.UnregisterInboundTrackAlias(h.inboundAlias)
+	}
 }
 
 // Close cancels the request by resetting both stream directions (§3.3.3). If
 // this side already sent its final message and FIN (e.g. [Publication.Done]),
-// only reading is stopped, so that message is not lost.
+// only reading is stopped, so that message is not lost. A subscription is then
+// Terminated (§5.1), so its Track Alias is released.
 //
-// Close does not know whether the peer already completed the request; after
-// that, §3.3.2 says the requester SHOULD FIN, so use Stream.Close instead.
+// Once a subscription's publisher has completed it (its FIN was read through
+// the handle or its broker), Close FINs instead, as §3.3.2 asks once nothing
+// further will be sent. Otherwise Close cannot know whether the peer completed the
+// request; after that, use Stream.Close to FIN.
 func (h *requestHandle) Close() error {
+	h.terminated()
+	if h.peerDone.Load() {
+		return h.Stream.Close()
+	}
 	if h.finished.Load() {
 		h.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
 		return nil
@@ -516,6 +564,7 @@ func (h *requestHandle) Broker() *RequestBroker {
 		b := h.s.NewRequestBroker(h.Stream)
 		b.PeerMessages(h.peerUpdate, h.peerNotify)
 		b.UpdateScope(h.updateScope)
+		b.handle = h
 		h.broker.Store(b)
 	})
 	return h.broker.Load()
@@ -530,7 +579,7 @@ func (h *requestHandle) Update(ctx context.Context, params message.Parameters) (
 	if b := h.broker.Load(); b != nil {
 		return b.Update(ctx, params)
 	}
-	return h.s.UpdateRequest(ctx, h.Stream, params)
+	return h.s.UpdateRequest(ctx, h, params) // h, so Read sees a FIN
 }
 
 // writeThenClose writes msg and FINs the send side, through the broker's
@@ -841,17 +890,21 @@ func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 		return nil, err
 	}
 	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
+		// Never Established (§5.1), so the alias is not held (§11.1).
+		r.s.UnregisterInboundTrackAlias(pub.TrackAlias)
 		return nil, fmt.Errorf("moqt/session: write PUBLISH REQUEST_OK: %w", err)
 	}
 	// The publisher may send REQUEST_UPDATE (§10.9) and PUBLISH_STATE_NOTIFY
 	// (§10.10).
 	return &IncomingPublication{
-		Stream:      r.Stream,
-		s:           r.s,
-		requestID:   pub.RequestID,
-		peerUpdate:  true,
-		peerNotify:  true,
-		updateScope: message.ScopeUpdateFromPublisher,
-		alias:       pub.TrackAlias,
+		Stream:       r.Stream,
+		s:            r.s,
+		requestID:    pub.RequestID,
+		peerUpdate:   true,
+		peerNotify:   true,
+		updateScope:  message.ScopeUpdateFromPublisher,
+		inboundAlias: pub.TrackAlias,
+		holdsAlias:   true,
+		alias:        pub.TrackAlias,
 	}, nil
 }
