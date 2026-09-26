@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -114,8 +115,8 @@ const maxEarlyDataStreams = 32
 // and setup is complete." A uni stream that begins with a data stream type is
 // held unread, its type bytes kept to be replayed, and handed out by
 // AcceptDataStream once the session is up; up to maxEarlyDataStreams of them.
-// A padding stream is discarded, and one that ends before its type is
-// skipped, as after setup.
+// A padding stream is discarded, and one reset before its type is skipped, as
+// after setup; one FINed before its type fails the handshake.
 // The first stream that does not is the control stream, and is returned with
 // its leading bytes replayed, for the SETUP parse to judge. (Bidirectional
 // request streams need nothing: nothing accepts them before setup completes.)
@@ -130,10 +131,14 @@ func (s *Session) acceptControlStream(ctx context.Context) (ReceiveStream, error
 		typ, err := wire.ReadVarint(rec)
 		stop()
 		switch {
+		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+			// FIN before a whole type: no valid stream of any kind; if it
+			// was the control stream, "Doing so results in the session
+			// being closed as a PROTOCOL_VIOLATION" (§3.3).
+			return nil, fmt.Errorf("read stream type: %w", err)
 		case err != nil:
-			// Ended or reset before its type arrived: skipped, as
-			// acceptDataStream skips it after setup. A control stream
-			// "MUST NOT be closed" (§3.3), so this is not the one.
+			// Reset before its type arrived — a data stream the peer
+			// abandoned: skipped, as acceptDataStream skips it after setup.
 			stream.CancelRead(uint64(moqt.StreamResetInternalError))
 			if ctx.Err() != nil {
 				return nil, ctx.Err()

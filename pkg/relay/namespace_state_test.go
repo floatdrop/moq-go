@@ -593,3 +593,56 @@ func TestNamespace_BlockedSubscriberReset(t *testing.T) {
 		return
 	}
 }
+
+// TestNamespace_TricklingSubscriberReset: a subscriber that reads, but too
+// slowly to keep up, is as blocked as one that stopped: every single write
+// completes, yet the oldest unsent message waits longer and longer. Once
+// enough are waiting long enough, the stream is reset.
+func TestNamespace_TricklingSubscriberReset(t *testing.T) {
+	t.Parallel()
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+	ctx := t.Context()
+	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
+	defer relayA.stop(t)
+	s, err := dialClient(
+		t,
+		relayA,
+	).SubscribeNamespace(ctx, &message.SubscribeNamespace{TrackNamespacePrefix: ns("video")})
+	if err != nil {
+		t.Fatalf("SubscribeNamespace: %v", err)
+	}
+	defer s.Close()
+	ended := make(chan error, 1)
+	go func() {
+		for {
+			if _, err := message.Parse(s.Stream); err != nil {
+				ended <- err
+				return
+			}
+			time.Sleep(20 * time.Millisecond) // about 50 messages a second
+		}
+	}()
+
+	for i := range 1500 {
+		if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
+			Prefix: ns("video", strconv.Itoa(i)), RelayAddr: "relay-C",
+		}); err != nil {
+			t.Fatalf("PublishNamespace: %v", err)
+		}
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
+		Prefix: ns("video", "late"), RelayAddr: "relay-C",
+	}); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	select {
+	case err := <-ended:
+		if errors.Is(err, io.EOF) {
+			t.Fatal("stream FINed; want it reset")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("a subscriber trickling its reads was not reset")
+	}
+}
