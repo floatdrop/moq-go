@@ -149,7 +149,10 @@ var notEchoedInPublish = []message.ParamID{
 // Relays"):
 //   - SUBSCRIBE_TRACKS parameters valid on PUBLISH are echoed (§10.20.1),
 //     except AUTHORIZATION_TOKEN (§10.2.2);
-//   - FORWARD=0 and GROUP_ORDER only when the subscriber set them;
+//   - FORWARD=0 only when the subscriber set it;
+//   - GROUP_ORDER always: the subscriber's, else the publisher's preference
+//     (§10.2.8), which the subscription's fills follow; §10.20.1 has these
+//     "explicitly communicated in PUBLISH";
 //   - LARGEST_OBJECT is the relay's own watermark (§10.2.17).
 func publishParamsForSubscriber(tp *registry.TracksParams, entry *registry.TrackEntry) message.Parameters {
 	var out message.Parameters
@@ -164,9 +167,11 @@ func publishParamsForSubscriber(tp *registry.TracksParams, entry *registry.Track
 	if !tp.Forward {
 		out = append(out, message.ForwardParam(false))
 	}
-	if tp.GroupOrder != 0 {
-		out = append(out, message.GroupOrderParam(message.GroupOrder(tp.GroupOrder)))
+	order := message.GroupOrder(tp.GroupOrder)
+	if order == 0 {
+		order = entry.DefaultGroupOrder()
 	}
+	out = append(out, message.GroupOrderParam(order))
 	if largest, ok := entry.GetLargest(); ok {
 		out = append(out, message.LargestObjectParam(largest.Group, largest.Object))
 	}

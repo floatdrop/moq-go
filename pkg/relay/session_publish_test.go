@@ -119,14 +119,15 @@ func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	if pub.TrackAlias == 0 {
 		t.Fatal("forwarded TrackAlias is 0; want one allocated on the subscriber's session")
 	}
-	// §10.20.1: the SUBSCRIBE_TRACKS omitted FORWARD and GROUP_ORDER, so the
-	// forwarded PUBLISH carries neither (FORWARD defaults to 1, GROUP_ORDER to
-	// the publisher's preference).
+	// §10.20.1: the SUBSCRIBE_TRACKS omitted FORWARD and GROUP_ORDER.
+	// FORWARD defaults to 1 and is omitted; GROUP_ORDER is the publisher's
+	// preference (§10.2.8), Ascending for this track (§12.5), and stated.
 	if p, ok := pub.Parameters.Find(message.ParamForward); ok {
 		t.Errorf("forwarded FORWARD present (=%d), want omitted", p.Byte)
 	}
-	if p, ok := pub.Parameters.Find(message.ParamGroupOrder); ok {
-		t.Errorf("forwarded GROUP_ORDER present (=%d), want omitted", p.Byte)
+	if p, ok := pub.Parameters.Find(message.ParamGroupOrder); !ok ||
+		message.GroupOrder(p.Byte) != message.GroupOrderAscending {
+		t.Errorf("forwarded GROUP_ORDER = %d (present=%v), want Ascending (0x1)", p.Byte, ok)
 	}
 }
 

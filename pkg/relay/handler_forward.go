@@ -85,7 +85,11 @@ func (h *sessionHandler) serveForwardedPublish(
 	sub.OpenedByPublish()
 	// handleSubscribeTracks already refused parameters this would reject.
 	_ = installSubscribeParams(sub, params)
-	resolveGroupOrder(sub, te)
+	// The Group Order the PUBLISH stated (see publishParamsForSubscriber), so
+	// the subscription's fills follow what it was told (§10.20.1).
+	if p, ok := fwd.Parameters.Find(message.ParamGroupOrder); ok {
+		sub.SetGroupOrder(p.Byte)
+	}
 	_, largest, has, added := h.tracks.AddDownstreamSnapshotLargest(fullName, sub)
 	registered()
 	if !added {
