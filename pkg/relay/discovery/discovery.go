@@ -28,7 +28,8 @@ import (
 
 // Op is the kind of a discovery event. Publish announces availability;
 // Unpublish announces removal. A single backend may emit either kind on
-// the same key over the entry's lifetime.
+// the same key over the entry's lifetime. SnapshotDone carries no Info: it
+// ends a watch's initial snapshot (see [DiscoveryStore.WatchTracks]).
 type Op int
 
 const (
@@ -36,15 +37,20 @@ const (
 	OpPublish Op = iota
 	// OpUnpublish — a track or namespace is no longer available.
 	OpUnpublish
+	// OpSnapshotDone — the watch has delivered its whole initial snapshot;
+	// every event after it is a live change.
+	OpSnapshotDone
 )
 
-// String returns "publish" or "unpublish".
+// String returns "publish", "unpublish" or "snapshot-done".
 func (o Op) String() string {
 	switch o {
 	case OpPublish:
 		return "publish"
 	case OpUnpublish:
 		return "unpublish"
+	case OpSnapshotDone:
+		return "snapshot-done"
 	}
 	return "unknown"
 }
@@ -169,10 +175,10 @@ type DiscoveryStore interface {
 	FindNamespacesUnder(ctx context.Context, prefix wire.TrackNamespace) ([]NamespaceInfo, error)
 
 	// WatchTracks returns a channel that first delivers the current set of
-	// track advertisements as OpPublish events (the snapshot), then streams
-	// every subsequent Publish / Unpublish the backend observes (local +
-	// remote), until ctx is cancelled or the store is closed. The channel is
-	// closed when the watch ends.
+	// track advertisements as OpPublish events (the snapshot) followed by one
+	// OpSnapshotDone, then streams every subsequent Publish / Unpublish the
+	// backend observes (local + remote), until ctx is cancelled or the store
+	// is closed. The channel is closed when the watch ends.
 	//
 	// The snapshot→follow handoff is gapless: across it no event is missed or
 	// duplicated. A consumer that wants "current state plus every change from
@@ -180,10 +186,12 @@ type DiscoveryStore interface {
 	// by a Watch (which would race any event landing between the two).
 	//
 	// The initial snapshot is delivered in full — a consumer interested only in
-	// deltas can ignore the leading OpPublish burst. For events after the
-	// snapshot a slow consumer must not block other watchers: backends SHOULD
-	// use a per-watcher buffered channel and drop live events on overflow with
-	// a logged warning.
+	// deltas can skip everything up to OpSnapshotDone, and one that restarts a
+	// watch can reconcile what it knew against the new snapshot. For events
+	// after the snapshot a slow consumer must not block other watchers, and
+	// must not silently miss one either: a backend that cannot deliver a live
+	// event to a watcher MUST end that watch (close its channel) instead of
+	// dropping the event, so the consumer notices and re-watches.
 	WatchTracks(ctx context.Context) (<-chan TrackEvent, error)
 
 	// WatchNamespaces streams namespace events. Same snapshot-then-follow

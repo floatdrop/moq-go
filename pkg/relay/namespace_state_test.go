@@ -437,3 +437,57 @@ func TestNamespace_RestartedWatchDropsStaleRemote(t *testing.T) {
 	}
 	requireNamespaceDone(t, msgs, "cam") // ...and its restart reconciles
 }
+
+// TestNamespace_RestartedWatchChangesOnlyWhatChanged: a restarted watch is
+// reconciled against what the relay already knew. A namespace withdrawn while
+// the watch was down is done, one added then is announced, and one still
+// advertised causes nothing — no NAMESPACE_DONE followed by NAMESPACE again.
+func TestNamespace_RestartedWatchChangesOnlyWhatChanged(t *testing.T) {
+	t.Parallel()
+	store := &cuttableWatchStore{MemoryStore: discovery.NewMemoryStore(), cut: make(chan struct{})}
+	defer store.Close()
+	ctx := t.Context()
+	remote := func(field string) discovery.NamespaceInfo {
+		return discovery.NamespaceInfo{Prefix: ns("video", field), RelayAddr: "relay-C"}
+	}
+	for _, f := range []string{"cam", "mic"} {
+		if err := store.PublishNamespace(ctx, remote(f)); err != nil {
+			t.Fatalf("PublishNamespace %s: %v", f, err)
+		}
+	}
+	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
+	defer relayA.stop(t)
+	_, msgs := subscribeNS(t, dialClient(t, relayA), "video")
+	got := map[string]bool{}
+	for range 2 {
+		got[relaytest.FormatNamespace(nextMessage(t, msgs).(*message.Namespace).TrackNamespaceSuffix)] = true
+	}
+	if len(got) != 2 {
+		t.Fatalf("initial NAMESPACEs %v, want cam and mic", got)
+	}
+
+	close(store.cut) // the watch goes down...
+	if err := store.UnpublishNamespace(ctx, remote("mic").Prefix, "relay-C"); err != nil {
+		t.Fatalf("UnpublishNamespace: %v", err)
+	}
+	if err := store.PublishNamespace(ctx, remote("screen")); err != nil {
+		t.Fatalf("PublishNamespace screen: %v", err)
+	}
+
+	// ...and its restart reconciles: exactly these two, in either order.
+	want := map[string]bool{"NAMESPACE_DONE mic": true, "NAMESPACE screen": true}
+	for range 2 {
+		var desc string
+		switch m := nextMessage(t, msgs).(type) {
+		case *message.Namespace:
+			desc = "NAMESPACE " + relaytest.FormatNamespace(m.TrackNamespaceSuffix)
+		case *message.NamespaceDone:
+			desc = "NAMESPACE_DONE " + relaytest.FormatNamespace(m.TrackNamespaceSuffix)
+		}
+		if !want[desc] {
+			t.Fatalf("after the restart got %q, want only NAMESPACE_DONE mic and NAMESPACE screen", desc)
+		}
+		delete(want, desc)
+	}
+	requireQuiet(t, msgs, "cam is still advertised")
+}

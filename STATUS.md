@@ -464,9 +464,5 @@ rule it misses.
 Relay:
 
 - Namespace subscriptions:
-  - a Discovery event the store drops (MemoryStore does, for a slow consumer)
-    is not recovered until the watch restarts, so a remote namespace can be
-    missing or linger; a restart sends NAMESPACE_DONE then NAMESPACE for every
-    remote namespace still advertised;
   - a subscriber whose stream is blocked by flow control grows its message
     queue without bound; §10.19 lets the relay reset the stream instead.
