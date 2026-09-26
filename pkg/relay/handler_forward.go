@@ -127,5 +127,5 @@ func (h *sessionHandler) serveForwardedPublish(
 	if p, ok := params.Find(message.ParamNewGroupRequest); ok {
 		h.propagateNewGroupUpstream(ctx, fullName, p.Varint)
 	}
-	h.readSubscribeUpdates(ctx, stream, sub, fullName)
+	h.readSubscribeUpdates(ctx, stream, sub, fullName, true)
 }
