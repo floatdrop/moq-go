@@ -14,6 +14,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
+// newTestTrackName returns a FullTrackName for name in a fixed test namespace.
 func newTestTrackName(name string) track.FullTrackName {
 	return track.FullTrackName{
 		Namespace: wire.TrackNamespace{[]byte("test")},
