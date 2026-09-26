@@ -11,45 +11,24 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 )
 
-// §10.9: "The receiver of a REQUEST_UPDATE MUST respond with exactly one
-// REQUEST_OK or REQUEST_ERROR message indicating if the update was
-// successful". §5.1: "The publisher does not send Objects if the Forward State
-// is 0." §10.9.1: "The REQUEST_UPDATE_OK will include the LARGEST_OBJECT
-// parameter", and "When a REQUEST_UPDATE is unsuccessful, the publisher MUST
-// also terminate the subscription by sending a PUBLISH_DONE with error code
-// UPDATE_FAILED."
+// A Publication answering REQUEST_UPDATE (§10.9): exactly one REQUEST_OK or
+// REQUEST_ERROR, no Objects at Forward State 0 (§5.1), LARGEST_OBJECT in the
+// OK, and PUBLISH_DONE UPDATE_FAILED after a declined update (§10.9.1).
 
-// servedPublication subscribes a client to a track the server answers with a
-// Publication whose broker is serving, and returns the client session and both
-// handles.
+// servedPublication subscribes a client to a server Publication whose broker is serving.
 func servedPublication(t *testing.T) (*session.Session, *session.Subscription, *session.Publication) {
 	t.Helper()
 	return servedPublicationWith(t, nil)
 }
 
-// servedPublicationWith is servedPublication with onUpdate, when non-nil,
-// deciding the subscriber's REQUEST_UPDATEs in place of the built-in handling.
+// servedPublicationWith is servedPublication with onUpdate, if non-nil, replacing the built-in update handling.
 func servedPublicationWith(
 	t *testing.T,
 	onUpdate session.UpdateHandler,
 ) (*session.Session, *session.Subscription, *session.Publication) {
 	t.Helper()
 	client, server := openPair(t)
-	pubs := make(chan *session.Publication, 1)
-	go func() {
-		r, err := server.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		p, err := r.AcceptSubscribe(nil)
-		if err != nil {
-			return
-		}
-		pubs <- p
-	}()
-	sub, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
-	must(t, err)
-	pub := <-pubs
+	sub, pub := subscribePair(t, client, server)
 	b := pub.Broker()
 	if onUpdate != nil {
 		b.HandleUpdates(onUpdate)
@@ -137,18 +116,7 @@ func TestPublicationDeclinesUnsupportedUpdate(t *testing.T) {
 // built-in one, and can still reuse it through ApplyUpdate.
 func TestPublicationCustomUpdateHandler(t *testing.T) {
 	client, server := openPair(t)
-	pubs := make(chan *session.Publication, 1)
-	go func() {
-		r, err := server.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		p, _ := r.AcceptSubscribe(nil)
-		pubs <- p
-	}()
-	sub, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
-	must(t, err)
-	pub := <-pubs
+	sub, pub := subscribePair(t, client, server)
 	b := pub.Broker()
 	var seen []message.ParamID
 	b.HandleUpdates(func(upd *message.RequestUpdate) (*message.RequestOK, error) {
@@ -178,56 +146,22 @@ func TestPublicationCustomUpdateHandler(t *testing.T) {
 	}
 }
 
-// TestBrokerWithoutHandlerDeclines: a broker nobody taught to handle updates
-// answers REQUEST_ERROR NOT_SUPPORTED — declining complies with §10.9, while
-// acknowledging and ignoring an update does not.
+// TestBrokerWithoutHandlerDeclines: a broker without an update handler
+// declines with REQUEST_ERROR NOT_SUPPORTED rather than ignoring it (§10.9).
 func TestBrokerWithoutHandlerDeclines(t *testing.T) {
 	client, server := openPair(t)
-	streams := make(chan session.Stream, 1)
-	go func() {
-		r, err := server.AcceptRequest(t.Context())
-		if err != nil {
-			return
-		}
-		if _, err := r.AcceptSubscribe(nil); err != nil {
-			return
-		}
-		streams <- r.Stream
-	}()
-	sub, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
-	must(t, err)
-	b := server.NewRequestBroker(<-streams)
+	sub, pub := subscribePair(t, client, server)
+	b := server.NewRequestBroker(pub.Stream)
 	go func() { _ = b.Serve(t.Context(), nil) }()
 
-	_, err = sub.Update(t.Context(), message.Parameters{message.ForwardParam(false)})
+	_, err := sub.Update(t.Context(), message.Parameters{message.ForwardParam(false)})
 	if rej, ok := errors.AsType[*session.RequestRejectedError](err); !ok || rej.Code != moqt.RequestNotSupported {
 		t.Fatalf("Update = %v, want REQUEST_ERROR NOT_SUPPORTED", err)
 	}
 }
 
-// drainOneSubgroup accepts and drains one subgroup stream on the subscriber,
-// so the publisher's writes complete on the unbuffered test pipe.
-func drainOneSubgroup(t *testing.T, client *session.Session) {
-	ds, err := client.AcceptDataStream(t.Context())
-	if err != nil {
-		return
-	}
-	sg, ok := ds.(*session.IncomingSubgroupStream)
-	if !ok {
-		return
-	}
-	for {
-		if _, err := sg.ReadObject(); err != nil {
-			return
-		}
-	}
-}
-
-// TestPublishOKForwardClosesSession: draft-20 moved subscription parameters
-// out of PUBLISH_OK ("Subscription parameters appear in REQUEST_UPDATE, not
-// PUBLISH_OK", #1790). FORWARD may appear in PUBLISH, not PUBLISH_OK
-// (§10.2.18), so one there is a parameter outside its scope: "the receiving
-// endpoint MUST close the connection with a PROTOCOL_VIOLATION" (§10.2.1).
+// TestPublishOKForwardClosesSession: FORWARD is not defined for PUBLISH_OK
+// (§10.2.18), so receiving it there is a PROTOCOL_VIOLATION (§10.2.1).
 func TestPublishOKForwardClosesSession(t *testing.T) {
 	client, server := openPair(t)
 	go func() {
@@ -243,9 +177,8 @@ func TestPublishOKForwardClosesSession(t *testing.T) {
 	requireClosedProtocolViolation(t, client)
 }
 
-// TestForwardPauseResetsOpenSubgroup: FORWARD=0 stops objects on subgroups
-// already open, too. §11.4.3 lists "Omitting a Subgroup Object due to the
-// subscriber's Forward State" among the reasons the sender resets the stream.
+// TestForwardPauseResetsOpenSubgroup: FORWARD=0 also resets subgroups already
+// open (§11.4.3).
 func TestForwardPauseResetsOpenSubgroup(t *testing.T) {
 	client, sub, pub := servedPublication(t)
 	peer := make(chan session.DataStream, 1)
@@ -295,26 +228,14 @@ func TestDeclinedUpdateEndsPublication(t *testing.T) {
 	}
 }
 
-// TestInvalidForwardClosesSession pins §10.2.18: a FORWARD value other than 0
-// or 1 "MUST close the session with PROTOCOL_VIOLATION", in a SUBSCRIBE and in
-// a REQUEST_UPDATE alike.
+// TestInvalidForwardClosesSession: FORWARD other than 0 or 1 closes the session
+// with PROTOCOL_VIOLATION (§10.2.18), in SUBSCRIBE and REQUEST_UPDATE alike.
 func TestInvalidForwardClosesSession(t *testing.T) {
 	bad := message.ByteParam(message.ParamForward, 2)
 	t.Run("REQUEST_UPDATE", func(t *testing.T) {
 		client, server := openPair(t)
-		go func() {
-			r, err := server.AcceptRequest(t.Context())
-			if err != nil {
-				return
-			}
-			p, err := r.AcceptSubscribe(nil)
-			if err != nil {
-				return
-			}
-			_ = p.Broker().Serve(t.Context(), nil)
-		}()
-		sub, err := client.Subscribe(t.Context(), &message.Subscribe{Name: []byte("t")})
-		must(t, err)
+		sub, pub := subscribePair(t, client, server)
+		go func() { _ = pub.Broker().Serve(t.Context(), nil) }()
 		go func() { _, _ = sub.Update(t.Context(), message.Parameters{bad}) }()
 		requireClosedProtocolViolation(t, server)
 	})

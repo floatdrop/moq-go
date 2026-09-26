@@ -172,16 +172,9 @@ func collectEvents[T any](t *testing.T, ch <-chan T, n int) []T {
 	return out
 }
 
-// TestDemuxParksStreamsUntilAliasKnown pins the reordering allowance in
-// §11.4.2: "if an endpoint receives a subgroup with an unknown Track Alias, it
-// MAY abandon the stream, or choose to buffer it for a brief period to handle
-// reordering with the control message that establishes the Track Alias".
-//
-// Demux buffers. It has to: a subscriber learns a track's alias from its
-// SUBSCRIBE_OK, and a publisher may push the track's first subgroup streams
-// before that reply has been read, so the opening Groups of a live broadcast
-// routinely land with no handler registered. Abandoning them loses media that
-// was delivered perfectly well.
+// TestDemuxParksStreamsUntilAliasKnown: a subgroup for an unknown Track Alias is
+// buffered until its alias is registered (§11.4.2 MAY buffer), since the first
+// Groups often arrive before SUBSCRIBE_OK is read.
 func TestDemuxParksStreamsUntilAliasKnown(t *testing.T) {
 	t.Parallel()
 	pub, sub := openPair(t)
@@ -237,12 +230,8 @@ func TestDemuxParksStreamsUntilAliasKnown(t *testing.T) {
 // rather than exported: the bound is an implementation choice, not API.
 const parkLimitForTest = 8
 
-// TestDemuxParkingIsBounded covers what stops parked streams accumulating.
-//
-// A parked stream is header-parsed and then left unread, so its body sits in
-// the transport's receive buffers holding connection-level flow control. §11.4.2
-// allows buffering "for a brief period" and abandoning otherwise; these bounds
-// are how Demux abandons.
+// TestDemuxParkingIsBounded: parked streams hold flow control, so parking is
+// bounded and the rest are abandoned (§11.4.2: buffer "for a brief period").
 func TestDemuxParkingIsBounded(t *testing.T) {
 	t.Parallel()
 

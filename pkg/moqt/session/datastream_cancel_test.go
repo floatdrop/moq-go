@@ -9,22 +9,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 )
 
-// TestIncomingFetchStreamCancelResetsTheReadSide covers the one Cancel in the
-// package that no test anywhere reaches.
-//
-// Its subgroup twin is exercised by the relay's tests, so it reads as covered
-// in a whole-suite profile; this one is at 0% across every package.
-//
-// What it is NOT guarding is the obvious hazard of a hand-copied one-liner,
-// resetting the wrong half: ReceiveStream has no CancelWrite, so that mistake
-// does not compile. What it does guard is that Cancel reaches the peer at all —
-// a body that drops the call, or resets something other than the stream's own
-// source, still compiles and still looks right, and §3.3.4 expects a receiver
-// declining the rest of a stream to reset its read side so the sender stops.
-//
-// So the assertion is about the peer rather than the caller: the writer must
-// see the stream fail. Asserting Cancel "did not panic" would restate the
-// implementation and catch nothing.
+// TestIncomingFetchStreamCancelResetsTheReadSide: Cancel resets the read side
+// so the peer's writer sees the stream fail (§3.3.4).
 func TestIncomingFetchStreamCancelResetsTheReadSide(t *testing.T) {
 	cli, srv := openPair(t)
 	ctx := t.Context()

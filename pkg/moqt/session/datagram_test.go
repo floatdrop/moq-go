@@ -1,50 +1,14 @@
 package session_test
 
 import (
-	"sync"
 	"testing"
 
-	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
-	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
 // paddingDatagramType mirrors the unexported constant in datagram.go (§11.5.2).
 const paddingDatagramType uint64 = 0x132B3E29
-
-// openPairWithConns is openPair's sibling that also returns the underlying
-// conns, so tests can inject raw datagrams (padding, unknown types) that the
-// Session API would never produce.
-func openPairWithConns(t *testing.T) (cli, srv *session.Session, cliConn, srvConn session.Conn) {
-	t.Helper()
-	ctx := t.Context()
-	cliConn, srvConn = sessiontest.NewConnPair()
-
-	var (
-		wg         sync.WaitGroup
-		cErr, sErr error
-	)
-	wg.Go(func() {
-		cli, cErr = session.Client(ctx, cliConn, session.WithImplementation("test/client"))
-	})
-	wg.Go(func() {
-		srv, sErr = session.Server(ctx, srvConn, session.WithImplementation("test/server"))
-	})
-	wg.Wait()
-	if cErr != nil {
-		t.Fatalf("client Open: %v", cErr)
-	}
-	if sErr != nil {
-		t.Fatalf("server Open: %v", sErr)
-	}
-	t.Cleanup(func() {
-		_ = cli.Close(moqt.SessionNoError, "test cleanup")
-		_ = srv.Close(moqt.SessionNoError, "test cleanup")
-	})
-	return cli, srv, cliConn, srvConn
-}
 
 func TestSendReceiveDatagram_RoundTrip(t *testing.T) {
 	cli, srv := openPair(t)

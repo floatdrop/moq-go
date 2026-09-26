@@ -104,12 +104,9 @@ func TestAcceptRequestRejectsStrayRequestUpdate(t *testing.T) {
 	}
 }
 
-// TestAcceptRequestNonFirstOpenerClosesSession pins draft-20 Table 5:
-// "Messages marked "First" MUST be the first message on a new request
-// stream." Only SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS, PUBLISH_NAMESPACE,
-// SUBSCRIBE_NAMESPACE and SUBSCRIBE_TRACKS may open one. Anything else is a
-// PROTOCOL_VIOLATION that AcceptRequest closes the session on itself, rather
-// than handing it to the application or trusting every caller to close.
+// TestAcceptRequestNonFirstOpenerClosesSession: only the "First" messages of
+// §10 Table 5 may open a request stream; AcceptRequest closes the session with
+// PROTOCOL_VIOLATION on anything else.
 func TestAcceptRequestNonFirstOpenerClosesSession(t *testing.T) {
 	t.Parallel()
 	for _, first := range []message.Message{

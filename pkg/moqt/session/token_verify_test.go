@@ -4,59 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
 )
 
-// openTokenPair opens a client/server pair where the server is configured
-// with the given options (typically WithMaxAuthTokenCacheSize and/or
-// WithTokenVerifier). The client is plain. Both sessions are closed on
-// cleanup.
-func openTokenPair(t *testing.T, serverOpts ...session.Option) (client, server *session.Session) {
-	t.Helper()
-	ctx := t.Context()
-	aConn, bConn := sessiontest.NewConnPair()
-
-	var (
-		wg         sync.WaitGroup
-		aErr, bErr error
-	)
-	wg.Go(func() {
-		client, aErr = session.Client(ctx, aConn,
-			session.WithImplementation("mediamesh-test/client"),
-		)
-	})
-	wg.Go(func() {
-		server, bErr = session.Server(ctx, bConn,
-			append([]session.Option{session.WithImplementation("mediamesh-test/server")}, serverOpts...)...,
-		)
-	})
-	wg.Wait()
-	if aErr != nil {
-		t.Fatalf("client Open: %v", aErr)
-	}
-	if bErr != nil {
-		t.Fatalf("server Open: %v", bErr)
-	}
-	t.Cleanup(func() {
-		_ = client.Close(moqt.SessionNoError, "test cleanup")
-		_ = server.Close(moqt.SessionNoError, "test cleanup")
-	})
-	return client, server
-}
-
-// sendSubscribeWithTokens opens a request stream from client carrying a
-// SUBSCRIBE with the given tokens as AUTHORIZATION_TOKEN parameters. The open
-// runs in a background goroutine because OpenRequest writes the SUBSCRIBE
-// synchronously and the pipe-backed write blocks until the peer accepts the
-// stream and reads it — the caller is expected to invoke AcceptRequest on the
-// server side. The opened stream is cancelled on cleanup so neither side blocks
-// after the test.
+// sendSubscribeWithTokens is sendSubscribeWithParams with toks as AUTHORIZATION TOKEN parameters.
 func sendSubscribeWithTokens(t *testing.T, client *session.Session, toks ...message.Token) {
 	t.Helper()
 	var ps message.Parameters
@@ -66,6 +21,7 @@ func sendSubscribeWithTokens(t *testing.T, client *session.Session, toks ...mess
 	sendSubscribeWithParams(t, client, ps)
 }
 
+// sendSubscribeWithParams opens a SUBSCRIBE with ps in the background for the caller to accept.
 func sendSubscribeWithParams(t *testing.T, client *session.Session, ps message.Parameters) {
 	t.Helper()
 	sub := &message.Subscribe{
@@ -96,7 +52,7 @@ func sendSubscribeWithParams(t *testing.T, client *session.Session, ps message.P
 // and that a later USE_ALIAS on a separate request resolves to the same
 // (Type, Value).
 func TestAcceptRequestResolvesRegisterToken(t *testing.T) {
-	client, server := openTokenPair(t, session.WithMaxAuthTokenCacheSize(4096))
+	client, server := openPair(t, session.WithMaxAuthTokenCacheSize(4096))
 
 	// Request 1: REGISTER alias 7 → (type 9, "secret").
 	sendSubscribeWithTokens(t, client, message.Token{
@@ -137,7 +93,7 @@ func TestAcceptRequestResolvesRegisterToken(t *testing.T) {
 // directly without touching the cache (so it works even with aliasing
 // prohibited, maxSize=0).
 func TestAcceptRequestUseValueToken(t *testing.T) {
-	client, server := openTokenPair(t) // no cache budget: aliasing prohibited
+	client, server := openPair(t) // no cache budget: aliasing prohibited
 
 	sendSubscribeWithTokens(t, client, message.Token{
 		AliasType:  message.AliasTypeUseValue,
@@ -160,7 +116,7 @@ func TestAcceptRequestUseValueToken(t *testing.T) {
 // same alias twice is a session-level fault carrying
 // SessionDuplicateAuthTokenAlias.
 func TestAcceptRequestDuplicateAliasIsSessionError(t *testing.T) {
-	client, server := openTokenPair(t, session.WithMaxAuthTokenCacheSize(4096))
+	client, server := openPair(t, session.WithMaxAuthTokenCacheSize(4096))
 
 	reg := message.Token{AliasType: message.AliasTypeRegister, TokenAlias: 1, TokenType: 1, TokenValue: []byte("a")}
 	sendSubscribeWithTokens(t, client, reg)
@@ -186,7 +142,7 @@ func TestAcceptRequestDuplicateAliasIsSessionError(t *testing.T) {
 // TestAcceptRequestUnknownAliasIsSessionError verifies that USE_ALIAS for an
 // unregistered alias yields SessionUnknownAuthTokenAlias.
 func TestAcceptRequestUnknownAliasIsSessionError(t *testing.T) {
-	client, server := openTokenPair(t, session.WithMaxAuthTokenCacheSize(4096))
+	client, server := openPair(t, session.WithMaxAuthTokenCacheSize(4096))
 
 	sendSubscribeWithTokens(t, client, message.Token{
 		AliasType:  message.AliasTypeUseAlias,
@@ -209,7 +165,7 @@ func TestAcceptRequestUnknownAliasIsSessionError(t *testing.T) {
 // no negotiated cache budget (maxSize=0) a REGISTER is an overflow fault per
 // §10.3.1.3.
 func TestAcceptRequestRegisterProhibitedIsOverflow(t *testing.T) {
-	client, server := openTokenPair(t) // maxSize 0
+	client, server := openPair(t) // maxSize 0
 
 	sendSubscribeWithTokens(t, client, message.Token{
 		AliasType:  message.AliasTypeRegister,
@@ -238,7 +194,7 @@ func TestVerifyRequestTokensAllow(t *testing.T) {
 		seen = tok
 		return nil
 	})
-	client, server := openTokenPair(t, session.WithTokenVerifier(verifier))
+	client, server := openPair(t, session.WithTokenVerifier(verifier))
 
 	sendSubscribeWithTokens(t, client, message.Token{
 		AliasType:  message.AliasTypeUseValue,
@@ -263,7 +219,7 @@ func TestVerifyRequestTokensDeny(t *testing.T) {
 	verifier := session.TokenVerifierFunc(func(_ context.Context, _ *session.Session, _ session.ResolvedToken) error {
 		return session.DenyToken(moqt.RequestExpiredAuthToken, "token expired")
 	})
-	client, server := openTokenPair(t, session.WithTokenVerifier(verifier))
+	client, server := openPair(t, session.WithTokenVerifier(verifier))
 
 	sendSubscribeWithTokens(t, client, message.Token{
 		AliasType:  message.AliasTypeUseValue,
@@ -293,7 +249,7 @@ func TestVerifyRequestTokensWrapsPlainError(t *testing.T) {
 	verifier := session.TokenVerifierFunc(func(_ context.Context, _ *session.Session, _ session.ResolvedToken) error {
 		return errors.New("bad signature")
 	})
-	client, server := openTokenPair(t, session.WithTokenVerifier(verifier))
+	client, server := openPair(t, session.WithTokenVerifier(verifier))
 
 	sendSubscribeWithTokens(t, client, message.Token{
 		AliasType:  message.AliasTypeUseValue,
@@ -318,7 +274,7 @@ func TestVerifyRequestTokensWrapsPlainError(t *testing.T) {
 // verifier, VerifyRequestTokens is a no-op (nil) even for token-bearing
 // requests.
 func TestVerifyRequestTokensNoVerifier(t *testing.T) {
-	client, server := openTokenPair(t) // no verifier
+	client, server := openPair(t) // no verifier
 
 	sendSubscribeWithTokens(t, client, message.Token{
 		AliasType:  message.AliasTypeUseValue,
@@ -337,7 +293,7 @@ func TestVerifyRequestTokensNoVerifier(t *testing.T) {
 // TestTokenCacheAccessor verifies that the session exposes a non-nil cache
 // sized from WithMaxAuthTokenCacheSize.
 func TestTokenCacheAccessor(t *testing.T) {
-	_, server := openTokenPair(t, session.WithMaxAuthTokenCacheSize(2048))
+	_, server := openPair(t, session.WithMaxAuthTokenCacheSize(2048))
 	cache := server.TokenCache()
 	if cache == nil {
 		t.Fatal("TokenCache() = nil")
@@ -354,7 +310,7 @@ func TestTokenCacheAccessor(t *testing.T) {
 // USE_ALIAS on a fresh request resolves instead of killing the session with
 // UNKNOWN_AUTH_TOKEN_ALIAS.
 func TestProcessFollowupTokensRegistersAlias(t *testing.T) {
-	client, server := openTokenPair(t, session.WithMaxAuthTokenCacheSize(4096))
+	client, server := openPair(t, session.WithMaxAuthTokenCacheSize(4096))
 
 	// Request 1: a plain SUBSCRIBE establishing the stream the update rides.
 	// Opened inline (not via sendSubscribeWithTokens) because the client
@@ -439,25 +395,13 @@ func TestProcessFollowupTokensRegistersAlias(t *testing.T) {
 // defines and its callers match on.
 var errVerifierPolicy = errors.New("policy: subject not permitted")
 
-// TestVerifyRequestTokensPreservesVerifierSentinel covers the one thing
-// TokenDeniedError.Unwrap exists for.
-//
-// VerifyRequestTokens normalises a plain verifier error into a
-// *TokenDeniedError so the request layer has a REQUEST_ERROR code to send. That
-// normalisation is also where a third-party verifier's own sentinel would be
-// lost: the caller receives our type, not theirs. Unwrap is the documented
-// survival path, and nothing exercised it — the sibling test above asserts the
-// wrapping happens but never matches through it, which is why Unwrap sat at 0%.
-//
-// An authorization policy that cannot tell "denied because expired" from
-// "denied because forbidden" after the error crosses this boundary is a real
-// loss for anyone implementing TokenVerifier, and it would break silently:
-// errors.Is simply starts returning false.
+// TestVerifyRequestTokensPreservesVerifierSentinel: a verifier's own error stays
+// matchable with errors.Is through the *TokenDeniedError wrapping (Unwrap).
 func TestVerifyRequestTokensPreservesVerifierSentinel(t *testing.T) {
 	verifier := session.TokenVerifierFunc(func(_ context.Context, _ *session.Session, _ session.ResolvedToken) error {
 		return fmt.Errorf("checking subject: %w", errVerifierPolicy)
 	})
-	client, server := openTokenPair(t, session.WithTokenVerifier(verifier))
+	client, server := openPair(t, session.WithTokenVerifier(verifier))
 
 	sendSubscribeWithTokens(t, client, message.Token{
 		AliasType:  message.AliasTypeUseValue,
@@ -479,10 +423,8 @@ func TestVerifyRequestTokensPreservesVerifierSentinel(t *testing.T) {
 	}
 }
 
-// TestAcceptRequestUndecodableTokenIsKeyValueFormattingError pins §10.2.2: "If
-// the Token structure cannot be decoded, the receiver MUST close the Session
-// with KEY_VALUE_FORMATTING_ERROR." An unknown Alias Type is undecodable too:
-// the Alias Type is what says which fields follow.
+// TestAcceptRequestUndecodableTokenIsKeyValueFormattingError: an undecodable
+// Token, including an unknown Alias Type, is KEY_VALUE_FORMATTING_ERROR (§10.2.2).
 func TestAcceptRequestUndecodableTokenIsKeyValueFormattingError(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -495,7 +437,7 @@ func TestAcceptRequestUndecodableTokenIsKeyValueFormattingError(t *testing.T) {
 		{"USE_ALIAS with trailing bytes", []byte{byte(message.AliasTypeUseAlias), 0x05, 0xFF}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			client, server := openTokenPair(t)
+			client, server := openPair(t)
 			sendSubscribeWithParams(t, client, message.Parameters{
 				message.BytesParam(message.ParamAuthorizationToken, tc.raw),
 			})

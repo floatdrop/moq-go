@@ -208,3 +208,80 @@ func TestFetchRejected(t *testing.T) {
 
 	wg.Wait()
 }
+
+// ---------------------------------------------------------------------------
+// FETCH responses that close the session
+// ---------------------------------------------------------------------------
+
+// TestFetchOKEndBeforeStartClosesSession: an End Location before the FETCH's
+// Start closes the session with PROTOCOL_VIOLATION (§10.14); End == Start is a
+// one-Object range. A Start relative to the Largest Object is comparable too,
+// since a FETCH's End defaults to it (§5.1.2) and FETCH_OK's End never passes
+// it (§10.14): the Next Object and relative StartGroup 0 start past it, except
+// when End is {0, 0} ("no content yet").
+func TestFetchOKEndBeforeStartClosesSession(t *testing.T) {
+	t.Parallel()
+	absolute := message.LocationFilter{Fields: 2, StartGroup: 5, StartObject: 2}
+	cases := []struct {
+		name   string
+		filter message.LocationFilter
+		end    message.Location
+		closes bool
+	}{
+		{"End in an earlier Group", absolute, message.Location{Group: 4, Object: 9}, true},
+		{"End earlier in the Start Group", absolute, message.Location{Group: 5, Object: 1}, true},
+		{"End at the Start", absolute, message.Location{Group: 5, Object: 2}, false},
+		{"Next Object", message.LocationFilter{Fields: 2}, message.Location{Group: 3, Object: 4}, true},
+		{"Next Object, End {0,0}", message.LocationFilter{Fields: 2}, message.Location{}, false},
+		{"relative StartGroup 0", message.LocationFilter{Fields: 1}, message.Location{Group: 2}, true},
+		{"relative StartGroup 2", message.LocationFilter{Fields: 1, StartGroup: 2}, message.Location{Group: 2}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client, server := openPair(t)
+			answerWith(t, server, &message.FetchOK{EndLocation: tc.end})
+			_, err := client.Fetch(t.Context(), &message.Fetch{
+				Namespace: videoNS, Name: []byte("t"),
+				Parameters: message.Parameters{message.LocationFilterParam(&tc.filter)},
+			})
+			if !tc.closes {
+				if err != nil {
+					t.Fatalf("Fetch: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("Fetch accepted a FETCH_OK whose End Location precedes the Start")
+			}
+			requireClosedProtocolViolation(t, client)
+		})
+	}
+}
+
+// TestFetchObjectInvalidFlagsCloseSession: Serialization Flags of 128 and
+// above other than the End of Range values are a PROTOCOL_VIOLATION (§11.4.4).
+func TestFetchObjectInvalidFlagsCloseSession(t *testing.T) {
+	t.Parallel()
+	client, server := openPair(t)
+	go func() {
+		out, err := server.OpenFetchStream(message.FetchHeader{RequestID: 0})
+		if err != nil {
+			return
+		}
+		_ = out.WriteObject(&message.FetchObject{SerializationFlags: 0x81, ObjectPayload: []byte("x")})
+		_ = out.Close()
+	}()
+	ds, err := client.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	fs, ok := ds.(*session.IncomingFetchStream)
+	if !ok {
+		t.Fatalf("AcceptDataStream = %T, want a FETCH stream", ds)
+	}
+	if _, err := fs.ReadObject(); err == nil {
+		t.Fatal("ReadObject accepted Serialization Flags 0x81")
+	}
+	requireClosedProtocolViolation(t, client)
+}

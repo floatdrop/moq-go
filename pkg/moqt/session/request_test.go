@@ -170,10 +170,8 @@ func TestAcceptRequestUnblocksOnSessionClose(t *testing.T) {
 	}
 }
 
-// TestAcceptRequestDuplicateID verifies that when the peer sends a second
-// request with the same Request ID, AcceptRequest returns ErrDuplicateRequestID
-// per §10.1 (on "a duplicate Request ID, it MUST close the session with
-// INVALID_REQUEST_ID").
+// TestAcceptRequestDuplicateID: a reused Request ID makes AcceptRequest return
+// ErrDuplicateRequestID, for an INVALID_REQUEST_ID close (§10.1).
 func TestAcceptRequestDuplicateID(t *testing.T) {
 	ctx := t.Context()
 	client, server := openPair(t)

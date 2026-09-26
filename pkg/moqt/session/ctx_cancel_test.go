@@ -3,7 +3,6 @@ package session_test
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"time"
 
@@ -57,8 +56,7 @@ func TestServerHandshakeCtxCancel(t *testing.T) {
 // surface ctx.Err().
 func TestAcceptRequestCtxCancel(t *testing.T) {
 	t.Parallel()
-	aConn, bConn := sessiontest.NewConnPair()
-	bSess := serverOf(t, aConn, bConn)
+	_, bSess, aConn, _ := openPairWithConns(t)
 
 	stream, err := aConn.OpenStream()
 	if err != nil {
@@ -91,8 +89,7 @@ func TestAcceptRequestCtxCancel(t *testing.T) {
 // must unblock it and surface ctx.Err().
 func TestAcceptDataStreamCtxCancel(t *testing.T) {
 	t.Parallel()
-	aConn, bConn := sessiontest.NewConnPair()
-	bSess := serverOf(t, aConn, bConn)
+	_, bSess, aConn, _ := openPairWithConns(t)
 
 	stream, err := aConn.OpenUniStream()
 	if err != nil {
@@ -122,36 +119,13 @@ func TestAcceptDataStreamCtxCancel(t *testing.T) {
 	}
 }
 
-// serverOf completes a real handshake over the pair and returns the server
-// session; the client session is closed with the test.
-func serverOf(t *testing.T, aConn, bConn session.Conn) *session.Session {
-	t.Helper()
-	var (
-		wg           sync.WaitGroup
-		aSess, bSess *session.Session
-		aErr, bErr   error
-	)
-	wg.Go(func() { aSess, aErr = session.Client(t.Context(), aConn) })
-	wg.Go(func() { bSess, bErr = session.Server(t.Context(), bConn) })
-	wg.Wait()
-	if aErr != nil || bErr != nil {
-		t.Fatalf("handshake: client=%v server=%v", aErr, bErr)
-	}
-	t.Cleanup(func() {
-		_ = aSess.Close(0, "test done")
-		_ = bSess.Close(0, "test done")
-	})
-	return bSess
-}
-
 // TestSessionErrPublishedBeforeDone pins the <-Done(); Err() contract: the
 // close cause is visible (and race-free under -race) the moment Done fires,
 // and carries the actual §3.5 code and reason — not the transport close
 // result, which is nil in the common case.
 func TestSessionErrPublishedBeforeDone(t *testing.T) {
 	t.Parallel()
-	aConn, bConn := sessiontest.NewConnPair()
-	bSess := serverOf(t, aConn, bConn)
+	_, bSess := openPair(t)
 
 	go bSess.Close(0x3 /* PROTOCOL_VIOLATION */, "test cause")
 

@@ -155,10 +155,8 @@ func TestAcceptDataStreamReservedSubgroupIDMode(t *testing.T) {
 	requireClosedProtocolViolation(t, server)
 }
 
-// TestAcceptDataStreamUnknownTypeClosesSession pins §3.4: "An endpoint that
-// receives an unknown stream type MUST close the session." AcceptDataStream
-// does so itself, so no caller can leave the session half-open by merely
-// stopping its accept loop.
+// TestAcceptDataStreamUnknownTypeClosesSession: an unknown stream type closes
+// the session (§3.4), which AcceptDataStream does itself.
 func TestAcceptDataStreamUnknownTypeClosesSession(t *testing.T) {
 	client, server := openPair(t)
 
@@ -180,11 +178,8 @@ func TestAcceptDataStreamUnknownTypeClosesSession(t *testing.T) {
 	requireClosedProtocolViolation(t, server)
 }
 
-// TestAcceptDataStreamSkipsAbortedHeaders pins §11.4.1: "Early termination of
-// a unidirectional stream does not affect the MOQT application state." A data
-// stream that ends or is reset before its header is complete is abandoned, and
-// AcceptDataStream goes on to return the next stream rather than an error the
-// caller would take as fatal.
+// TestAcceptDataStreamSkipsAbortedHeaders: a data stream ended or reset before
+// its header is complete is skipped, not an error (§11.4.1).
 func TestAcceptDataStreamSkipsAbortedHeaders(t *testing.T) {
 	client, server := openPair(t)
 	conn := session.SessionConn(client)
@@ -231,53 +226,66 @@ func TestAcceptDataStreamSkipsAbortedHeaders(t *testing.T) {
 	}
 }
 
-// requireClosedProtocolViolation waits for sess to close and checks the code.
-func requireClosedProtocolViolation(t *testing.T, sess *session.Session) {
-	t.Helper()
-	select {
-	case <-sess.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("session stayed open; want PROTOCOL_VIOLATION close")
-	}
-	closed, ok := errors.AsType[*session.ClosedError](sess.Err())
-	if !ok {
-		t.Fatalf("Err() = %v, want a *session.ClosedError", sess.Err())
-	}
-	if closed.Code != moqt.SessionProtocolViolation {
-		t.Errorf("closed with code %#x, want PROTOCOL_VIOLATION (%#x)",
-			uint64(closed.Code), uint64(moqt.SessionProtocolViolation))
+// TestFINMidObjectClosesSession: a data stream FINed inside a serialized
+// Object is io.ErrUnexpectedEOF, not io.EOF, and closes the session with
+// PROTOCOL_VIOLATION (§11.4).
+func TestFINMidObjectClosesSession(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		open func(*session.Session) (io.WriteCloser, error)
+		body []byte // the start of an Object, followed by FIN
+		read func(session.DataStream) error
+	}{
+		{
+			"subgroup",
+			func(c *session.Session) (io.WriteCloser, error) {
+				return c.OpenSubgroup(message.SubgroupHeader{TrackAlias: 7, EndOfGroup: true})
+			},
+			[]byte{0x00}, // Object ID Delta
+			func(ds session.DataStream) error {
+				_, err := ds.(*session.IncomingSubgroupStream).ReadObject()
+				return err
+			},
+		},
+		{
+			"fetch",
+			func(c *session.Session) (io.WriteCloser, error) {
+				return c.OpenFetchStream(message.FetchHeader{RequestID: 1})
+			},
+			// Serialization Flags with Group and Object ID Delta present.
+			[]byte{byte(message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta)},
+			func(ds session.DataStream) error {
+				_, err := ds.(*session.IncomingFetchStream).ReadObject()
+				return err
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := openPair(t)
+			go func() {
+				out, err := tc.open(client)
+				if err != nil {
+					return // surfaces as the AcceptDataStream error below
+				}
+				_, _ = out.Write(tc.body)
+				_ = out.Close()
+			}()
+
+			ds, err := server.AcceptDataStream(t.Context())
+			if err != nil {
+				t.Fatalf("AcceptDataStream: %v", err)
+			}
+			err = tc.read(ds)
+			if errors.Is(err, io.EOF) || !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("ReadObject = %v, want io.ErrUnexpectedEOF (and not io.EOF)", err)
+			}
+			requireClosedProtocolViolation(t, server)
+		})
 	}
 }
 
-// TestSubgroupStreamFINMidObjectClosesSession pins §11.4: "If a stream ends
-// gracefully (i.e., the stream terminates with a FIN) in the middle of a
-// serialized Object, the session SHOULD be closed with a PROTOCOL_VIOLATION."
-// ReadObject must neither report the torn stream as a clean io.EOF nor leave
-// the session open.
-func TestSubgroupStreamFINMidObjectClosesSession(t *testing.T) {
-	client, server := openPair(t)
-	go func() {
-		out, err := client.OpenSubgroup(message.SubgroupHeader{TrackAlias: 7, EndOfGroup: true})
-		if err != nil {
-			return // surfaces as the AcceptDataStream error below
-		}
-		_, _ = out.Write([]byte{0x00}) // Object ID Delta, then FIN
-		_ = out.Close()
-	}()
-
-	ds, err := server.AcceptDataStream(t.Context())
-	if err != nil {
-		t.Fatalf("AcceptDataStream: %v", err)
-	}
-	_, err = ds.(*session.IncomingSubgroupStream).ReadObject()
-	if errors.Is(err, io.EOF) || !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("ReadObject = %v, want io.ErrUnexpectedEOF (and not io.EOF)", err)
-	}
-	requireClosedProtocolViolation(t, server)
-}
-
-// TestSubgroupStreamResetMidObjectKeepsSession is the other half: a reset is
-// §11.4.1 cancellation, not a malformed stream, and leaves the session alone.
+// TestSubgroupStreamResetMidObjectKeepsSession: a reset mid-object is
+// cancellation (§11.4.1), not a malformed stream, and leaves the session up.
 func TestSubgroupStreamResetMidObjectKeepsSession(t *testing.T) {
 	client, server := openPair(t)
 	go func() {
@@ -296,41 +304,11 @@ func TestSubgroupStreamResetMidObjectKeepsSession(t *testing.T) {
 	if _, err := ds.(*session.IncomingSubgroupStream).ReadObject(); err == nil || errors.Is(err, io.EOF) {
 		t.Fatalf("ReadObject = %v, want a reset error", err)
 	}
-	select {
-	case <-server.Done():
-		t.Fatalf("session closed after a mid-object reset: %v", server.Err())
-	case <-time.After(50 * time.Millisecond):
-	}
+	requireStaysOpen(t, server, 50*time.Millisecond)
 }
 
-// TestFetchStreamFINMidObjectClosesSession is the FETCH-stream counterpart of
-// TestSubgroupStreamFINMidObjectClosesSession: §11.4 covers every data stream.
-func TestFetchStreamFINMidObjectClosesSession(t *testing.T) {
-	client, server := openPair(t)
-	go func() {
-		out, err := client.OpenFetchStream(message.FetchHeader{RequestID: 1})
-		if err != nil {
-			return
-		}
-		// Serialization Flags with Group and Object ID Delta present, then FIN.
-		_, _ = out.Write([]byte{byte(message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta)})
-		_ = out.Close()
-	}()
-
-	ds, err := server.AcceptDataStream(t.Context())
-	if err != nil {
-		t.Fatalf("AcceptDataStream: %v", err)
-	}
-	_, err = ds.(*session.IncomingFetchStream).ReadObject()
-	if errors.Is(err, io.EOF) || !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("ReadObject = %v, want io.ErrUnexpectedEOF (and not io.EOF)", err)
-	}
-	requireClosedProtocolViolation(t, server)
-}
-
-// TestSubgroupObjectIDOverflowClosesSession pins §11.4.2: "If the resulting
-// Object ID would be greater than 2^64 - 1, the endpoint MUST close the
-// session with a PROTOCOL_VIOLATION." Without the check the ID wraps to 0.
+// TestSubgroupObjectIDOverflowClosesSession: an Object ID past 2^64-1 closes
+// the session with PROTOCOL_VIOLATION rather than wrapping (§11.4.2).
 func TestSubgroupObjectIDOverflowClosesSession(t *testing.T) {
 	client, server := openPair(t)
 	go func() {
@@ -357,9 +335,8 @@ func TestSubgroupObjectIDOverflowClosesSession(t *testing.T) {
 	requireClosedProtocolViolation(t, server)
 }
 
-// TestFetchIDOverflowClosesSession pins §11.4.4.1: "If the computed Group ID
-// would be less than 0 or greater than 2^64-1, the Subscriber MUST close the
-// Session with error 'PROTOCOL_VIOLATION'", and the same for the Object ID.
+// TestFetchIDOverflowClosesSession: a computed Group or Object ID below 0 or
+// past 2^64-1 closes the session with PROTOCOL_VIOLATION (§11.4.4.1).
 func TestFetchIDOverflowClosesSession(t *testing.T) {
 	const maxID = uint64(math.MaxUint64)
 	both := message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta
@@ -424,12 +401,8 @@ func TestFetchIDOverflowClosesSession(t *testing.T) {
 	}
 }
 
-// TestSubgroupInvalidObjectClosesSession: a subgroup object the draft says
-// is session-fatal must close the session, not just fail its stream.
-//   - §11.2.1.2: properties on a non-Normal status object — "MUST close the
-//     session with a PROTOCOL_VIOLATION".
-//   - §11.2.1.1: an unknown Object Status "SHOULD be treated as a protocol
-//     error and the session SHOULD be closed with a PROTOCOL_VIOLATION".
+// TestSubgroupInvalidObjectClosesSession: properties on a non-Normal status
+// Object (§11.2.1.2) and an unknown Object Status (§11.2.1.1) close the session.
 func TestSubgroupInvalidObjectClosesSession(t *testing.T) {
 	tests := []struct {
 		name  string

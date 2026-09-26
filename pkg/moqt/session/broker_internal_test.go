@@ -36,6 +36,7 @@ func routeEventually(t *testing.T, b *RequestBroker, msg message.Message) {
 	}
 }
 
+// startUpdate runs b.Update in the background and delivers its error.
 func startUpdate(b *RequestBroker) <-chan error {
 	errCh := make(chan error, 1)
 	go func() {
@@ -45,8 +46,8 @@ func startUpdate(b *RequestBroker) <-chan error {
 	return errCh
 }
 
+// newTestBroker returns a broker over a stub stream; a zero-value Session suffices for AllocRequestID.
 func newTestBroker() *RequestBroker {
-	// A zero-value Session suffices: Update only needs AllocRequestID.
 	return (&Session{}).NewRequestBroker(brokerStubStream{})
 }
 
@@ -156,6 +157,8 @@ func TestBrokerUpdate_TimeoutRemovesWaiter(t *testing.T) {
 
 // recordingBrokerStream captures writes so a test can decode what went out.
 type recordingBrokerStream struct {
+	brokerStubStream
+
 	mu  sync.Mutex
 	buf []byte
 }
@@ -166,11 +169,6 @@ func (s *recordingBrokerStream) Write(p []byte) (int, error) {
 	s.mu.Unlock()
 	return len(p), nil
 }
-func (s *recordingBrokerStream) Close() error             { return nil }
-func (s *recordingBrokerStream) CancelWrite(uint64)       {}
-func (s *recordingBrokerStream) Read([]byte) (int, error) { return 0, nil }
-func (s *recordingBrokerStream) CancelRead(uint64)        {}
-func (s *recordingBrokerStream) Context() context.Context { return context.Background() }
 
 // TestBrokerUpdate_ConsumesFreshRequestIDs pins §10.1: REQUEST_UPDATE is a
 // request message that consumes a Request ID, so every update the broker

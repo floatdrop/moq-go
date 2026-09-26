@@ -197,3 +197,83 @@ func TestBrokerServe_RejectsInvalidUpdateRequestID(t *testing.T) {
 		t.Fatalf("session close cause = %v, want INVALID_REQUEST_ID", err)
 	}
 }
+
+// TestFollowupRolesEnforcedByBroker: REQUEST_UPDATE comes only from a
+// request's sender or a PUBLISH subscriber (§10.9), and PUBLISH_STATE_NOTIFY
+// only from a subscription's publisher (§10.10); anything else closes the
+// session with PROTOCOL_VIOLATION.
+func TestFollowupRolesEnforcedByBroker(t *testing.T) {
+	// Each setup serves one side's broker and returns that side's session
+	// and the peer's end of the stream, which the test writes to.
+	onSubscriber := func(t *testing.T, c, s *session.Session) (*session.Session, session.Stream) {
+		sub, pub := subscribePair(t, c, s)
+		b := sub.Broker()
+		go func() { _ = b.Serve(t.Context(), nil) }()
+		return c, pub.Stream // the publisher writes; the subscriber's broker reads
+	}
+	onPublisher := func(t *testing.T, c, s *session.Session) (*session.Session, session.Stream) {
+		sub, pub := subscribePair(t, c, s)
+		b := pub.Broker()
+		go func() { _ = b.Serve(t.Context(), nil) }()
+		return s, sub.Stream
+	}
+	onFetchRequester := func(t *testing.T, c, s *session.Session) (*session.Session, session.Stream) {
+		peer := acceptWith(t, s, func(r *session.Request) (session.Stream, error) {
+			_, err := r.AcceptFetch(nil)
+			return r.Stream, err
+		})
+		fr, err := c.Fetch(t.Context(), &message.Fetch{Name: []byte("t")})
+		must(t, err)
+		b := fr.Broker()
+		go func() { _ = b.Serve(t.Context(), nil) }()
+		return c, <-peer
+	}
+	onPublishReceiver := func(t *testing.T, c, s *session.Session) (*session.Session, session.Stream) {
+		incs := make(chan *session.IncomingPublication, 1)
+		go func() {
+			r, err := s.AcceptRequest(t.Context())
+			if err != nil {
+				return
+			}
+			p, _ := r.AcceptPublish()
+			incs <- p
+		}()
+		pub, err := c.Publish(t.Context(), &message.Publish{Name: []byte("t")})
+		must(t, err)
+		inc := <-incs
+		b := inc.Broker()
+		go func() { _ = b.Serve(t.Context(), nil) }()
+		return s, pub.Stream
+	}
+	update := func(c *session.Session) message.Message { return &message.RequestUpdate{RequestID: c.AllocRequestID()} }
+	notify := func(*session.Session) message.Message { return &message.PublishStateNotify{} }
+
+	for _, tc := range []struct {
+		name   string
+		serve  func(t *testing.T, c, s *session.Session) (*session.Session, session.Stream)
+		msg    func(sender *session.Session) message.Message
+		closes bool
+	}{
+		{"REQUEST_UPDATE from a SUBSCRIBE's publisher", onSubscriber, update, true},
+		{"PUBLISH_STATE_NOTIFY from a SUBSCRIBE's subscriber", onPublisher, notify, true},
+		{"REQUEST_UPDATE from a FETCH responder", onFetchRequester, update, true},
+		{"PUBLISH_STATE_NOTIFY on a FETCH", onFetchRequester, notify, true},
+		{"PUBLISH_STATE_NOTIFY from a SUBSCRIBE's publisher (allowed)", onSubscriber, notify, false},
+		{"REQUEST_UPDATE from a PUBLISH's sender (allowed)", onPublishReceiver, update, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, server := openPair(t)
+			served, peer := tc.serve(t, client, server)
+			sender := client
+			if served == client {
+				sender = server
+			}
+			go func() { _ = message.Marshal(peer, tc.msg(sender)) }()
+			if tc.closes {
+				requireClosedProtocolViolation(t, served)
+				return
+			}
+			requireStaysOpen(t, served, 200*time.Millisecond)
+		})
+	}
+}

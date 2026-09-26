@@ -9,32 +9,24 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 )
 
-// prioritizedFakeStream extends the test-only fakeSendStream pattern with a
-// SetSendPriority method that records every priority key the relay pushes
-// through. It satisfies both [session.SendStream] and
-// [session.PrioritizedSendStream].
-type prioritizedFakeStream struct {
-	buf        *bytes.Buffer
-	priorities []session.StreamPriority
-}
-
-func (s *prioritizedFakeStream) Write(p []byte) (int, error) { return s.buf.Write(p) }
-func (s *prioritizedFakeStream) Close() error                { return nil }
-func (s *prioritizedFakeStream) CancelWrite(uint64)          {}
-func (s *prioritizedFakeStream) Context() context.Context    { return context.Background() }
-
-func (s *prioritizedFakeStream) SetSendPriority(p session.StreamPriority) {
-	s.priorities = append(s.priorities, p)
-}
-
-// plainFakeStream satisfies SendStream but not PrioritizedSendStream — used
-// to verify the silent no-op fallback.
-type plainFakeStream struct{ buf *bytes.Buffer }
+// plainFakeStream is a [session.SendStream] into a buffer, with no optional capabilities.
+type plainFakeStream struct{ buf bytes.Buffer }
 
 func (s *plainFakeStream) Write(p []byte) (int, error) { return s.buf.Write(p) }
 func (s *plainFakeStream) Close() error                { return nil }
 func (s *plainFakeStream) CancelWrite(uint64)          {}
 func (s *plainFakeStream) Context() context.Context    { return context.Background() }
+
+// prioritizedFakeStream is a [session.PrioritizedSendStream] recording every priority it is given.
+type prioritizedFakeStream struct {
+	plainFakeStream
+
+	priorities []session.StreamPriority
+}
+
+func (s *prioritizedFakeStream) SetSendPriority(p session.StreamPriority) {
+	s.priorities = append(s.priorities, p)
+}
 
 // TestOutgoingSubgroupStream_SetSendPriority_ForwardsWhenSupported pins
 // the forwarding contract: when the inner SendStream implements
@@ -43,7 +35,7 @@ func (s *plainFakeStream) Context() context.Context    { return context.Backgrou
 func TestOutgoingSubgroupStream_SetSendPriority_ForwardsWhenSupported(t *testing.T) {
 	t.Parallel()
 
-	inner := &prioritizedFakeStream{buf: &bytes.Buffer{}}
+	inner := &prioritizedFakeStream{}
 	out := session.NewOutgoingSubgroupStream(inner)
 
 	p0 := session.StreamPriority{Subscriber: 0}                             // highest
@@ -66,25 +58,21 @@ func TestOutgoingSubgroupStream_SetSendPriority_ForwardsWhenSupported(t *testing
 func TestOutgoingSubgroupStream_SetSendPriority_NoopWhenUnsupported(t *testing.T) {
 	t.Parallel()
 
-	inner := &plainFakeStream{buf: &bytes.Buffer{}}
+	inner := &plainFakeStream{}
 	out := session.NewOutgoingSubgroupStream(inner)
 
 	// Must not panic.
 	out.SetSendPriority(session.StreamPriority{Subscriber: 42})
 }
 
-// reliableSpyStream satisfies [session.SendStream] and
-// [session.ReliableResetStream], counting SetReliableBoundary calls.
+// reliableSpyStream is a [session.ReliableResetStream] counting SetReliableBoundary calls.
 type reliableSpyStream struct {
-	buf   *bytes.Buffer
+	plainFakeStream
+
 	marks int
 }
 
-func (s *reliableSpyStream) Write(p []byte) (int, error) { return s.buf.Write(p) }
-func (s *reliableSpyStream) Close() error                { return nil }
-func (s *reliableSpyStream) CancelWrite(uint64)          {}
-func (s *reliableSpyStream) Context() context.Context    { return context.Background() }
-func (s *reliableSpyStream) SetReliableBoundary()        { s.marks++ }
+func (s *reliableSpyStream) SetReliableBoundary() { s.marks++ }
 
 // TestOutgoingSubgroupStream_MarkReliable pins the §11.4.3 RESET_STREAM_AT
 // plumbing: MarkReliable forwards to the underlying stream when it implements
@@ -92,7 +80,7 @@ func (s *reliableSpyStream) SetReliableBoundary()        { s.marks++ }
 func TestOutgoingSubgroupStream_MarkReliable(t *testing.T) {
 	t.Parallel()
 
-	supported := &reliableSpyStream{buf: &bytes.Buffer{}}
+	supported := &reliableSpyStream{}
 	out := session.NewOutgoingSubgroupStream(supported)
 	out.MarkReliable()
 	out.MarkReliable()
@@ -101,6 +89,6 @@ func TestOutgoingSubgroupStream_MarkReliable(t *testing.T) {
 	}
 
 	// Must not panic when the underlying stream lacks the extension.
-	plain := &plainFakeStream{buf: &bytes.Buffer{}}
+	plain := &plainFakeStream{}
 	session.NewOutgoingSubgroupStream(plain).MarkReliable()
 }

@@ -250,15 +250,8 @@ func TestFetchObjectRoundTrip(t *testing.T) {
 	}
 }
 
-// TestWriteObjectWrongType verifies that the type system prevents passing a
-// FetchObject to an OutgoingSubgroupStream at compile time. At runtime we
-// verify that a subgroup stream correctly rejects a nil payload (zero-value
-// object) without panicking, and that a fetch stream correctly rejects a nil
-// payload without panicking.
-//
-// The compile-time guarantee is the primary value: WriteObject(*SubgroupObject)
-// and WriteObject(*FetchObject) are distinct method signatures, so the wrong
-// type is a compile error, not a runtime error.
+// TestWriteObjectWrongType: the wrong object type is a compile error (distinct
+// WriteObject signatures); at runtime a zero-value object must not panic.
 func TestWriteObjectWrongType(t *testing.T) {
 	cli, srv := openPair(t)
 	ctx := t.Context()
@@ -734,12 +727,9 @@ func TestIncomingFetchStream_ReadDecoded_Descending(t *testing.T) {
 	}
 }
 
-// TestIncomingFetchStream_ReadDecoded_EndOfRange verifies that
-// §11.4.4.2 absence markers surface via EndOfNonExistentRange /
-// EndOfUnknownRange and BECOME the prior Group/Object ID for the next
-// object ("Prior Group ID and prior Object ID: The values from the End of
-// Range indicator"), while the prior Subgroup ID and Priority stay those
-// of the last actual object.
+// TestIncomingFetchStream_ReadDecoded_EndOfRange: End of Range markers surface
+// as EndOfNonExistentRange / EndOfUnknownRange and become the prior Group and
+// Object ID; the prior Subgroup ID and Priority stay the last Object's (§11.4.4.2).
 func TestIncomingFetchStream_ReadDecoded_EndOfRange(t *testing.T) {
 	cli, srv := openPair(t)
 	ctx := t.Context()
@@ -827,12 +817,9 @@ func TestIncomingFetchStream_ReadDecoded_EndOfRange(t *testing.T) {
 	}
 }
 
-// TestIncomingFetchStream_ReadDecoded_FirstObjectViolations verifies
-// §11.4.4.1: "The first Object MUST include a Group ID Delta and Object ID
-// Delta [...]. If the first Object in the FETCH response uses a flag that
-// references fields in the prior Object, the Subscriber MUST close the session
-// with a PROTOCOL_VIOLATION." Each field that can reference the prior Object
-// is covered.
+// TestIncomingFetchStream_ReadDecoded_FirstObjectViolations: a first Object
+// missing a delta, or referencing any prior-Object field, closes the session
+// with PROTOCOL_VIOLATION (§11.4.4.1).
 func TestIncomingFetchStream_ReadDecoded_FirstObjectViolations(t *testing.T) {
 	tests := []struct {
 		name  string
