@@ -14,6 +14,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
 // ErrRequestIDParityViolation is returned by [Session.CheckPeerRequestID] when
@@ -533,6 +534,16 @@ type requestHandle struct {
 	// peerDone records that the publisher's FIN was read.
 	peerDone atomic.Bool
 
+	// namespaces marks a SUBSCRIBE_NAMESPACE, whose broker checks each
+	// NAMESPACE_DONE against the NAMESPACEs before it (§10.19); nsPrefix is
+	// the Track Namespace Prefix it was sent with.
+	namespaces bool
+	nsPrefix   wire.TrackNamespace
+
+	// goaways checks the GOAWAYs this stream carries (§10.4), for every
+	// reader of the handle.
+	goaways RequestGoaways
+
 	// answered is TypeSubscribe or TypePublish for a request this side sent,
 	// whose response was read: its broker closes the session on another
 	// (§5.1). Zero otherwise.
@@ -608,6 +619,7 @@ func (h *requestHandle) Broker() *RequestBroker {
 		b.PeerMessages(h.peerUpdate, h.peerNotify)
 		b.UpdateScope(h.updateScope)
 		b.handle = h
+		b.nsPrefix = h.nsPrefix
 		h.broker.Store(b)
 	})
 	return h.broker.Load()

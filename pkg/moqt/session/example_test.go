@@ -436,18 +436,17 @@ func ExampleSession_SubscribeNamespace() {
 	}
 	defer annStream.Close()
 
-	for {
-		msg, err := message.Parse(annStream)
-		if err != nil {
-			return
-		}
+	// The broker enforces the session-level rules, such as a NAMESPACE_DONE
+	// only after its NAMESPACE (§10.19), and returns when the stream ends.
+	_ = annStream.Broker().Serve(ctx, func(msg message.Message) bool {
 		switch m := msg.(type) {
 		case *message.Namespace:
 			fmt.Printf("announced: %v\n", m.TrackNamespaceSuffix)
 		case *message.NamespaceDone:
 			fmt.Printf("done: %v\n", m.TrackNamespaceSuffix)
 		}
-	}
+		return true
+	})
 }
 
 // Accepting requests on the server side. A server (or relay) pulls inbound
