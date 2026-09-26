@@ -875,7 +875,10 @@ func (w *subgroupWriter) run() {
 // the Object ID is one greater; fwd follows the last Object on its inbound
 // stream; or its Prior Object ID Gap (§12.9) says the IDs between do not
 // exist. Knowing from the cache or the subscriber's filters that they are in
-// other Subgroups or filtered out is not used (a choice).
+// other Subgroups or filtered out is not used (a choice). A gap that also
+// covers prevID is not trusted. It is a §12.9 malformed-track condition, but
+// like the others that need earlier Objects it is not detected (see
+// [message.CheckObjectProperties]); the Object just goes on a new stream.
 func isNextObject(fwd fwdObject, prevID uint64, dropped bool) bool {
 	if fwd.absID == prevID+1 {
 		return true
@@ -887,7 +890,7 @@ func isNextObject(fwd fwdObject, prevID uint64, dropped bool) bool {
 		return true
 	}
 	gap, ok := message.PriorObjectIDGap(fwd.obj.Properties)
-	return ok && fwd.absID-gap <= prevID+1
+	return ok && fwd.absID-gap == prevID+1
 }
 
 // openCounted opens a subgroup stream, counting it for the §10.12 Stream

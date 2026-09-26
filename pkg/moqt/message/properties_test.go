@@ -309,6 +309,10 @@ func TestPriorObjectIDGap(t *testing.T) {
 			t.Errorf("%s: PriorObjectIDGap = (%d, %v), want (%d, %v)", tc.name, gap, ok, tc.gap, tc.hasGap)
 		}
 	}
+	raw := AppendTrackProperties([]wire.KVPair{immutable(kv(PropertyPriorObjectIDGap, 2))})
+	if n := testing.AllocsPerRun(10, func() { PriorObjectIDGap(raw) }); n != 0 {
+		t.Errorf("PriorObjectIDGap allocates %v times, want 0", n)
+	}
 }
 
 func BenchmarkCheckObjectProperties(b *testing.B) {
