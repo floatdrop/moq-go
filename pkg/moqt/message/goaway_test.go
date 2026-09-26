@@ -32,9 +32,8 @@ func TestGoawayOversizedURIRejected(t *testing.T) {
 	}
 }
 
-// TestGoawayHugeURILengthRejected feeds a GOAWAY whose New Session URI length
-// is 2^63 — a valid draft-20 varint (§1.4.1) that overflows int. Parse must
-// return an error rather than panic, since any peer can send this frame.
+// TestGoawayHugeURILengthRejected: a 2^63 URI length is a valid varint
+// (§1.4.1) that overflows int; Parse must error, not panic.
 func TestGoawayHugeURILengthRejected(t *testing.T) {
 	w := wire.NewWriter(nil)
 	w.Varint(1 << 63)

@@ -136,6 +136,7 @@ func (b *rwBuffer) Reset() {
 // import collision with the rest of the package's test files.
 var errEOF = rwEOF{}
 
+// rwEOF is the error type behind errEOF.
 type rwEOF struct{}
 
 func (rwEOF) Error() string { return "EOF" }

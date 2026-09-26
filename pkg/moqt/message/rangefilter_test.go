@@ -74,6 +74,7 @@ func TestRangeFilterRoundTrip(t *testing.T) {
 	}
 }
 
+// nilIfEmpty maps an empty slice to nil, so comparisons ignore the difference.
 func nilIfEmpty(r []Range) []Range {
 	if len(r) == 0 {
 		return nil
