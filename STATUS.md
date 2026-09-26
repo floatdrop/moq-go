@@ -492,3 +492,131 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   the first copy of each {Group, Object} is forwarded and later ones are
   dropped unread. Comparing them would detect a malformed track (§2.4.2
   condition 6), at a cost on every Object.
+
+### Draft-20 compliance review backlog
+
+A second full review against draft-ietf-moq-transport-20 (2026-09-26, at
+`dbe571e`) found the gaps below. Each item names the rule it misses. Items
+already listed as Limitations above are not repeated here.
+
+High:
+
+- A FETCH answered from the cache treats every Object missing above the
+  eviction floor as non-existent and FINs the stream, although a lost datagram,
+  a reset subgroup stream or a subgroup still in flight leaves such holes. §10.13:
+  a relay that meets an uncached Object of unknown status "MUST pause subsequent
+  delivery until it has confirmed the object's status upstream".
+- The relay's 32-Group dedup window measures Group ID distance, so an Object of a
+  Group 32 or more IDs below the newest is dropped as already delivered and the
+  downstream stream then FINs. §9.4: "MUST NOT reorder or drop objects received on
+  a multi-object stream"; §11.4.3 requires a reset when Objects were not delivered.
+- A request stream reset or FINed before its first message is complete ends the
+  relay's request loop without closing the session (§3.3.2, §3.3.3: that request
+  fails or is cancelled, nothing more).
+  A bad Request ID on an opener takes the same path instead of closing the session
+  with INVALID_REQUEST_ID (§10.1).
+- A subscriber's cancellation does not reset the subscription's open subgroup
+  streams or fill fetch streams: the relay keeps forwarding, then FINs (§5.1.1:
+  "MUST reset any open streams associated with the SUBSCRIBE"; §5.1.3.1).
+- A REQUEST_UPDATE carrying TRACK_NAMESPACE_PREFIX on SUBSCRIBE_NAMESPACE or
+  SUBSCRIBE_TRACKS (§10.9.2) is applied without authorization, and its tokens
+  are dropped. §10.19 and §10.20 say "The publisher MUST ensure the subscriber
+  is authorized to perform this namespace subscription", which an updated
+  prefix changes; §10.2.2 lets a REQUEST_UPDATE carry the token that
+  authorizes it.
+- A fill stream on a subscription that omits GROUP_ORDER is written Ascending,
+  ignoring DEFAULT_PUBLISHER_GROUP_ORDER (§10.2.8, §10.2.15, §12.5). A subscriber
+  decoding it Descending gets wrong Group IDs (§11.4.4.1).
+
+Session layer:
+
+- DUPLICATE_TRACK_ALIAS never closes the session: the relay answers REQUEST_ERROR
+  MALFORMED_TRACK, `Session.Subscribe` and `AcceptPublish` return an error (§11.1).
+  A session-layer subscriber also never releases an alias when its subscription
+  ends.
+- A GOAWAY on a request stream is ignored: a second one, or one carrying a New
+  Session URI sent to a server, does not close the session (§10.4).
+- A REQUEST_ERROR Redirect is dropped after parsing: a server receiving a Connect
+  URI, or a Track Name on a namespace-scoped request, does not close the session,
+  and the application cannot follow it (§10.6.1).
+- A first response other than REQUEST_OK / REQUEST_ERROR to SUBSCRIBE_NAMESPACE or
+  SUBSCRIBE_TRACKS does not close the session (§10.19, §10.20).
+- `Publication`'s automatic PUBLISH_DONE UPDATE_FAILED is sent while its subgroup
+  streams are open, `WriteObject` still succeeds after `Done`, and a subgroup
+  opened concurrently with `Done` is missing from the Stream Count (§10.12).
+- `Publication`'s REQUEST_UPDATE_OK carries LARGEST_OBJECT only for Objects it
+  wrote itself, not the one its SUBSCRIBE_OK or PUBLISH reported (§10.2.17,
+  §10.9.1).
+- `ReadPublishSkipped` does not close the session on a REQUEST_UPDATE or
+  PUBLISH_STATE_NOTIFY from the publisher (§10.9, §10.10), and nothing enforces
+  NAMESPACE_DONE-before-NAMESPACE on a namespace subscription (§10.19).
+- A second SUBSCRIBE_OK is handed to the application (§5.1 SHOULD close).
+- A rejected request sends STOP_SENDING with INTERNAL_ERROR (§3.3.4 SHOULD use a
+  relevant code).
+- Mandatory Track Property enforcement is off unless configured (§2.5.1).
+- FETCH Serialization Flags ≥ 128 are read as field bits before being rejected,
+  so a reset or oversized length avoids the PROTOCOL_VIOLATION (§11.4.4).
+- SETUP options are sorted unstably, so with more than 12 the Token order on the
+  wire can differ from the order `heldSetupAliases` replays (§10.3.1.4).
+
+Validation (values that MUST close the session):
+
+- GROUP_ORDER on PUBLISH, inside FILL_PARAMETERS, and in `AcceptSubscribe` /
+  `AcceptPublish` (§10.2.8); the FETCH case is the Limitation above.
+- FORWARD in PUBLISH_STATE_NOTIFY, in a publisher's REQUEST_UPDATE, and in
+  `AcceptPublish` (§10.2.18).
+- DEFAULT_PUBLISHER_GROUP_ORDER outside {1, 2} and DYNAMIC_GROUPS above 1 in
+  Track Properties (§12.5, §12.6).
+- A LOCATION_FILTER whose StartGroup + EndGroupDelta overflows: REQUEST_ERROR
+  MALFORMED_TRACK on SUBSCRIBE, REQUEST_UPDATE and SUBSCRIBE_TRACKS, INVALID_FILTER
+  on FETCH, a fill reset in FILL_PARAMETERS (§5.1.2).
+
+Relay:
+
+- Any REQUEST_UPDATE turns INCLUDE_PROPERTIES=0 back off, so the subscriber
+  resolves the wrong default Publisher Priority. §10.9: a parameter absent from
+  REQUEST_UPDATE "remains unchanged", and INCLUDE_PROPERTIES cannot appear in
+  one (§10.2.21, §12.4).
+- A merged Subgroup FINs when one contributor ends cleanly although its Objects
+  began after ones a reset contributor never delivered (§11.4.3).
+- Replay streams (joiners, gap and properties reopens) lose the first Object's
+  delivery-timeout override (§8, §12.1, §12.2).
+- FETCH_OK never sets End Of Track (§10.14).
+- A cancelled FETCH keeps writing its data stream (§5.2: "MUST reset").
+- FILL_TIMEOUT does not bound an upstream FETCH once its data stream is open
+  (§10.2.5 SHOULD).
+- Objects from an upstream FETCH are exempt from MAX_CACHE_DURATION, and cached
+  Objects age from when they were read whole rather than their beginning (§12.3).
+- A fill range is evaluated against a later Largest Object than SUBSCRIBE_OK or
+  REQUEST_UPDATE_OK reported (§5.1.3).
+- TRACK_STATUS returns DOES_NOT_EXIST for a PUBLISHed track with no properties
+  or Objects, which SUBSCRIBE accepts (§10.15: "treats it identically").
+- A client cannot SUBSCRIBE to a track it publishes under its own
+  PUBLISH_NAMESPACE (§5.1).
+- RENDEZVOUS_TIMEOUT is ignored (§10.2.6 SHOULD hold the subscription; §9.5).
+- REQUEST_ERROR MALFORMED_TRACK, defined for FETCH, answers SUBSCRIBE, PUBLISH
+  and REQUEST_UPDATE failures (§10.6.2).
+- The relay keeps initiating requests on a session it sent GOAWAY to (§10.4
+  SHOULD avoid), and closes with GOAWAY_TIMEOUT when it sent none (§3.5).
+- A PUBLISH can follow PUBLISH_SKIPPED for the same upstream PUBLISH after a
+  prefix update moves away and back (§6.1).
+- Upstream FETCHes to a publisher whose track is found malformed are not
+  cancelled (§2.4.2).
+- Filters are not aggregated upstream (§6.3.1 SHOULD).
+
+Documentation:
+
+- Limitations: "Duplicate Objects … are not compared" is stale; the FETCH
+  GROUP_ORDER entry omits PUBLISH and FILL_PARAMETERS; the LOC entry names
+  `PropAudioLevel = 0x0A` (it is 0x0C); "Handles the application reads itself"
+  says `CheckPeerParams` checks roles; "Inbound GOAWAY" omits request streams.
+- Table rows 10.2.5, 10.2.6, 10.2.8, 10.2.9, 10.2.15, 10.2.18, 10.2.21, 12.3,
+  12.5 and 12.6 overstate what is done (see the items above), and the package
+  summary still lists joining FETCH.
+- `session/namespace.go` says NAMESPACE / NAMESPACE_DONE go on a
+  PUBLISH_NAMESPACE stream (§10.17, §10.18).
+- About a dozen stale `§` citations (padding, grease, fetch ordering, caching).
+
+Open questions for interop: whether an End of Range marker carries an Object
+Payload Length (Figure 28 vs §11.4.4.2), and whether EXPIRES may appear in
+TRACK_STATUS_OK (§10.15 vs §10.2.16).
