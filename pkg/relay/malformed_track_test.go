@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -455,6 +456,8 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps, objProps []byte) {
 	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
+	written := make(chan struct{})
+	tailWritten := sync.OnceFunc(func() { close(written) })
 	go func() {
 		for {
 			req, err := pubSess.AcceptRequest(t.Context())
@@ -468,7 +471,7 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps, objProps []byte) {
 				}
 				for g := stitchLiveLo; g <= stitchLiveHi; g++ {
 					sg, err := openSubgroupWaiting(t, pubSess, message.SubgroupHeader{
-						SubgroupIDMode: message.SubgroupIDImplicitZero, TrackAlias: 42, GroupID: g,
+						SubgroupIDMode: message.SubgroupIDImplicitZero, TrackAlias: 42, GroupID: g, EndOfGroup: true,
 					})
 					if err != nil {
 						return
@@ -476,6 +479,7 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps, objProps []byte) {
 					_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte{byte('a' + g)}})
 					_ = sg.Close()
 				}
+				tailWritten()
 			case *message.Fetch:
 				_ = req.Reply(&message.FetchOK{
 					EndLocation:     message.Location{Group: stitchLiveLo - 1},
@@ -503,6 +507,7 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps, objProps []byte) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	go drainAll(t.Context(), live)
+	awaitTailCached(t, written)
 	fc := dialAnotherClient(t, pubSess)
 	deadline := time.Now().Add(5 * time.Second)
 	for {

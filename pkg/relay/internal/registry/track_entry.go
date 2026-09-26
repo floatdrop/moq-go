@@ -432,6 +432,9 @@ func (e *TrackEntry) SubgroupEnded(lastObj ObjectInfo, endOfGroup bool) error {
 	hard := lastObj.Status == message.ObjectStatusNormal
 	at := lastObj.Object
 	if hard {
+		if at == math.MaxUint64 {
+			return nil // nothing lies past it
+		}
 		at++
 	}
 	ends := end{at: at, set: true, hard: hard}
@@ -519,15 +522,53 @@ func (e *TrackEntry) LowestForwarded(group, subgroup uint64) (uint64, bool) {
 	return sg.minObject, sg.hasObject
 }
 
+// LocRange is an inclusive range of Locations, Lo through Hi.
+type LocRange struct{ Lo, Hi message.Location }
+
+// KnownAbsent reports the Locations the ledger knows do not exist (§2.1:
+// "All signals that an Object does not exist are authoritative"), within the
+// Groups it holds: each Group's end onward (§11.2.1.1, §11.4.2; a status end
+// at M from M, since a status Object is not one a FETCH serializes), and the Object
+// and Group ID gaps announced (§12.8, §12.9). The ranges may overlap and are
+// in no particular order. A FIN or END_OF_GROUP bit that ended a Group is
+// known only here, not from the cache.
+func (e *TrackEntry) KnownAbsent() []LocRange {
+	e.deliveredMu.Lock()
+	defer e.deliveredMu.Unlock()
+	var out []LocRange
+	for id, g := range e.delivered {
+		if g.end.set {
+			out = append(out, LocRange{
+				Lo: message.Location{Group: id, Object: g.end.at},
+				Hi: message.Location{Group: id, Object: math.MaxUint64},
+			})
+		}
+		for _, r := range g.objectGaps {
+			out = append(out, LocRange{
+				Lo: message.Location{Group: id, Object: r.lo},
+				Hi: message.Location{Group: id, Object: r.hi},
+			})
+		}
+	}
+	for _, r := range e.groupGaps {
+		out = append(out, LocRange{
+			Lo: message.Location{Group: r.lo},
+			Hi: message.Location{Group: r.hi, Object: math.MaxUint64},
+		})
+	}
+	return out
+}
+
 // groupEnd reports where o ends its Group (see [end]), if it does: an
 // END_OF_GROUP or END_OF_TRACK status at M at M (§11.2.1.1); a datagram's
 // END_OF_GROUP bit on Object N at N+1, which §2.4.2's non-exhaustive list does
-// not name but §11.3.1 defines alike.
+// not name but §11.3.1 defines alike. After Object 2^64-1 nothing lies past,
+// so that bit ends nothing.
 func groupEnd(o ObjectInfo) (at uint64, hard, ok bool) {
 	switch {
 	case o.Status == message.ObjectStatusEndOfGroup, o.Status == message.ObjectStatusEndOfTrack:
 		return o.Object, false, true
-	case o.Datagram && o.EndOfGroup:
+	case o.Datagram && o.EndOfGroup && o.Object < math.MaxUint64:
 		return o.Object + 1, true, true
 	}
 	return 0, false, false

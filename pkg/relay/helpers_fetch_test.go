@@ -122,8 +122,22 @@ func fetchAndDrain(
 	return reqStream.OK, decodeFetchStream(t, fs, order)
 }
 
+// awaitTailCached waits, up to 5s, for an upstream to close written once it
+// has written its live tail, then lets the relay cache the last of it. Writes
+// over the test transport return once the relay has read them.
+func awaitTailCached(t *testing.T, written <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-written:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the upstream never wrote its live tail")
+	}
+	time.Sleep(50 * time.Millisecond)
+}
+
 // decodeFetchStream reads fs to EOF, reversing the §11.4.4.1 delta encoding
-// itself rather than through the session decoder.
+// itself rather than through the session decoder. End of Range markers
+// (§11.4.4.2) are skipped, but anchor the Object after them.
 func decodeFetchStream(t *testing.T, fs *session.IncomingFetchStream, order message.GroupOrder) []decodedFetchObject {
 	t.Helper()
 	var (
@@ -140,6 +154,10 @@ func decodeFetchStream(t *testing.T, fs *session.IncomingFetchStream, order mess
 				return out
 			}
 			t.Fatalf("ReadObject: %v", err)
+		}
+		if isEndOfRange(fo.SerializationFlags) {
+			prevGroup, prevObject, havePrev = fo.GroupIDDelta, fo.ObjectIDDelta, true
+			continue
 		}
 
 		var g, o uint64
@@ -169,6 +187,15 @@ func decodeFetchStream(t *testing.T, fs *session.IncomingFetchStream, order mess
 		prevObject = o
 		havePrev = true
 	}
+}
+
+// isEndOfRange reports whether flags are a §11.4.4.2 End of Range marker's.
+func isEndOfRange(flags uint64) bool {
+	switch flags {
+	case message.FetchEndOfNonExistentRange, message.FetchEndOfUnknownRange, message.FetchEndOfTimedOutRange:
+		return true
+	}
+	return false
 }
 
 // fetchElem is one element of a FETCH response: an Object or a §11.4.4.2

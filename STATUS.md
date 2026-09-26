@@ -62,8 +62,8 @@ By package, bottom-up along the dependency stack:
 - **`relay`** — routes objects through a track registry with per-subscription
   live fanout under a §8 slow-reader policy, merges multiple upstream publishers
   per track (§9.5) with §2.1 {Group, Object} dedup and survivor-continues
-  failover, serves FETCHes from a per-track cache (stitching evicted ranges from
-  an upstream FETCH), issues on-demand upstream SUBSCRIBEs to every matching
+  failover, serves FETCHes from a per-track cache (asking an upstream FETCH
+  about what the cache cannot vouch for), issues on-demand upstream SUBSCRIBEs to every matching
   publisher (local and, via a `DiscoveryStore` + `Dialer`, remote), reflects
   remote namespaces to local subscribers, gates requests through an `Authorizer`
   hook, emits telemetry through a `Metrics` hook, and drains sessions with
@@ -197,7 +197,7 @@ By package, bottom-up along the dependency stack:
 | 10.10   | PUBLISH_STATE_NOTIFY          | 0x22   | DONE   | Only the publisher may send it; enforced by brokers and the relay. |
 | 10.11   | PUBLISH                       | 0x1D   | DONE   | |
 | 10.12   | PUBLISH_DONE                  | 0x0B   | DONE   | Sent once every stream of the subscription has closed and no datagram send is in progress, with the exact Stream Count; written on its own goroutine, so subscribers do not wait on each other. When a track's last upstream ends, its PUBLISH_DONE code reaches subscribers if it is about the track (TRACK_ENDED, MALFORMED_TRACK); codes about the relay's own upstream subscription become INTERNAL_ERROR. |
-| 10.13   | FETCH                         | 0x16   | DONE   | Standalone, the only kind in draft-20. |
+| 10.13   | FETCH                         | 0x16   | DONE   | Standalone, the only kind in draft-20. From the cache, a Location is non-existent only on a signal: a Prior Group or Object ID Gap, a Group's or the Track's end, or an upstream's FETCH. Other uncached Locations are FETCHed from a fetch-capable upstream in one span, within FILL_TIMEOUT, or else marked End of Unknown (or Timed-Out) Range. |
 | 10.14   | FETCH_OK                      | 0x18   | DONE   | An End Location before the FETCH's Start closes the session. A Start relative to the Largest Object is compared through End ≤ Largest; an End of {0,0} is let through, as it cannot be told apart from "no content yet". |
 | 10.15   | TRACK_STATUS                  | 0x0D   | DONE   | Reply via REQUEST_OK, then FIN; any follow-up from the requester closes the session. |
 | 10.16   | PUBLISH_NAMESPACE             | 0x06   | DONE   | |
@@ -222,7 +222,7 @@ By package, bottom-up along the dependency stack:
 | 11.4.3   | Closing subgroup streams             | DONE    | Relay forwards only the next object on a stream, otherwise reset+reopen: the next object is one ID greater, read next from the same upstream stream (only filtered-out objects between), or covered by its Prior Object ID Gap; an object the relay dropped, or one from another upstream, breaks the run. FINs on clean inbound EOF, resets on inbound reset, resets with MALFORMED_TRACK after a terminal EndOfGroup/EndOfTrack object (§2.4.2), marks reliable boundaries for RESET_STREAM_AT (`SetReliableBoundary`, transport-gated on `EnableStreamResetPartialDelivery`), and resets (not FINs) in-flight subgroups whose group falls out of range after a narrowing REQUEST_UPDATE. A subscription that skipped any Object of the Subgroup other than one before its Start Location (a filter, Forward State 0, a Start raised past Objects already sent, an inbox overflow with EXCESSIVE_LOAD, an expiry) gets resets, never a FIN, on that Subgroup's streams. Objects published before a subscription joined are treated as before its Start. |
 | 11.4.4   | Fetch header                         | DONE    | Serialization Flags of 128 or more that are not an End of Range close the session. |
 | 11.4.4.1 | Fetch flags                          | DONE    | All subgroup modes + delta/priority/properties/status flags. A first Object that references a prior Object's fields closes the session. |
-| 11.4.4.2 | End of range                         | DONE    | Non-existent (0x8C) / unknown (0x10C) handled. An Object after a leading marker that references a prior Subgroup ID or Priority closes the session. |
+| 11.4.4.2 | End of range                         | DONE    | Non-existent (0x8C) / unknown (0x10C) / timed-out (0x20C) handled; a marker covers the Locations after the previous element in the order the response carries them (see Limitations). An Object after a leading marker that references a prior Subgroup ID or Priority closes the session. |
 | 11.5     | Padding streams & datagrams          | DONE    | Recognised type IDs silently discarded. |
 
 ## §12 MOQT properties
@@ -490,6 +490,20 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   Properties, and neither SUBSCRIBE_OK nor the FETCH_HEADER carries a Group
   Order, so it cannot tell a Descending fill from an Ascending one. A gap in the
   draft; a subscriber that asks for a fill avoids it by sending GROUP_ORDER.
+- **FETCH End of Range markers in Descending order (§11.4.4.2)** — an
+  interpretation. A marker covers "Locations between the last serialized
+  Object, if any, and this Location"; the relay reads "between" in the order
+  the response carries Locations (Groups in its Group Order, Object IDs
+  ascending within a Group), so in Descending order a Group's unknown tail is
+  marked at {G, 2^64-1} after its Objects. The draft does not say which order
+  it means. Interop with moxygen and moqtail is unverified.
+- **FETCH from the cache and publishers that do not mark Group ends (§2.1,
+  §10.13)** — the relay treats a Group's tail as unknown unless an
+  END_OF_GROUP or END_OF_TRACK status, an END_OF_GROUP bit on a FINed
+  subgroup, or a gap Property says where it ends. A publisher that marks none
+  gets an End of Unknown Range after every Group in a cached FETCH or fill, or,
+  behind a fetch-capable upstream, an upstream FETCH for them. Group ends known
+  only from a subgroup FIN are kept for the last 32 Groups.
 - **Fill streams are not scheduled against their subscription (§7.2 rules 3
   and 4)** — a subscription-delivered Object should go first when the fill's
   Group Order differs, and the fill-delivered one first within a Group. The
@@ -505,14 +519,6 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
 A second full review against draft-ietf-moq-transport-20 (2026-09-26, at
 `dbe571e`) found the gaps below. Each item names the rule it misses. Items
 already listed as Limitations above are not repeated here.
-
-High:
-
-- A FETCH answered from the cache treats every Object missing above the
-  eviction floor as non-existent and FINs the stream, although a lost datagram,
-  a reset subgroup stream or a subgroup still in flight leaves such holes. §10.13:
-  a relay that meets an uncached Object of unknown status "MUST pause subsequent
-  delivery until it has confirmed the object's status upstream".
 
 Session layer:
 

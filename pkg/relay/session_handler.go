@@ -678,8 +678,8 @@ func (h *sessionHandler) streamFetchRange(
 	unwatch := context.AfterFunc(ctx, cancelOut)
 	defer unwatch()
 
-	// Gather cached objects, stitching the below-floor portion from upstream
-	// when the cache doesn't cover the whole range (§9.4).
+	// Gather cached objects, asking an upstream about what the cache cannot
+	// vouch for (§10.13).
 	objs, refusal := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
 	if ctx.Err() != nil {
 		cancelOut() // before the deferred StreamClosed (§10.12)

@@ -2,6 +2,7 @@ package registry_test
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -524,5 +525,21 @@ func TestTrackEntry_LowestForwarded(t *testing.T) {
 		if low, ok := e.LowestForwarded(1, tc.subgroup); !ok || low != tc.want {
 			t.Errorf("LowestForwarded(1, %d) = (%d, %v), want (%d, true)", tc.subgroup, low, ok, tc.want)
 		}
+	}
+}
+
+// TestTrackEntry_EndAfterLastObjectID: a hard end after Object 2^64-1 has
+// nothing past it, so it records no absence rather than wrapping to Object 0.
+func TestTrackEntry_EndAfterLastObjectID(t *testing.T) {
+	t.Parallel()
+	const last = math.MaxUint64
+	e := newTestEntry("last-id")
+	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: last, Datagram: true, EndOfGroup: true}, registry.ClaimFresh)
+	mustClaim(t, e, registry.ObjectInfo{Group: 2, Object: last}, registry.ClaimFresh)
+	if err := e.SubgroupEnded(registry.ObjectInfo{Group: 2, Object: last}, true); err != nil {
+		t.Fatalf("SubgroupEnded: %v", err)
+	}
+	if got := e.KnownAbsent(); len(got) != 0 {
+		t.Fatalf("KnownAbsent = %v, want nothing", got)
 	}
 }

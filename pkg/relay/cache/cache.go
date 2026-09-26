@@ -1,5 +1,5 @@
-// Package cache holds the relay's per-track Object Cache (§9.4 fetch
-// support). Storage is a fixed-capacity circular ring buffer (FIFO) with
+// Package cache holds the relay's per-track Object Cache (§9.1 caching
+// relays). Storage is a fixed-capacity circular ring buffer (FIFO) with
 // an auxiliary {GroupID, ObjectID} → ring-slot index map for O(1) point
 // lookup and overwrite-in-place.
 //
@@ -115,7 +115,7 @@ type cacheKey struct {
 // cache. Each [TrackEntry] holds one.
 //
 // Concurrency: an RWMutex guards the ring. Writes (Put / Delete) take the
-// write lock and are O(1); reads (Get / GetRange / OldestRetained / Len)
+// write lock and are O(1); reads (Get / GetRange / Len)
 // take the read lock. FETCH reads are
 // O(capacity) (default 1024), so the read lock lets concurrent FETCHes — the
 // flash-crowd-of-joining-subscribers case the relay is built for — scan in
@@ -339,7 +339,6 @@ func (c *ObjectCache) GetRange(start, end message.Location, order message.GroupO
 		return nil
 	}
 	c.mu.RLock()
-	floor, hasFloor := c.oldestRetainedLocked()
 	out := make([]*CachedObject, 0)
 	for _, obj := range c.ring {
 		if obj == nil {
@@ -350,13 +349,7 @@ func (c *ObjectCache) GetRange(start, end message.Location, order message.GroupO
 			continue
 		}
 		if !c.notExpiredLocked(obj) {
-			// §12.3: expired state "becomes unknown". Above the floor a
-			// plain gap would assert non-existence (§11.4.4), so mark it;
-			// below it the caller accounts for the span (OldestRetained).
-			if hasFloor && floor.Less(loc) {
-				out = append(out, &CachedObject{GroupID: obj.GroupID, ObjectID: obj.ObjectID, EndOfUnknownRange: true})
-			}
-			continue
+			continue // §12.3: its state "becomes unknown"; the caller treats it so
 		}
 		// Append the stored pointer directly — Put never recycles or
 		// mutates a stored struct, so this never aliases storage a later
@@ -366,46 +359,6 @@ func (c *ObjectCache) GetRange(start, end message.Location, order message.GroupO
 	c.mu.RUnlock()
 	sortObjects(out, order)
 	return out
-}
-
-// OldestRetained returns the lowest Location currently held by the cache —
-// the eviction floor — and a bool that is false when the cache holds no live
-// object.
-//
-// Because the ring evicts oldest-first and objects are stored in (broadly
-// increasing) arrival order, the retained set is a suffix of the track by
-// Location: everything below OldestRetained has either been evicted by size
-// or TTL pressure, or was never cached by this relay. Either way the relay
-// does not hold it. A FETCH responder uses this boundary to decide which part
-// of a requested range it can answer from cache and which part it must stitch
-// from upstream — a gap below the floor is "maybe exists upstream", whereas a
-// gap at or above the floor is ground-truth non-existence.
-//
-// Like [ObjectCache.GetRange], this is an O(capacity) scan; FETCH is not the
-// hot path.
-func (c *ObjectCache) OldestRetained() (message.Location, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.oldestRetainedLocked()
-}
-
-// oldestRetainedLocked is OldestRetained with c.mu held.
-func (c *ObjectCache) oldestRetainedLocked() (message.Location, bool) {
-	var (
-		oldest message.Location
-		found  bool
-	)
-	for _, obj := range c.ring {
-		if obj == nil || !c.notExpiredLocked(obj) {
-			continue
-		}
-		loc := message.Location{Group: obj.GroupID, Object: obj.ObjectID}
-		if !found || loc.Less(oldest) {
-			oldest = loc
-			found = true
-		}
-	}
-	return oldest, found
 }
 
 // sortObjects sorts in-place by (group, object). Group direction is

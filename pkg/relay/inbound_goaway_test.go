@@ -1,9 +1,12 @@
 package relay_test
 
 import (
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay"
@@ -108,7 +111,12 @@ func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
+	// A FETCH before the GOAWAY may be stitched from the publisher (a Group
+	// still in flight is unknown to the relay); only one after it counts.
+	var goneAway atomic.Bool
 	fetches := make(chan *session.Request, 4)
+	written := make(chan struct{})
+	tailWritten := sync.OnceFunc(func() { close(written) })
 	go func() {
 		for {
 			req, err := pubSess.AcceptRequest(t.Context())
@@ -123,6 +131,7 @@ func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 				for g := stitchLiveLo; g <= stitchLiveHi; g++ {
 					sg, err := openSubgroupWaiting(t, pubSess, message.SubgroupHeader{
 						SubgroupIDMode: message.SubgroupIDImplicitZero, TrackAlias: 42, GroupID: g,
+						EndOfGroup: true, // so the cache alone answers the tail
 					})
 					if err != nil {
 						return
@@ -130,7 +139,12 @@ func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 					_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte{byte('a' + g)}})
 					_ = sg.Close()
 				}
+				tailWritten()
 			case *message.Fetch:
+				if !goneAway.Load() {
+					_ = req.RejectError(moqt.RequestDoesNotExist, "not yet")
+					continue
+				}
 				fetches <- req
 			}
 		}
@@ -141,6 +155,7 @@ func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	go drainAll(t.Context(), live)
+	awaitTailCached(t, written)
 
 	// Wait until the cache holds the live tail, with a FETCH the cache
 	// answers alone.
@@ -158,6 +173,7 @@ func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
+	goneAway.Store(true)
 	if err := pubSess.SendGoaway(10*time.Second, ""); err != nil {
 		t.Fatalf("SendGoaway: %v", err)
 	}
