@@ -228,9 +228,9 @@ func ExampleRequestMux() {
 		_ = r.RejectError(moqt.RequestNotSupported, "unsupported request type")
 	})
 
-	// Run returns when ctx is cancelled or AcceptRequest fails. A session-fatal
-	// error (e.g. *session.ErrDuplicateRequestID) should be escalated by closing
-	// the session with the mapped code.
+	// Run returns when ctx is cancelled or AcceptRequest fails; a protocol
+	// violation (e.g. *session.ErrDuplicateRequestID) has already closed the
+	// session with the mapped code.
 	_ = mux.Run(ctx, server)
 }
 

@@ -167,18 +167,23 @@ func requireRefusedOpen(t *testing.T, want string, open func(context.Context) (*
 // requireClosedProtocolViolation waits for sess to close and checks the code.
 func requireClosedProtocolViolation(t *testing.T, sess *session.Session) {
 	t.Helper()
+	requireClosedCode(t, sess, moqt.SessionProtocolViolation)
+}
+
+// requireClosedCode checks that sess closes itself with want.
+func requireClosedCode(t *testing.T, sess *session.Session, want moqt.SessionErrorCode) {
+	t.Helper()
 	select {
 	case <-sess.Done():
 	case <-time.After(2 * time.Second):
-		t.Fatal("session stayed open; want PROTOCOL_VIOLATION close")
+		t.Fatalf("session stayed open; want close with %#x", uint64(want))
 	}
 	closed, ok := errors.AsType[*session.ClosedError](sess.Err())
 	if !ok {
 		t.Fatalf("Err() = %v, want a *session.ClosedError", sess.Err())
 	}
-	if closed.Code != moqt.SessionProtocolViolation {
-		t.Errorf("closed with code %#x, want PROTOCOL_VIOLATION (%#x)",
-			uint64(closed.Code), uint64(moqt.SessionProtocolViolation))
+	if closed.Code != want {
+		t.Errorf("closed with code %#x, want %#x", uint64(closed.Code), uint64(want))
 	}
 }
 

@@ -86,14 +86,9 @@ func (m *RequestMux) OnUnknown(f func(*Request)) {
 // until ctx is cancelled or [Session.AcceptRequest] returns an error, which Run
 // returns.
 //
-// Some AcceptRequest errors are session-fatal protocol violations — a §10.1
-// Request-ID parity/monotonicity violation (*ErrRequestIDParityViolation /
-// *ErrDuplicateRequestID) or a token-cache fault (*TokenCacheError) — that the
-// caller MUST escalate by closing the session with the mapped code (see
-// [Session.AcceptRequest]). Run surfaces the error unchanged so the caller can
-// inspect it with errors.As and Close accordingly. A request stream opened by
-// anything but a request message (§3.3, *ErrUnexpectedRequestOpener and
-// friends) arrives with the session already closed.
+// Run surfaces an AcceptRequest error unchanged. Any but ctx's means the
+// session has ended: a protocol violation (§3.3, §10, §10.1, §10.2.2) arrives
+// already closed with the mapped code (see [Session.AcceptRequest]).
 //
 // Dispatch is synchronous: a handler runs to completion before Run accepts the
 // next request, mirroring a hand-written accept loop and [Demux.Run]. A handler

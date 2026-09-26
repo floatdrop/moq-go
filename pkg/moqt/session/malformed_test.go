@@ -66,24 +66,43 @@ func TestMalformedOpenerClosesSession(t *testing.T) {
 	}
 }
 
-// TestTruncatedOpenerResetsOnlyStream: a stream ending before its first frame
-// is complete is the peer giving up, not a Length mismatch.
+// TestTruncatedOpenerResetsOnlyStream: a stream ending or reset before its
+// first frame is complete is the peer giving up on that request (§3.3.2,
+// §3.3.3), not a Length mismatch: AcceptRequest moves on to the next request.
 func TestTruncatedOpenerResetsOnlyStream(t *testing.T) {
 	t.Parallel()
-	_, server, cliConn, _ := openPairWithConns(t)
-	stream, err := cliConn.OpenStream()
-	if err != nil {
-		t.Fatalf("OpenStream: %v", err)
+	for _, tc := range []struct {
+		name string
+		end  func(session.Stream)
+	}{
+		{"FIN", func(s session.Stream) { _ = s.Close() }},
+		{"reset", func(s session.Stream) { s.CancelWrite(0) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client, server, cliConn, _ := openPairWithConns(t)
+			stream, err := cliConn.OpenStream()
+			if err != nil {
+				t.Fatalf("OpenStream: %v", err)
+			}
+			go func() {
+				// Type SUBSCRIBE, Length 16, then only two body bytes.
+				_, _ = stream.Write([]byte{byte(message.TypeSubscribe), 0x00, 0x10, 0x00, 0x00})
+				tc.end(stream)
+				_, _ = session.OpenRequestForTest(client, &message.Subscribe{
+					RequestID: 0, Namespace: videoNS, Name: []byte("next"),
+				})
+			}()
+			req, err := server.AcceptRequest(t.Context())
+			if err != nil {
+				t.Fatalf("AcceptRequest: %v, want the request after the truncated one", err)
+			}
+			if name := string(req.First.(*message.Subscribe).Name); name != "next" {
+				t.Fatalf("accepted %q, want the request after the truncated one", name)
+			}
+			requireStaysOpen(t, server, 100*time.Millisecond)
+		})
 	}
-	go func() {
-		// Type SUBSCRIBE, Length 16, then only two body bytes and a FIN.
-		_, _ = stream.Write([]byte{byte(message.TypeSubscribe), 0x00, 0x10, 0x00, 0x00})
-		_ = stream.Close()
-	}()
-	if _, err := server.AcceptRequest(t.Context()); err == nil {
-		t.Fatal("AcceptRequest accepted a truncated opener")
-	}
-	requireStaysOpen(t, server, 100*time.Millisecond)
 }
 
 func TestMalformedResponseClosesSession(t *testing.T) {
