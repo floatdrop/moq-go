@@ -55,19 +55,16 @@ func (e *ErrDuplicateRequestID) Error() string {
 }
 
 // ErrUnexpectedRequestUpdate is returned by AcceptRequest when a peer opens a
-// request stream whose first message is a REQUEST_UPDATE. §10.9 permits
-// REQUEST_UPDATE only as a follow-up on an existing request stream (or against
-// a PUBLISH-established subscription); a REQUEST_UPDATE in any other position
-// is a PROTOCOL_VIOLATION. AcceptRequest has already closed the session with
-// SessionProtocolViolation.
+// request stream with REQUEST_UPDATE, which §10.9 allows only as a follow-up.
+// AcceptRequest has already closed the session with PROTOCOL_VIOLATION.
 type ErrUnexpectedRequestUpdate struct {
 	RequestID uint64
 }
 
 // ErrUnexpectedPublishStateNotify is returned by AcceptRequest when a peer
-// opens a request stream with PUBLISH_STATE_NOTIFY. §10.10 admits it only as a
-// publisher's unilateral notification on a subscription's existing stream, so
-// this is a PROTOCOL_VIOLATION; AcceptRequest has already closed the session.
+// opens a request stream with PUBLISH_STATE_NOTIFY, which §10.10 allows only on
+// an existing subscription's stream. AcceptRequest has already closed the
+// session with PROTOCOL_VIOLATION.
 var ErrUnexpectedPublishStateNotify = errors.New(
 	"moqt/session: PUBLISH_STATE_NOTIFY as the first message of a request stream — PROTOCOL_VIOLATION")
 
@@ -79,12 +76,9 @@ func (e *ErrUnexpectedRequestUpdate) Error() string {
 }
 
 // ErrUnexpectedRequestOpener is returned by AcceptRequest when a peer opens a
-// request stream with anything but the seven request messages — a response or
-// follow-up such as SUBSCRIBE_OK, PUBLISH_DONE or GOAWAY, or an unknown type.
-// §3.3: "Bidirectional streams MUST NOT begin with any other message type
-// unless negotiated. If they do, the peer MUST close the Session with a
-// PROTOCOL_VIOLATION." AcceptRequest has already closed the session.
-// (REQUEST_UPDATE and PUBLISH_STATE_NOTIFY keep their own error values.)
+// request stream with a message that is not a request opener (§3.3), including
+// an unknown type. AcceptRequest has already closed the session with
+// PROTOCOL_VIOLATION.
 type ErrUnexpectedRequestOpener struct {
 	Type message.Type
 }
@@ -165,16 +159,13 @@ func (l *RequestUpdateLimiter) Responded() {
 	l.outstanding--
 }
 
-// RequestRejectedError is returned by Publish / Subscribe when the peer
-// answers a request with REQUEST_ERROR (§10.6). Callers can detect it via
-// errors.AsType and inspect Code / Reason.
+// RequestRejectedError is returned by a request opener when the peer answers
+// with REQUEST_ERROR (§10.6).
 type RequestRejectedError struct {
 	Code   moqt.RequestErrorCode
 	Reason string
-	// RetryInterval is the REQUEST_ERROR's Retry Interval as sent (§10.6.2):
-	// 0 means the request SHOULD NOT be retried, N means it SHOULD NOT be
-	// sent again for N-1 milliseconds. [RequestRejectedError.RetryAfter]
-	// decodes it.
+	// RetryInterval is the raw Retry Interval (§10.6.2); see
+	// [RequestRejectedError.RetryAfter].
 	RetryInterval uint64
 }
 
@@ -228,8 +219,8 @@ type Request struct {
 	// helpers to allocate Track Aliases and register inbound aliases.
 	s *Session
 
-	// okSent records that a REQUEST_OK has gone out through Reply or an
-	// Accept helper, so a later one answers a REQUEST_UPDATE (§10.5).
+	// okSent records that Reply has sent a REQUEST_OK, so a later one answers
+	// a REQUEST_UPDATE (§10.5).
 	okSent atomic.Bool
 }
 
@@ -244,15 +235,12 @@ type Request struct {
 // requests for session-level tracks and namespaces". AcceptRequest loops until
 // it has an application-visible request to return.
 //
-// A stream opened by anything but the seven request messages (§3.3) — an
-// unknown type, a response, REQUEST_UPDATE or PUBLISH_STATE_NOTIFY — makes
-// AcceptRequest close the session with PROTOCOL_VIOLATION itself and return
-// *ErrUnexpectedRequestOpener, *ErrUnexpectedRequestUpdate or
-// ErrUnexpectedPublishStateNotify. A first message whose body does not match
-// its Length or fails validation also closes the session with
-// PROTOCOL_VIOLATION (§10; the error wraps [message.ErrMalformedMessage]).
-// A stream that ends or is reset before its first message is complete only
-// resets that stream.
+// A stream not opened by a request message (§3.3), or whose first message is
+// malformed (§10, wrapping [message.ErrMalformedMessage]), closes the session
+// with PROTOCOL_VIOLATION; the error is *ErrUnexpectedRequestOpener,
+// *ErrUnexpectedRequestUpdate, ErrUnexpectedPublishStateNotify or the parse
+// error. A stream that ends before its first message is complete only resets
+// that stream.
 func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 	for {
 		stream, err := s.conn.AcceptStream(ctx)
@@ -268,39 +256,29 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			// §3.3: an unknown type cannot be one of the seven openers.
-			// readResponse has already closed the session (§10); this only
-			// shapes the error returned.
+			// §3.3: readResponse already closed the session; this only shapes
+			// the error.
 			if typ, ok := errors.AsType[message.ErrUnknownType](err); ok {
 				return nil, s.closeProtocolViolation(&ErrUnexpectedRequestOpener{Type: message.Type(typ)})
 			}
 			return nil, fmt.Errorf("moqt/session: parse request first message: %w", err)
 		}
 
-		// §10.9: REQUEST_UPDATE is valid only as a follow-up on an existing
-		// request stream (or against a PUBLISH-established subscription), never
-		// as the message that opens a stream. Receiving one here is a
-		// PROTOCOL_VIOLATION (§3.3), and the session is closed with it.
+		// §10.9, §3.3: REQUEST_UPDATE never opens a stream.
 		if upd, ok := msg.(*message.RequestUpdate); ok {
 			resetStream(stream)
 			return nil, s.closeProtocolViolation(&ErrUnexpectedRequestUpdate{RequestID: upd.RequestID})
 		}
 
-		// §10.10: PUBLISH_STATE_NOTIFY is a unilateral publisher-to-subscriber
-		// notification on an existing subscription's stream. "An endpoint that
-		// receives a PUBLISH_STATE_NOTIFY for any other request type, or from the
-		// subscriber, MUST close the session with a PROTOCOL_VIOLATION" — opening
-		// a stream with one is both. It carries no Request ID, so the §10.1
-		// accounting below would not catch it either.
+		// §10.10: PUBLISH_STATE_NOTIFY never opens a stream. It carries no
+		// Request ID, so the §10.1 check below would not catch it.
 		if _, ok := msg.(*message.PublishStateNotify); ok {
 			resetStream(stream)
 			return nil, s.closeProtocolViolation(ErrUnexpectedPublishStateNotify)
 		}
 
-		// §3.3: a request stream begins with one of seven message types;
-		// "Bidirectional streams MUST NOT begin with any other message type
-		// unless negotiated. If they do, the peer MUST close the Session with
-		// a PROTOCOL_VIOLATION."
+		// §3.3: "Bidirectional streams MUST NOT begin with any other message
+		// type unless negotiated."
 		if !isRequestOpener(msg) {
 			resetStream(stream)
 			return nil, s.closeProtocolViolation(&ErrUnexpectedRequestOpener{Type: msg.Type()})
@@ -313,8 +291,7 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 			return nil, err
 		}
 
-		// §10.1 parity + duplicate enforcement, shared with the follow-up
-		// REQUEST_UPDATE path — see [Session.CheckPeerRequestID].
+		// §10.1 parity and duplicate check.
 		if m, ok := msg.(message.WithRequestID); ok {
 			if err := s.CheckPeerRequestID(m.GetRequestID()); err != nil {
 				resetStream(stream)
@@ -322,23 +299,18 @@ func (s *Session) AcceptRequest(ctx context.Context) (*Request, error) {
 			}
 		}
 
-		// §10.2.2: process any AUTHORIZATION_TOKEN parameters now, before the
-		// request is dispatched/validated/authorized. REGISTER tokens are
-		// committed to the inbound cache here so the alias persists even if the
-		// request is later rejected for an unrelated reason (a §10.2.2 MUST).
-		// A cache-layer failure is a session-level fault carried by
-		// *TokenCacheError; the caller MUST close the session with its Code.
+		// §10.2.2: REGISTER tokens commit before any rejection, so the alias
+		// persists even if the request fails. A *TokenCacheError is
+		// session-fatal; the caller closes the session with its Code.
 		tokens, err := s.processRequestTokens(msg)
 		if err != nil {
 			resetStream(stream)
 			return nil, err
 		}
 
-		// §3.2.1 / §3.2.2: a request for a reserved namespace the
-		// implementation owns is rejected with DOES_NOT_EXIST here, after
-		// token processing (so REGISTER tokens still commit), without ever
-		// surfacing to the application. Other reserved ("."-prefixed)
-		// namespaces fall through to the application per §3.2.1.
+		// §3.2.1 / §3.2.2: reserved namespaces the implementation owns are
+		// rejected here, after token processing; other "."-prefixed ones reach
+		// the application.
 		if reason, reject := reservedNamespaceRejection(msg); reject {
 			rejectStreamWithError(stream, moqt.RequestDoesNotExist, reason)
 			continue
@@ -466,16 +438,12 @@ func rejectStreamWithError(stream Stream, code moqt.RequestErrorCode, reason str
 	_ = (&Request{Stream: stream}).RejectError(code, reason)
 }
 
-// requestHandle is the state every requester-side typed handle embeds: the
-// still-open bidi request stream (close it to end the request), the owning
-// session, and the §10.1 Request ID of the request the stream carries (used
-// where a follow-on message must reference the original request, e.g. the
-// FETCH_HEADER a FetchResponder opens). Embedding it provides the shared
-// Update and Broker methods.
+// requestHandle is the state every typed request handle embeds: the open
+// request stream, the owning session and the request's §10.1 Request ID. It
+// provides the shared Close, Update and Broker methods.
 type requestHandle struct {
-	// Stream is the request stream, still open for follow-up traffic.
-	// [requestHandle.Close] ends the request; Stream.Close only FINs this
-	// side, which does not cancel it (§3.3.2).
+	// Stream is the request stream. [requestHandle.Close] cancels the
+	// request; Stream.Close only FINs this side (§3.3.2).
 	Stream
 
 	s         *Session
@@ -484,29 +452,22 @@ type requestHandle struct {
 	brokerOnce sync.Once
 	broker     atomic.Pointer[RequestBroker]
 
-	// finished records that writeThenClose delivered this side's final
-	// message and FIN, so Close must not reset what it sent.
+	// finished records that writeThenClose sent this side's final message
+	// and FIN, so Close must not reset it.
 	finished atomic.Bool
 
-	// peerUpdate / peerNotify are the follow-ups the peer may send on this
-	// stream (§10.9 / §10.10), and updateScope the §10.2.1 scope of the
-	// peer's REQUEST_UPDATEs, applied to the broker on creation.
+	// Follow-ups the peer may send (§10.9 / §10.10) and the §10.2.1 scope of
+	// its REQUEST_UPDATEs; applied to the broker on creation.
 	peerUpdate, peerNotify bool
 	updateScope            message.ParamScope
 }
 
-// Close ends the request by cancelling it (§3.3.3): "abruptly terminating any
-// directions of the stream that are still open, using RESET_STREAM for a
-// direction they are sending and STOP_SENDING for a direction they are
-// receiving". A FIN alone would not do — "it is not a request cancellation"
-// (§3.3.2). If this side already finished sending (e.g. [Publication.Done]
-// wrote PUBLISH_DONE and FIN), only reading is stopped, so the final message
-// is not lost.
+// Close cancels the request by resetting both stream directions (§3.3.3). If
+// this side already sent its final message and FIN (e.g. [Publication.Done]),
+// only reading is stopped, so that message is not lost.
 //
-// Close does not track whether the peer already completed the request. A
-// Close after that (e.g. a deferred one after PUBLISH_DONE arrived) resets
-// where §3.3.2 says the requester SHOULD FIN; the request is over either way.
-// Use Stream.Close to FIN instead.
+// Close does not know whether the peer already completed the request; after
+// that, §3.3.2 says the requester SHOULD FIN, so use Stream.Close instead.
 func (h *requestHandle) Close() error {
 	if h.finished.Load() {
 		h.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
@@ -523,11 +484,9 @@ func cancelRequest(s Stream) {
 }
 
 // Broker returns this request's [RequestBroker], creating it on first call.
-// Use it when the request outlives its initial response and follow-up
-// traffic must coexist with updates: run [RequestBroker.Serve] to own the
-// stream's reads, and route writes through the broker. Once created, the
-// handle's own Update (and terminal writes like [Publication.Done]) go
-// through the broker automatically, so they stay safe alongside Serve.
+// Run [RequestBroker.Serve] to own the stream's reads when follow-up traffic
+// must coexist with updates. Once created, the handle's Update and terminal
+// writes like [Publication.Done] go through the broker.
 func (h *requestHandle) Broker() *RequestBroker {
 	h.brokerOnce.Do(func() {
 		b := h.s.NewRequestBroker(h.Stream)
@@ -538,15 +497,11 @@ func (h *requestHandle) Broker() *RequestBroker {
 	return h.broker.Load()
 }
 
-// Update sends a REQUEST_UPDATE (§10.9) on the request stream and awaits the
-// single REQUEST_OK / REQUEST_ERROR the spec mandates. params carries only
-// the fields to change; any parameter omitted keeps its prior value on the
-// peer.
+// Update sends a REQUEST_UPDATE (§10.9) and awaits its REQUEST_OK or
+// REQUEST_ERROR. params carries only the fields to change.
 //
-// With no [requestHandle.Broker] attached this is [Session.UpdateRequest] —
-// it reads the response directly, so it must be the stream's only reader.
-// With a broker attached it delegates to [RequestBroker.Update], whose
-// response arrives via the broker's Serve loop.
+// Without a [requestHandle.Broker] this is [Session.UpdateRequest] and must be
+// the stream's only reader; with one it delegates to [RequestBroker.Update].
 func (h *requestHandle) Update(ctx context.Context, params message.Parameters) (*message.RequestOK, error) {
 	if b := h.broker.Load(); b != nil {
 		return b.Update(ctx, params)
@@ -554,9 +509,8 @@ func (h *requestHandle) Update(ctx context.Context, params message.Parameters) (
 	return h.s.UpdateRequest(ctx, h.Stream, params)
 }
 
-// writeThenClose writes msg and FINs the send side, routing through the
-// attached broker's write lock when one exists — the shared backend of
-// terminal handle methods like [Publication.Done].
+// writeThenClose writes msg and FINs the send side, through the broker's
+// write lock when one exists.
 func (h *requestHandle) writeThenClose(msg message.Message) error {
 	if b := h.broker.Load(); b != nil {
 		if err := b.writeThenClose(msg); err != nil {
@@ -575,13 +529,8 @@ func (h *requestHandle) writeThenClose(msg message.Message) error {
 	return nil
 }
 
-// openRequest opens a new outbound bidirectional stream and writes first as
-// its initial message. The returned Stream can be used to read responses
-// (typically a single REQUEST_OK / REQUEST_ERROR / SUBSCRIBE_OK first, then
-// optionally more) and to send follow-up messages such as REQUEST_UPDATE.
-//
-// On any error before the stream is established and the first message
-// written, the stream (if any) is reset and the error is returned.
+// openRequest opens a bidi stream and writes first as its initial message. On
+// a write error the stream is reset.
 func (s *Session) openRequest(first message.Message) (Stream, error) {
 	stream, err := s.conn.OpenStream()
 	if err != nil {
@@ -590,14 +539,9 @@ func (s *Session) openRequest(first message.Message) (Stream, error) {
 	return writeFirst(stream, first)
 }
 
-// openAllocRequest opens a request stream for m and assigns m a freshly
-// allocated Request ID (§10.1) only after the open succeeds — so a failed open
-// (e.g. ErrNoStreamCredit) consumes no ID and the §10.1 sequence stays
-// untouched — then writes it as the stream's first message. It does NOT await
-// the peer's response — the caller owns the read side. It is the single
-// primitive beneath every typed request opener (Publish, Subscribe, Fetch,
-// TrackStatus, the namespace requests) and the non-blocking
-// [Session.OpenPublish] used for relay fan-out.
+// openAllocRequest opens a request stream and writes m as its first message.
+// m's Request ID (§10.1) is allocated only after the open succeeds, so a
+// failed open consumes no ID. It does not await the response.
 func (s *Session) openAllocRequest(m message.WithRequestID) (Stream, error) {
 	stream, err := s.conn.OpenStream()
 	if err != nil {
@@ -617,24 +561,13 @@ func writeFirst(stream Stream, first message.Message) (Stream, error) {
 	return stream, nil
 }
 
-// readResponse parses one message from stream, honoring ctx. message.Parse
-// reads from a context-free io.Reader, so cancellation is bridged by resetting
-// the stream's read side with StreamResetCancelled (§3.3.4), which unblocks the
-// in-flight Parse.
+// readResponse parses one message from stream, honoring ctx by resetting the
+// read side with StreamResetCancelled when ctx is done; it then returns
+// ctx.Err(). A malformed message closes the session with PROTOCOL_VIOLATION.
 //
-// The bridge is a context.AfterFunc hook rather than a watcher goroutine: it
-// fires (in its own goroutine) only if ctx is actually cancelled, so the common
-// case — the response arrives first — runs no extra goroutine at all, and the
-// deferred stop() removes the hook. When ctx fired, ctx.Err() is returned in
-// place of the resulting wire error so the caller sees context.Canceled /
-// context.DeadlineExceeded.
-//
-// Known teardown-only race: a cancellation landing after a successful Parse
-// but before stop() detaches the hook fires a stale CancelRead — the caller
-// receives (msg, nil) on a stream whose read side was just reset. Every
-// caller's ctx is a session/relay-lifetime context, so the poisoned handle
-// only occurs mid-shutdown, where the very next read surfacing a reset is
-// acceptable.
+// A cancellation landing between a successful Parse and stop() still resets
+// the read side; callers' contexts are session-lifetime, so this only happens
+// during shutdown.
 func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Message, error) {
 	stop := context.AfterFunc(ctx, func() {
 		stream.CancelRead(uint64(moqt.StreamResetCancelled))
@@ -644,31 +577,17 @@ func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Mess
 	if err != nil && ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	// §10: an unknown type or a body that does not match its Length closes
-	// the session; so does an unknown parameter (§10.2), which fails the body.
+	// §10, §10.2: unknown type, bad Length or unknown parameter.
 	if errors.Is(err, message.ErrMalformedMessage) {
 		return nil, s.closeProtocolViolation(err)
 	}
 	return msg, err
 }
 
-// awaitRequestResponse opens a request stream for m (allocating its Request ID
-// only after the open succeeds — see [Session.openAllocRequest]), awaits the
-// peer's initial response, and dispatches it:
-//
-//   - the expected success type OK is handed to onOK, which owns the still-open
-//     stream from that point: it wraps the stream in the typed handle, or closes
-//     it and returns an error (e.g. on Track Property validation failure);
-//   - REQUEST_ERROR (§10.6) is surfaced as a *RequestRejectedError and the
-//     stream is closed;
-//   - any other message is an unexpected-response error and the stream is closed.
-//
-// Error messages name the operation via m.Type() (e.g. "SUBSCRIBE"). It is the
-// single primitive beneath [Session.Publish], [Session.Subscribe],
-// [Session.Fetch], [Session.TrackStatus], and the three namespace request
-// openers, which share this §10.1 open / await-OK skeleton and differ only in
-// OK type and success handling (Publish additionally pre-allocates its Track
-// Alias before the open).
+// awaitRequestResponse opens a request stream for m and awaits the initial
+// response. An OK is handed to onOK, which then owns the stream; REQUEST_ERROR
+// (§10.6) becomes a *RequestRejectedError; anything else is an error. On
+// either failure the stream is closed.
 func awaitRequestResponse[OK message.Message, R any](
 	ctx context.Context,
 	s *Session,
@@ -695,9 +614,7 @@ func awaitRequestResponse[OK message.Message, R any](
 			return r, err
 		}
 		// §10.2.1, checked after onOK: for a SUBSCRIBE it registers the Track
-		// Alias, and the publisher may already be sending on it, so nothing
-		// may delay that (#85). A violation closes the session, handle and
-		// all.
+		// Alias the publisher may already be sending on, so nothing may delay it.
 		if err := s.CheckPeerParams(message.ScopeOfResponse(m.Type()), resp); err != nil {
 			return zero, err
 		}
@@ -714,27 +631,14 @@ func awaitRequestResponse[OK message.Message, R any](
 	return zero, fmt.Errorf("moqt/session: unexpected %s in %s response", resp.Type(), m.Type())
 }
 
-// UpdateRequest sends a REQUEST_UPDATE (§10.9) on an already-established
-// request stream and awaits the single REQUEST_OK / REQUEST_ERROR the spec
-// mandates in response. The update rides the original bidi stream — the
-// stream, not the ID, names the request being modified — but per §10.1 the
-// REQUEST_UPDATE itself consumes a fresh Request ID from this endpoint's
-// space, which the session allocates here (a reused ID is a duplicate the
-// peer must treat as session-fatal). params carries only the fields the
-// caller wants to change; any parameter omitted keeps its prior value on the
-// peer (§10.9).
+// UpdateRequest sends a REQUEST_UPDATE (§10.9) with a fresh Request ID (§10.1)
+// on an established request stream and awaits its REQUEST_OK or REQUEST_ERROR
+// (*RequestRejectedError). params carries only the fields to change. The
+// stream is left open either way.
 //
-// On REQUEST_OK the parsed message is returned and the stream is left open
-// for further traffic. REQUEST_ERROR is surfaced as a *RequestRejectedError;
-// the stream is left open so the caller can decide how to tear down (a failed
-// subscription update is followed by PUBLISH_DONE from the publisher, §10.9).
-//
-// UpdateRequest reads the response directly off the stream, so it MUST NOT
-// run concurrently with any other reader of the same stream ([DrainAndWait],
-// a PUBLISH_DONE-draining loop, another UpdateRequest) — a concurrent reader
-// races it for the response and can swallow it, blocking this call until ctx
-// expires. When the stream needs a standing reader, use [RequestBroker.Serve]
-// and [RequestBroker.Update] instead.
+// UpdateRequest reads the response directly, so it MUST NOT run concurrently
+// with another reader of the stream; use [RequestBroker.Update] when the
+// stream needs a standing reader.
 func (s *Session) UpdateRequest(
 	ctx context.Context,
 	stream Stream,
@@ -753,16 +657,12 @@ func (s *Session) UpdateRequest(
 	return s.mapUpdateResponse(resp)
 }
 
-// CheckPeerParams checks the Message Parameters of m, received from the peer
-// as a message of the given scope, against §10.2.1 ("If it appears in some
-// other type of message, the receiving endpoint MUST close the connection with
-// a PROTOCOL_VIOLATION") and §10.2's duplicate rule. On a violation it closes
-// the session with PROTOCOL_VIOLATION and returns the error. A message without
-// parameters passes.
+// CheckPeerParams checks the Message Parameters of a peer message m against
+// scope (§10.2.1) and §10.2's duplicate rule. On a violation it closes the
+// session with PROTOCOL_VIOLATION and returns the error.
 //
-// The session checks every message it reads itself. Callers that read a
-// request stream with [message.Parse] — REQUEST_UPDATEs on a request they
-// answer, for instance — call it for what they read.
+// The session checks the messages it reads itself; callers that read a
+// request stream with [message.Parse] call it for what they read.
 func (s *Session) CheckPeerParams(scope message.ParamScope, m message.Message) error {
 	params, ok := message.ParamsOf(m)
 	if !ok {
@@ -775,15 +675,11 @@ func (s *Session) CheckPeerParams(scope message.ParamScope, m message.Message) e
 }
 
 // emptyPropertiesOK names the REQUEST_OK answering req when §10.5 says its
-// Track Properties are empty: "Track Properties are populated in
-// TRACK_STATUS_OK; they are empty in PUBLISH_OK, REQUEST_UPDATE_OK,
-// SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK." A nil req means the
-// REQUEST_OK answers a REQUEST_UPDATE; so does any REQUEST_OK on a SUBSCRIBE
-// or FETCH stream, which are first answered SUBSCRIBE_OK and FETCH_OK.
-// Responses the list does not name (TRACK_STATUS_OK, and the SUBSCRIBE_TRACKS
-// OK) report false — as does a REQUEST_UPDATE_OK on a SUBSCRIBE_TRACKS stream,
-// which req alone cannot tell from that stream's first OK: callers that can
-// pass nil for it.
+// Track Properties are empty ("they are empty in PUBLISH_OK,
+// REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK"). A nil
+// req, a SUBSCRIBE or a FETCH means a REQUEST_UPDATE_OK. SUBSCRIBE_TRACKS
+// reports false: req alone cannot tell its first OK from an update's, so
+// callers that can pass nil for the latter.
 func emptyPropertiesOK(req message.Message) (string, bool) {
 	switch req.(type) {
 	case nil, *message.Subscribe, *message.Fetch:
@@ -798,10 +694,9 @@ func emptyPropertiesOK(req message.Message) (string, bool) {
 	return "", false
 }
 
-// checkRequestOKTrackProperties enforces §10.5 on a received REQUEST_OK
-// answering req (nil for a REQUEST_UPDATE). An endpoint that receives Track
-// Properties in one of the OKs [emptyPropertiesOK] names "MUST close the
-// session with a PROTOCOL_VIOLATION", so it does.
+// checkRequestOKTrackProperties closes the session with PROTOCOL_VIOLATION
+// when a received REQUEST_OK answering req (nil for a REQUEST_UPDATE) carries
+// Track Properties §10.5 says are empty.
 func (s *Session) checkRequestOKTrackProperties(req, resp message.Message) error {
 	ok, isOK := resp.(*message.RequestOK)
 	if !isOK || len(ok.TrackProperties) == 0 {
@@ -814,17 +709,13 @@ func (s *Session) checkRequestOKTrackProperties(req, resp message.Message) error
 	return s.closeProtocolViolation(fmt.Errorf("moqt/session: Track Properties in %s", name))
 }
 
-// Reply marshals a response message onto the request's bidi stream. The
-// stream is left open so further messages can be written. Use RejectError or
-// Stream.Close to terminate the send direction.
+// Reply marshals a response message onto the request's stream and leaves it
+// open. Use RejectError or Stream.Close to end the send direction.
 //
-// A REQUEST_OK carrying Track Properties where §10.5 says they are empty —
-// answering a PUBLISH, PUBLISH_NAMESPACE or SUBSCRIBE_NAMESPACE, or a
-// REQUEST_UPDATE on a SUBSCRIBE, FETCH or SUBSCRIBE_TRACKS — is refused with
-// [ErrTrackPropertiesNotAllowed] and nothing is written: the peer would have
-// to close the session. On a SUBSCRIBE_TRACKS stream every REQUEST_OK after
-// the first answers a REQUEST_UPDATE; a first one written to Stream directly
-// rather than through Reply goes uncounted.
+// A REQUEST_OK carrying Track Properties where §10.5 says they are empty is
+// refused with [ErrTrackPropertiesNotAllowed] and nothing is written. On a
+// SUBSCRIBE_TRACKS stream, every REQUEST_OK after the first sent through Reply
+// counts as a REQUEST_UPDATE_OK.
 func (r *Request) Reply(msg message.Message) error {
 	ok, isOK := msg.(*message.RequestOK)
 	if isOK && len(ok.TrackProperties) > 0 {
@@ -845,35 +736,17 @@ func (r *Request) Reply(msg message.Message) error {
 	return nil
 }
 
-// RejectError writes a REQUEST_ERROR with the given code and reason, then
-// cancels the read side and FINs the send direction of the bidi stream
-// (§3.3.3: "When an endpoint rejects a request without performing any
-// application processing, it SHOULD send a REQUEST_ERROR and FIN the stream.").
-// CancelRead ensures that any further data the peer sends after the rejection
-// does not queue in the transport buffer indefinitely.
-//
-// When the REQUEST_ERROR itself cannot be written, the stream is reset instead
-// and the write error returned. §3.3.3 gives a responder both exits —
-// REQUEST_ERROR plus FIN, or "Receivers cancel requests if they are unable to
-// or choose not to respond" — and a failed write has taken neither until the
-// reset lands. Returning early without it leaves the requester waiting on a
-// response that can never arrive, for as long as the session lives.
-//
-// RejectError sends Retry Interval 0: the request "SHOULD NOT be retried"
-// (§10.6.2). Use [Request.Reject] to invite a retry.
+// RejectError writes a REQUEST_ERROR with Retry Interval 0 (§10.6.2), stops
+// reading and FINs the stream (§3.3.3). If the REQUEST_ERROR cannot be
+// written, the stream is reset instead so the requester is not left waiting.
+// Use [Request.Reject] to invite a retry.
 func (r *Request) RejectError(code moqt.RequestErrorCode, reason string) error {
 	return r.Reject(&RequestRejectedError{Code: code, Reason: reason})
 }
 
 // Reject is [Request.RejectError] with rej's Code, Reason and RetryInterval
-// (§10.6.2: "If a request is retryable with the same parameters at a later
-// time, the sender of REQUEST_ERROR includes a non-zero Retry Interval in the
-// message"). It is the send-side counterpart of the *[RequestRejectedError] a
-// requester gets back.
-//
-// REDIRECT is refused with an error and nothing is written: its Redirect
-// structure is "Present only when Error Code is REDIRECT" (§10.6.2), and
-// Reject has none to send.
+// (§10.6.2). REDIRECT is refused and nothing is written, since Reject has no
+// Redirect structure to send.
 func (r *Request) Reject(rej *RequestRejectedError) error {
 	if rej.Code == moqt.RequestRedirect {
 		return errors.New("moqt/session: Reject cannot send REDIRECT: it has no Redirect structure (§10.6.2)")
@@ -890,24 +763,19 @@ func (r *Request) Reject(rej *RequestRejectedError) error {
 	return r.Stream.Close()
 }
 
-// AcceptSubscribe accepts an inbound SUBSCRIBE (§10.7) and returns a
-// [Publication] for pushing objects back to the subscriber — the accept-side
-// counterpart of [Session.Publish]. r.First MUST be a *message.Subscribe.
+// AcceptSubscribe accepts an inbound SUBSCRIBE (§10.7): it writes
+// SUBSCRIBE_OK and returns a [Publication] bound to its Track Alias. r.First
+// MUST be a *message.Subscribe.
 //
-// ok carries the SUBSCRIBE_OK fields the caller wants to set (negotiated
-// Parameters, TrackProperties); its TrackAlias is filled in automatically when
-// zero, via [Session.AllocOutboundTrackAlias] — set it non-zero to assign a
-// specific alias (e.g. to mirror an upstream). ok may be nil for the all-default
-// reply. AcceptSubscribe writes SUBSCRIBE_OK and returns a Publication whose
-// [Publication.OpenSubgroup] is pre-bound to the alias and whose
-// [Publication.Done] ends the subscription with PUBLISH_DONE.
+// ok may be nil for the all-default reply; a zero TrackAlias is allocated with
+// [Session.AllocOutboundTrackAlias]. A FORWARD value above 1 closes the
+// session with PROTOCOL_VIOLATION (§10.2.18).
 func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error) {
 	sub, isSub := r.First.(*message.Subscribe)
 	if !isSub {
 		return nil, fmt.Errorf("moqt/session: AcceptSubscribe on a %s request", r.First.Type())
 	}
-	// §10.2.18: FORWARD other than 0 or 1 "MUST close the session with
-	// PROTOCOL_VIOLATION".
+	// §10.2.18.
 	if f, found := sub.Parameters.Find(message.ParamForward); found && f.Byte > 1 {
 		resetStream(r.Stream)
 		return nil, r.s.closeProtocolViolation(
@@ -925,23 +793,15 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 	return newPublication(r.s, r.Stream, sub.RequestID, ok.TrackAlias, sub.Parameters), nil
 }
 
-// AcceptPublish accepts an inbound PUBLISH (§10.11): it registers the
-// publisher-assigned Track Alias (§11.1, so inbound subgroup/datagram streams
-// resolve to this track and a reused alias is caught as DUPLICATE_TRACK_ALIAS),
-// replies REQUEST_OK, and returns an [IncomingPublication] for the receiving
-// side — the accept-side counterpart of [Session.Publish]. r.First MUST be a
-// *message.Publish. The objects arrive on subgroup uni-streams via
-// [Session.AcceptDataStream].
+// AcceptPublish accepts an inbound PUBLISH (§10.11): it registers the Track
+// Alias (§11.1), replies REQUEST_OK and returns an [IncomingPublication].
+// r.First MUST be a *message.Publish.
 //
-// When the session enforces Mandatory Track Properties (see
-// [WithKnownMandatoryTrackProperties]), a PUBLISH carrying one it does not
-// understand is refused with REQUEST_ERROR UNSUPPORTED_EXTENSION (§2.5.1) and
-// Track Properties that do not parse with MALFORMED_TRACK; the validation
-// error is returned.
-//
-// If the alias collides with a different already-registered track,
-// *ErrDuplicateTrackAlias is returned WITHOUT replying OK; the caller MUST close
-// the session with [moqt.SessionDuplicateTrackAlias] (§11.1).
+// Track Properties that fail validation (see
+// [WithKnownMandatoryTrackProperties]) are rejected with REQUEST_ERROR and the
+// error returned. On an alias collision *ErrDuplicateTrackAlias is returned
+// without replying; the caller MUST close the session with
+// [moqt.SessionDuplicateTrackAlias] (§11.1).
 func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 	pub, isPub := r.First.(*message.Publish)
 	if !isPub {
@@ -958,8 +818,8 @@ func (r *Request) AcceptPublish() (*IncomingPublication, error) {
 	if err := message.Marshal(r.Stream, &message.RequestOK{}); err != nil {
 		return nil, fmt.Errorf("moqt/session: write PUBLISH REQUEST_OK: %w", err)
 	}
-	// The publisher sent the PUBLISH, so it may send REQUEST_UPDATE
-	// (§10.9) as well as PUBLISH_STATE_NOTIFY (§10.10).
+	// The publisher may send REQUEST_UPDATE (§10.9) and PUBLISH_STATE_NOTIFY
+	// (§10.10).
 	return &IncomingPublication{
 		Stream:      r.Stream,
 		s:           r.s,

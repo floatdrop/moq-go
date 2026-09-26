@@ -137,15 +137,12 @@ func (s *Session) TokenCache() *TokenCache { return s.tokenCache }
 // applies each token to the inbound cache per §10.2.2, returning the resolved
 // (Type, Value) tokens for any REGISTER / USE_ALIAS / USE_VALUE entries.
 //
-// Processing order matters: a REGISTER is committed to the cache immediately,
-// honouring the §10.2.2 MUST that the receiver "MUST register the Token Alias
-// in the token cache, even if the message fails for other reasons". Because
-// the cache mutation happens here — before the request is validated or
-// authorized — a later rejection of the request does not roll the alias back.
+// A REGISTER is committed immediately, before the request is validated, so a
+// later rejection does not roll it back (§10.2.2: "even if the message fails
+// for other reasons").
 //
-// A cache-layer failure (malformed token, duplicate alias, overflow, unknown
-// alias) is returned as a [*TokenCacheError] carrying the session-level
-// SESSION_ERROR code the caller must close the session with.
+// A cache-layer failure is returned as a [*TokenCacheError] carrying the code
+// the caller must close the session with.
 func (s *Session) processRequestTokens(msg message.Message) ([]ResolvedToken, error) {
 	ps, ok := message.ParamsOf(msg)
 	if !ok {
@@ -153,12 +150,9 @@ func (s *Session) processRequestTokens(msg message.Message) ([]ResolvedToken, er
 	}
 	tokens, err := message.TokensFromParam(ps)
 	if err != nil {
-		// §10.2.2: "If the Token structure cannot be decoded, the receiver
-		// MUST close the Session with KEY_VALUE_FORMATTING_ERROR." That
-		// includes an unknown Alias Type, which leaves the fields that
-		// follow undefined. (§3.5 describes MALFORMED_AUTH_TOKEN as
-		// "Invalid Auth Token serialization during registration"; the
-		// specific MUST above is followed.)
+		// §10.2.2: an undecodable Token, including an unknown Alias Type,
+		// closes with KEY_VALUE_FORMATTING_ERROR. This follows that MUST
+		// over §3.5's MALFORMED_AUTH_TOKEN description.
 		return nil, &TokenCacheError{Code: moqt.SessionKeyValueFormattingError, Err: err}
 	}
 	if len(tokens) == 0 {
@@ -178,14 +172,13 @@ func (s *Session) processRequestTokens(msg message.Message) ([]ResolvedToken, er
 	return resolved, nil
 }
 
-// applyToken applies one parsed token to the inbound cache per §10.2.2 and
-// returns what it resolves to; ok is false for a DELETE, which carries no
-// value. A cache failure is a [*TokenCacheError].
+// applyToken applies one token to the inbound cache (§10.2.2) and returns what
+// it resolves to; ok is false for a DELETE. A cache failure is a
+// [*TokenCacheError].
 func (s *Session) applyToken(t *message.Token) (tok ResolvedToken, ok bool, err error) {
 	switch t.AliasType {
 	case message.AliasTypeRegister:
-		// §10.2.2: register before any further validation so the alias
-		// persists even if the request is later rejected.
+		// §10.2.2: register before any further validation.
 		if err := s.tokenCache.Register(t.TokenAlias, t.TokenType, t.TokenValue); err != nil {
 			return ResolvedToken{}, false, &TokenCacheError{Code: sessionCodeForCacheErr(err), Err: err}
 		}
@@ -250,28 +243,19 @@ func sessionCodeForCacheErr(err error) moqt.SessionErrorCode {
 }
 
 // ProcessFollowupTokens resolves the AUTHORIZATION_TOKEN parameters (§10.2.2)
-// of a follow-up message read off an established request stream — §10.2.2
-// explicitly allows tokens on REQUEST_UPDATE, and the receiver "MUST register
-// the Token Alias in the token cache, even if the message fails for other
-// reasons".
-// AcceptRequest performs the same processing for a stream's FIRST message;
-// any code that reads follow-ups directly (message.Parse on the stream) MUST
-// route messages carrying parameters through here, or the peer's view of the
-// token cache silently diverges and its next USE_ALIAS kills the session
-// with UNKNOWN_AUTH_TOKEN_ALIAS.
+// of a follow-up message, such as a REQUEST_UPDATE, read off an established
+// request stream. Code that reads follow-ups with message.Parse MUST route
+// them through here, or the token cache diverges from the peer's.
 //
-// The error contract matches AcceptRequest: a *TokenCacheError carries the
-// SESSION_ERROR code the caller must close the session with. Messages
-// without parameters (or without token parameters) return (nil, nil).
+// A *TokenCacheError carries the code the caller must close the session with.
+// Messages without token parameters return (nil, nil).
 func (s *Session) ProcessFollowupTokens(msg message.Message) ([]ResolvedToken, error) {
 	return s.processRequestTokens(msg)
 }
 
-// SetupTokens returns the tokens the peer sent in AUTHORIZATION TOKEN options
-// of its SETUP (§10.3.1.4: tokens "that the peer can use to authorize MOQT
-// session establishment"), resolved as for a request (§10.2.2). The session
-// does not verify them; authorizing the session is the application's call.
-// Each call returns fresh copies.
+// SetupTokens returns copies of the resolved tokens the peer sent in
+// AUTHORIZATION TOKEN options of its SETUP (§10.3.1.4). The session does not
+// verify them.
 func (s *Session) SetupTokens() []ResolvedToken {
 	out := make([]ResolvedToken, len(s.setupTokens))
 	for i, t := range s.setupTokens {
@@ -281,19 +265,13 @@ func (s *Session) SetupTokens() []ResolvedToken {
 }
 
 // processSetupTokens applies the AUTHORIZATION TOKEN options in the peer's
-// SETUP (§10.3.1.4, "functionally equivalent to the AUTHORIZATION TOKEN
-// message parameter") and keeps the resolved tokens for [Session.SetupTokens].
-// Two rules differ from a request's:
-//   - §10.2.2: "If a server receives Alias Type DELETE (0x0) or USE_ALIAS
-//     (0x2) in a SETUP message, it MUST close the session with a
-//     PROTOCOL_VIOLATION."
-//   - §10.3.1.4: a REGISTER "that exceeds its MAX_AUTH_TOKEN_CACHE_SIZE [...]
-//     MUST NOT fail the session with AUTH_TOKEN_CACHE_OVERFLOW. Instead, it
-//     MUST treat the option as Alias Type USE_VALUE."
+// SETUP (§10.3.1.4) and keeps the resolved tokens for [Session.SetupTokens].
+// Unlike a request, a server closes with PROTOCOL_VIOLATION on DELETE or
+// USE_ALIAS (§10.2.2), and a REGISTER that overflows the cache is treated as
+// USE_VALUE (§10.3.1.4).
 //
-// A REGISTER that both repeats an alias and would overflow the cache closes
-// with DUPLICATE_AUTH_TOKEN_ALIAS: the cache checks the alias first, and the
-// draft does not say which rule wins (an assumption).
+// Assumption: a REGISTER that both repeats an alias and overflows closes with
+// DUPLICATE_AUTH_TOKEN_ALIAS; the draft does not say which rule wins.
 //
 // Every error is a [*TokenCacheError] carrying the code to close with.
 func (s *Session) processSetupTokens() error {
@@ -303,9 +281,7 @@ func (s *Session) processSetupTokens() error {
 		}
 		var t message.Token
 		if err := t.Parse(opt.ByteVal); err != nil {
-			// §10.2.2: "If the Token structure cannot be decoded, the
-			// receiver MUST close the Session with
-			// KEY_VALUE_FORMATTING_ERROR."
+			// §10.2.2.
 			return &TokenCacheError{Code: moqt.SessionKeyValueFormattingError,
 				Err: fmt.Errorf("moqt/session: AUTHORIZATION TOKEN setup option: %w", err)}
 		}
@@ -330,20 +306,13 @@ func (s *Session) processSetupTokens() error {
 }
 
 // SetupTokenAliases returns the aliases of the REGISTER tokens this endpoint
-// sent in SETUP ([WithSetupToken]) that the peer holds, in the order sent.
-// §10.3.1.4: a REGISTER exceeding the peer's MAX_AUTH_TOKEN_CACHE_SIZE is
-// treated by it as USE_VALUE, and "the sender MUST handle registration
-// failures of this kind by purging any Token Aliases that failed to register
-// based on the peer's MAX_AUTH_TOKEN_CACHE_SIZE option in SETUP (or the
-// default value of 0)". Only the aliases returned here may be referenced with
-// USE_ALIAS.
+// sent in SETUP ([WithSetupToken]) that fit the peer's
+// MAX_AUTH_TOKEN_CACHE_SIZE, in the order sent (§10.3.1.4). Only these may be
+// referenced with USE_ALIAS.
 func (s *Session) SetupTokenAliases() []uint64 { return slices.Clone(s.setupTokenAliases) }
 
-// checkOutboundSetupTokens refuses setup tokens the peer would have to close
-// the session over: DELETE or USE_ALIAS (§10.2.2: "If a server receives Alias
-// Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP message, it MUST close the
-// session with a PROTOCOL_VIOLATION"; a client has nothing registered for
-// either to name), and an alias REGISTERed twice (DUPLICATE_AUTH_TOKEN_ALIAS).
+// checkOutboundSetupTokens refuses setup tokens the peer would close the
+// session over (§10.2.2): DELETE, USE_ALIAS, or an alias REGISTERed twice.
 func checkOutboundSetupTokens(toks []message.Token) error {
 	var registered []uint64
 	for _, t := range toks {
@@ -364,11 +333,9 @@ func checkOutboundSetupTokens(toks []message.Token) error {
 	return nil
 }
 
-// heldSetupAliases replays, against the peer's MAX_AUTH_TOKEN_CACHE_SIZE
-// (§10.3.1.3; 0 when the peer sent none), the cache accounting the peer
-// applies to toks in order ([TokenCache.Register]: 16 bytes plus the value
-// each), and returns the aliases of the REGISTERs that fit. The peer treats
-// the others as USE_VALUE (§10.3.1.4).
+// heldSetupAliases replays the peer's cache accounting ([TokenCache.Register])
+// against its MAX_AUTH_TOKEN_CACHE_SIZE (§10.3.1.3; default 0) and returns
+// the aliases of the REGISTERs that fit (§10.3.1.4).
 func heldSetupAliases(toks []message.Token, peerOptions []wire.KVPair) []uint64 {
 	var limit uint64
 	for _, opt := range peerOptions {

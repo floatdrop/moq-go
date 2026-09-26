@@ -11,10 +11,8 @@ import (
 )
 
 // TrackStatusRequest is a completed TRACK_STATUS request (§10.15), returned by
-// [Session.TrackStatus] with the peer's TRACK_STATUS_OK. TRACK_STATUS cannot be
-// updated — "the subscriber cannot send REQUEST_UPDATE" (§10.15) — so the
-// requester has already FINned its side of the stream, and nothing but the
-// responder's FIN follows the OK. Close stops reading the stream.
+// [Session.TrackStatus] with the peer's TRACK_STATUS_OK. It cannot be updated,
+// so this side of the stream is already FINned. Close stops reading.
 type TrackStatusRequest struct {
 	Stream
 
@@ -22,8 +20,7 @@ type TrackStatusRequest struct {
 	OK *message.TrackStatusOK
 }
 
-// Close releases the stream's receive side. Its send side was FINned when the
-// response arrived.
+// Close releases the stream's receive side.
 func (t *TrackStatusRequest) Close() error {
 	t.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
 	return nil
@@ -35,15 +32,13 @@ func (t *TrackStatusRequest) Close() error {
 //
 // ok carries the TRACK_STATUS_OK fields (status, largest location, Track
 // Properties — [message.TrackStatusOK] is an alias of [message.RequestOK]); it
-// may be nil for the all-default reply. TRACK_STATUS is a one-shot status
-// query: the stream "is closed with a FIN after TRACK_STATUS_OK or
-// REQUEST_ERROR are sent" (§10.15), so no handle is returned.
+// may be nil for the all-default reply. The stream is FINned after the reply
+// (§10.15), so no handle is returned.
 //
-// The requester "sends TRACK_STATUS as the first and only message" (§10.15).
-// A REQUEST_UPDATE after it MUST close the session with PROTOCOL_VIOLATION
-// (§10.9), as must an unknown or malformed message (§10). Closing on any other
-// well-formed message is this implementation's reading of "only message"; the
-// draft names no consequence for it.
+// Any later message from the requester closes the session with
+// PROTOCOL_VIOLATION (§10.9, §10). Interpretation: for a well-formed message
+// other than REQUEST_UPDATE this reads §10.15's "first and only message"; the
+// draft names no consequence.
 func (r *Request) AcceptTrackStatus(ok *message.TrackStatusOK) error {
 	if _, isTS := r.First.(*message.TrackStatus); !isTS {
 		return fmt.Errorf("moqt/session: AcceptTrackStatus on a %s request", r.First.Type())
@@ -52,8 +47,7 @@ func (r *Request) AcceptTrackStatus(ok *message.TrackStatusOK) error {
 		ok = &message.TrackStatusOK{}
 	}
 	if err := message.Marshal(r.Stream, ok); err != nil {
-		// As in RejectError: a response that cannot be written must not
-		// leave the requester waiting on a stream that looks healthy.
+		// As in RejectError: do not leave the requester waiting.
 		resetStream(r.Stream)
 		return fmt.Errorf("moqt/session: write TRACK_STATUS_OK: %w", err)
 	}
@@ -64,11 +58,9 @@ func (r *Request) AcceptTrackStatus(ok *message.TrackStatusOK) error {
 	return nil
 }
 
-// rejectTrackStatusFollowups reads the requester's side of an answered
-// TRACK_STATUS stream until it ends. Anything arriving there closes the session
-// (see [Request.AcceptTrackStatus]): a message, or bytes that do not parse. It
-// returns quietly on the requester's FIN, a stream reset, or session close — so
-// a requester that never FINs holds it only until the session ends.
+// rejectTrackStatusFollowups closes the session if anything arrives on an
+// answered TRACK_STATUS stream (see [Request.AcceptTrackStatus]). It returns
+// quietly on the requester's FIN, a reset or session close.
 func (r *Request) rejectTrackStatusFollowups() {
 	src := &readErrRecorder{r: r.Stream}
 	msg, err := message.Parse(src)
@@ -103,10 +95,8 @@ func (e *readErrRecorder) Read(p []byte) (int, error) {
 // REQUEST_OK (TRACK_STATUS_OK) or REQUEST_ERROR. The session assigns
 // m.RequestID; the caller supplies Namespace, Name, and optional Parameters.
 //
-// On success a [TrackStatusRequest] is returned whose OK holds the parsed
-// TRACK_STATUS_OK. The request cannot be updated, so this side of the stream is
-// FINned once the response arrives (§3.3.2: a requester "MAY FIN immediately
-// after sending a message if it will not send a REQUEST_UPDATE"). On
+// On success this side of the stream is FINned (§3.3.2) and a
+// [TrackStatusRequest] holding the TRACK_STATUS_OK is returned. On
 // REQUEST_ERROR the stream is closed and a *RequestRejectedError is returned.
 func (s *Session) TrackStatus(ctx context.Context, m *message.TrackStatus) (*TrackStatusRequest, error) {
 	return awaitRequestResponse(ctx, s, m,

@@ -44,17 +44,14 @@ type Session struct {
 	peerOptions []wire.KVPair
 
 	// earlyData holds data streams that arrived before the peer's control
-	// stream (§3.3), for AcceptDataStream; see acceptControlStream.
+	// stream (§3.3); see acceptControlStream.
 	earlyMu   sync.Mutex
 	earlyData []ReceiveStream
 
-	// setupTokenAliases are the aliases this endpoint REGISTERed in its SETUP
-	// that the peer holds; see [Session.SetupTokenAliases].
+	// See [Session.SetupTokenAliases] and [Session.SetupTokens]. Written once
+	// during open.
 	setupTokenAliases []uint64
-
-	// setupTokens are the tokens resolved from the peer's SETUP; see
-	// [Session.SetupTokens]. Written once during open.
-	setupTokens []ResolvedToken
+	setupTokens       []ResolvedToken
 
 	// Outgoing Request ID allocator: client starts at 0 (even), server at 1
 	// (odd); each AllocRequestID advances by 2 (§10.1).
@@ -103,13 +100,12 @@ type Session struct {
 	// a DUPLICATE_TRACK_ALIAS session error.
 	inboundAliases map[uint64]InboundTrack
 
-	// inboundAliasRefs counts the registrations of each alias in
-	// inboundAliases; see [Session.RegisterInboundTrack]. Protected by mu.
+	// inboundAliasRefs counts the registrations of each alias. Protected by
+	// mu.
 	inboundAliasRefs map[uint64]int
 
-	// aliasRegistered is closed, and replaced, each time RegisterInboundTrack
-	// binds a new alias, waking [IncomingSubgroupStream.AwaitInboundTrack].
-	// Protected by mu.
+	// aliasRegistered is closed and replaced each time a new alias is bound,
+	// waking awaitInboundTrack. Protected by mu.
 	aliasRegistered chan struct{}
 
 	// knownMandatoryTrackProperties is the set of Mandatory Track Property
@@ -282,8 +278,7 @@ func checkOutboundSetupOptions(r role, conn Conn, opts []wire.KVPair) error {
 					"HTTP/3 carries the path and authority in the CONNECT request", name)
 		}
 	}
-	// A server closes the session over one that is not RFC 3986; refuse to
-	// send it. uri.Parse goes through net/url, which lets some through.
+	// The server would close the session over a non-RFC 3986 value.
 	if _, err := checkPathAndAuthoritySyntax(opts); err != nil {
 		return fmt.Errorf("moqt/session: %w", err)
 	}
@@ -339,12 +334,9 @@ func (s *Session) checkPeerSetupOptions() (moqt.SessionErrorCode, error) {
 	return moqt.SessionNoError, nil
 }
 
-// checkPathAndAuthoritySyntax enforces the syntax rule of PATH (§10.3.1.2)
-// and AUTHORITY (§10.3.1.1) — on receipt by a server over native QUIC, where
-// receiving them is legal, and on a client before it sends them: each
-// "follows the URI formatting rules [RFC3986]", and "If an AUTHORITY option
-// does not conform to these rules, the session MUST be closed with
-// MALFORMED_AUTHORITY" — likewise PATH with MALFORMED_PATH.
+// checkPathAndAuthoritySyntax checks PATH (§10.3.1.2) and AUTHORITY
+// (§10.3.1.1) against RFC 3986, returning MALFORMED_PATH or
+// MALFORMED_AUTHORITY as the close code.
 func checkPathAndAuthoritySyntax(opts []wire.KVPair) (moqt.SessionErrorCode, error) {
 	for _, opt := range opts {
 		switch message.SetupOption(opt.Type) {

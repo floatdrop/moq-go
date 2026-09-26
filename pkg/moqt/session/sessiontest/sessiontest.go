@@ -161,22 +161,19 @@ func (s *uniStream) CancelWrite(uint64) {
 }
 func (s *uniStream) Read(p []byte) (int, error) { return s.r.Read(p) }
 
-// CancelRead is the acceptor's STOP_SENDING: it also ends the opener's send
-// side, whose Context is cancelled as on a real transport.
+// CancelRead is the acceptor's STOP_SENDING; it also cancels Context.
 func (s *uniStream) CancelRead(uint64) {
 	_ = s.r.CloseWithError(errCancelled)
 	s.ctxCancel()
 }
 
 // Context is cancelled when Close() or CancelWrite() has been called, or the
-// peer called CancelRead — the send side is done (cleanly, via reset, or
-// because the peer stopped reading).
+// peer called CancelRead.
 func (s *uniStream) Context() context.Context { return s.ctx }
 
 // bidiStream is two io.Pipes wired so each end reads what the other writes.
 // ctx / ctxCancel implement Context() on the send side; peerCtxCancel cancels
-// the other end's, which is how this end's CancelRead (STOP_SENDING) reaches
-// the writer.
+// the other end's on this end's CancelRead (STOP_SENDING).
 type bidiStream struct {
 	r             pipeReadCloser
 	w             pipeWriteCloser

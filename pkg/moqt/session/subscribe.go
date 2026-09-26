@@ -40,8 +40,7 @@ func (sub *Subscription) TrackAlias() uint64 { return sub.OK.TrackAlias }
 func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscription, error) {
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.SubscribeOK) (*Subscription, error) {
-			// §2.5.1: reject tracks with unknown mandatory track properties.
-			// "the subscriber MUST cancel the subscription" (§2.5.1).
+			// §2.5.1: "the subscriber MUST cancel the subscription".
 			if err := s.validateTrackProperties(ok.TrackProperties, "SUBSCRIBE_OK"); err != nil {
 				cancelRequest(stream)
 				return nil, err
@@ -54,7 +53,7 @@ func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscri
 				return nil, err
 			}
 			// The publisher may send PUBLISH_STATE_NOTIFY (§10.10) but not
-			// REQUEST_UPDATE: it did not send the SUBSCRIBE (§10.9).
+			// REQUEST_UPDATE (§10.9).
 			return &Subscription{
 				Stream:     stream,
 				s:          s,

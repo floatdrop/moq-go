@@ -13,21 +13,14 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// handshake performs the SETUP exchange (§3.3). Each side opens a
-// unidirectional control stream and writes SETUP, then accepts the peer's
-// stream and reads theirs. The two directions run in parallel under an
-// errgroup whose derived context cancels the sibling when either side fails,
-// and BOTH the SETUP write and the SETUP read are bridged to that context
-// with context.AfterFunc → CancelWrite/CancelRead (the readResponse pattern):
-// stream I/O is context-free, so without the bridge a peer that opens the
-// control stream but stalls mid-SETUP (or stops granting flow-control
-// credit) would block the handshake past ctx cancellation — wedging, for a
-// relay, the per-conn handler goroutine that Stop must join.
+// handshake performs the SETUP exchange (§3.3): each side writes SETUP on its
+// own control stream and reads the peer's, in parallel under an errgroup. Both
+// directions are bridged to the context with context.AfterFunc, so a peer
+// that stalls mid-SETUP cannot block past cancellation.
 //
-// Per §3.3, until SETUP is exchanged a peer may also open uni-streams for
-// Objects or bidi-streams for requests. Data streams that arrive first are
-// held for AcceptDataStream (see acceptControlStream); request streams wait in
-// the transport until AcceptRequest.
+// Data streams that arrive before the control stream are held for
+// AcceptDataStream (see acceptControlStream); request streams wait in the
+// transport until AcceptRequest.
 func (s *Session) handshake(ctx context.Context, options []wire.KVPair) error {
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -103,23 +96,16 @@ func (s *Session) handshake(ctx context.Context, options []wire.KVPair) error {
 	return nil
 }
 
-// maxEarlyDataStreams caps how many data streams the handshake holds for
-// [Session.AcceptDataStream] before the peer's control stream arrives; more
-// are refused with EXCESSIVE_LOAD. It matches the relay's hold for streams
-// that beat their Track Alias.
+// maxEarlyDataStreams caps how many data streams the handshake holds before
+// the peer's control stream arrives; more are refused with EXCESSIVE_LOAD.
 const maxEarlyDataStreams = 32
 
-// acceptControlStream returns the peer's control stream. §3.3: "Unidirectional
-// streams containing Objects [...] could arrive prior to the control streams,
-// in which case the data SHOULD be buffered until both control streams arrive
-// and setup is complete." A uni stream that begins with a data stream type is
-// held unread, its type bytes kept to be replayed, and handed out by
-// AcceptDataStream once the session is up; up to maxEarlyDataStreams of them.
-// A padding stream is discarded, and one reset before its type is skipped, as
-// after setup; one FINed before its type fails the handshake.
-// The first stream that does not is the control stream, and is returned with
-// its leading bytes replayed, for the SETUP parse to judge. (Bidirectional
-// request streams need nothing: nothing accepts them before setup completes.)
+// acceptControlStream returns the peer's control stream. Data streams that
+// arrive first are held, with their type bytes replayed, for AcceptDataStream
+// (§3.3: "the data SHOULD be buffered"). A padding stream is discarded and one
+// reset before its type is skipped; one FINed before its type fails the
+// handshake. The first other stream is returned, with its leading bytes
+// replayed, for the SETUP parse to judge.
 func (s *Session) acceptControlStream(ctx context.Context) (ReceiveStream, error) {
 	for {
 		stream, err := s.conn.AcceptUniStream(ctx)
@@ -132,21 +118,17 @@ func (s *Session) acceptControlStream(ctx context.Context) (ReceiveStream, error
 		stop()
 		switch {
 		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
-			// FIN before a whole type: no valid stream of any kind; if it
-			// was the control stream, "Doing so results in the session
-			// being closed as a PROTOCOL_VIOLATION" (§3.3).
+			// FIN before a whole type: no valid stream of any kind (§3.3).
 			return nil, fmt.Errorf("read stream type: %w", err)
 		case err != nil:
-			// Reset before its type arrived — a data stream the peer
-			// abandoned: skipped, as acceptDataStream skips it after setup.
+			// Reset before its type: skipped, as after setup (§11.4.1).
 			stream.CancelRead(uint64(moqt.StreamResetInternalError))
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			continue
 		case typ == message.PaddingStreamType:
-			// §11.5.1: "The receiver MUST discard all data received on a
-			// padding stream to prevent exhausting flow control."
+			// §11.5.1.
 			stream.CancelRead(uint64(moqt.StreamResetInternalError))
 			continue
 		}

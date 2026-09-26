@@ -26,12 +26,10 @@ import (
 //   - AUTHORIZATION_TOKEN parameters on follow-ups are resolved through the
 //     session token cache (§10.2.2); a cache fault closes the session with
 //     the mandated code.
-//   - A peer REQUEST_UPDATE is answered with the single REQUEST_OK or
-//     REQUEST_ERROR §10.9 mandates, as decided by the handler installed with
-//     [RequestBroker.HandleUpdates]. With no handler it is declined
-//     (REQUEST_ERROR NOT_SUPPORTED): acknowledging an update without applying
-//     it would misstate the request's state. [Publication.Broker] installs a
-//     handler that applies FORWARD itself.
+//   - A peer REQUEST_UPDATE is answered (§10.9) by the handler installed with
+//     [RequestBroker.HandleUpdates], or declined with NOT_SUPPORTED when there
+//     is none, since acknowledging an unapplied update would misstate the
+//     request's state.
 //   - Everything else (PUBLISH_DONE, unsolicited responses, …) is handed to
 //     Serve's callback.
 //
@@ -58,41 +56,32 @@ type RequestBroker struct {
 	streamClosed  bool
 
 	// onUpdate decides each peer REQUEST_UPDATE; nil declines it.
-	// onUpdateFailed runs after a declined update — §10.9.1's follow-up,
-	// e.g. PUBLISH_DONE UPDATE_FAILED for a subscription. Both are set
+	// onUpdateFailed runs after a declined update (§10.9.1). Both are set
 	// before Serve runs.
 	onUpdate       UpdateHandler
 	onUpdateFailed func()
 
-	// updateScope is the §10.2.1 scope peer REQUEST_UPDATEs are checked
-	// against; 0 skips the check. See [RequestBroker.UpdateScope].
+	// updateScope is the §10.2.1 scope of peer REQUEST_UPDATEs; 0 skips the
+	// check.
 	updateScope message.ParamScope
 
-	// noPeerUpdate / noPeerNotify record that the peer may not send
-	// REQUEST_UPDATE / PUBLISH_STATE_NOTIFY on this stream; see
-	// [RequestBroker.PeerMessages].
+	// See [RequestBroker.PeerMessages].
 	noPeerUpdate bool
 	noPeerNotify bool
 }
 
-// PeerMessages declares which follow-ups the peer may send on this stream.
-// §10.9: REQUEST_UPDATE comes only from "The sender of a request" or from "A
-// subscriber ... of a subscription established with PUBLISH". §10.10:
-// PUBLISH_STATE_NOTIFY "applies only to subscriptions, and is sent only by the
-// publisher". A disallowed one closes the session with PROTOCOL_VIOLATION, as
-// both sections require. Typed handles' Broker methods set this; a broker from
-// [Session.NewRequestBroker] allows both until told otherwise. Call it before
-// [RequestBroker.Serve].
+// PeerMessages declares whether the peer may send REQUEST_UPDATE (§10.9) and
+// PUBLISH_STATE_NOTIFY (§10.10) on this stream; a disallowed one closes the
+// session with PROTOCOL_VIOLATION. Typed handles set this; a broker from
+// [Session.NewRequestBroker] allows both. Call it before [RequestBroker.Serve].
 func (b *RequestBroker) PeerMessages(requestUpdate, publishStateNotify bool) {
 	b.noPeerUpdate, b.noPeerNotify = !requestUpdate, !publishStateNotify
 }
 
-// UpdateScope sets the §10.2.1 parameter scope of the peer's REQUEST_UPDATEs
-// on this stream — [message.ScopeOfUpdate] of the request, or
-// [message.ScopeUpdateFromSubscriber] for the subscriber of a PUBLISH — so one
-// carrying a parameter outside it closes the session with PROTOCOL_VIOLATION.
-// The typed handles' brokers have it set; a broker made with
-// [Session.NewRequestBroker] checks nothing until told. Call it before
+// UpdateScope sets the §10.2.1 parameter scope of the peer's REQUEST_UPDATEs;
+// one carrying a parameter outside it closes the session with
+// PROTOCOL_VIOLATION. Typed handles set this; a broker from
+// [Session.NewRequestBroker] checks nothing. Call it before
 // [RequestBroker.Serve].
 func (b *RequestBroker) UpdateScope(s message.ParamScope) { b.updateScope = s }
 
@@ -103,9 +92,7 @@ func (b *RequestBroker) UpdateScope(s message.ParamScope) { b.updateScope = s }
 type UpdateHandler func(upd *message.RequestUpdate) (*message.RequestOK, error)
 
 // HandleUpdates installs the handler that decides peer REQUEST_UPDATEs,
-// replacing any earlier one (for a [Publication], its built-in handling —
-// which the new handler can still reuse via [Publication.ApplyUpdate]). Call
-// it before [RequestBroker.Serve].
+// replacing any earlier one. Call it before [RequestBroker.Serve].
 func (b *RequestBroker) HandleUpdates(h UpdateHandler) { b.onUpdate = h }
 
 // answerUpdate writes the §10.9 response to upd and reports whether the
@@ -120,8 +107,7 @@ func (b *RequestBroker) answerUpdate(upd *message.RequestUpdate) (bool, error) {
 	} else {
 		ok, err = b.onUpdate(upd)
 	}
-	// A handler that closed the session (e.g. §10.2.18's PROTOCOL_VIOLATION
-	// on a bad FORWARD) ends Serve; there is no request left to answer.
+	// A handler that closed the session leaves no request to answer.
 	select {
 	case <-b.sess.Done():
 		if err == nil {
@@ -135,8 +121,7 @@ func (b *RequestBroker) answerUpdate(upd *message.RequestUpdate) (bool, error) {
 			ok = &message.RequestOK{}
 		}
 		if len(ok.TrackProperties) > 0 {
-			// §10.5: REQUEST_UPDATE_OK's Track Properties are empty; sending
-			// them would make the peer close the session.
+			// §10.5: REQUEST_UPDATE_OK's Track Properties are empty.
 			err = fmt.Errorf("%w: REQUEST_UPDATE_OK", ErrTrackPropertiesNotAllowed)
 		}
 	}
@@ -179,11 +164,9 @@ func (s *Session) NewRequestBroker(stream Stream) *RequestBroker {
 	return &RequestBroker{stream: stream, sess: s}
 }
 
-// mapUpdateResponse converts a §10.9 response message into the
-// (*message.RequestOK, error) shape Update-style callers return: REQUEST_OK
-// passes through, REQUEST_ERROR becomes a *RequestRejectedError, anything
-// else is a protocol-shape error. A REQUEST_UPDATE_OK carrying Track
-// Properties closes the session (§10.5).
+// mapUpdateResponse converts a §10.9 response: REQUEST_OK passes through,
+// REQUEST_ERROR becomes a *RequestRejectedError, anything else is an error. A
+// REQUEST_UPDATE_OK carrying Track Properties closes the session (§10.5).
 func (s *Session) mapUpdateResponse(msg message.Message) (*message.RequestOK, error) {
 	switch m := msg.(type) {
 	case *message.RequestOK:
@@ -337,11 +320,9 @@ func (b *RequestBroker) closeUpdates() {
 }
 
 // Close cancels the request (§3.3.3): pending and future Updates fail with
-// [ErrRequestStreamClosed], and both directions are reset with code — STOP_SENDING
-// on the read side (unblocking a running Serve) and RESET_STREAM on the send
-// side. A FIN would not end the request (§3.3.2). Serialized against in-flight
-// writes; idempotent. Must not be called with locks that Serve's callback
-// might need held.
+// [ErrRequestStreamClosed] and both directions are reset with code, which
+// unblocks a running Serve. Serialized against in-flight writes; idempotent.
+// Must not be called with locks that Serve's callback might need held.
 func (b *RequestBroker) Close(code moqt.StreamResetCode) {
 	b.closeUpdates()
 	b.mu.Lock()
@@ -359,20 +340,16 @@ func (b *RequestBroker) Close(code moqt.StreamResetCode) {
 // the parse), or onMsg returns false. On exit, pending and future Update
 // calls fail with [ErrRequestStreamClosed].
 //
-// Responses route to Update waiters; token parameters go through the
-// session's token cache (a cache fault closes the session with the §10.2.2
-// code and ends Serve); peer REQUEST_UPDATEs are answered as the handler
-// installed with [RequestBroker.HandleUpdates] decides, and declined with
-// NOT_SUPPORTED when there is none. Every message — including each
-// REQUEST_UPDATE and any unsolicited response — is passed to onMsg (nil means
-// "discard"); return false from onMsg to stop serving.
+// Responses route to Update waiters; a token cache fault closes the session
+// (§10.2.2); peer REQUEST_UPDATEs are answered as described on
+// [RequestBroker]. Every other message, including each REQUEST_UPDATE and any
+// unsolicited response, is passed to onMsg (nil means "discard"); return false
+// from onMsg to stop serving.
 //
-// A follow-up that cannot be read (any non-EOF error) resets the read side
-// with INTERNAL_ERROR so the peer learns reads stopped instead of filling flow
-// control into a void; one that is malformed (an unknown type, or a body that
-// does not match its Length) also closes the session with PROTOCOL_VIOLATION
-// (§10). Serve returns nil on a clean FIN or an onMsg stop, ctx.Err() on
-// cancellation, and the read/token error otherwise.
+// A read error resets the read side with INTERNAL_ERROR; a malformed follow-up
+// also closes the session with PROTOCOL_VIOLATION (§10). Serve returns nil on
+// a clean FIN or an onMsg stop, ctx.Err() on cancellation, and the read/token
+// error otherwise.
 func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) bool) error {
 	defer b.closeUpdates()
 	stop := context.AfterFunc(ctx, func() {
@@ -416,10 +393,9 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 
 		switch m := msg.(type) {
 		case *message.RequestOK, *message.RequestError:
-			// Every REQUEST_OK read here answers a REQUEST_UPDATE — the
-			// request's own response was read before the broker attached —
-			// so §10.5's empty-Track-Properties rule applies even to one that
-			// arrives after its Update gave up.
+			// The request's own response was read before the broker
+			// attached, so every REQUEST_OK here is a REQUEST_UPDATE_OK
+			// (§10.5), even one whose Update gave up.
 			if err := b.sess.checkRequestOKTrackProperties(nil, m); err != nil {
 				return err
 			}
@@ -461,9 +437,8 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 				_ = b.sess.Close(moqt.SessionTooManyRequestUpdates, err.Error())
 				return err
 			}
-			// §10.9: the receiver of a REQUEST_UPDATE "MUST respond with
-			// exactly one REQUEST_OK or REQUEST_ERROR"; the handler decides
-			// which. onMsg still observes the update.
+			// §10.9: "MUST respond with exactly one REQUEST_OK or
+			// REQUEST_ERROR". onMsg still observes the update.
 			accepted, err := b.answerUpdate(m)
 			if err != nil {
 				return err
