@@ -292,3 +292,48 @@ func drainOneSubgroup(t *testing.T, client *session.Session) {
 		}
 	}
 }
+
+// sendSubgroup opens a subgroup stream on from, runs write on it and closes it, and returns to's end with the
+// writer's result. The writer runs in a goroutine because the test pipe is synchronous: Write blocks until read.
+func sendSubgroup(
+	t *testing.T,
+	from, to *session.Session,
+	hdr message.SubgroupHeader,
+	write func(*session.OutgoingSubgroupStream) error,
+) (*session.IncomingSubgroupStream, <-chan error) {
+	t.Helper()
+	writeErr := make(chan error, 1)
+	go func() {
+		out, err := from.OpenSubgroup(hdr)
+		if err != nil {
+			writeErr <- err
+			return
+		}
+		if err := write(out); err != nil {
+			writeErr <- err
+			return
+		}
+		writeErr <- out.Close()
+	}()
+	ds, err := to.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	in, ok := ds.(*session.IncomingSubgroupStream)
+	if !ok {
+		t.Fatalf("AcceptDataStream returned %T, want *session.IncomingSubgroupStream", ds)
+	}
+	return in, writeErr
+}
+
+// writeObjects is a sendSubgroup write func that writes objs in order.
+func writeObjects(objs ...*message.SubgroupObject) func(*session.OutgoingSubgroupStream) error {
+	return func(out *session.OutgoingSubgroupStream) error {
+		for _, o := range objs {
+			if err := out.WriteObject(o); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
