@@ -119,12 +119,12 @@ type SubscriberEntry struct {
 	// order; outReady wakes it, and closed stops it once the entry is
 	// unregistered.
 	outMu    sync.Mutex
-	outbox   []message.Message
+	outbox   []queuedMessage
 	stopped  bool
 	outReady chan struct{}
-	// writeSince is when RunWriter's current write began (UnixNano), 0 while
-	// it is not writing; see [SubscriberEntry.push].
-	writeSince atomic.Int64
+	// writing is the message RunWriter is sending now (zero at when idle);
+	// guarded by outMu. Together with outbox it is what is still unsent.
+	writing queuedMessage
 	// writerDone is closed when RunWriter returns; see
 	// [SubscriberEntry.WriterDone].
 	writerDone chan struct{}

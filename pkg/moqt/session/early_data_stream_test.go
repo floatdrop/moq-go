@@ -154,9 +154,9 @@ func TestEarlyDataStreamsBounded(t *testing.T) {
 
 // TestHandshakeSkipsPaddingAndAbortedStreams: before the control stream,
 // a padding stream is discarded, not held (§11.5.1: "The receiver MUST
-// discard all data received on a padding stream"), and a stream that ends
-// before its type arrived is skipped as it would be after setup, rather than
-// failing the handshake.
+// discard all data received on a padding stream"), and a stream reset before
+// its type arrived is skipped as it would be after setup, rather than failing
+// the handshake.
 func TestHandshakeSkipsPaddingAndAbortedStreams(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
@@ -165,11 +165,11 @@ func TestHandshakeSkipsPaddingAndAbortedStreams(t *testing.T) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	wg.Go(func() {
-		empty, err := clientConn.OpenUniStream()
+		aborted, err := clientConn.OpenUniStream()
 		if err != nil {
 			return
 		}
-		_ = empty.Close() // FIN before any byte
+		aborted.CancelWrite(uint64(moqt.StreamResetCancelled)) // reset before any byte
 		padding, err := clientConn.OpenUniStream()
 		if err != nil {
 			return

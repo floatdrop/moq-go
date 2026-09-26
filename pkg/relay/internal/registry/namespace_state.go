@@ -177,33 +177,44 @@ func (e *SubscriberEntry) Finish(m message.Message) {
 
 func (e *SubscriberEntry) enqueue(m message.Message) { e.push(m, false) }
 
-// maxQueuedMessages bounds how many messages a namespace subscription may have
-// waiting to be sent. §10.19: "If the publisher is unable to send NAMESPACE or
-// NAMESPACE_DONE messages in a timely manner because the SUBSCRIBE_NAMESPACE
-// response stream is blocked by flow control, the publisher MAY reset the
-// SUBSCRIBE_NAMESPACE response stream." The relay treats a stream as blocked
-// when its writer has been stuck in one write for maxBlockedWrite while at
-// least maxQueuedMessages wait behind it; a burst (seeding a subscription, a
-// prefix update, a Discovery resync) queues many messages at once but keeps
-// the writer moving, so it does not count. The same rule holds a
-// SUBSCRIBE_TRACKS stream's PUBLISH_SKIPPEDs.
+// maxQueuedMessages and maxUnsentWait bound a namespace subscription's queue.
+// §10.19: "If the publisher is unable to send NAMESPACE or NAMESPACE_DONE
+// messages in a timely manner because the SUBSCRIBE_NAMESPACE response stream
+// is blocked by flow control, the publisher MAY reset the SUBSCRIBE_NAMESPACE
+// response stream." The relay counts a stream as blocked when at least
+// maxQueuedMessages are unsent and the oldest of them has waited longer than
+// maxUnsentWait — whether the subscriber stopped reading or reads too slowly
+// to keep up. A burst (seeding a subscription, a prefix update, a Discovery
+// resync) that a reading subscriber drains within maxUnsentWait does not
+// count. The check runs when a message is queued: a stream that is stuck
+// while nothing new arrives is left alone, its queue not growing. The same
+// bound holds a SUBSCRIBE_TRACKS stream's PUBLISH_SKIPPEDs.
 const (
 	maxQueuedMessages = 1024
-	maxBlockedWrite   = time.Second
+	maxUnsentWait     = time.Second
 )
 
-// push appends m, then the finish marker (a nil message) when last. Nothing
-// is queued once the request is finishing or its stream failed. A push to a
-// blocked stream (see maxQueuedMessages) resets it with EXCESSIVE_LOAD instead
-// — both halves, which also unblocks the stuck write and ends the request's
-// reader, so the owner unregisters e.
+// queuedMessage is a message waiting for RunWriter, with when it was queued
+// (a monotonic time, so a wall-clock step does not trip the bound). A nil
+// m is the finish marker.
+type queuedMessage struct {
+	m  message.Message
+	at time.Time
+}
+
+// push appends m, then the finish marker when last. Nothing is queued once
+// the request is finishing or its stream failed. A push to a blocked stream
+// (see maxQueuedMessages) resets it with EXCESSIVE_LOAD instead — both
+// halves, which also unblocks a stuck write and ends the request's reader, so
+// the owner unregisters e.
 func (e *SubscriberEntry) push(m message.Message, last bool) {
+	now := time.Now()
 	e.outMu.Lock()
 	if e.stopped {
 		e.outMu.Unlock()
 		return
 	}
-	if len(e.outbox) >= maxQueuedMessages && e.writeBlocked() {
+	if e.blockedLocked(now) {
 		e.stopped = true
 		e.outbox = nil
 		e.outMu.Unlock()
@@ -211,9 +222,9 @@ func (e *SubscriberEntry) push(m message.Message, last bool) {
 		e.Stream.CancelRead(uint64(moqt.StreamResetExcessiveLoad))
 		return
 	}
-	e.outbox = append(e.outbox, m)
+	e.outbox = append(e.outbox, queuedMessage{m: m, at: now})
 	if last {
-		e.outbox = append(e.outbox, nil)
+		e.outbox = append(e.outbox, queuedMessage{at: now})
 		e.stopped = true
 	}
 	e.outMu.Unlock()
@@ -223,11 +234,27 @@ func (e *SubscriberEntry) push(m message.Message, last bool) {
 	}
 }
 
+// blockedLocked reports whether at least maxQueuedMessages are unsent and the
+// oldest has waited longer than maxUnsentWait. e.outMu must be held.
+func (e *SubscriberEntry) blockedLocked(now time.Time) bool {
+	unsent := len(e.outbox)
+	oldest := time.Time{}
+	if !e.writing.at.IsZero() {
+		unsent++
+		oldest = e.writing.at
+	} else if len(e.outbox) > 0 {
+		oldest = e.outbox[0].at
+	}
+	return unsent >= maxQueuedMessages && now.Sub(oldest) > maxUnsentWait
+}
+
 // RunWriter sends e's queued messages in order until e is unregistered, the
 // request finishes, or a write fails. Its owner runs it once, for the
-// subscription's lifetime. After a failed write it also stops reading the
-// stream, so the request's reader returns and the owner unregisters e: that is
-// how a peer's STOP_SENDING-only cancel (§3.3.3) ends the subscription.
+// subscription's lifetime. It takes one message at a time, so what it has not
+// sent yet stays counted (see maxQueuedMessages). After a failed write it also
+// stops reading the stream, so the request's reader returns and the owner
+// unregisters e: that is how a peer's STOP_SENDING-only cancel (§3.3.3) ends
+// the subscription.
 func (e *SubscriberEntry) RunWriter() {
 	defer close(e.writerDone)
 	for {
@@ -236,35 +263,34 @@ func (e *SubscriberEntry) RunWriter() {
 			return
 		case <-e.outReady:
 		}
-		e.outMu.Lock()
-		batch := e.outbox
-		e.outbox = nil
-		e.outMu.Unlock()
-		for _, m := range batch {
-			if m == nil { // the finish marker
+		for {
+			e.outMu.Lock()
+			if len(e.outbox) == 0 {
+				e.outMu.Unlock()
+				break
+			}
+			q := e.outbox[0]
+			e.outbox[0] = queuedMessage{}
+			e.outbox = e.outbox[1:]
+			e.writing = q
+			e.outMu.Unlock()
+			if q.m == nil { // the finish marker
 				_ = e.Stream.Close()
 				return
 			}
-			e.writeSince.Store(time.Now().UnixNano())
-			err := e.write(m)
-			e.writeSince.Store(0)
+			err := e.write(q.m)
+			e.outMu.Lock()
+			e.writing = queuedMessage{}
 			if err != nil {
-				e.outMu.Lock()
 				e.stopped = true
 				e.outbox = nil
 				e.outMu.Unlock()
 				e.Stream.CancelRead(uint64(moqt.StreamResetInternalError))
 				return
 			}
+			e.outMu.Unlock()
 		}
 	}
-}
-
-// writeBlocked reports whether RunWriter has been stuck in one write for
-// maxBlockedWrite.
-func (e *SubscriberEntry) writeBlocked() bool {
-	since := e.writeSince.Load()
-	return since != 0 && time.Since(time.Unix(0, since)) > maxBlockedWrite
 }
 
 // WriterDone is closed once RunWriter has returned: after the FIN that
