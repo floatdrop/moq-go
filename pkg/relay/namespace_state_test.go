@@ -494,6 +494,51 @@ func TestNamespace_RestartedWatchChangesOnlyWhatChanged(t *testing.T) {
 	requireQuiet(t, msgs, "cam is still advertised")
 }
 
+// TestNamespace_LargeSeedNotReset: the bound is for a subscriber whose stream
+// is blocked, not for a burst. One whose prefix covers more namespaces than
+// the bound, all queued at once when it subscribes, receives them all.
+func TestNamespace_LargeSeedNotReset(t *testing.T) {
+	t.Parallel()
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+	ctx := t.Context()
+	const advertised = 1500
+	for i := range advertised {
+		if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
+			Prefix: ns("video", strconv.Itoa(i)), RelayAddr: "relay-C",
+		}); err != nil {
+			t.Fatalf("PublishNamespace: %v", err)
+		}
+	}
+	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
+	defer relayA.stop(t)
+	var s *session.NamespaceSubscription
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		// Wait until the relay's watch has the whole snapshot.
+		var msgs <-chan message.Message
+		s, msgs = subscribeNS(t, dialClient(t, relayA), "video")
+		n := 0
+	count:
+		for {
+			select {
+			case _, ok := <-msgs:
+				if !ok {
+					t.Fatalf("stream ended after %d NAMESPACEs; a reading subscriber must not be reset", n)
+				}
+				if n++; n == advertised {
+					return
+				}
+			case <-time.After(500 * time.Millisecond):
+				break count
+			}
+		}
+		_ = s.Close()
+		if time.Now().After(deadline) {
+			t.Fatalf("got %d NAMESPACEs, want %d", n, advertised)
+		}
+	}
+}
+
 // TestNamespace_BlockedSubscriberReset: §10.19 "If the publisher is unable to
 // send NAMESPACE or NAMESPACE_DONE messages in a timely manner because the
 // SUBSCRIBE_NAMESPACE response stream is blocked by flow control, the
@@ -524,7 +569,14 @@ func TestNamespace_BlockedSubscriberReset(t *testing.T) {
 			t.Fatalf("PublishNamespace: %v", err)
 		}
 	}
-	time.Sleep(200 * time.Millisecond) // the relay queues what it can
+	// Blocked past the limit, the next event resets the stream.
+	time.Sleep(1500 * time.Millisecond)
+	if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
+		Prefix: ns("video", "late"), RelayAddr: "relay-C",
+	}); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
 
 	n := 0
 	for {

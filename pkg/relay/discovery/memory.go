@@ -51,8 +51,8 @@ type MemoryStore struct {
 	mu         sync.RWMutex
 	tracks     map[trackEntryKey]TrackInfo
 	namespaces map[namespaceEntryKey]NamespaceInfo
-	trackWatch []chan TrackEvent
-	nsWatch    []chan NamespaceEvent
+	trackWatch []*watcher[TrackEvent]
+	nsWatch    []*watcher[NamespaceEvent]
 	closed     bool
 	// withdrawn records relay addresses that called Withdraw, so a late
 	// Publish cannot re-advertise a relay that is draining.
@@ -266,16 +266,16 @@ func (s *MemoryStore) WatchTracks(ctx context.Context) (<-chan TrackEvent, error
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
-	ch := make(chan TrackEvent, len(s.tracks)+1+s.bufferSize)
+	w := newWatcher[TrackEvent](len(s.tracks) + 1 + s.bufferSize)
 	for _, v := range s.tracks {
-		ch <- TrackEvent{Op: OpPublish, Info: v} // fits: capacity includes the snapshot
+		w.ch <- TrackEvent{Op: OpPublish, Info: v} // fits: capacity includes the snapshot
 	}
-	ch <- TrackEvent{Op: OpSnapshotDone}
-	s.trackWatch = append(s.trackWatch, ch)
+	w.ch <- TrackEvent{Op: OpSnapshotDone}
+	s.trackWatch = append(s.trackWatch, w)
 	s.mu.Unlock()
 
-	go s.watchTrackLifecycle(ctx, ch)
-	return ch, nil
+	go watchLifecycle(ctx, &s.mu, &s.trackWatch, w)
+	return w.ch, nil
 }
 
 // WatchNamespaces — see [MemoryStore.WatchTracks].
@@ -285,16 +285,16 @@ func (s *MemoryStore) WatchNamespaces(ctx context.Context) (<-chan NamespaceEven
 		s.mu.Unlock()
 		return nil, ErrClosed
 	}
-	ch := make(chan NamespaceEvent, len(s.namespaces)+1+s.bufferSize)
+	w := newWatcher[NamespaceEvent](len(s.namespaces) + 1 + s.bufferSize)
 	for _, v := range s.namespaces {
-		ch <- NamespaceEvent{Op: OpPublish, Info: v} // fits: capacity includes the snapshot
+		w.ch <- NamespaceEvent{Op: OpPublish, Info: v} // fits: capacity includes the snapshot
 	}
-	ch <- NamespaceEvent{Op: OpSnapshotDone}
-	s.nsWatch = append(s.nsWatch, ch)
+	w.ch <- NamespaceEvent{Op: OpSnapshotDone}
+	s.nsWatch = append(s.nsWatch, w)
 	s.mu.Unlock()
 
-	go s.watchNamespaceLifecycle(ctx, ch)
-	return ch, nil
+	go watchLifecycle(ctx, &s.mu, &s.nsWatch, w)
+	return w.ch, nil
 }
 
 // Withdraw drops every track and namespace advertisement whose RelayAddr is
@@ -341,41 +341,76 @@ func (s *MemoryStore) Close() error {
 		return nil
 	}
 	s.closed = true
-	// Close under the lock so closes cannot race a concurrent fanout send
-	// (which also holds s.mu). A lifecycle goroutine that wakes after this
-	// sees s.closed and does not double-close.
-	for _, ch := range s.trackWatch {
-		close(ch)
+	// End under the lock so the closes cannot race a concurrent fanout send
+	// (which also holds s.mu); ending also releases each lifecycle goroutine.
+	for _, w := range s.trackWatch {
+		w.end()
 	}
-	for _, ch := range s.nsWatch {
-		close(ch)
+	for _, w := range s.nsWatch {
+		w.end()
 	}
 	s.trackWatch = nil
 	s.nsWatch = nil
 	return nil
 }
 
+// watcher is one watch: the channel its events go to, and done, closed
+// together with it so the watch's lifecycle goroutine is released however the
+// watch ends — ctx, Close, or overflow.
+type watcher[T any] struct {
+	ch   chan T
+	done chan struct{}
+}
+
+func newWatcher[T any](buffer int) *watcher[T] {
+	return &watcher[T]{ch: make(chan T, buffer), done: make(chan struct{})}
+}
+
+// end closes the watch. The caller holds the store's lock and has removed w
+// from its list, so it is ended exactly once.
+func (w *watcher[T]) end() {
+	close(w.ch)
+	close(w.done)
+}
+
+// watchLifecycle ends w when ctx is cancelled, unless it ended first.
+func watchLifecycle[T any](ctx context.Context, mu sync.Locker, watchers *[]*watcher[T], w *watcher[T]) {
+	select {
+	case <-w.done:
+		return // overflow or Close ended it
+	case <-ctx.Done():
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	i := slices.Index(*watchers, w)
+	if i < 0 {
+		return // ended while this goroutine waited for the lock
+	}
+	*watchers = slices.Delete(*watchers, i, i+1)
+	w.end()
+}
+
 // fanout delivers ev to each watcher with a non-blocking send. A watcher whose
-// buffer is full is removed and its channel closed rather than skipped: a
-// dropped event would leave it silently out of date, while a closed watch is
-// noticed and re-watched (see [DiscoveryStore.WatchTracks]). It returns how
-// many watchers were closed. It MUST be called with s.mu held: the sends and
-// closes are then mutually exclusive with the lifecycle goroutines' closes.
-// The publish path still never blocks on a slow watcher; the caller logs the
-// count AFTER releasing s.mu so a slow log sink cannot stall the store.
-func fanout[T any](watchers *[]chan T, ev T) int {
-	closed := 0
-	*watchers = slices.DeleteFunc(*watchers, func(ch chan T) bool {
+// buffer is full is removed and ended rather than skipped: a dropped event
+// would leave it silently out of date, while an ended watch is noticed and
+// re-watched (see [DiscoveryStore.WatchTracks]). It returns how many watchers
+// were ended. It MUST be called with s.mu held: the sends and closes are then
+// mutually exclusive with the other ends. The publish path still never blocks
+// on a slow watcher; the caller logs the count AFTER releasing s.mu so a slow
+// log sink cannot stall the store.
+func fanout[T any](watchers *[]*watcher[T], ev T) int {
+	ended := 0
+	*watchers = slices.DeleteFunc(*watchers, func(w *watcher[T]) bool {
 		select {
-		case ch <- ev:
+		case w.ch <- ev:
 			return false
 		default:
-			close(ch)
-			closed++
+			w.end()
+			ended++
 			return true
 		}
 	})
-	return closed
+	return ended
 }
 
 // warnDropped logs that n slow watchers had their watch ended, if any. Called
@@ -388,43 +423,6 @@ func (s *MemoryStore) warnDropped(n int, op Op, keyAttr string, keyVal any) {
 	}
 	s.log.Warn("discovery: ended the watch of slow watcher(s)",
 		"op", op.String(), keyAttr, keyVal, "watchers", n)
-}
-
-// watchTrackLifecycle removes ch from the watch list when ctx is
-// cancelled or the store is closed. The channel is closed exactly once.
-func (s *MemoryStore) watchTrackLifecycle(ctx context.Context, ch chan TrackEvent) {
-	<-ctx.Done()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		// Close already shut us down; channel already closed.
-		return
-	}
-	i := slices.Index(s.trackWatch, ch)
-	if i < 0 {
-		return // fanout already ended it on overflow
-	}
-	s.trackWatch = slices.Delete(s.trackWatch, i, i+1)
-	// Close under the lock so it cannot race a concurrent fanout send (which
-	// also holds s.mu). Once removed from s.trackWatch above, no later fanout
-	// will reference ch.
-	close(ch)
-}
-
-func (s *MemoryStore) watchNamespaceLifecycle(ctx context.Context, ch chan NamespaceEvent) {
-	<-ctx.Done()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return
-	}
-	i := slices.Index(s.nsWatch, ch)
-	if i < 0 {
-		return // fanout already ended it on overflow
-	}
-	s.nsWatch = slices.Delete(s.nsWatch, i, i+1)
-	// Close under the lock — see [MemoryStore.watchTrackLifecycle].
-	close(ch)
 }
 
 // namespaceWireKey serialises a TrackNamespace into a canonical byte

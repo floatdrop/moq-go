@@ -24,9 +24,9 @@ import (
 // relay, the per-conn handler goroutine that Stop must join.
 //
 // Per §3.3, until SETUP is exchanged a peer may also open uni-streams for
-// objects or bidi-streams for requests, we assume the peer is
-// well-behaved and the first unidirectional stream it opens is the control
-// stream beginning with SETUP. Out-of-order stream handling is not yet implemented.
+// Objects or bidi-streams for requests. Data streams that arrive first are
+// held for AcceptDataStream (see acceptControlStream); request streams wait in
+// the transport until AcceptRequest.
 func (s *Session) handshake(ctx context.Context, options []wire.KVPair) error {
 	g, gctx := errgroup.WithContext(ctx)
 
@@ -114,6 +114,8 @@ const maxEarlyDataStreams = 32
 // and setup is complete." A uni stream that begins with a data stream type is
 // held unread, its type bytes kept to be replayed, and handed out by
 // AcceptDataStream once the session is up; up to maxEarlyDataStreams of them.
+// A padding stream is discarded, and one that ends before its type is
+// skipped, as after setup.
 // The first stream that does not is the control stream, and is returned with
 // its leading bytes replayed, for the SETUP parse to judge. (Bidirectional
 // request streams need nothing: nothing accepts them before setup completes.)
@@ -127,9 +129,21 @@ func (s *Session) acceptControlStream(ctx context.Context) (ReceiveStream, error
 		rec := &recordingByteReader{r: stream}
 		typ, err := wire.ReadVarint(rec)
 		stop()
-		if err != nil {
+		switch {
+		case err != nil:
+			// Ended or reset before its type arrived: skipped, as
+			// acceptDataStream skips it after setup. A control stream
+			// "MUST NOT be closed" (§3.3), so this is not the one.
 			stream.CancelRead(uint64(moqt.StreamResetInternalError))
-			return nil, fmt.Errorf("read stream type: %w", err)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			continue
+		case typ == message.PaddingStreamType:
+			// §11.5.1: "The receiver MUST discard all data received on a
+			// padding stream to prevent exhausting flow control."
+			stream.CancelRead(uint64(moqt.StreamResetInternalError))
+			continue
 		}
 		replayed := &prefixedStream{ReceiveStream: stream, prefix: rec.read}
 		if !isDataStreamType(typ) {
@@ -162,7 +176,7 @@ func (s *Session) nextUniStream(ctx context.Context) (ReceiveStream, error) {
 }
 
 func isDataStreamType(typ uint64) bool {
-	return message.IsSubgroupHeaderType(typ) || message.IsFetchHeaderType(typ) || typ == message.PaddingStreamType
+	return message.IsSubgroupHeaderType(typ) || message.IsFetchHeaderType(typ)
 }
 
 // recordingByteReader reads r one byte at a time, keeping what it read.
