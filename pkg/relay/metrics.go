@@ -109,7 +109,10 @@ const (
 	// ResetCauseProperties is a reopen to carry Object Properties (§2.5):
 	// the outbound stream's SUBGROUP_HEADER had PROPERTIES clear (§11.4.2),
 	// taken from another upstream of the same Subgroup (§9.3), so a fresh
-	// stream with the bit set was opened. No Object is lost.
+	// stream with the bit set was opened. Objects already written survive
+	// the reset only where RESET_STREAM_AT is in use (see
+	// [session.OutgoingSubgroupStream.MarkReliable]); elsewhere the unacked
+	// ones are lost, as with [ResetCauseGap].
 	ResetCauseProperties
 )
 
