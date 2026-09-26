@@ -216,9 +216,11 @@ func TestRelay_SkipBeforeStartKeepsFIN(t *testing.T) {
 	}
 }
 
-// TestRelay_ForwardStateOmissionResetsReopenedStream: after a pause omitted an
-// Object, the stream reopened on resume ends with a reset too.
-func TestRelay_ForwardStateOmissionResetsReopenedStream(t *testing.T) {
+// TestRelay_ForwardStateOmissionKeepsStream: an Object omitted while paused did
+// not pass the subscriber's filters (§5.1.5: "The Forward parameter is also a
+// type of filter"), so the Object after the resume is the next Object and
+// stays on the stream (§11.4.3), which still ends with a reset.
+func TestRelay_ForwardStateOmissionKeepsStream(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
@@ -240,7 +242,7 @@ func TestRelay_ForwardStateOmissionResetsReopenedStream(t *testing.T) {
 			return
 		}
 		<-resumed
-		_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte("2")}) // gap: a new stream
+		_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte("2")})
 		_ = sg.Close()
 	}()
 
@@ -248,18 +250,25 @@ func TestRelay_ForwardStateOmissionResetsReopenedStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcceptDataStream: %v", err)
 	}
-	first, ok := ds.(*session.IncomingSubgroupStream)
+	in, ok := ds.(*session.IncomingSubgroupStream)
 	if !ok {
 		t.Fatalf("AcceptDataStream = %T, want a subgroup stream", ds)
 	}
-	if _, err := first.ReadObject(); err != nil {
-		t.Fatalf("ReadObject: %v", err)
+	type result struct {
+		ids []uint64
+		end error
 	}
+	done := make(chan result, 1)
 	go func() {
+		var r result
 		for {
-			if _, err := first.ReadObject(); err != nil {
+			o, err := in.ReadDecoded()
+			if err != nil {
+				r.end = err
+				done <- r
 				return
 			}
+			r.ids = append(r.ids, o.ObjectID)
 		}
 	}()
 	if _, err := subSess.UpdateRequest(
@@ -280,11 +289,16 @@ func TestRelay_ForwardStateOmissionResetsReopenedStream(t *testing.T) {
 	}
 	close(resumed)
 
-	ids, end := readUntilEnd(t, subSess)
-	if !slices.Equal(ids, []uint64{2}) {
-		t.Fatalf("the reopened stream carried Objects %v, want [2]", ids)
+	var r result
+	select {
+	case r = <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the subgroup stream did not end")
 	}
-	requireReset(t, end, "Object 1 was omitted while paused")
+	if !slices.Equal(r.ids, []uint64{0, 2}) {
+		t.Fatalf("the stream carried Objects %v, want [0 2]", r.ids)
+	}
+	requireReset(t, r.end, "Object 1 was omitted while paused")
 }
 
 // TestRelay_StartRaisedToLaterGroupResetsPromptly: a Start raised past the

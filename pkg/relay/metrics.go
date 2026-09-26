@@ -71,12 +71,11 @@ type TrackRef struct {
 type ResetCause uint8
 
 const (
-	// ResetCauseGap is a §11.4.3 reopen: the next object to forward was not
-	// consecutive with the last one written, so the current outbound stream
-	// was reset and a fresh one opened. The relay MUST NOT forward a
-	// non-consecutive object on an existing subgroup stream, so this is
-	// correct behaviour — but it is also the direct consequence of an
-	// earlier drop or filter narrowing, and a subscriber sees the hole.
+	// ResetCauseGap is a §11.4.3 reopen: the object to forward was not known
+	// to be "the next Object" after the last one written, so the current
+	// outbound stream was reset and a fresh one opened. That is correct
+	// behaviour, but it usually follows an earlier drop, or Objects arriving
+	// from several upstreams, and a subscriber sees the hole.
 	ResetCauseGap ResetCause = iota
 
 	// ResetCauseDeliveryTimeout is §8: an object sat unsent past the

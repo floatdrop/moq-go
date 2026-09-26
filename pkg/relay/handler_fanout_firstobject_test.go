@@ -165,40 +165,6 @@ func TestFanout_FirstObjectBitClearedForFilteredHead(t *testing.T) {
 	}
 }
 
-// TestFanout_FirstObjectBitAcrossGapReopen: after a gap reopen (§11.4.3) only
-// the original stream carries FIRST_OBJECT.
-func TestFanout_FirstObjectBitAcrossGapReopen(t *testing.T) {
-	t.Parallel()
-	pub, sub := firstObjectTopology(t, nil)
-	// Objects 0, 1, then a jump to 5: the relay must not forward the
-	// non-consecutive object on the same outbound stream.
-	writeSubgroupObjects(t, pub, message.SubgroupHeader{
-		SubgroupIDMode: message.SubgroupIDImplicitZero, TrackAlias: 7, GroupID: 0,
-	}, []uint64{0, 1, 5})
-
-	caps := captureSubgroups(t, sub, 2)
-	var origin, reopened *subgroupCapture
-	for i := range caps {
-		if len(caps[i].Objects) > 0 && caps[i].Objects[0] == 0 {
-			origin = &caps[i]
-		} else {
-			reopened = &caps[i]
-		}
-	}
-	if origin == nil || reopened == nil {
-		t.Fatalf("expected an origin and a reopened stream, got %+v", caps)
-	}
-	if origin.Header.ReplayingSubgroup {
-		t.Error("origin stream begins with the subgroup's first object: FIRST_OBJECT must be set")
-	}
-	if !reopened.Header.ReplayingSubgroup {
-		t.Error("gap-reopened stream is mid-subgroup: FIRST_OBJECT must be clear")
-	}
-	if len(reopened.Objects) != 1 || reopened.Objects[0] != 5 {
-		t.Errorf("reopened stream objects = %v, want [5]", reopened.Objects)
-	}
-}
-
 // TestFanout_FirstObjectBitNotInvented: an inbound replay stream (FIRST_OBJECT
 // clear) is not forwarded with the bit set.
 func TestFanout_FirstObjectBitNotInvented(t *testing.T) {

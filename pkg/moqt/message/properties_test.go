@@ -285,6 +285,32 @@ func TestCheckObjectProperties(t *testing.T) {
 	}
 }
 
+// TestPriorObjectIDGap: the Prior Object ID Gap (§12.9) is found in either list
+// (§12.7), and Properties that make the track malformed carry none.
+func TestPriorObjectIDGap(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		raw    []byte
+		gap    uint64
+		hasGap bool
+	}{
+		{"empty", nil, 0, false},
+		{"other properties", AppendTrackProperties([]wire.KVPair{kv(0x40, 1)}), 0, false},
+		{"mutable", AppendTrackProperties([]wire.KVPair{kv(0x40, 1), kv(PropertyPriorObjectIDGap, 3)}), 3, true},
+		{"zero", AppendTrackProperties([]wire.KVPair{kv(PropertyPriorObjectIDGap, 0)}), 0, true},
+		{"inside Immutable", AppendTrackProperties([]wire.KVPair{immutable(kv(PropertyPriorObjectIDGap, 2))}), 2, true},
+		{"two instances", AppendTrackProperties([]wire.KVPair{
+			kv(PropertyPriorObjectIDGap, 1), immutable(kv(PropertyPriorObjectIDGap, 1)),
+		}), 0, false},
+		{"unparseable", []byte{0x02}, 0, false},
+	} {
+		gap, ok := PriorObjectIDGap(tc.raw)
+		if gap != tc.gap || ok != tc.hasGap {
+			t.Errorf("%s: PriorObjectIDGap = (%d, %v), want (%d, %v)", tc.name, gap, ok, tc.gap, tc.hasGap)
+		}
+	}
+}
+
 func BenchmarkCheckObjectProperties(b *testing.B) {
 	raw := AppendTrackProperties([]wire.KVPair{
 		kv(0x40, 1), kv(PropertyPriorObjectIDGap, 1), immutable(kv(0x42, 7)),

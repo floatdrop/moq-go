@@ -32,6 +32,19 @@ type fwdObject struct {
 	// first marks the subgroup's true first object (§11.4.2 FIRST_OBJECT);
 	// only an outbound stream beginning with it sets the bit.
 	first bool
+
+	// follows reports that the Object handed to the writer before this one
+	// was read just before it from the same inbound stream, with only
+	// Objects the subscriber's filters rejected between (see
+	// [subgroupWriter.admit]).
+	follows bool
+}
+
+// inboundPos is an Object's place on its inbound subgroup stream: the stream,
+// and how many Objects had been read from it, this one included.
+type inboundPos struct {
+	src *session.IncomingSubgroupStream
+	seq uint64
 }
 
 // subgroupWriterSet is the payload of a [registry.SharedSubgroup]: one
@@ -265,6 +278,9 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 
 	var (
 		firstObj = true
+		// pos counts every Object read, dedup losers included: each is an
+		// Object between its neighbours (§11.4.3).
+		pos = inboundPos{src: stream}
 		// terminalSeen: an EndOfGroup/EndOfTrack was read on this inbound
 		// stream; any later object makes the track malformed (§11.4.3,
 		// §2.4.2).
@@ -315,6 +331,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 
 		isTrueFirst := firstObj && !hdr.ReplayingSubgroup
 		firstObj = false
+		pos.seq++
 		objectID := stream.ObjectID() // resolved by ReadObject (§11.4.2)
 
 		// Tracked whether or not this copy wins the dedup claim below.
@@ -368,8 +385,14 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			if w == nil {
 				continue
 			}
-			if w.admit(hdr, objectID, obj.Properties) {
-				w.publish(fwdObject{obj: obj, absID: objectID, first: isTrueFirst, maxCacheAge: liveMaxAge})
+			if take, follows := w.admit(pos, hdr, objectID, obj.Properties); take {
+				w.publish(fwdObject{
+					obj:         obj,
+					absID:       objectID,
+					first:       isTrueFirst,
+					maxCacheAge: liveMaxAge,
+					follows:     follows,
+				})
 			}
 		}
 		sg.Mu.Unlock()
@@ -435,7 +458,8 @@ func (h *sessionHandler) openWriterForSub(
 // subgroupWriter is the per-subscriber writer goroutine: it drains an inbox
 // onto outbound subgroup streams on the subscriber's session.
 //
-//   - A gap in Object IDs resets the stream and opens a fresh one (§11.4.3).
+//   - An Object that is not the next Object resets the stream and opens a
+//     fresh one (§11.4.3, see [isNextObject]).
 //   - A clean inbound EOF FINs the stream; an inbound error resets it.
 //   - A full inbox drops the object. An object that waited longer than
 //     maxLag resets with TOO_FAR_BEHIND and terminates the subscription
@@ -485,15 +509,27 @@ type subgroupWriter struct {
 	// straggler from another upstream. Only touched by admit, under sg.Mu.
 	lastAdmitted uint64
 	hasAdmitted  bool
+	// lastPos is where the last Object admit let through was read, moved
+	// past the filtered Objects read after it; zero once the relay drops
+	// one. Only touched by admit and publish, under sg.Mu.
+	lastPos inboundPos
 }
 
 // admit decides whether w takes the Object at objectID of the subgroup hdr
-// names, closing w when it will take none again.
-func (w *subgroupWriter) admit(hdr message.SubgroupHeader, objectID uint64, props []byte) bool {
+// names, read at pos, closing w when it will take none again. follows is
+// [fwdObject.follows] for a taken Object.
+func (w *subgroupWriter) admit(
+	pos inboundPos,
+	hdr message.SubgroupHeader,
+	objectID uint64,
+	props []byte,
+) (take, follows bool) {
+	follows = w.lastPos.src == pos.src && w.lastPos.seq+1 == pos.seq
 	switch w.sub.ForwardDecision(hdr.GroupID, objectID, hdr.SubgroupID, hdr.PublisherPriority, props) {
 	case registry.Forward:
 		w.lastAdmitted, w.hasAdmitted = objectID, true
-		return true
+		w.lastPos = pos
+		return true, follows
 	case registry.SkipObject, registry.SkipPaused:
 		// The stream stays open for later Objects, but the Subgroup is now
 		// incomplete (§11.4.3).
@@ -509,7 +545,13 @@ func (w *subgroupWriter) admit(hdr message.SubgroupHeader, objectID uint64, prop
 			w.markIncomplete(moqt.StreamResetCancelled)
 		}
 	}
-	return false
+	// §11.4.3: an Object that "did not pass the subscriber's filters" does
+	// not separate the ones either side of it. Forward State is one of them
+	// (§5.1.5).
+	if follows {
+		w.lastPos = pos
+	}
+	return false, false
 }
 
 // markIncomplete sets subgroupWriter.incomplete; the first code recorded
@@ -541,7 +583,8 @@ func (w *subgroupWriter) resetCode() moqt.StreamResetCode {
 
 // publish enqueues fwd without blocking, stamping its enqueue time for the
 // lag check. On overflow the object is dropped, and past maxDropsBeforeReset
-// the writer is closed in reset mode. It is a no-op after close.
+// the writer is closed in reset mode. It is a no-op after close. Callers hold
+// sg.Mu.
 func (w *subgroupWriter) publish(fwd fwdObject) {
 	w.dropsMu.Lock()
 	if w.closed {
@@ -556,6 +599,7 @@ func (w *subgroupWriter) publish(fwd fwdObject) {
 		w.metrics.ObjectForwarded(w.ref, w.hdr.SubgroupID)
 	default:
 		w.metrics.ObjectDropped(w.ref, w.hdr.SubgroupID)
+		w.lastPos = inboundPos{} // the next Object does not follow a sent one
 		w.dropsMu.Lock()
 		w.drops++
 		w.markIncompleteLocked(moqt.StreamResetExcessiveLoad)
@@ -634,6 +678,9 @@ func (w *subgroupWriter) run() {
 		prevID      uint64
 		hasWritten  bool
 		writeFailed bool
+		// dropped: an Object was dropped since the last one written, so the
+		// next is not known to follow it.
+		dropped bool
 	)
 
 	// reopen resets the current outbound stream (if any) and opens a fresh
@@ -712,10 +759,8 @@ func (w *subgroupWriter) run() {
 			}
 		}
 
-		// §11.4.3: only "the next Object" may go on an existing stream. Of
-		// the draft's three ways to tell, this relay uses only "one greater
-		// than the previous Object" (a choice) and reopens on any other gap.
-		if hasWritten && fwd.absID != prevID+1 {
+		// §11.4.3: only "the next Object" may go on an existing stream.
+		if hasWritten && !isNextObject(fwd, prevID, dropped) {
 			w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseGap)
 			if !reopen(fwd.first) {
 				failWrites()
@@ -727,6 +772,7 @@ func (w *subgroupWriter) run() {
 		// the open above, which can block.
 		if expired(fwd) {
 			w.dropExpired(hasWritten)
+			dropped = true
 			continue
 		}
 
@@ -761,6 +807,7 @@ func (w *subgroupWriter) run() {
 		}
 		prevID = fwd.absID
 		hasWritten = true
+		dropped = false
 		// §11.4.3: a later reset still delivers what was written.
 		w.out.MarkReliable()
 	}
@@ -821,6 +868,26 @@ func (w *subgroupWriter) run() {
 	}
 
 	w.closeOut(true, 0)
+}
+
+// isNextObject reports whether fwd is "the next Object" (§11.4.3) on a stream
+// whose last Object is prevID. Of the draft's ways to tell, the relay uses:
+// the Object ID is one greater; fwd follows the last Object on its inbound
+// stream; or its Prior Object ID Gap (§12.9) says the IDs between do not
+// exist. Knowing from the cache or the subscriber's filters that they are in
+// other Subgroups or filtered out is not used (a choice).
+func isNextObject(fwd fwdObject, prevID uint64, dropped bool) bool {
+	if fwd.absID == prevID+1 {
+		return true
+	}
+	if dropped || fwd.absID <= prevID {
+		return false
+	}
+	if fwd.follows {
+		return true
+	}
+	gap, ok := message.PriorObjectIDGap(fwd.obj.Properties)
+	return ok && fwd.absID-gap <= prevID+1
 }
 
 // openCounted opens a subgroup stream, counting it for the §10.12 Stream
