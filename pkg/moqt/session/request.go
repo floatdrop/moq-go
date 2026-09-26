@@ -697,8 +697,9 @@ func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Mess
 
 // awaitRequestResponse opens a request stream for m and awaits the initial
 // response. An OK is handed to onOK, which then owns the stream; REQUEST_ERROR
-// (§10.6) becomes a *RequestRejectedError; anything else is an error. On
-// either failure the stream is closed.
+// (§10.6) becomes a *RequestRejectedError; anything else is an error, and for
+// SUBSCRIBE_NAMESPACE and SUBSCRIBE_TRACKS also closes the session (§10.19,
+// §10.20). On either failure the stream is closed.
 func awaitRequestResponse[OK message.Message, R any](
 	ctx context.Context,
 	s *Session,
@@ -735,7 +736,14 @@ func awaitRequestResponse[OK message.Message, R any](
 	if rerr, isErr := resp.(*message.RequestError); isErr {
 		return zero, s.rejection(rerr, m.Type())
 	}
-	return zero, fmt.Errorf("moqt/session: unexpected %s in %s response", resp.Type(), m.Type())
+	err = fmt.Errorf("moqt/session: unexpected %s in %s response", resp.Type(), m.Type())
+	// §10.19, §10.20: "If the subscriber receives any message other than a
+	// REQUEST_OK or a REQUEST_ERROR as the first message on the response half
+	// of the stream, then it MUST close the session with a PROTOCOL_VIOLATION."
+	if t := m.Type(); t == message.TypeSubscribeNamespace || t == message.TypeSubscribeTracks {
+		return zero, s.closeProtocolViolation(err)
+	}
+	return zero, err
 }
 
 // UpdateRequest sends a REQUEST_UPDATE (§10.9) with a fresh Request ID (§10.1)

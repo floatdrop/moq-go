@@ -94,7 +94,8 @@ func (s *Session) PublishNamespace(
 //
 // On success a [NamespaceSubscription] is returned whose embedded stream stays
 // open (the caller will receive NAMESPACE / NAMESPACE_DONE messages on it). On
-// REQUEST_ERROR the stream is closed and a *RequestRejectedError is returned.
+// REQUEST_ERROR the stream is closed and a *RequestRejectedError is returned;
+// any other first response closes the session with PROTOCOL_VIOLATION (§10.19).
 func (s *Session) SubscribeNamespace(
 	ctx context.Context,
 	m *message.SubscribeNamespace,
@@ -111,7 +112,8 @@ func (s *Session) SubscribeNamespace(
 //
 // On success a [TrackSubscription] is returned whose embedded stream stays open
 // for PUBLISH_SKIPPED follow-ups (read via [TrackSubscription.ReadPublishSkipped]).
-// On REQUEST_ERROR the stream is closed and a *RequestRejectedError is returned.
+// On REQUEST_ERROR the stream is closed and a *RequestRejectedError is returned;
+// any other first response closes the session with PROTOCOL_VIOLATION (§10.20).
 func (s *Session) SubscribeTracks(ctx context.Context, m *message.SubscribeTracks) (*TrackSubscription, error) {
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.RequestOK) (*TrackSubscription, error) {
