@@ -115,6 +115,10 @@ func (s *Session) SubscribeNamespace(
 func (s *Session) SubscribeTracks(ctx context.Context, m *message.SubscribeTracks) (*TrackSubscription, error) {
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.RequestOK) (*TrackSubscription, error) {
+			if err := s.checkTrackPropertyValues(ok.TrackProperties, "SUBSCRIBE_TRACKS_OK"); err != nil {
+				cancelRequest(stream)
+				return nil, err
+			}
 			return &TrackSubscription{Stream: stream, OK: ok, s: s}, nil
 		})
 }

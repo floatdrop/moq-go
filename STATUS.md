@@ -233,8 +233,8 @@ By package, bottom-up along the dependency stack:
 | 12.2  | OBJECT_DELIVERY_TIMEOUT        | 0x02 | DONE   | Track + Object Property; first-object override, as §12.1. |
 | 12.3  | MAX_CACHE_DURATION             | 0x04 | DONE   | Per Object: each carries the value of the upstream it arrived through (captured with the Track Alias in `session.InboundTrack`), and is not forwarded live or served from the cache past it; a present 0 is never served from the cache. In FETCH and fill an expired Object is an End of Unknown Range, whether it expired before the snapshot or while the stream was written. |
 | 12.4  | DEFAULT_PUBLISHER_PRIORITY     | 0x0E | DONE   | |
-| 12.5  | DEFAULT_PUBLISHER_GROUP_ORDER  | 0x22 | DONE   | Validated. |
-| 12.6  | DYNAMIC_GROUPS                 | 0x30 | DONE   | Property defined & scope-validated (flow: see §5.1.6.1). |
+| 12.5  | DEFAULT_PUBLISHER_GROUP_ORDER  | 0x22 | DONE   | A value outside {1, 2} closes the session, also inside Immutable Properties; an omitted one is Ascending. |
+| 12.6  | DYNAMIC_GROUPS                 | 0x30 | DONE   | A value above 1 closes the session, also inside Immutable Properties. |
 | 12.7  | Immutable properties           | 0x0B | DONE   | Relays cache & forward verbatim, never add. Property lookups search its contents too (`message.ExpandImmutable`), the mutable value winning: delivery timeouts, MAX_CACHE_DURATION, DYNAMIC_GROUPS, Mandatory Track Property screening, and property Range Filters. |
 | 12.8  | Prior group ID gap             | 0x3C | PARTIAL| Object-scope; encoder in `msf/groupid.go`. More than one, or one past the Group ID, makes the track malformed (`message.CheckObjectProperties`), and the relay also ends the track for two values in one Group. Against the last 32 Groups of any upstream (`registry.TrackEntry.ClaimDelivered`), the relay neither forwards nor caches an Object in a Group announced absent; a gap covering a received Group is accepted (§2.1, §9.1, see Limitations). Not in upstream FETCH responses, nor in a session that is not a relay's. |
 | 12.9  | Prior object ID gap            | 0x3E | PARTIAL| Object-scope. More than one, or one past the Object ID, makes the track malformed. The relay neither forwards nor caches an Object announced absent, and accepts a gap covering a received Object, as for §12.8. |
@@ -547,11 +547,6 @@ Session layer:
 - SETUP options are sorted unstably, so with more than 12 the Token order on the
   wire can differ from the order `heldSetupAliases` replays (§10.3.1.4).
 
-Validation (values that MUST close the session):
-
-- DEFAULT_PUBLISHER_GROUP_ORDER outside {1, 2} and DYNAMIC_GROUPS above 1 in
-  Track Properties (§12.5, §12.6).
-
 Relay:
 
 - Any REQUEST_UPDATE turns INCLUDE_PROPERTIES=0 back off, so the subscriber
@@ -591,9 +586,8 @@ Documentation:
 - Limitations: "Duplicate Objects … are not compared" is stale; the LOC entry names
   `PropAudioLevel = 0x0A` (it is 0x0C); "Handles the application reads itself"
   says `CheckPeerParams` checks roles; "Inbound GOAWAY" omits request streams.
-- Table rows 10.2.6, 10.2.15, 10.2.21, 12.3,
-  12.5 and 12.6 overstate what is done (see the items above), and the package
-  summary still lists joining FETCH.
+- Table rows 10.2.6, 10.2.15, 10.2.21 and 12.3 overstate what is done (see
+  the items above), and the package summary still lists joining FETCH.
 - `session/namespace.go` says NAMESPACE / NAMESPACE_DONE go on a
   PUBLISH_NAMESPACE stream (§10.17, §10.18).
 - About a dozen stale `§` citations (padding, grease, fetch ordering, caching).

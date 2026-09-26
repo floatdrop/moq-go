@@ -1,7 +1,6 @@
 package registry
 
 import (
-	"fmt"
 	"slices"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -23,11 +22,9 @@ type decodedProperties struct {
 	// set, no field below is meaningful, so every accessor reports it.
 	parseErr error
 
-	// dynamicGroups is DYNAMIC_GROUPS=1 (§12.6). dynamicGroupsErr is a §12.6
-	// PROTOCOL_VIOLATION (a DYNAMIC_GROUPS value > 1) by the upstream
-	// publisher.
-	dynamicGroups    bool
-	dynamicGroupsErr error
+	// dynamicGroups is DYNAMIC_GROUPS=1 (§12.6). The session closed on a
+	// value above 1.
+	dynamicGroups bool
 
 	// deliveryTimeouts is the publisher's Track-level OBJECT_DELIVERY_TIMEOUT
 	// (§12.2) and SUBGROUP_DELIVERY_TIMEOUT (§12.1) pair. Per §8 a zero value
@@ -36,15 +33,15 @@ type decodedProperties struct {
 	// reading of a track that declares neither.
 	deliveryTimeouts message.DeliveryTimeouts
 
-	// groupOrder is DEFAULT_PUBLISHER_GROUP_ORDER (§12.5) when it holds an
-	// allowed value, else zero.
+	// groupOrder is DEFAULT_PUBLISHER_GROUP_ORDER (§12.5), zero when omitted.
+	// The session closed on a value outside {1, 2}.
 	groupOrder message.GroupOrder
 }
 
 // decodeTrackProperties parses the raw Track Properties block once and pulls
 // out the fields the relay acts on. A structural parse failure short-circuits
-// to a parseErr that every accessor surfaces; per-property value violations
-// (e.g. §12.6) are recorded on the matching field's error.
+// to a parseErr that every accessor surfaces. The session has closed on a
+// session-fatal value (§12.5, §12.6) before Properties reach here.
 func decodeTrackProperties(raw []byte) decodedProperties {
 	pairs, err := message.ParseTrackProperties(raw)
 	if err == nil {
@@ -60,48 +57,32 @@ func decodeTrackProperties(raw []byte) decodedProperties {
 		// branch here for each new property.
 		switch kv.Type {
 		case message.PropertyDynamicGroups:
-			d.dynamicGroups, d.dynamicGroupsErr = decodeDynamicGroups(kv.IntVal)
+			d.dynamicGroups = kv.IntVal == 1
 		case message.PropertyObjectDeliveryTimeout:
 			d.deliveryTimeouts.Object = message.MillisecondTimeout(kv.IntVal)
 		case message.PropertySubgroupDeliveryTimeout:
 			d.deliveryTimeouts.Subgroup = message.MillisecondTimeout(kv.IntVal)
 		case message.PropertyDefaultPublisherGroupOrder:
-			d.groupOrder = 0
-			if kv.IntVal == uint64(message.GroupOrderAscending) || kv.IntVal == uint64(message.GroupOrderDescending) {
-				d.groupOrder = message.GroupOrder(kv.IntVal)
+			d.groupOrder = message.GroupOrderAscending
+			if kv.IntVal == uint64(message.GroupOrderDescending) {
+				d.groupOrder = message.GroupOrderDescending
 			}
 		}
 	}
 	return d
 }
 
-// decodeDynamicGroups interprets a DYNAMIC_GROUPS value (§12.6): 0 is false,
-// 1 is true, and anything greater is a PROTOCOL_VIOLATION so the caller can
-// decline to act on it.
-func decodeDynamicGroups(v uint64) (bool, error) {
-	switch v {
-	case 0:
-		return false, nil
-	case 1:
-		return true, nil
-	default:
-		return false, fmt.Errorf(
-			"relay: DYNAMIC_GROUPS value %d > 1 (§12.6 PROTOCOL_VIOLATION)", v)
-	}
-}
-
 // DynamicGroups reports whether the track advertised DYNAMIC_GROUPS=1 (§12.6),
-// using the value decoded once when Properties was set. The error is a §12.6
-// PROTOCOL_VIOLATION (a DYNAMIC_GROUPS value > 1), or a structural failure
-// parsing the Properties block; either way the §10.2.19 caller declines the
-// NEW_GROUP_REQUEST rather than acting on it.
+// using the value decoded once when Properties was set. The error is a
+// structural failure parsing the Properties block; the §10.2.19 caller then
+// declines the NEW_GROUP_REQUEST rather than acting on it.
 func (e *TrackEntry) DynamicGroups() (bool, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.decoded.parseErr != nil {
 		return false, e.decoded.parseErr
 	}
-	return e.decoded.dynamicGroups, e.decoded.dynamicGroupsErr
+	return e.decoded.dynamicGroups, nil
 }
 
 // DeliveryTimeouts returns the publisher's Track-level delivery timeouts (§8),
@@ -125,7 +106,7 @@ func (e *TrackEntry) DeliveryTimeouts() message.DeliveryTimeouts {
 // DefaultGroupOrder is the publisher's Group Order preference, its
 // DEFAULT_PUBLISHER_GROUP_ORDER Track Property (§12.5): Ascending when it is
 // omitted ("If omitted, the publisher's preference is Ascending"), and when
-// it is not an allowed value or the Properties are malformed.
+// the Properties are malformed.
 func (e *TrackEntry) DefaultGroupOrder() message.GroupOrder {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
