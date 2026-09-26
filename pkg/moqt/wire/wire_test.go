@@ -554,9 +554,8 @@ func TestTrackNamespace_HasPrefix(t *testing.T) {
 	}
 }
 
-// TestReaderHugeLengthRejected guards the draft-20 varint range (§1.4.1: up to
-// 2^64-1). A peer-supplied length >= 2^63 does not fit an int; it must yield
-// ErrShortBuffer, not a negative FixedBytes argument that panics in make.
+// TestReaderHugeLengthRejected: a §1.4.1 length >= 2^63 does not fit an int and
+// must yield ErrShortBuffer, not a panic.
 func TestReaderHugeLengthRejected(t *testing.T) {
 	for _, n := range []uint64{1 << 63, 1<<64 - 1} {
 		w := NewWriter(nil)

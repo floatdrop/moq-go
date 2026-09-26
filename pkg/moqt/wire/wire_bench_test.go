@@ -23,6 +23,7 @@ var (
 	sinkErr    error
 )
 
+// makePayload returns n bytes of a repeating pattern.
 func makePayload(n int) []byte {
 	b := make([]byte, n)
 	for i := range b {
@@ -31,6 +32,7 @@ func makePayload(n int) []byte {
 	return b
 }
 
+// makeKVPairs returns n key-value pairs for benchmarks.
 func makeKVPairs(n int) []KVPair {
 	pairs := make([]KVPair, n)
 	for i := range pairs {
