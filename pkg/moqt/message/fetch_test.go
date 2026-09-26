@@ -350,6 +350,20 @@ func TestFetchObjectIsEndOfRangeCoversAllThree(t *testing.T) {
 	}
 }
 
+// TestFetchObjectParseRejectsInvalidFlags: Parse rejects Serialization Flags
+// of 128 or more that are not End of Range markers right after reading them
+// (§11.4.4), without reading their bits as fields: 0xFF alone, with nothing
+// after it, is ErrInvalidFetchFlags rather than a truncated object.
+func TestFetchObjectParseRejectsInvalidFlags(t *testing.T) {
+	for _, flags := range []uint64{0x80, 0xFF, 0x8D, 0x100} {
+		var o FetchObject
+		err := o.Parse(wire.NewReader(wire.AppendVarint(nil, flags)))
+		if !errors.Is(err, ErrInvalidFetchFlags) {
+			t.Errorf("Parse(flags 0x%X) = %v, want ErrInvalidFetchFlags", flags, err)
+		}
+	}
+}
+
 func TestFetchObjectValidateInvalidFlags(t *testing.T) {
 	// Values >= 128 that are not end-of-range markers are PROTOCOL_VIOLATION.
 	obj := &FetchObject{
