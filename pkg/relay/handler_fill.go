@@ -20,9 +20,9 @@ import (
 // requestID is the Request ID of the message that asked for the fill; the
 // FETCH_HEADER carries it, so one subscription can have several fills open.
 //
-// It returns an error only for a malformed FILL_PARAMETERS, which the caller
-// MUST turn into a session-level PROTOCOL_VIOLATION (§10.2.15). Any other
-// failure resets the fill stream and leaves the subscription unaffected.
+// A failure resets the fill stream, leaves the subscription unaffected, and
+// is returned for the log. AcceptRequest has closed the session on a malformed
+// FILL_PARAMETERS (§10.2.15; see [message.Parameters.CheckScope]).
 func (h *sessionHandler) maybeServeFill(
 	ctx context.Context,
 	sub *registry.DownstreamSub,
@@ -31,10 +31,7 @@ func (h *sessionHandler) maybeServeFill(
 	requestID uint64,
 	ps message.Parameters,
 ) error {
-	inner, requested, err := message.FillParametersFromParam(ps)
-	if err != nil {
-		return err
-	}
+	inner, requested, _ := message.FillParametersFromParam(ps)
 	if !requested {
 		return nil
 	}
@@ -62,10 +59,7 @@ func (h *sessionHandler) maybeServeFill(
 	// §5.1.3: the fill range comes from the LOCATION_FILTER inside
 	// FILL_PARAMETERS, falling back to the subscription's own filter, and to
 	// the whole track when neither is present.
-	filter, err := message.LocationFilterFromParam(inner)
-	if err != nil {
-		return fail(err)
-	}
+	filter, _ := message.LocationFilterFromParam(inner)
 	if filter == nil {
 		filter = sub.GetFilter()
 	}
@@ -94,6 +88,7 @@ func (h *sessionHandler) maybeServeFill(
 	// would (§5.1.4); the other types are inherited.
 	rangeFilters := sub.GetRangeFilters()
 	if slices.ContainsFunc(inner, func(p message.Parameter) bool { return message.IsRangeFilterParam(p.Type) }) {
+		var err error
 		rangeFilters, err = rangeFilters.Update(inner)
 		if err == nil && rangeFilters != nil {
 			err = rangeFilters.Validate(h.sess.MaxFilterRanges())

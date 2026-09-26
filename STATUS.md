@@ -166,8 +166,8 @@ By package, bottom-up along the dependency stack:
 | 10.2.5  | FILL_TIMEOUT                  | 0x0A   | DONE   | The budget for a FETCH's or fill's upstream FETCH, its response included: when it runs out, what arrived is served and the rest is an End of Timed-Out Range; 0 asks no upstream. Default 5s. |
 | 10.2.6  | RENDEZVOUS_TIMEOUT            | 0x04   | DONE   | |
 | 10.2.7  | SUBSCRIBER_PRIORITY           | 0x20   | DONE   | |
-| 10.2.8  | GROUP_ORDER                   | 0x22   | DONE   | Ascending/Descending validated. |
-| 10.2.9  | LOCATION_FILTER               | 0x21   | DONE   | Overflow-checked. |
+| 10.2.8  | GROUP_ORDER                   | 0x22   | DONE   | A value outside {1, 2} closes the session, wherever it appears, FILL_PARAMETERS included. |
+| 10.2.9  | LOCATION_FILTER               | 0x21   | DONE   | An end Group overflowing 2^64-1 closes the session with PROTOCOL_VIOLATION (§5.1.2); a value that does not parse, with KEY_VALUE_FORMATTING_ERROR (§1.4.3). |
 | 10.2.10 | SUBGROUP_FILTER               | 0x25   | DONE   | Enforced per object in the fanout/FETCH. |
 | 10.2.11 | OBJECTID_FILTER               | 0x26   | DONE   | Enforced per object in the fanout/FETCH. |
 | 10.2.12 | PRIORITY_FILTER               | 0x27   | DONE   | Enforced per object (subgroup priority); >255 rejected INVALID_FILTER. |
@@ -176,7 +176,7 @@ By package, bottom-up along the dependency stack:
 | 10.2.15 | FILL_PARAMETERS               | 0x23   | PARTIAL| Inner Table 6 scope and duplicates checked; omitted Range Filters are not inherited from the subscription (see §5.1.3). |
 | 10.2.16 | EXPIRES                       | 0x08   | DONE   | |
 | 10.2.17 | LARGEST_OBJECT                | 0x09   | DONE   | Monotonic constraint applied. |
-| 10.2.18 | FORWARD                       | 0x10   | DONE   | |
+| 10.2.18 | FORWARD                       | 0x10   | DONE   | A value above 1 closes the session, in every message that may carry it. |
 | 10.2.19 | NEW_GROUP_REQUEST             | 0x32   | DONE   | |
 | 10.2.20 | TRACK_NAMESPACE_PREFIX        | 0x34   | DONE   | Applied on REQUEST_UPDATE; SUBSCRIBE_NAMESPACE reconciles its announced set. |
 | 10.2.21 | INCLUDE_PROPERTIES            | 0x35   | DONE   | A value other than 0 or 1 closes the session. With 0 the relay sends empty Track Properties in SUBSCRIBE_OK, FETCH_OK, TRACK_STATUS_OK and forwarded PUBLISH, and writes the priority inline on that subscription's subgroups and datagrams, since the subscriber cannot inherit DEFAULT_PUBLISHER_PRIORITY. |
@@ -333,10 +333,6 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   self-limit *outbound* REQUEST_UPDATEs against a peer's advertised value for the
   same reason: `UpdateRequest`/`RequestBroker.Update` are synchronous
   write-then-read, so they never exceed any limit ≥ 1.
-- **Out-of-range GROUP_ORDER on FETCH (§10.2.8)** — the SUBSCRIBE and
-  SUBSCRIBE_TRACKS paths now close the session with PROTOCOL_VIOLATION on an
-  out-of-range GROUP_ORDER/FORWARD (§10.2.8/§10.2.18), but the FETCH path
-  still reads a bad GROUP_ORDER as Ascending pending the same promotion.
 - **Late publisher pickup (§9.5)** — multiple publishers per track are merged
   and deduplicated, and a local PUBLISH_NAMESPACE that arrives after a track's
   upstream set is established is SUBSCRIBEd for each matching track. Two
@@ -553,15 +549,8 @@ Session layer:
 
 Validation (values that MUST close the session):
 
-- GROUP_ORDER on PUBLISH, inside FILL_PARAMETERS, and in `AcceptSubscribe` /
-  `AcceptPublish` (§10.2.8); the FETCH case is the Limitation above.
-- FORWARD in PUBLISH_STATE_NOTIFY, in a publisher's REQUEST_UPDATE, and in
-  `AcceptPublish` (§10.2.18).
 - DEFAULT_PUBLISHER_GROUP_ORDER outside {1, 2} and DYNAMIC_GROUPS above 1 in
   Track Properties (§12.5, §12.6).
-- A LOCATION_FILTER whose StartGroup + EndGroupDelta overflows: REQUEST_ERROR
-  MALFORMED_TRACK on SUBSCRIBE, REQUEST_UPDATE and SUBSCRIBE_TRACKS, INVALID_FILTER
-  on FETCH, a fill reset in FILL_PARAMETERS (§5.1.2).
 
 Relay:
 
@@ -599,11 +588,10 @@ Relay:
 
 Documentation:
 
-- Limitations: "Duplicate Objects … are not compared" is stale; the FETCH
-  GROUP_ORDER entry omits PUBLISH and FILL_PARAMETERS; the LOC entry names
+- Limitations: "Duplicate Objects … are not compared" is stale; the LOC entry names
   `PropAudioLevel = 0x0A` (it is 0x0C); "Handles the application reads itself"
   says `CheckPeerParams` checks roles; "Inbound GOAWAY" omits request streams.
-- Table rows 10.2.6, 10.2.8, 10.2.9, 10.2.15, 10.2.18, 10.2.21, 12.3,
+- Table rows 10.2.6, 10.2.15, 10.2.21, 12.3,
   12.5 and 12.6 overstate what is done (see the items above), and the package
   summary still lists joining FETCH.
 - `session/namespace.go` says NAMESPACE / NAMESPACE_DONE go on a

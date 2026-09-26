@@ -674,8 +674,10 @@ func (s *Session) UpdateRequest(
 }
 
 // CheckPeerParams checks the Message Parameters of a peer message m against
-// scope (§10.2.1) and §10.2's duplicate rule. On a violation it closes the
-// session with PROTOCOL_VIOLATION and returns the error.
+// scope (§10.2.1), §10.2's duplicate rule and the values the draft makes
+// session-fatal (see [message.Parameters.CheckScope]). On a violation it
+// closes the session, with KEY_VALUE_FORMATTING_ERROR for a value that does
+// not parse (§1.4.3) and PROTOCOL_VIOLATION otherwise, and returns the error.
 //
 // The session checks the messages it reads itself; callers that read a
 // request stream with [message.Parse] call it for what they read.
@@ -685,6 +687,10 @@ func (s *Session) CheckPeerParams(scope message.ParamScope, m message.Message) e
 		return nil
 	}
 	if err := params.CheckScope(scope); err != nil {
+		if errors.Is(err, message.ErrValueFormatting) {
+			_ = s.Close(moqt.SessionKeyValueFormattingError, err.Error())
+			return err
+		}
 		return s.closeProtocolViolation(err)
 	}
 	return nil
@@ -784,18 +790,11 @@ func (r *Request) Reject(rej *RequestRejectedError) error {
 // MUST be a *message.Subscribe.
 //
 // ok may be nil for the all-default reply; a zero TrackAlias is allocated with
-// [Session.AllocOutboundTrackAlias]. A FORWARD value above 1 closes the
-// session with PROTOCOL_VIOLATION (§10.2.18).
+// [Session.AllocOutboundTrackAlias].
 func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error) {
 	sub, isSub := r.First.(*message.Subscribe)
 	if !isSub {
 		return nil, fmt.Errorf("moqt/session: AcceptSubscribe on a %s request", r.First.Type())
-	}
-	// §10.2.18.
-	if f, found := sub.Parameters.Find(message.ParamForward); found && f.Byte > 1 {
-		resetStream(r.Stream)
-		return nil, r.s.closeProtocolViolation(
-			fmt.Errorf("moqt/session: FORWARD value %d in SUBSCRIBE", f.Byte))
 	}
 	if ok == nil {
 		ok = &message.SubscribeOK{}

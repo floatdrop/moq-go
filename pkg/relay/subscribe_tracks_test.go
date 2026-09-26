@@ -253,17 +253,19 @@ func TestForwardedPublish_RepublishedTrackForwardedAgain(t *testing.T) {
 }
 
 // TestForwardedPublish_SubscribeTracksParametersValidated: SUBSCRIBE_TRACKS
-// parameters are validated as on SUBSCRIBE (§10.20.1): a malformed
-// LOCATION_FILTER is MALFORMED_TRACK.
+// parameters are validated as on SUBSCRIBE (§10.20.1): a LOCATION_FILTER that
+// does not parse closes the session (§1.4.3).
 func TestForwardedPublish_SubscribeTracksParametersValidated(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-	_, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: ns("video"),
-		Parameters:           message.Parameters{message.BytesParam(message.ParamLocationFilter, []byte{0xFF})},
-	})
-	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
+	go func() {
+		_, _ = subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+			TrackNamespacePrefix: ns("video"),
+			Parameters:           message.Parameters{message.BytesParam(message.ParamLocationFilter, []byte{0xFF})},
+		})
+	}()
+	requireSessionClosed(t, subSess, "a SUBSCRIBE_TRACKS with a LOCATION_FILTER that does not parse")
 }
 
 // A REQUEST_UPDATE on SUBSCRIBE_TRACKS applies to the PUBLISHes sent from then

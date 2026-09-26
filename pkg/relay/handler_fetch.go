@@ -80,12 +80,9 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 
 	// draft-20 moved the FETCH range out of the message and into the
 	// LOCATION_FILTER parameter (§5.1.2), inclusive at both ends. An absent
-	// filter fetches the whole track up to Largest Object.
-	filter, err := message.LocationFilterFromParam(msg.Parameters)
-	if err != nil {
-		_ = req.RejectError(moqt.RequestInvalidFilter, "relay: malformed LOCATION_FILTER")
-		return
-	}
+	// filter fetches the whole track up to Largest Object. AcceptRequest has
+	// validated it (see [message.Parameters.CheckScope]).
+	filter, _ := message.LocationFilterFromParam(msg.Parameters)
 	if filter == nil {
 		filter = &message.LocationFilter{}
 	}
@@ -218,22 +215,11 @@ func (h *sessionHandler) handleFetchUpdate(ctx context.Context, req *session.Req
 	}
 }
 
-// TODO: §10.2.8: an out-of-range GROUP_ORDER MUST close the session, as
-// [checkGroupOrderParam] does for SUBSCRIBE; the FETCH path reads it as
-// Ascending.
-//
-// fetchGroupOrder pulls the GROUP_ORDER parameter (§10.2.8) out of a
-// FETCH's Parameters list. Defaults to ascending when omitted; the
-// FETCH responder uses this to choose between ascending and descending
-// traversal through the cache.
+// fetchGroupOrder is a FETCH's GROUP_ORDER (§10.2.8): Ascending when omitted.
+// AcceptRequest has closed the session on a value outside {1, 2}.
 func fetchGroupOrder(ps message.Parameters) message.GroupOrder {
-	p, ok := ps.Find(message.ParamGroupOrder)
-	if !ok {
-		return message.GroupOrderAscending
-	}
-	g := message.GroupOrder(p.Byte)
-	if g == message.GroupOrderDescending {
-		return g
+	if p, ok := ps.Find(message.ParamGroupOrder); ok {
+		return message.GroupOrder(p.Byte)
 	}
 	return message.GroupOrderAscending
 }

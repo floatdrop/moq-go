@@ -358,6 +358,10 @@ func (ps Parameters) append(w *wire.Writer) {
 	}
 }
 
+// errParamTypeOverflow is a parameter Type delta taking the Type past 2^64-1:
+// a PROTOCOL_VIOLATION (§10.2), unlike a value that does not parse.
+var errParamTypeOverflow = errors.New("moqt/message: parameter type delta overflow")
+
 // parse reads a Number-of-Parameters varint followed by that many parameters
 // from r.
 func (ps *Parameters) parse(r *wire.Reader) error {
@@ -376,7 +380,7 @@ func (ps *Parameters) parse(r *wire.Reader) error {
 			return err
 		}
 		if delta > ^uint64(0)-prev {
-			return errors.New("moqt/message: parameter type delta overflow")
+			return errParamTypeOverflow
 		}
 		t := prev + delta
 		p := Parameter{Type: ParamID(t)}

@@ -1,6 +1,7 @@
 package message
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 
@@ -47,7 +48,13 @@ func FillParametersFromParam(ps Parameters) (inner Parameters, ok bool, err erro
 		return nil, false, nil
 	}
 	if err := inner.parse(wire.NewReader(p.Bytes)); err != nil {
-		return nil, true, fmt.Errorf("moqt/message: FILL_PARAMETERS: %w", err)
+		// §10.2: an unknown parameter, or a Type past 2^64-1, is a
+		// PROTOCOL_VIOLATION here as in any message; anything else is a
+		// value that does not parse (§1.4.3).
+		if errors.Is(err, ErrUnknownParameter) || errors.Is(err, errParamTypeOverflow) {
+			return nil, true, fmt.Errorf("moqt/message: FILL_PARAMETERS: %w", err)
+		}
+		return nil, true, fmt.Errorf("%w: FILL_PARAMETERS: %w", ErrValueFormatting, err)
 	}
 	for _, ip := range inner {
 		if !slices.Contains(fillParamsAllowed, ip.Type) {

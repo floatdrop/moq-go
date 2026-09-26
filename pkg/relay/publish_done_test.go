@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"testing"
 	"time"
 
@@ -241,9 +240,8 @@ func TestPublishDone_EndedSubscriptionStopsAtNextObject(t *testing.T) {
 	}()
 
 	// A request-scoped malformed update: REQUEST_ERROR, then UPDATE_FAILED.
-	_, err = subSess.UpdateRequest(t.Context(), subReq,
-		message.Parameters{message.AbsoluteRangeFilter(message.Location{Group: math.MaxUint64}, 1)})
-	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
+	_, err = subSess.UpdateRequest(t.Context(), subReq, message.Parameters{badRangeFilter()})
+	requireRejectedWithCode(t, err, moqt.RequestInvalidFilter)
 	close(rejected) // the upstream subgroup goes on, and its stream stays open
 
 	if pd := awaitPublishDone(t, subReq); pd.StatusCode != moqt.PublishDoneUpdateFailed {
@@ -393,12 +391,10 @@ func TestPublishDone_AfterFailedFill(t *testing.T) {
 		t.Fatal("the object never reached the relay")
 	}
 
-	// A five-field LOCATION_FILTER in FILL_PARAMETERS does not parse, which
-	// fails the fill after SUBSCRIBE_OK.
+	// An invalid Range Filter in FILL_PARAMETERS fails the fill after
+	// SUBSCRIBE_OK.
 	subSess := dialAnotherClient(t, pubSess)
-	subReq := subscribeCam1(t, subSess, message.FillParametersParam(message.Parameters{
-		message.BytesParam(message.ParamLocationFilter, []byte{0, 0, 0, 0, 0}),
-	}))
+	subReq := subscribeCam1(t, subSess, message.FillParametersParam(message.Parameters{badRangeFilter()}))
 	ds, err := subSess.AcceptDataStream(t.Context())
 	if err != nil {
 		t.Fatalf("AcceptDataStream (fill): %v", err)

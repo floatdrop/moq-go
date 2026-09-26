@@ -39,12 +39,6 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		slog.String("name", string(msg.Name)),
 		slog.Uint64("alias", msg.TrackAlias))
 
-	// §10.2.18: an out-of-range FORWARD closes the session.
-	if err := checkForwardParam(msg.Parameters); err != nil {
-		_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
-		return
-	}
-
 	// §2.5.1: refuse an unknown Mandatory Track Property. MALFORMED_TRACK for
 	// unparseable Track Properties is this repo's choice; the draft is silent.
 	if err := h.sess.CheckTrackProperties(msg.TrackProperties, "PUBLISH"); err != nil {

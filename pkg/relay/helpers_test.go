@@ -32,6 +32,14 @@ func trackProp(typ, v uint64) []wire.KVPair {
 	return []wire.KVPair{{Type: typ, IntVal: v}}
 }
 
+// badRangeFilter is a PRIORITY_FILTER ranging past 255, which the relay
+// refuses per request with INVALID_FILTER (§10.2.12).
+func badRangeFilter() message.Parameter {
+	return message.RangeFilterParam(&message.RangeFilter{
+		Type: message.ParamPriorityFilter, Ranges: []message.Range{{Start: 0, End: 300}},
+	})
+}
+
 // dynamicGroupsProperties is Track Properties carrying DYNAMIC_GROUPS = value.
 func dynamicGroupsProperties(value uint64) []byte {
 	return message.AppendTrackProperties(trackProp(message.PropertyDynamicGroups, value))

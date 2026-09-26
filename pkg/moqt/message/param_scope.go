@@ -218,10 +218,18 @@ func (e *ParamScopeError) Error() string {
 	return fmt.Sprintf("moqt/message: %s not allowed in %s (PROTOCOL_VIOLATION §10.2.1)", e.Type, e.Scope)
 }
 
+// ErrValueFormatting marks a parameter whose value does not match the
+// serialization its type defines. §1.4.3: the receiver "MUST close the session
+// with error code KEY_VALUE_FORMATTING_ERROR".
+var ErrValueFormatting = errors.New("moqt/message: value does not match its type's serialization")
+
 // CheckScope reports the first parameter of ps not allowed in a message of the
 // given scope (§10.2.1) or repeated where it may not be (§10.2), and validates
-// the FILL_PARAMETERS (§10.2.15) and INCLUDE_PROPERTIES (§10.2.21) values.
-// Every error is a session-level PROTOCOL_VIOLATION.
+// the values a receiver must close the session for, in ps and inside its
+// FILL_PARAMETERS (§10.2.15): GROUP_ORDER (§10.2.8), FORWARD (§10.2.18),
+// INCLUDE_PROPERTIES (§10.2.21) and LOCATION_FILTER (§5.1.2). Every error is a
+// session-level PROTOCOL_VIOLATION, except one wrapping [ErrValueFormatting],
+// a KEY_VALUE_FORMATTING_ERROR.
 func (ps Parameters) CheckScope(scope ParamScope) error {
 	for _, p := range ps {
 		allowed := paramScopes[p.Type]
@@ -236,13 +244,35 @@ func (ps Parameters) CheckScope(scope ParamScope) error {
 	if t, dup := ps.firstDuplicate(); dup {
 		return &ParamScopeError{Type: t, Scope: scope, Duplicate: true}
 	}
-	if _, _, err := FillParametersFromParam(ps); err != nil {
+	inner, _, err := FillParametersFromParam(ps)
+	if err != nil {
 		return err
+	}
+	if err := inner.checkValues(); err != nil {
+		return fmt.Errorf("FILL_PARAMETERS: %w", err)
+	}
+	return ps.checkValues()
+}
+
+// checkValues validates the values in ps a receiver must close the session
+// for; see [Parameters.CheckScope].
+func (ps Parameters) checkValues() error {
+	if p, ok := ps.Find(ParamGroupOrder); ok &&
+		GroupOrder(p.Byte) != GroupOrderAscending && GroupOrder(p.Byte) != GroupOrderDescending {
+		return fmt.Errorf("moqt/message: GROUP_ORDER value %d outside {1,2} (PROTOCOL_VIOLATION §10.2.8)", p.Byte)
+	}
+	if p, ok := ps.Find(ParamForward); ok && p.Byte > 1 {
+		return fmt.Errorf("moqt/message: FORWARD value %d outside {0,1} (PROTOCOL_VIOLATION §10.2.18)", p.Byte)
 	}
 	if _, err := IncludePropertiesFromParam(ps); err != nil {
 		return err
 	}
-	return nil
+	switch _, err := LocationFilterFromParam(ps); {
+	case err == nil, errors.Is(err, errEndGroupOverflow):
+		return err
+	default:
+		return fmt.Errorf("%w: LOCATION_FILTER: %w", ErrValueFormatting, err)
+	}
 }
 
 // firstDuplicate reports the first parameter type repeated in ps where its

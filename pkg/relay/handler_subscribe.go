@@ -160,8 +160,8 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		slog.String("name", string(msg.Name)),
 		slog.Uint64("alias", alias))
 
-	// §5.1.3: FILL_PARAMETERS asks for a fill fetch stream; a malformed one
-	// was already rejected by installSubscribeParams.
+	// §5.1.3: FILL_PARAMETERS asks for a fill fetch stream; AcceptRequest
+	// has closed the session on a malformed one.
 	if err := h.maybeServeFill(ctx, sub, entry, fullName, msg.RequestID, msg.Parameters); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
 			slog.String("err", err.Error()))
@@ -238,23 +238,12 @@ func (h *sessionHandler) handleSubscribeUpdate(
 ) {
 	prevForward := sub.ForwardState()
 	if err := installSubscribeParams(sub, upd.Parameters); err != nil {
-		if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
-			// §10.2.8 / §10.2.18: session-level even in a REQUEST_UPDATE.
-			h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE parameter protocol violation",
-				slog.String("err", err.Error()))
-			_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
-			return
-		}
-		h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE parameter parse failed",
+		h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE range filter rejected",
 			slog.String("err", err.Error()))
 		// §10.9.1: REQUEST_ERROR, then PUBLISH_DONE / UPDATE_FAILED. Writes go
 		// through the sub's lock.
-		code := moqt.RequestMalformedTrack
-		if errors.Is(err, message.ErrInvalidFilter) {
-			code = moqt.RequestInvalidFilter
-		}
 		_ = sub.WriteMessage(&message.RequestError{
-			ErrorCode:   code,
+			ErrorCode:   moqt.RequestInvalidFilter,
 			ErrorReason: err.Error(),
 		})
 		sub.TerminateWithPublishDone(moqt.PublishDoneUpdateFailed, err.Error())
@@ -576,21 +565,13 @@ func resolveGroupOrder(sub *registry.DownstreamSub, entry *registry.TrackEntry) 
 
 // installSubscribeParams records the subscription parameters present in ps
 // (§10.2) on sub, leaving absent ones unchanged. The Largest snapshot is the
-// caller's (see [registry.TrackRegistry.AddDownstreamSnapshotLargest]).
+// caller's (see [registry.TrackRegistry.AddDownstreamSnapshotLargest]). The
+// session has already closed on a value the draft makes session-fatal (see
+// [message.Parameters.CheckScope]); an error here is a Range Filter's, which
+// is INVALID_FILTER (§5.1.4).
 func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) error {
-	filter, err := message.LocationFilterFromParam(ps)
-	if err != nil {
-		return fmt.Errorf("location filter: %w", err)
-	}
-	if filter != nil {
-		if err := filter.Validate(); err != nil {
-			return err
-		}
+	if filter, _ := message.LocationFilterFromParam(ps); filter != nil {
 		sub.SetFilter(filter)
-	}
-
-	if err := checkForwardParam(ps); err != nil {
-		return err
 	}
 	if p, ok := ps.Find(message.ParamForward); ok {
 		sub.SetForwardState(int(p.Byte))
@@ -598,9 +579,6 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 
 	if p, ok := ps.Find(message.ParamSubscriberPriority); ok {
 		sub.SetPriority(p.Byte)
-	}
-	if err := checkGroupOrderParam(ps); err != nil {
-		return err
 	}
 	if p, ok := ps.Find(message.ParamGroupOrder); ok {
 		sub.SetGroupOrder(p.Byte)
@@ -634,60 +612,17 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 }
 
 // refuseSubscriptionParams answers a SUBSCRIBE or SUBSCRIBE_TRACKS whose
-// subscription parameters [installSubscribeParams] rejected.
+// Range Filters [installSubscribeParams] rejected: malformed or over the limit,
+// INVALID_FILTER (§5.1.4, §10.6).
 func (h *sessionHandler) refuseSubscriptionParams(ctx context.Context, req *session.Request, err error) {
-	if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
-		// §10.2.8 / §10.2.18: an out-of-range GROUP_ORDER/FORWARD is a
-		// session-level PROTOCOL_VIOLATION.
-		h.log.LogAttrs(ctx, slog.LevelDebug, "subscription parameter protocol violation",
-			slog.String("err", err.Error()))
-		_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
-		return
-	}
-	// §5.1.4 / §10.6: a malformed or over-limit Range Filter is INVALID_FILTER.
-	if errors.Is(err, message.ErrInvalidFilter) {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "subscription range filter rejected",
-			slog.String("err", err.Error()))
-		_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
-		return
-	}
-	// Deviation: §5.1.2 makes a malformed LOCATION_FILTER a session-level
-	// PROTOCOL_VIOLATION; the relay scopes it to the request.
-	h.log.LogAttrs(ctx, slog.LevelDebug, "subscription parameter parse failed",
+	h.log.LogAttrs(ctx, slog.LevelDebug, "subscription range filter rejected",
 		slog.String("err", err.Error()))
-	_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
+	_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
 }
 
 // errPeerGoingAway reports a request the relay did not send because the peer
 // sent GOAWAY (§10.4; see [peerSentGoaway]).
 var errPeerGoingAway = errors.New("relay: peer sent GOAWAY; no new requests to it (§10.4)")
-
-// paramProtocolViolation marks a parameter value that closes the session with
-// PROTOCOL_VIOLATION: an out-of-range GROUP_ORDER (§10.2.8) or FORWARD
-// (§10.2.18).
-type paramProtocolViolation struct{ reason string }
-
-func (e *paramProtocolViolation) Error() string { return e.reason }
-
-// checkForwardParam enforces the §10.2.18 FORWARD range (0 or 1).
-func checkForwardParam(ps message.Parameters) error {
-	if p, ok := ps.Find(message.ParamForward); ok && p.Byte > 1 {
-		return &paramProtocolViolation{fmt.Sprintf("invalid FORWARD value 0x%X (§10.2.18)", p.Byte)}
-	}
-	return nil
-}
-
-// checkGroupOrderParam enforces the §10.2.8 GROUP_ORDER range (0x1 or 0x2).
-func checkGroupOrderParam(ps message.Parameters) error {
-	if p, ok := ps.Find(message.ParamGroupOrder); ok {
-		switch message.GroupOrder(p.Byte) {
-		case message.GroupOrderAscending, message.GroupOrderDescending:
-		default:
-			return &paramProtocolViolation{fmt.Sprintf("invalid GROUP_ORDER value 0x%X (§10.2.8)", p.Byte)}
-		}
-	}
-	return nil
-}
 
 // includeProperties reports whether INCLUDE_PROPERTIES (§10.2.21) asks for
 // Track Properties: yes unless it is 0.
