@@ -684,15 +684,21 @@ func (w *subgroupWriter) run() {
 		// dropped: an Object was dropped since the last one written, so the
 		// next is not known to follow it.
 		dropped bool
+		// sentAny: an Object was written on some stream of this writer, so no
+		// later stream begins with the Subgroup's first Object.
+		sentAny bool
 	)
 	w.withProps = w.hdr.Properties
 
 	// reopen resets the current outbound stream (if any) and opens a fresh
 	// one, for the lazy first open, after a §11.4.3 gap, and to carry Object
-	// Properties the old header could not. first sets the
-	// §11.4.2 FIRST_OBJECT bit; otherwise the stream is a replay. All its
-	// blocking I/O is bounded by w.ctx.
+	// Properties the old header could not. first sets the §11.4.2
+	// FIRST_OBJECT bit, unless an Object was already sent; otherwise the
+	// stream is a replay. All its blocking I/O is bounded by w.ctx.
 	reopen := func(first bool) bool {
+		// A contributor's first Object is not the Subgroup's once another
+		// contributor's went out (§9.3).
+		first = first && !sentAny
 		if w.unbridge != nil {
 			w.unbridge()
 			w.unbridge = nil
@@ -814,6 +820,7 @@ func (w *subgroupWriter) run() {
 		}
 		prevID = fwd.absID
 		hasWritten = true
+		sentAny = true
 		dropped = false
 		// §11.4.3: a later reset still delivers what was written.
 		w.out.MarkReliable()

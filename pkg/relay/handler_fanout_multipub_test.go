@@ -458,12 +458,14 @@ func TestFanout_MultiPublisher_ForwardsEveryContributorsProperties(t *testing.T)
 			subscribeCam1(t, subSess)
 
 			type received struct {
-				id    uint64
-				props []byte
+				id     uint64
+				props  []byte
+				stream int  // 1-based index of the stream it came on
+				replay bool // its stream's header had FIRST_OBJECT clear
 			}
 			got := make(chan received, 8)
 			go func() {
-				for {
+				for stream := 1; ; stream++ {
 					ds, err := subSess.AcceptDataStream(t.Context())
 					if err != nil {
 						return
@@ -478,7 +480,7 @@ func TestFanout_MultiPublisher_ForwardsEveryContributorsProperties(t *testing.T)
 							if err != nil {
 								return
 							}
-							got <- received{o.ObjectID, o.Properties}
+							got <- received{o.ObjectID, o.Properties, stream, sg.Header.ReplayingSubgroup}
 						}
 					}()
 				}
@@ -507,7 +509,7 @@ func TestFanout_MultiPublisher_ForwardsEveryContributorsProperties(t *testing.T)
 			if err := a.WriteObjectAt(0, &message.SubgroupObject{Payload: []byte("a")}); err != nil {
 				t.Fatalf("A WriteObjectAt 0: %v", err)
 			}
-			await(0) // A's header is now the merged stream's
+			r0 := await(0) // A's header is now the merged stream's
 			b, err := bPub.OpenSubgroup(bHdr)
 			if err != nil {
 				t.Fatalf("B OpenSubgroup: %v", err)
@@ -522,8 +524,14 @@ func TestFanout_MultiPublisher_ForwardsEveryContributorsProperties(t *testing.T)
 			); err != nil {
 				t.Fatalf("B WriteObjectAt 1: %v", err)
 			}
-			if r := await(1); !bytes.Equal(r.props, bProps) {
+			r := await(1)
+			if !bytes.Equal(r.props, bProps) {
 				t.Fatalf("Object 1 Properties = %x, want %x", r.props, bProps)
+			}
+			// B's header claims FIRST_OBJECT, but a stream beginning with Object 1
+			// is mid-Subgroup (§11.4.2): Object 0 went out first.
+			if r.stream != r0.stream && !r.replay {
+				t.Fatal("Object 1's new stream sets FIRST_OBJECT, though Object 0 was sent before it")
 			}
 			// A contributor without the bit still reaches the subscriber.
 			if err := a.WriteObjectAt(2, &message.SubgroupObject{Payload: []byte("a")}); err != nil {
