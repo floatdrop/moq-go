@@ -85,14 +85,10 @@ func Parse(src io.Reader) (Message, error) {
 	return ParsePayload(Type(t), payload)
 }
 
-// ErrMalformedMessage is wrapped by every error [ParsePayload] returns, and so
-// by every error [Parse] returns once it has read a whole frame: an unknown
-// type, a Message Body that does not match its Length, or a field that fails
-// validation. Each is session-fatal — §10: "An endpoint that receives an
-// unknown message type MUST close the session", and "If the length does not
-// match the length of the Message Body, the receiver MUST close the session
-// with a PROTOCOL_VIOLATION". A frame that could not be read whole (the stream
-// ended or was reset mid-frame) does not wrap it.
+// ErrMalformedMessage is wrapped by every error [ParsePayload] returns, and by
+// every error [Parse] returns once it has read a whole frame: an unknown type,
+// a Length mismatch, or a field that fails validation, each session-fatal
+// (§10). A frame that could not be read whole does not wrap it.
 var ErrMalformedMessage = errors.New("moqt/message: malformed message")
 
 // ParsePayload constructs a Message of the given Type and parses payload into

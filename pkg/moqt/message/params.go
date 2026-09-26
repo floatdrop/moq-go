@@ -30,12 +30,9 @@ const (
 	ParamLocationFilter          ParamID = 0x21
 	ParamGroupOrder              ParamID = 0x22
 	ParamFillParameters          ParamID = 0x23
-	// Range Filter parameters (§5.1.4, §10.2.10-14). All five carry a
-	// length-prefixed blob (SetID, optional Property Type, delta-encoded
-	// Ranges) — see rangefilter.go. Message Parameters are not Key-Value-Pairs:
-	// "The encoding is specified by each parameter definition" (§10.2), so type
-	// parity says nothing about them, and all five are length-prefixed as
-	// §5.1.4's figures show (KindBytes, in paramKinds).
+	// Range Filter parameters (§5.1.4, §10.2.10-14), see rangefilter.go. All
+	// five are length-prefixed (KindBytes) whatever their type parity: Message
+	// Parameter encodings are per definition (§10.2), not Key-Value-Pairs.
 	ParamSubgroupFilter       ParamID = 0x25
 	ParamObjectIDFilter       ParamID = 0x26
 	ParamPriorityFilter       ParamID = 0x27
@@ -368,11 +365,8 @@ func (ps *Parameters) parse(r *wire.Reader) error {
 	if err != nil {
 		return err
 	}
-	// count is an untrusted varint (up to 2^64-1, §1.4.1); never preallocate from it
-	// directly or a crafted message triggers an out-of-range makeslice panic.
-	// Each parameter occupies at least one byte on the wire (its type-delta
-	// varint), so the real count cannot exceed the remaining bytes — the loop
-	// surfaces a truncated count as a read error.
+	// count is untrusted (up to 2^64-1, §1.4.1): cap the preallocation by the
+	// remaining bytes, since each parameter takes at least one.
 	//nolint:gosec // G115: Reader.Remaining() = len(buf)-off is always >= 0.
 	out := make(Parameters, 0, min(count, uint64(r.Remaining())))
 	var prev uint64

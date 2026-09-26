@@ -8,15 +8,12 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// ErrIDOverflow reports a Group or Object ID reconstructed from a delta that
-// falls outside 0..2^64-1. §11.4.2 and §11.4.4.1 make it a session-level
-// PROTOCOL_VIOLATION.
+// ErrIDOverflow reports a Group or Object ID reconstructed from a delta outside
+// 0..2^64-1, a session-level PROTOCOL_VIOLATION (§11.4.2, §11.4.4.1).
 var ErrIDOverflow = errors.New("moqt/message: Group or Object ID outside 0..2^64-1")
 
-// NextSubgroupObjectID applies a §11.4.2 Object ID Delta to the previous
-// Object ID on a Subgroup stream: "The Object ID Delta + 1 is added to the
-// previous Object ID". A result past 2^64-1 is [ErrIDOverflow], on which "the
-// endpoint MUST close the session with a PROTOCOL_VIOLATION".
+// NextSubgroupObjectID returns prev + delta + 1, the next Object ID on a
+// Subgroup stream (§11.4.2), or [ErrIDOverflow] past 2^64-1.
 func NextSubgroupObjectID(prev, delta uint64) (uint64, error) {
 	id, carry := bits.Add64(prev, delta, 1)
 	if carry != 0 {
@@ -82,9 +79,7 @@ func (o *SubgroupObject) Append(w *wire.Writer, hasProperties bool) {
 // had the Properties bit set, which determines if Properties are included.
 //
 // io.EOF is returned only for a stream that ends before the object's first
-// byte. Once the Object ID Delta has been read, a FIN is a stream ending "in
-// the middle of a serialized Object" (§11.4) and surfaces as
-// io.ErrUnexpectedEOF.
+// byte; a FIN mid-Object (§11.4) is io.ErrUnexpectedEOF.
 func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
 	delta, err := r.Varint()
 	if err != nil {
@@ -139,9 +134,8 @@ func (o *SubgroupObject) Validate() error {
 		default:
 			return fmt.Errorf("moqt/message: invalid object status 0x%X", o.ObjectStatus)
 		}
-		// §11.2.1.2: "If an endpoint receives properties on an Object with
-		// status that is not Normal, it MUST close the session with a
-		// PROTOCOL_VIOLATION." A Properties Length of 0 carries none (§11.4.2).
+		// §11.2.1.2: no properties on a non-Normal status; a Properties Length
+		// of 0 carries none (§11.4.2).
 		if o.ObjectStatus != ObjectStatusNormal && len(o.Properties) > 0 {
 			return fmt.Errorf("moqt/message: object status 0x%X carries properties", o.ObjectStatus)
 		}

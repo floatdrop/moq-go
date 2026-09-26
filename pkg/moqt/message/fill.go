@@ -55,8 +55,7 @@ func FillParametersFromParam(ps Parameters) (inner Parameters, ok bool, err erro
 				"moqt/message: %s not allowed inside FILL_PARAMETERS (PROTOCOL_VIOLATION §10.2.15)", ip.Type)
 		}
 	}
-	// A separate parameter scope, "encoded as if they were Parameters for a
-	// separate message" (§10.2.15), so §10.2's duplicate rule applies.
+	// A separate message's parameters (§10.2.15): §10.2's duplicate rule applies.
 	if t, dup := inner.firstDuplicate(); dup {
 		return nil, true, fmt.Errorf("moqt/message: duplicate %s inside FILL_PARAMETERS (PROTOCOL_VIOLATION §10.2)", t)
 	}

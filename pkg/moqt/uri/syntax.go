@@ -8,15 +8,13 @@ import (
 )
 
 // CheckAuthority reports whether s is an RFC 3986 authority (§3.2) with a
-// non-empty host, the form the AUTHORITY Setup Option carries (§10.3.1.1:
-// it "follows the URI formatting rules [RFC3986]"; §3.1.1: "The authority
-// portion MUST NOT contain an empty host portion"):
+// non-empty host, the form the AUTHORITY Setup Option carries (§10.3.1.1,
+// §3.1.1):
 //
 //	authority = [ userinfo "@" ] host [ ":" port ]
 //
-// Unlike [Parse], which goes through net/url, it accepts nothing RFC 3986
-// does not: no raw non-ASCII, no zone identifiers, no characters outside the
-// grammar.
+// Unlike [Parse] (net/url), it accepts nothing outside the RFC 3986 grammar:
+// no raw non-ASCII, no zone identifiers.
 func CheckAuthority(s string) error {
 	hostport := s
 	if userinfo, rest, found := strings.Cut(s, "@"); found {
@@ -39,10 +37,8 @@ func CheckAuthority(s string) error {
 }
 
 // CheckPathAndQuery reports whether s is an RFC 3986 path-abempty optionally
-// followed by "?" and a query — the form the PATH Setup Option carries
-// (§10.3.1.2: "the client MUST set the PATH option to the path-abempty portion
-// of the URI; if query is present, the client MUST concatenate ?, followed by
-// the query portion"):
+// followed by "?" and a query, the form the PATH Setup Option carries
+// (§10.3.1.2):
 //
 //	path-abempty = *( "/" segment )
 //	segment      = *pchar

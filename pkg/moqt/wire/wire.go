@@ -80,8 +80,7 @@ func (r *Reader) UInt8() (uint8, error) {
 // the caller owns; mutating it does not affect the Reader's buffer, and
 // retaining it does not pin the buffer for GC. Zero-length reads return nil.
 func (r *Reader) FixedBytes(n int) ([]byte, error) {
-	// n < 0 when a caller converted a peer-supplied varint >= 2^63 (§1.4.1
-	// allows up to 2^64-1); no buffer is that long, so it is short too.
+	// n < 0 when a caller's int conversion of a varint >= 2^63 wrapped.
 	if n < 0 || r.Remaining() < n {
 		return nil, ErrShortBuffer
 	}
@@ -122,8 +121,7 @@ func (r *Reader) varintBytes(copyBytes bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// §1.4.1 varints reach 2^64-1; bound n before it can wrap in the int
-	// conversion.
+	// §1.4.1 varints reach 2^64-1: bound n before the int conversion.
 	if n > uint64(r.Remaining()) { //nolint:gosec // G115: Remaining() is len(buf)-off >= 0.
 		return nil, ErrShortBuffer
 	}
@@ -277,8 +275,7 @@ func (s *StreamReader) VarintBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// §1.4.1 varints reach 2^64-1; bound n before it can wrap in the int
-	// conversion.
+	// §1.4.1 varints reach 2^64-1: bound n before the int conversion.
 	if n > uint64(MaxStreamFieldSize) { //nolint:gosec // G115: a size cap, never negative.
 		return nil, fmt.Errorf("%w: %d > %d", ErrFieldTooLarge, n, MaxStreamFieldSize)
 	}

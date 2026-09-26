@@ -76,8 +76,8 @@ func (f *RangeFilter) Bytes() []byte {
 }
 
 // RangeFilterParam builds the message Parameter (§10.2) carrying f. The value
-// is a length-prefixed blob (KindBytes) for all five filter types — see the
-// paramKinds note in params.go on why parameter encodings ignore type parity.
+// is a length-prefixed blob (KindBytes) for all five filter types, see the
+// note in params.go.
 func RangeFilterParam(f *RangeFilter) Parameter {
 	return BytesParam(f.Type, f.Bytes())
 }
@@ -201,10 +201,8 @@ type filterKey struct {
 // RangeFiltersFromParams extracts every Range Filter parameter (§5.1.4) from ps,
 // validates each, rejects a duplicate (Type, SetID, Property Type) combination
 // (§5.1.4), and groups them by SetID. Returns (nil, nil) when ps carries no
-// range filters — the "no filter" default, matching [LocationFilterFromParam].
-// A zero-length parameter is no filter (§5.1.4: "When Length is 0, there is no
-// filter and no further fields are present"). The MAX_FILTER_RANGES limit
-// needs the negotiated cap and is enforced separately by
+// range filters, matching [LocationFilterFromParam]. A zero-length parameter
+// is no filter (§5.1.4). The MAX_FILTER_RANGES limit is enforced separately by
 // [RangeFilterSet.Validate].
 func RangeFiltersFromParams(ps Parameters) (*RangeFilterSet, error) {
 	filters, err := parseRangeFilters(ps)
@@ -214,13 +212,11 @@ func RangeFiltersFromParams(ps Parameters) (*RangeFilterSet, error) {
 	return buildRangeFilterSet(filters)
 }
 
-// Update applies a REQUEST_UPDATE's Range Filter parameters to s (§5.1.4): "In
-// REQUEST_UPDATE, Length of 0 removes the filter; non-zero replaces it
-// entirely. If a filter parameter is omitted from REQUEST_UPDATE, it is
-// unchanged." A zero-length parameter carries no SetID, so a filter is named
-// by its Parameter Type: every existing filter of a type the update carries is
-// dropped, and the update's non-empty filters of that type take their place.
-// Returns nil when no filter remains. s may be nil (no filters yet).
+// Update applies a REQUEST_UPDATE's Range Filter parameters to s (§5.1.4):
+// Length 0 removes a filter, non-zero replaces it, omitted leaves it. A
+// zero-length parameter carries no SetID, so filters are replaced by Parameter
+// Type: every existing filter of a type the update carries is dropped. Returns
+// nil when no filter remains. s may be nil.
 func (s *RangeFilterSet) Update(ps Parameters) (*RangeFilterSet, error) {
 	added, err := parseRangeFilters(ps)
 	if err != nil {
@@ -313,12 +309,9 @@ func (s *RangeFilterSet) Validate(maxFilterRanges uint64) error {
 	return nil
 }
 
-// propertyValue extracts property t's value from a decoded property KV set —
-// the first one, so the mutable value when [ExpandImmutable] also found one
-// inside Immutable Properties (§12.7).
-// Even property types carry a varint value (in wire.KVPair.IntVal); Range
-// Filters require an even Property Type (enforced by Validate), so an odd type
-// never reaches here.
+// propertyValue returns the first value of property t in pairs: the mutable
+// one when [ExpandImmutable] also found it in Immutable Properties (§12.7).
+// Validate admits only even (varint) Property Types.
 func propertyValue(pairs []wire.KVPair, t PropertyType) (uint64, bool) {
 	for _, kv := range pairs {
 		if kv.Type == t {

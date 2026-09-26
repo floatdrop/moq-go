@@ -8,25 +8,14 @@ import (
 )
 
 // CheckObjectProperties reports whether an Object's raw Properties make its
-// track malformed (§2.4.2) by any rule decidable from the Object alone:
+// track malformed (§2.4.2) by a rule decidable from the Object alone: an
+// unparsable pair or nested Immutable Properties (§12.7), a repeated Prior
+// Group/Object ID Gap or one exceeding the Object's ID (§12.8, §12.9), or a
+// Mandatory Track Property (§2.5.1). A repeated Immutable Properties is
+// treated as malformed too, an interpretation: §12.7 forbids it but does not
+// list it as malformed. Rules that need earlier Objects are not checked.
 //
-//   - a Key-Value-Pair that cannot be parsed, in the mutable list or inside
-//     Immutable Properties (§12.7);
-//   - Immutable Properties inside Immutable Properties (§12.7);
-//   - more than one Immutable Properties. §12.7 says only "An Object MUST NOT
-//     contain more than one instance of this property", outside its list of
-//     malformed conditions; treating it as malformed is this package's reading
-//     of §2.4.2's non-exhaustive list;
-//   - more than one Prior Group ID Gap or Prior Object ID Gap, counting both
-//     lists, or one larger than the Object's Group ID / Object ID (§12.8,
-//     §12.9);
-//   - a Mandatory Track Property used as an Object Property (§2.5.1).
-//
-// The §12.8 / §12.9 rules that need earlier Objects — a gap covering an
-// Object already received, an Object inside a gap already communicated,
-// differing Prior Group ID Gaps within a Group — are not checked.
-//
-// It runs once per Object, so it walks the pairs without allocating.
+// Must not allocate: per-Object path.
 func CheckObjectProperties(raw []byte, groupID, objectID uint64) error {
 	var c objectPropertiesCheck
 	if err := c.walk(raw, false); err != nil {
@@ -65,7 +54,7 @@ func (c *objectPropertiesCheck) walk(raw []byte, nested bool) error {
 				return errors.New("moqt/message: Immutable Properties inside Immutable Properties (§12.7)")
 			}
 			if c.immutables++; c.immutables > 1 {
-				// An interpretation: see CheckObjectProperties.
+				// An interpretation, see CheckObjectProperties.
 				return fmt.Errorf("moqt/message: Immutable Properties: %w (§12.7, §2.4.2)", errTooManyInstances)
 			}
 			if err := c.walk(kv.ByteVal, true); err != nil {
