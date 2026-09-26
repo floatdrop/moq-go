@@ -266,9 +266,18 @@ func TestRelay_MaxCacheDurationExpiredObjectIsUnknown(t *testing.T) {
 	pubB := dialAnotherClient(t, pubA)
 	publishVideoTrackProps(t, pubB, "cam1", 9, nil)
 	newCam1Subscriber(t, pubA)
-	publishObjects(t, pubB, 9, 1, 1)
-	publishObjects(t, pubA, aliasA, 2, 1)
-	publishObjects(t, pubB, 9, 3, 1)
+	// END_OF_GROUP, so the Groups' ends are known and only the expired
+	// Object is unknown.
+	for _, p := range []struct {
+		sess         *session.Session
+		alias, group uint64
+	}{{pubB, 9, 1}, {pubA, aliasA, 2}, {pubB, 9, 3}} {
+		hdr := subgroupHeader(p.alias, p.group)
+		hdr.EndOfGroup = true
+		if err := writeSubgroup(p.sess, hdr, 1); err != nil {
+			t.Fatal(err)
+		}
+	}
 	time.Sleep(3 * maxCacheMs * time.Millisecond)
 
 	elems := fetchCam1(t, dialAnotherClient(t, pubA), 3)

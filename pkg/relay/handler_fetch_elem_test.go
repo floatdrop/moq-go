@@ -4,105 +4,63 @@ import (
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
-// TestUpstreamFetchElemOK: an upstream FETCH element may be re-serialized only
-// if it lies in [start, endIncl], Object IDs ascend within a group, and Group
-// IDs move in the response's order; markers get the range check only
-// (§11.4.4). A wrong one would re-encode to well-formed but wrong IDs.
+// TestUpstreamFetchElemOK: an upstream FETCH element, Object or marker, may be
+// re-served only if it lies in the span and comes after the previous element
+// in the order the response carries them: Object IDs ascending within a
+// Group, Groups in the response's order (§11.4.4). A wrong one would re-encode
+// to well-formed but wrong IDs.
 func TestUpstreamFetchElemOK(t *testing.T) {
 	t.Parallel()
 
 	loc := func(g, o uint64) message.Location {
 		return message.Location{Group: g, Object: o}
 	}
-	// The requested sub-range for every case below.
-	start, endIncl := loc(10, 0), loc(20, 5)
+	span := registry.LocRange{Lo: loc(10, 0), Hi: loc(20, 5)}
+	at := func(g, o uint64) *message.Location { l := loc(g, o); return &l }
 
 	for _, tc := range []struct {
-		name     string
-		loc      message.Location
-		prev     message.Location
-		havePrev bool
-		order    message.GroupOrder
-		isMarker bool
-		want     bool
+		name  string
+		loc   message.Location
+		prev  *message.Location
+		order message.GroupOrder
+		want  bool
 	}{
-		// Range bounds. Inclusive at both ends: endIncl is the last
-		// serviceable Location, not one past it.
-		{name: "first element at start", loc: loc(10, 0), want: true},
-		{name: "first element at endIncl", loc: loc(20, 5), want: true},
-		{name: "below start by one object", loc: loc(9, 9), want: false},
-		{name: "above endIncl by one object", loc: loc(20, 6), want: false},
-		{name: "above endIncl by one group", loc: loc(21, 0), want: false},
+		// Span bounds, inclusive at both ends.
+		{name: "first element at the start", loc: loc(10, 0), want: true},
+		{name: "first element at the end", loc: loc(20, 5), want: true},
+		{name: "below the start by one object", loc: loc(9, 9), want: false},
+		{name: "above the end by one object", loc: loc(20, 6), want: false},
+		{name: "above the end by one group", loc: loc(21, 0), want: false},
+		{name: "no prev, mid-span", loc: loc(15, 3), want: true},
 
-		// No predecessor: only the range check can apply.
-		{name: "no prev, mid-range", loc: loc(15, 3), want: true},
-
-		// Within one group, Object IDs must strictly ascend — in BOTH
-		// order directions. GROUP_ORDER sequences groups, not the objects
-		// inside them, so descending must not loosen this.
+		// Within a Group, Object IDs strictly ascend in both orders.
+		{name: "same group ascending object", loc: loc(15, 4), prev: at(15, 3), want: true},
+		{name: "same group repeated object", loc: loc(15, 3), prev: at(15, 3), want: false},
+		{name: "same group descending object", loc: loc(15, 2), prev: at(15, 3), want: false},
 		{
-			name: "same group ascending object", loc: loc(15, 4),
-			prev: loc(15, 3), havePrev: true, want: true,
-		},
-		{
-			name: "same group repeated object", loc: loc(15, 3),
-			prev: loc(15, 3), havePrev: true, want: false,
-		},
-		{
-			name: "same group descending object", loc: loc(15, 2),
-			prev: loc(15, 3), havePrev: true, want: false,
-		},
-		{
-			name: "same group descending object, descending order", loc: loc(15, 2),
-			prev: loc(15, 3), havePrev: true,
+			name: "same group descending object, descending order", loc: loc(15, 2), prev: at(15, 3),
 			order: message.GroupOrderDescending, want: false,
 		},
 
-		// Across groups the direction must match the response order.
+		// Across Groups the direction must match the response order.
+		{name: "ascending order, group advances", loc: loc(16, 0), prev: at(15, 3), want: true},
+		{name: "ascending order, group goes backwards", loc: loc(14, 0), prev: at(15, 3), want: false},
 		{
-			name: "ascending order, group advances", loc: loc(16, 0),
-			prev: loc(15, 3), havePrev: true, want: true,
-		},
-		{
-			name: "ascending order, group goes backwards", loc: loc(14, 0),
-			prev: loc(15, 3), havePrev: true, want: false,
-		},
-		{
-			name: "descending order, group goes backwards", loc: loc(14, 0),
-			prev: loc(15, 3), havePrev: true,
+			name: "descending order, group goes backwards", loc: loc(14, 0), prev: at(15, 3),
 			order: message.GroupOrderDescending, want: true,
 		},
 		{
-			name: "descending order, group advances", loc: loc(16, 0),
-			prev: loc(15, 3), havePrev: true,
+			name: "descending order, group advances", loc: loc(16, 0), prev: at(15, 3),
 			order: message.GroupOrderDescending, want: false,
-		},
-
-		// Markers re-anchor the encoding with absolute IDs, so an ordering
-		// violation is not one for them — but they are still confined to
-		// the requested range.
-		{
-			name: "marker may break group direction", loc: loc(14, 0),
-			prev: loc(15, 3), havePrev: true, isMarker: true, want: true,
-		},
-		{
-			name: "marker may repeat a location", loc: loc(15, 3),
-			prev: loc(15, 3), havePrev: true, isMarker: true, want: true,
-		},
-		{
-			name: "marker outside the range is still rejected", loc: loc(21, 0),
-			prev: loc(15, 3), havePrev: true, isMarker: true, want: false,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := upstreamFetchElemOK(
-				tc.loc, tc.prev, tc.havePrev, start, endIncl, tc.order, tc.isMarker)
-			if got != tc.want {
-				t.Errorf("upstreamFetchElemOK(loc=%v prev=%v havePrev=%v order=%v marker=%v) = %v, want %v",
-					tc.loc, tc.prev, tc.havePrev, tc.order, tc.isMarker, got, tc.want)
+			if got := upstreamFetchElemOK(tc.loc, tc.prev, span, tc.order); got != tc.want {
+				t.Errorf("upstreamFetchElemOK(%v, prev %v, %v) = %v, want %v", tc.loc, tc.prev, tc.order, got, tc.want)
 			}
 		})
 	}

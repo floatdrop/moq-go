@@ -2,11 +2,9 @@ package relay
 
 import (
 	"math"
-	"slices"
 	"testing"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
-	"github.com/floatdrop/moq-go/pkg/relay/cache"
 )
 
 func TestFetchPredecessor(t *testing.T) {
@@ -81,37 +79,4 @@ func TestCapFetchEndLocation(t *testing.T) {
 	if got := capFetchEndLocation(&f, largest); got != largest {
 		t.Errorf("whole end group = %v, want the capped %v", got, largest)
 	}
-}
-
-func TestMergeFetchObjects(t *testing.T) {
-	lower := []*cache.CachedObject{{GroupID: 0}, {GroupID: 1}}
-	upper := []*cache.CachedObject{{GroupID: 5}, {GroupID: 6}}
-
-	asc := groupIDs(mergeFetchObjects(message.GroupOrderAscending, lower, upper))
-	if !slices.Equal(asc, []uint64{0, 1, 5, 6}) {
-		t.Errorf("ascending merge = %v; want [0 1 5 6] (lower leads)", asc)
-	}
-	desc := groupIDs(mergeFetchObjects(message.GroupOrderDescending, lower, upper))
-	if !slices.Equal(desc, []uint64{5, 6, 0, 1}) {
-		t.Errorf("descending merge = %v; want [5 6 0 1] (upper leads)", desc)
-	}
-
-	// Degenerate inputs pass through unchanged.
-	emptyLower := groupIDs(mergeFetchObjects(message.GroupOrderAscending, nil, upper))
-	if !slices.Equal(emptyLower, []uint64{5, 6}) {
-		t.Errorf("empty lower = %v; want [5 6]", emptyLower)
-	}
-	emptyUpper := groupIDs(mergeFetchObjects(message.GroupOrderAscending, lower, nil))
-	if !slices.Equal(emptyUpper, []uint64{0, 1}) {
-		t.Errorf("empty upper = %v; want [0 1]", emptyUpper)
-	}
-}
-
-// groupIDs returns the Group IDs of objs.
-func groupIDs(objs []*cache.CachedObject) []uint64 {
-	out := make([]uint64, len(objs))
-	for i, o := range objs {
-		out[i] = o.GroupID
-	}
-	return out
 }

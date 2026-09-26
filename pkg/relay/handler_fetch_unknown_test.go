@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 // unknownGapTopology wires upstream publisher → relay ← live subscriber, with
 // onFetch answering the relay's upstream FETCH, and returns a fetch-only
 // client. The upstream pushes single-object groups liveLo..liveHi, so the cache
-// floor is liveLo and a FETCH from group 0 has a below-floor part.
+// cached tail starts at liveLo, so a FETCH from group 0 has an uncached part.
 func unknownGapTopology(
 	t *testing.T,
 	ns wire.TrackNamespace,
@@ -32,6 +33,8 @@ func unknownGapTopology(
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 
+	written := make(chan struct{})
+	tailWritten := sync.OnceFunc(func() { close(written) })
 	go func() {
 		for {
 			req, err := upSess.AcceptRequest(t.Context())
@@ -46,6 +49,7 @@ func unknownGapTopology(
 				for g := liveLo; g <= liveHi; g++ {
 					sg, err := upSess.OpenSubgroup(message.SubgroupHeader{
 						SubgroupIDMode: message.SubgroupIDImplicitZero,
+						EndOfGroup:     true, // its FIN ends the Group
 						TrackAlias:     upstreamAlias,
 						GroupID:        g,
 					})
@@ -55,6 +59,7 @@ func unknownGapTopology(
 					_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte{byte('a' + g)}})
 					_ = sg.Close()
 				}
+				tailWritten()
 			case *message.Fetch:
 				onFetch(upSess, req, m)
 			}
@@ -75,19 +80,20 @@ func unknownGapTopology(
 	// would hand back a fetch client while the cache is still filling, and
 	// every caller's expected answer is stated in terms of a *full* tail — so
 	// a fetch that lands early gets a legitimately different answer, with the
-	// unknown-range floor sitting wherever the cache happened to reach.
+	// unknown range ending wherever the cache happened to reach.
 	//
 	// Wait on the relay's watermark (TRACK_STATUS, §10.2.17), not on the
 	// subscriber: the relay may drop a lagging subscriber (§3.3.4) while the
 	// cache is fully populated.
 	go drainAll(t.Context(), live)
+	awaitTailCached(t, written)
 
 	fetchClient := dialAnotherClient(t, upSess)
 	waitRelayLargest(t, fetchClient, ns, name, liveHi, 0)
 	return fetchClient
 }
 
-// TestFetch_UnknownRangeMarkerWhenUpstreamRejects: a below-floor part the
+// TestFetch_UnknownRangeMarkerWhenUpstreamRejects: an uncached part the
 // upstream refuses to serve is covered by an End of Unknown Range marker before
 // the cached Objects, not left as a gap (§11.4.4).
 func TestFetch_UnknownRangeMarkerWhenUpstreamRejects(t *testing.T) {
@@ -104,8 +110,8 @@ func TestFetch_UnknownRangeMarkerWhenUpstreamRejects(t *testing.T) {
 	for {
 		elems := tryFetchElems(t, fc, video, name, liveHi, nil)
 		if len(elems) > 0 && elems[0].Unknown && groupsEqual(realGroups(elems), liveLo, liveHi) {
-			// The marker covers [request start, cache floor): its Location
-			// is the floor's predecessor.
+			// The marker covers the uncached part: its Location is the end of
+			// the Group before the cached tail.
 			if wantG := liveLo - 1; elems[0].Group != wantG || elems[0].Object != math.MaxUint64 {
 				t.Fatalf("unknown marker at {%d,%d}, want {%d,%d}",
 					elems[0].Group, elems[0].Object, wantG, uint64(math.MaxUint64))
@@ -126,8 +132,10 @@ func TestFetch_UnknownRangeMarkerWhenUpstreamRejects(t *testing.T) {
 }
 
 // TestFetch_UnknownRangeMarkerDescending is the descending-order counterpart:
-// the unserviceable below-floor range comes last in stream order, so the
-// marker must trail the cached objects, at the range's start Location.
+// the unserviceable uncached range comes last in stream order, so the
+// marker trails the cached objects, at the range's last Location in stream
+// order: Group 0's last Object (Groups descending, Objects ascending within
+// one; see fetch_ranges.go).
 func TestFetch_UnknownRangeMarkerDescending(t *testing.T) {
 	video := ns("video")
 	name := []byte("cam-unknown-desc")
@@ -151,8 +159,8 @@ func TestFetch_UnknownRangeMarkerDescending(t *testing.T) {
 		}
 		if len(elems) > 0 && descOK {
 			last := elems[len(elems)-1]
-			if !last.Unknown || last.Group != 0 || last.Object != 0 {
-				t.Fatalf("want trailing unknown marker at {0,0}, got %+v (elems %v)", last, elems)
+			if !last.Unknown || last.Group != 0 || last.Object != math.MaxUint64 {
+				t.Fatalf("want trailing unknown marker at {0, 2^64-1}, got %+v (elems %v)", last, elems)
 			}
 			return
 		}
@@ -265,7 +273,7 @@ func TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation(t *testing.T) {
 			groupsEqual(got[:upstreamHi+1], 0, upstreamHi) &&
 			groupsEqual(got[upstreamHi+1:], liveLo, liveHi) {
 			// One unknown marker, between the stitched head and the cached
-			// tail, at the below-floor sub-range's inclusive end.
+			// tail, at the uncached sub-range's inclusive end.
 			if len(elems) != len(got)+1 || !elems[upstreamHi+1].Unknown {
 				t.Fatalf("want single unknown marker after group %d, got elems %v", upstreamHi, elems)
 			}
@@ -306,7 +314,7 @@ func TestFetch_DiscardsOutOfRangeUpstreamElements(t *testing.T) {
 				return
 			}
 			// Rogue marker beyond the requested range (the relay asked for
-			// the below-floor part only, ending before group liveLo).
+			// the uncached part only, ending before group liveLo).
 			_ = out.WriteObject(&message.FetchObject{
 				SerializationFlags: message.FetchEndOfUnknownRange,
 				GroupIDDelta:       liveHi - 2,
@@ -319,7 +327,7 @@ func TestFetch_DiscardsOutOfRangeUpstreamElements(t *testing.T) {
 	for {
 		elems := tryFetchElems(t, fc, video, name, liveHi, nil)
 		if len(elems) > 0 && elems[0].Unknown && groupsEqual(realGroups(elems), liveLo, liveHi) {
-			// The rogue marker must not appear; the below-floor range is
+			// The rogue marker must not appear; the uncached range is
 			// covered by the relay's own whole-sub-range marker instead.
 			if wantG := liveLo - 1; elems[0].Group != wantG || elems[0].Object != math.MaxUint64 {
 				t.Fatalf("marker at {%d,%d}, want relay's own at {%d,%d}",

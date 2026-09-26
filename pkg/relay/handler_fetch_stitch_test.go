@@ -22,7 +22,7 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 
 	video := ns("video")
 	name := []byte("cam1")
-	const liveLo, liveHi = uint64(5), uint64(9) // cached → floor = group 5
+	const liveLo, liveHi = uint64(5), uint64(9) // cached from group 5
 	const upstreamAlias = uint64(42)
 
 	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
@@ -31,7 +31,7 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 
 	// Upstream loop: answer the on-demand SUBSCRIBE by pushing the live tail
 	// (which the relay caches), and answer the stitch FETCH with the older,
-	// below-floor range.
+	// uncached range.
 	go func() {
 		for {
 			req, err := upSess.AcceptRequest(t.Context())
@@ -61,11 +61,10 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 				}
 			case *message.Fetch:
 				// Serve exactly the group range the relay asks for. The relay
-				// requests precisely the below-floor part, and the floor isn't
-				// fixed (the upstream subscription uses the Next Object filter, so
-				// the relay may not cache the upstream's first pushed group) —
-				// honouring the requested range keeps the split gapless whatever
-				// the floor turns out to be.
+				// requests precisely the uncached part, which isn't fixed (the
+				// upstream subscription uses the Next Object filter, so the relay
+				// may not cache the upstream's first pushed group) — honouring the
+				// requested range keeps the answer gapless whatever it is.
 				// draft-20 carries the range in LOCATION_FILTER (§5.1.2), and the
 				// relay always sends the absolute four-field form.
 				f, ferr := message.LocationFilterFromParam(m.Parameters)

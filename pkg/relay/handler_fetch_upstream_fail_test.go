@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -79,7 +80,7 @@ func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 			if got := stitchMarkerOf(objs); got != tc.wantMarker {
 				t.Fatalf("stitched response encoded %s, want %s", got, tc.wantMarker)
 			}
-			// The below-floor part must never be served from an upstream
+			// The uncached part must never be served from an upstream
 			// response the relay could not read to completion. Groups below
 			// the cached tail would be exactly that.
 			if groups := stitchedGroups(
@@ -93,11 +94,11 @@ func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 	}
 }
 
-// TestFetch_DescendingCappedUpstreamFallsBackToWholeUnknown: when the upstream
-// caps FETCH_OK below the requested sub-range (§10.13), a descending response
-// marks the whole sub-range unknown, anchored at its start, since a trailing
-// marker cannot be placed.
-func TestFetch_DescendingCappedUpstreamFallsBackToWholeUnknown(t *testing.T) {
+// TestFetch_DescendingCappedUpstreamMarksRemainder: when the upstream caps
+// FETCH_OK below the requested sub-range (§10.13), a descending response marks
+// what lies past the cap unknown, and nothing below it: under the upstream's
+// clean FIN the rest does not exist.
+func TestFetch_DescendingCappedUpstreamMarksRemainder(t *testing.T) {
 	t.Parallel()
 	objs := runStitch(t, stitchOpts{
 		order: message.GroupOrderDescending,
@@ -121,29 +122,18 @@ func TestFetch_DescendingCappedUpstreamFallsBackToWholeUnknown(t *testing.T) {
 		},
 	})
 
-	// Presence of a marker is not enough to tell the two encodings apart: the
-	// ascending path also emits one here. What separates them is WHERE it is
-	// anchored. unknownWholeRange anchors a descending marker at the
-	// sub-range START (group 0 — the whole below-floor range is unknown),
-	// while the per-remainder path appends one at endIncl, the top of that
-	// range. A marker in the wrong place is a well-formed response making a
-	// false claim about which objects are undetermined.
-	var marker *session.DecodedFetchObject
+	// The sub-range is Groups 0-4 (the cache holds 5-9); the cap is {3, 0}.
+	// Past it lie {3, 1} through Group 4, whose run ends, in stream order,
+	// with Group 3's last Object. Groups 0-2 and {3, 0} are a plain gap.
+	var markers []*session.DecodedFetchObject
 	for _, o := range objs {
 		if o.EndOfUnknownRange {
-			marker = o
-			break
+			markers = append(markers, o)
 		}
 	}
-	if marker == nil {
-		t.Fatalf("a capped descending upstream response produced no unknown marker; "+
-			"the uncovered remainder was encoded as an authoritative gap (objects: %v)",
-			stitchedGroups(objs))
-	}
-	if marker.GroupID != 0 {
-		t.Errorf("unknown marker anchored at group %d, want 0 — descending must fall back "+
-			"to marking the WHOLE sub-range unknown, not just the uncovered remainder",
-			marker.GroupID)
+	if len(markers) != 1 || markers[0].GroupID != 3 || markers[0].ObjectID != math.MaxUint64 {
+		t.Fatalf("unknown markers %v, want one at {3, 2^64-1} covering what lies past the cap "+
+			"(objects: %v)", markers, stitchedGroups(objs))
 	}
 }
 
@@ -209,7 +199,7 @@ func TestFetch_StitchedObjectKeepsDatagramForwardingPreference(t *testing.T) {
 }
 
 const (
-	stitchLiveLo = uint64(5) // cached live tail: groups 5..9, so the eviction floor is 5
+	stitchLiveLo = uint64(5) // cached live tail: groups 5..9, so Groups 0-4 are uncached
 	stitchLiveHi = uint64(9)
 )
 
@@ -246,8 +236,8 @@ func replyThen(end func(*session.OutgoingFetchStream)) func(*session.Session, *s
 }
 
 // runStitch runs the stitch topology of TestFetch_StitchesEvictedRangeFromUpstream
-// (an upstream feeding a cached live tail, and a FETCH reaching below the
-// eviction floor) and returns the stitched response's elements.
+// (an upstream feeding a cached live tail, and a FETCH reaching the uncached
+// Groups below it) and returns the stitched response's elements.
 func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 	t.Helper()
 	upSess, teardown := connectRelay(t, relay.Config{})
@@ -288,6 +278,8 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 		return fmt.Sprintf("; the upstream goroutine had already stopped: %v", upFail)
 	}
 
+	written := make(chan struct{})
+	tailWritten := sync.OnceFunc(func() { close(written) })
 	go func() {
 		for {
 			req, err := upSess.AcceptRequest(t.Context())
@@ -306,6 +298,7 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 				for g := stitchLiveLo; g <= stitchLiveHi; g++ {
 					sg, err := openSubgroupWaiting(t, upSess, message.SubgroupHeader{
 						SubgroupIDMode: message.SubgroupIDImplicitZero,
+						EndOfGroup:     true, // its FIN ends the Group
 						TrackAlias:     upstreamAlias,
 						GroupID:        g,
 					})
@@ -322,6 +315,7 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 						return
 					}
 				}
+				tailWritten()
 			case *message.Fetch:
 				if opts.onFetch == nil {
 					continue // never answer: the relay must time out
@@ -339,9 +333,10 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 	}
 	t.Cleanup(func() { _ = liveReq.Close() })
 	go drainAll(t.Context(), live)
+	awaitTailCached(t, written)
 
 	// Retry until the cached tail is present: before that the FETCH is either
-	// rejected or answers from an empty cache, and the below-floor split this
+	// rejected or answers from an empty cache, and the uncached part this
 	// test is about has not happened yet.
 	fc := dialAnotherClient(t, upSess)
 	deadline := time.Now().Add(10 * time.Second)
@@ -468,7 +463,7 @@ func TestFetch_RangeFilterKeepsTimedOutMarker(t *testing.T) {
 	})
 
 	// onFetch nil + a short FILL_TIMEOUT is the §10.2.5 budget-exhausted path,
-	// which reports the below-floor span as an End of Timed-Out Range.
+	// which reports the uncached span as an End of Timed-Out Range.
 	objs := runStitch(t, stitchOpts{
 		onFetch:     nil,
 		fillTimeout: 300 * time.Millisecond,

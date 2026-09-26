@@ -24,36 +24,6 @@ func locs(objs []*cache.CachedObject) []message.Location {
 	return out
 }
 
-// TestObjectCache_OldestRetained pins the eviction-floor accessor: false on an
-// empty cache, the minimum live Location otherwise, and an advancing floor as
-// size pressure evicts the oldest entries.
-func TestObjectCache_OldestRetained(t *testing.T) {
-	t.Parallel()
-
-	c := cache.NewObjectCache(0, 0)
-	if _, ok := c.OldestRetained(); ok {
-		t.Fatal("empty cache must report no oldest retained")
-	}
-
-	// Insert out of order; the floor is the minimum Location regardless.
-	putAt(c, 5, 2)
-	putAt(c, 3, 0)
-	putAt(c, 7, 1)
-	if got, ok := c.OldestRetained(); !ok || got != (message.Location{Group: 3, Object: 0}) {
-		t.Fatalf("OldestRetained = %v, %v; want {3 0}, true", got, ok)
-	}
-
-	// A size-bounded cache evicts oldest-first, so the floor advances as
-	// newer groups push the earliest insert out of the ring.
-	small := cache.NewObjectCache(2, 0)
-	putAt(small, 1, 0)
-	putAt(small, 2, 0)
-	putAt(small, 3, 0) // evicts {1,0}
-	if got, ok := small.OldestRetained(); !ok || got != (message.Location{Group: 2, Object: 0}) {
-		t.Fatalf("after eviction OldestRetained = %v, %v; want {2 0}, true", got, ok)
-	}
-}
-
 // TestObjectCache_GetRange_Order pins GetRange's sort: groups in the requested
 // order, Objects ascending within a group (§10.13). Inserts are scrambled so
 // FIFO order cannot pass.
@@ -168,8 +138,8 @@ func TestObjectCache_Delete(t *testing.T) {
 }
 
 // TestPerObjectMaxCacheDuration: each Object keeps its upstream's
-// MAX_CACHE_DURATION (§12.3). Expired above the oldest served Object it reads
-// as End of Unknown Range; a present 0 is never served; absent means relay TTL.
+// MAX_CACHE_DURATION (§12.3). An expired one is not returned; a present 0 is
+// never served; absent means relay TTL.
 func TestPerObjectMaxCacheDuration(t *testing.T) {
 	c := cache.NewObjectCache(16, 0)
 	put := func(group uint64, maxAge time.Duration, has bool) *cache.CachedObject {
@@ -182,7 +152,7 @@ func TestPerObjectMaxCacheDuration(t *testing.T) {
 		c.Put(o)
 		return o
 	}
-	put(0, 10*time.Millisecond, true) // expires, below the floor
+	put(0, 10*time.Millisecond, true) // expires
 	put(1, 0, false)                  // never expires
 	short := put(2, 10*time.Millisecond, true)
 	put(3, 0, false)
@@ -197,7 +167,7 @@ func TestPerObjectMaxCacheDuration(t *testing.T) {
 		}
 		got = append(got, fmt.Sprintf("%d:%s", o.GroupID, kind))
 	}
-	want := []string{"1:obj", "2:unknown", "3:obj", "4:unknown"}
+	want := []string{"1:obj", "3:obj"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("GetRange = %v, want %v", got, want)
 	}
