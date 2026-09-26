@@ -559,6 +559,7 @@ func readRequestStream(
 	// done carries the fin result, so nothing else escapes to the heap.
 	done := make(chan bool, 1)
 	go func() {
+		var goaways session.RequestGoaways
 		for {
 			m, err := message.Parse(stream)
 			if err != nil {
@@ -575,6 +576,12 @@ func readRequestStream(
 					_ = sess.Close(moqt.SessionProtocolViolation, err.Error())
 				}
 				done <- eof
+				return
+			}
+			// §10.4: a second GOAWAY, or one with a URI from a client,
+			// closed the session.
+			if g, ok := m.(*message.Goaway); ok && goaways.Received(sess, g) != nil {
+				done <- false
 				return
 			}
 			if !onMsg(m) {
