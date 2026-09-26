@@ -25,6 +25,7 @@ var (
 	benchSinkOK   bool
 )
 
+// benchCachePayload returns an n-byte payload.
 func benchCachePayload(n int) []byte {
 	b := make([]byte, n)
 	for i := range b {
