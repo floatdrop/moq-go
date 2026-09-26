@@ -8,16 +8,13 @@ import (
 	"strings"
 )
 
-// ErrUnknownParameter is wrapped by the parse error for a Message Parameter
-// type this version does not define. §10.2: an endpoint that receives one
-// "MUST close the session with PROTOCOL_VIOLATION".
+// ErrUnknownParameter is wrapped by the parse error for an undefined Message
+// Parameter type, a PROTOCOL_VIOLATION (§10.2).
 var ErrUnknownParameter = errors.New("moqt/message: unknown parameter type")
 
-// ParamScope is the message form a parameter block arrived in, as the
-// per-parameter scope rules of §10.2.1 tell them apart. A REQUEST_OK takes its
-// form from the request it answers (§10.5: "PUBLISH_OK, REQUEST_UPDATE_OK,
-// TRACK_STATUS_OK, ..."), and a REQUEST_UPDATE from the request it updates.
-// Values are bit flags so a parameter's allowed forms are one mask.
+// ParamScope is the message form a parameter block arrived in (§10.2.1). A
+// REQUEST_OK takes its form from the request it answers (§10.5), and a
+// REQUEST_UPDATE from the request it updates. Values are bit flags.
 type ParamScope uint32
 
 const (
@@ -37,10 +34,9 @@ const (
 	ScopePublishNamespaceOK
 	ScopePublishStateNotify
 	ScopeRequestUpdateOK
-	// ScopeUpdateFromSubscriber is a REQUEST_UPDATE for a subscription —
-	// established by SUBSCRIBE or PUBLISH — sent by its subscriber;
-	// ScopeUpdateFromPublisher one sent by its publisher, on a PUBLISH it
-	// sent. §5.1.4 allows the Range Filters only "from the subscriber".
+	// ScopeUpdateFromSubscriber is a REQUEST_UPDATE on a subscription sent by
+	// its subscriber, ScopeUpdateFromPublisher one sent by the publisher of a
+	// PUBLISH. §5.1.4 allows the Range Filters only "from the subscriber".
 	ScopeUpdateFromSubscriber
 	ScopeUpdateFromPublisher
 	ScopeUpdateFetch
@@ -54,13 +50,8 @@ const (
 	scopeUpdateSubscription = ScopeUpdateFromSubscriber | ScopeUpdateFromPublisher
 	scopeAnyUpdate          = scopeUpdateSubscription | ScopeUpdateFetch | ScopeUpdateTrackStatus |
 		ScopeUpdateSubscribeNamespace | ScopeUpdateSubscribeTracks | ScopeUpdatePublishNamespace
-	// §5.1.4: "All other filter parameters MAY appear multiple times in a
-	// FETCH, SUBSCRIBE, SUBSCRIBE_TRACKS, or REQUEST_UPDATE (on a
-	// subscription, from the subscriber only) message", and the Track
-	// Property filter in "a SUBSCRIBE_TRACKS message or REQUEST_UPDATE for
-	// it". Its opening sentence names SUBSCRIBE, FETCH and SUBSCRIBE_TRACKS
-	// for all five, so all five share one scope here; the text is ambiguous,
-	// and the reading that closes fewer sessions was chosen.
+	// §5.1.4 is ambiguous on where each filter may appear; all five share the
+	// widest reading, which closes fewer sessions.
 	scopeRangeFilter = ScopeSubscribe | ScopeFetch | ScopeSubscribeTracks |
 		ScopeUpdateFromSubscriber | ScopeUpdateSubscribeTracks
 )
@@ -227,18 +218,14 @@ func (e *ParamScopeError) Error() string {
 	return fmt.Sprintf("moqt/message: %s not allowed in %s (PROTOCOL_VIOLATION §10.2.1)", e.Type, e.Scope)
 }
 
-// CheckScope reports the first parameter of ps that may not appear in a
-// message of the given scope, or that repeats where its definition does not
-// allow it (see [Parameters.firstDuplicate]). A FILL_PARAMETERS value is a
-// scope of its own (§10.2.15) and is checked against its table too, and an
-// INCLUDE_PROPERTIES value must be 0 or 1 (§10.2.21). Every error is a
-// session-level PROTOCOL_VIOLATION.
+// CheckScope reports the first parameter of ps not allowed in a message of the
+// given scope (§10.2.1) or repeated where it may not be (§10.2), and validates
+// the FILL_PARAMETERS (§10.2.15) and INCLUDE_PROPERTIES (§10.2.21) values.
+// Every error is a session-level PROTOCOL_VIOLATION.
 func (ps Parameters) CheckScope(scope ParamScope) error {
 	for _, p := range ps {
 		allowed := paramScopes[p.Type]
-		// §10.20.1: "Any Parameter that can be specified on a Subscription
-		// (ie: in SUBSCRIBE) is valid in SUBSCRIBE_TRACKS, unless otherwise
-		// specified." They become the subscriptions' initial parameters.
+		// §10.20.1: SUBSCRIBE parameters are valid in SUBSCRIBE_TRACKS.
 		if allowed&ScopeSubscribe != 0 {
 			allowed |= ScopeSubscribeTracks
 		}
@@ -258,12 +245,9 @@ func (ps Parameters) CheckScope(scope ParamScope) error {
 	return nil
 }
 
-// firstDuplicate reports the first parameter type that appears more than once
-// in ps where its definition does not allow it (§10.2: "Senders MUST NOT
-// repeat the same Parameter Type in a message unless the parameter definition
-// explicitly allows multiple instances"). The Range Filters may repeat
-// (§5.1.4), and so may AUTHORIZATION_TOKEN (§10.2.2: it "MAY be repeated
-// within a message").
+// firstDuplicate reports the first parameter type repeated in ps where its
+// definition does not allow it (§10.2). The Range Filters (§5.1.4) and
+// AUTHORIZATION_TOKEN (§10.2.2) may repeat.
 func (ps Parameters) firstDuplicate() (ParamID, bool) {
 	for i, p := range ps {
 		if IsRangeFilterParam(p.Type) || p.Type == ParamAuthorizationToken {

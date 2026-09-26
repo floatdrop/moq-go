@@ -53,10 +53,8 @@ func (r *Reader) KVPair(prev uint64) (KVPair, uint64, error) {
 	return r.kvPair(prev, true)
 }
 
-// KVPairView is [Reader.KVPair] with a byte value that aliases the reader's
-// buffer instead of copying it, for callers that only inspect the pairs
-// (per-Object validation) and must not allocate. The value is valid only as
-// long as the buffer is.
+// KVPairView is [Reader.KVPair] without the copy, for per-Object inspection
+// that must not allocate: a byte value aliases the reader's buffer.
 func (r *Reader) KVPairView(prev uint64) (KVPair, uint64, error) {
 	return r.kvPair(prev, false)
 }

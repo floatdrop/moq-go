@@ -63,12 +63,10 @@ const (
 const DefaultPublisherPriority uint8 = 128
 
 // TrackDefaultPublisherPriority returns the DEFAULT_PUBLISHER_PRIORITY (§12.4)
-// carried in a raw Track Properties block, or [DefaultPublisherPriority] when
-// the property is omitted. Per §12.7 the value may sit in the mutable list or
-// inside Immutable Properties and both are searched, the mutable list first.
-// §12.4 says "Priorities above 255 are invalid" without prescribing a
-// reaction; an invalid value, like a malformed block, is read as omitted
-// rather than truncated.
+// in a raw Track Properties block, or [DefaultPublisherPriority] when it is
+// omitted. Immutable Properties are searched too, the mutable value winning
+// (§12.7). §12.4 prescribes no reaction to a value above 255; like a malformed
+// block, it is read as omitted.
 func TrackDefaultPublisherPriority(trackProperties []byte) uint8 {
 	pairs, err := ParseTrackProperties(trackProperties)
 	if err != nil {
@@ -102,16 +100,11 @@ func findDefaultPublisherPriority(pairs []wire.KVPair) (uint8, bool) {
 }
 
 // ExpandImmutable returns pairs followed by the contents of each Immutable
-// Properties property (§12.7) among them — "When looking for the value of a
-// property, processors MUST search both the mutable properties and the
-// contents of Immutable Properties." A lookup that stops at the first match
-// gets the mutable value when both carry one, as [TrackDefaultPublisherPriority]
-// does; a loop in which a later pair overwrites an earlier one should range
-// over the result backwards for the same outcome.
+// Properties among them, for the lookup §12.7 requires. The first match is the
+// mutable value; a last-wins loop must range over the result backwards.
 //
 // pairs is returned as is, without allocating, when it holds no Immutable
-// Properties. Contents that do not parse are an error: §12.7 makes the track
-// malformed when "A Key-Value-Pair cannot be parsed".
+// Properties. Contents that do not parse are an error (§12.7).
 func ExpandImmutable(pairs []wire.KVPair) ([]wire.KVPair, error) {
 	out := pairs
 	for _, kv := range pairs {
@@ -141,9 +134,8 @@ func parseSearchable(raw []byte) ([]wire.KVPair, error) {
 }
 
 // TrackMaxCacheDuration returns the MAX_CACHE_DURATION (§12.3) in a raw Track
-// Properties block and whether it is present, searching Immutable Properties
-// too with the mutable value winning (§12.7). A block that does not parse
-// reads as having none.
+// Properties block and whether it is present, the mutable value winning over
+// Immutable Properties (§12.7). A block that does not parse has none.
 func TrackMaxCacheDuration(trackProperties []byte) (time.Duration, bool) {
 	pairs, err := parseSearchable(trackProperties)
 	if err != nil {
