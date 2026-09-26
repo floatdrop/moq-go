@@ -63,7 +63,16 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 
 	// §9.3: the first copy of {GroupID, ObjectID} wins, unless an announced
 	// gap says it does not exist (§2.1, §9.1).
-	fresh, err := entry.ClaimDelivered(d.GroupID, d.ObjectID, message.ObjectPriorGaps(d.Properties))
+	info := registry.ObjectInfo{
+		Group:      d.GroupID,
+		Object:     d.ObjectID,
+		Datagram:   true,
+		Priority:   d.PublisherPriority,
+		Status:     d.ObjectStatus,
+		EndOfGroup: d.HasEndOfGroup(),
+		Gaps:       message.ObjectPriorGaps(d.Properties),
+	}
+	fresh, err := entry.ClaimDelivered(info)
 	if err != nil {
 		h.endMalformedTrack(ctx, entry, h.sess, err)
 		return
@@ -78,6 +87,10 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 			Properties:        d.Properties,
 			Payload:           d.ObjectPayload,
 		}); err != nil {
+			h.endMalformedTrack(ctx, entry, h.sess, err)
+			return
+		}
+		if err := entry.RecordDuplicate(info); err != nil {
 			h.endMalformedTrack(ctx, entry, h.sess, err)
 		}
 		return

@@ -3,6 +3,7 @@ package registry
 import (
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -143,8 +144,12 @@ type TrackEntry struct {
 	// It also holds the Prior Group and Object ID Gaps (§12.8, §12.9) seen:
 	// each Group its Object ID gaps and Group gap value, and groupGaps the Group
 	// ID ranges announced absent, pruned with the same window.
-	delivered       map[uint64]*deliveredGroup
-	groupGaps       []idRange
+	delivered map[uint64]*deliveredGroup
+	groupGaps []idRange
+	// trackEnd is where the Track ends, its END_OF_TRACK (§2.4.2), if
+	// hasTrackEnd; kept past the window.
+	trackEnd        message.Location
+	hasTrackEnd     bool
 	deliveredMax    uint64
 	deliveredHasMax bool
 
@@ -250,9 +255,11 @@ const deliveredGroupWindow = 32
 // drop objects received on a multi-object stream". A cached copy of an Object
 // a gap later covers is kept (§9.1 makes updating the cache a MAY). The one gap rule
 // it does report, as an error wrapping [session.ErrMalformedTrack], is a Group
-// carrying two Prior Group ID Gap values (§12.8). The rejected Object leaves no
-// state in the ledger.
-func (e *TrackEntry) ClaimDelivered(group, object uint64, gaps message.PriorGaps) (bool, error) {
+// carrying two Prior Group ID Gap values (§12.8). An Object ClaimDelivered
+// rejects leaves no state in the ledger, and a duplicate records only its
+// gaps, since the caller's §9.1 check may still reject it.
+func (e *TrackEntry) ClaimDelivered(o ObjectInfo) (bool, error) {
+	group, object, gaps := o.Group, o.Object, o.Gaps
 	e.deliveredMu.Lock()
 	defer e.deliveredMu.Unlock()
 
@@ -266,6 +273,9 @@ func (e *TrackEntry) ClaimDelivered(group, object uint64, gaps message.PriorGaps
 	if gaps.HasGroup && g != nil && g.hasGroupGap && g.groupGap != gaps.Group {
 		return false, fmt.Errorf("%w: Group %d carries Prior Group ID Gaps %d and %d (§12.8)",
 			session.ErrMalformedTrack, group, g.groupGap, gaps.Group)
+	}
+	if err := e.checkEndsLocked(g, o); err != nil {
+		return false, err
 	}
 	if e.announcedAbsentLocked(g, group, object) {
 		return false, nil
@@ -295,19 +305,355 @@ func (e *TrackEntry) ClaimDelivered(group, object uint64, gaps message.PriorGaps
 	if _, ok := g.objects[object]; ok {
 		return false, nil
 	}
+	e.recordEndsLocked(g, o)
 	g.objects[object] = struct{}{}
 	return true, nil
+}
+
+// ObjectInfo is what [TrackEntry.ClaimDelivered] checks of an Object against
+// the earlier Objects of the track.
+type ObjectInfo struct {
+	Group, Object uint64
+	// Subgroup is the Object's Subgroup ID, unless Datagram (§11.2.1).
+	Subgroup uint64
+	Datagram bool
+	// Priority is the resolved Publisher Priority (§7).
+	Priority uint8
+	// Status is the Object Status (§11.2.1.1).
+	Status uint64
+	// EndOfGroup is a datagram's END_OF_GROUP bit (§11.3.1).
+	EndOfGroup bool
+	// Gaps are the Object's Prior Group and Object ID Gaps (§12.8, §12.9).
+	Gaps message.PriorGaps
+}
+
+// end is where a Subgroup, Group or Track ends: its first missing Object ID
+// (§2.4.2). A status Object at M ends it at M (§11.2.1.1); a FIN after Object N
+// (§11.4.3), or an END_OF_GROUP bit on it (§11.4.2, §11.3.1), at N+1. The two
+// agree when M = N+1, as §9.1 lets a relay turn one into the other.
+//
+// Interpretation: §2.4.2 calls both the "final Object", the status Object at
+// M and the Object N, which would make M = N+1 two different finals.
+type end struct {
+	at  uint64
+	set bool
+	// hard reports that a FIN or END_OF_GROUP bit set it. Only then is a
+	// Normal Object at at past the end: with status Objects alone, it is the
+	// Object going from existing to not existing (§9.1), or the late Object of
+	// §2.1, in either order.
+	hard bool
+}
+
+// past reports whether an Object at id is past e: a status Object strictly
+// after it, a Normal one also at it if e is hard.
+func (e end) past(id uint64, normal bool) bool {
+	return e.set && (id > e.at || id == e.at && normal && e.hard)
+}
+
+// conflicts reports whether e already ends somewhere other than at (set by a
+// FIN or bit if hard). A status end at M and a hard end at M+1 agree: Object M
+// went from existing to not existing (§9.1), and the end is M.
+func (e end) conflicts(at uint64, hard bool) bool {
+	switch {
+	case !e.set, e.at == at:
+		return false
+	case hard && !e.hard:
+		return at != e.at+1
+	case !hard && e.hard:
+		return at+1 != e.at
+	}
+	return true
+}
+
+// with is e also ending at at, set by a FIN or bit if hard, once checked with
+// conflicts.
+func (e end) with(at uint64, hard bool) end {
+	switch {
+	case !e.set:
+		return end{at: at, set: true, hard: hard}
+	case at == e.at:
+		return end{at: at, set: true, hard: e.hard || hard}
+	case at < e.at:
+		return end{at: at, set: true} // a status end below a hard one
+	}
+	return e
+}
+
+// subgroupLedger is one Subgroup of a [deliveredGroup].
+type subgroupLedger struct {
+	priority uint8
+	// maxNormal and maxStatus are the largest Normal and status Object IDs
+	// received, if hasNormal and hasStatus.
+	maxNormal, maxStatus uint64
+	hasNormal, hasStatus bool
+	end                  end
+}
+
+// SubgroupEnded records that an inbound subgroup stream ended with a FIN after
+// lastObj: that ends its Subgroup (see [end]; on a status Object, at it) and,
+// if the stream's header set END_OF_GROUP (§11.4.2), the Group. An error
+// wrapping [session.ErrMalformedTrack] reports a §2.4.2 condition: another
+// stream of the Subgroup ended elsewhere, or an Object past this end was
+// received; the Objects past the lower end are then removed from the cache.
+func (e *TrackEntry) SubgroupEnded(lastObj ObjectInfo, endOfGroup bool) error {
+	group, subgroup := lastObj.Group, lastObj.Subgroup
+	e.deliveredMu.Lock()
+	defer e.deliveredMu.Unlock()
+	g := e.delivered[group]
+	if g == nil {
+		return nil // aged out of the window, or every Object dropped
+	}
+	hard := lastObj.Status == message.ObjectStatusNormal
+	at := lastObj.Object
+	if hard {
+		at++
+	}
+	ends := end{at: at, set: true, hard: hard}
+	sg, seen := g.subgroups[subgroup]
+	if !seen {
+		sg.priority = lastObj.Priority // every Object of it was dropped
+	}
+	sgEnd, gEnd := sg.end.with(at, hard), g.end.with(at, hard)
+	switch {
+	case sg.end.conflicts(at, hard):
+		e.purgePastLocked(group, &subgroup, lower(sg.end, ends))
+		return fmt.Errorf("%w: Subgroup %d of Group %d ends at Objects %d and %d (§2.4.2)",
+			session.ErrMalformedTrack, subgroup, group, sg.end.at, at)
+	case sg.hasStatus && sgEnd.past(sg.maxStatus, false),
+		sg.hasNormal && sgEnd.past(sg.maxNormal, true):
+		e.purgePastLocked(group, &subgroup, sgEnd)
+		return fmt.Errorf("%w: Subgroup %d of Group %d ends at Object %d below an Object received (§2.4.2)",
+			session.ErrMalformedTrack, subgroup, group, at)
+	case !endOfGroup:
+	case g.end.conflicts(at, hard):
+		e.purgePastLocked(group, nil, lower(g.end, ends))
+		return fmt.Errorf("%w: Group %d ends at Objects %d and %d (§2.4.2)",
+			session.ErrMalformedTrack, group, g.end.at, at)
+	case g.pastEnd(gEnd):
+		e.purgePastLocked(group, nil, gEnd)
+		return fmt.Errorf("%w: Group %d ends at Object %d below an Object received (§2.4.2)",
+			session.ErrMalformedTrack, group, at)
+	}
+	sg.end = sgEnd
+	if g.subgroups == nil {
+		g.subgroups = make(map[uint64]subgroupLedger)
+	}
+	g.subgroups[subgroup] = sg
+	if endOfGroup {
+		g.end = gEnd
+	}
+	return nil
+}
+
+// lower is whichever of a and b ends first.
+func lower(a, b end) end {
+	if b.at < a.at {
+		return b
+	}
+	return a
+}
+
+// RecordDuplicate records what o, a copy [TrackEntry.ClaimDelivered] reported
+// as already delivered, says about its Subgroup, Group and Track, once the
+// caller's §9.1 check found it consistent with the first copy: an
+// END_OF_GROUP arriving after a Normal Object at its ID still ends the Group,
+// and a Normal copy of a status Object still counts as received.
+//
+// Objects claimed since o's [TrackEntry.ClaimDelivered] are checked too: an
+// error wrapping [session.ErrMalformedTrack] reports a §2.4.2 condition.
+func (e *TrackEntry) RecordDuplicate(o ObjectInfo) error {
+	e.deliveredMu.Lock()
+	defer e.deliveredMu.Unlock()
+	g := e.delivered[o.Group]
+	if g == nil {
+		return nil
+	}
+	if _, ok := g.objects[o.Object]; !ok { // one dropped as announced absent
+		return nil
+	}
+	if err := e.checkEndsLocked(g, o); err != nil {
+		return err
+	}
+	e.recordEndsLocked(g, o)
+	return nil
+}
+
+// groupEnd reports where o ends its Group (see [end]), if it does: an
+// END_OF_GROUP or END_OF_TRACK status at M at M (§11.2.1.1); a datagram's
+// END_OF_GROUP bit on Object N at N+1, which §2.4.2's non-exhaustive list does
+// not name but §11.3.1 defines alike.
+func groupEnd(o ObjectInfo) (at uint64, hard, ok bool) {
+	switch {
+	case o.Status == message.ObjectStatusEndOfGroup, o.Status == message.ObjectStatusEndOfTrack:
+		return o.Object, false, true
+	case o.Datagram && o.EndOfGroup:
+		return o.Object + 1, true, true
+	}
+	return 0, false, false
+}
+
+// checkEndsLocked reports the §2.4.2 conditions an Object o makes against the
+// earlier ones, g being its Group's ledger entry: a Publisher Priority other
+// than its Subgroup's, an Object past its Subgroup's, Group's or Track's end,
+// or an end placed elsewhere or below an Object received; the Objects past the
+// end are then removed from the cache.
+func (e *TrackEntry) checkEndsLocked(g *deliveredGroup, o ObjectInfo) error {
+	normal := o.Status == message.ObjectStatusNormal
+	loc := message.Location{Group: o.Group, Object: o.Object}
+	switch {
+	case e.hasTrackEnd && e.trackEnd.Less(loc):
+		return fmt.Errorf("%w: Object %d of Group %d is past END_OF_TRACK at %d/%d (§2.4.2)",
+			session.ErrMalformedTrack, o.Object, o.Group, e.trackEnd.Group, e.trackEnd.Object)
+	case o.Status != message.ObjectStatusEndOfTrack:
+	case e.hasTrackEnd && e.trackEnd != loc:
+		e.purgeTrackPastLocked(loc) // below the earlier one: not past it
+		return fmt.Errorf("%w: END_OF_TRACK at Object %d of Group %d and at %d/%d (§2.4.2)",
+			session.ErrMalformedTrack, o.Object, o.Group, e.trackEnd.Group, e.trackEnd.Object)
+	case e.purgeTrackPastLocked(loc):
+		return fmt.Errorf("%w: END_OF_TRACK at Object %d of Group %d is below an Object received (§2.4.2)",
+			session.ErrMalformedTrack, o.Object, o.Group)
+	}
+	if g == nil {
+		return nil
+	}
+	if g.end.past(o.Object, normal) {
+		return fmt.Errorf("%w: Object %d of Group %d is past its end at %d (§2.4.2)",
+			session.ErrMalformedTrack, o.Object, o.Group, g.end.at)
+	}
+	if at, hard, ok := groupEnd(o); ok {
+		gEnd := g.end.with(at, hard)
+		switch {
+		case g.end.conflicts(at, hard):
+			e.purgePastLocked(o.Group, nil, lower(g.end, end{at: at, set: true, hard: hard}))
+			return fmt.Errorf("%w: Group %d ends at Objects %d and %d (§2.4.2)",
+				session.ErrMalformedTrack, o.Group, g.end.at, at)
+		case g.pastEnd(gEnd):
+			e.purgePastLocked(o.Group, nil, gEnd)
+			return fmt.Errorf("%w: Group %d ends at Object %d below an Object received (§2.4.2)",
+				session.ErrMalformedTrack, o.Group, at)
+		}
+	}
+	if o.Datagram {
+		return nil
+	}
+	sg, seen := g.subgroups[o.Subgroup]
+	switch {
+	case !seen:
+	case sg.priority != o.Priority:
+		return fmt.Errorf("%w: Subgroup %d of Group %d has Publisher Priorities %d and %d (§2.4.2)",
+			session.ErrMalformedTrack, o.Subgroup, o.Group, sg.priority, o.Priority)
+	case sg.end.past(o.Object, normal):
+		return fmt.Errorf("%w: Object %d of Subgroup %d in Group %d is past its end at %d (§2.4.2)",
+			session.ErrMalformedTrack, o.Object, o.Subgroup, o.Group, sg.end.at)
+	}
+	return nil
+}
+
+// purgeTrackPastLocked reports whether an Object past END_OF_TRACK at loc was
+// received, in the window, and removes those from the cache. END_OF_TRACK is a
+// status end (see [end]): a Normal Object at loc is the late Object of §2.1.
+func (e *TrackEntry) purgeTrackPastLocked(loc message.Location) bool {
+	found := false
+	ended := end{at: loc.Object, set: true}
+	for id, g := range e.delivered {
+		switch {
+		case id > loc.Group:
+			found = true
+			e.purgeGroupLocked(id)
+		case id == loc.Group && g.pastEnd(ended):
+			found = true
+			e.purgePastLocked(id, nil, ended)
+		}
+	}
+	return found
+}
+
+// purgeGroupLocked removes every Object of group from the cache, status
+// Objects included (§2.4.2).
+func (e *TrackEntry) purgeGroupLocked(group uint64) {
+	objs := e.Cache.GetRange(
+		message.Location{Group: group},
+		message.Location{Group: group, Object: math.MaxUint64},
+		message.GroupOrderAscending,
+	)
+	for _, o := range objs {
+		e.Cache.Delete(group, o.ObjectID)
+	}
+}
+
+// purgePastLocked removes from the cache the Objects of group, in subgroup if
+// not nil, past ended: Object(s) triggering Malformed Track status MUST NOT be
+// cached (§2.4.2).
+func (e *TrackEntry) purgePastLocked(group uint64, subgroup *uint64, ended end) {
+	objs := e.Cache.GetRange(
+		message.Location{Group: group, Object: ended.at},
+		message.Location{Group: group, Object: math.MaxUint64},
+		message.GroupOrderAscending,
+	)
+	for _, o := range objs {
+		if !ended.past(o.ObjectID, o.Status == message.ObjectStatusNormal) {
+			continue
+		}
+		if subgroup != nil && (o.ForwardingPref != cache.ForwardingSubgroup || o.SubgroupID != *subgroup) {
+			continue
+		}
+		e.Cache.Delete(group, o.ObjectID)
+	}
+}
+
+// recordEndsLocked records what o, once checked, says about its Subgroup,
+// Group and Track.
+func (e *TrackEntry) recordEndsLocked(g *deliveredGroup, o ObjectInfo) {
+	normal := o.Status == message.ObjectStatusNormal
+	if normal {
+		g.maxNormal, g.hasNormal = max(g.maxNormal, o.Object), true
+	} else {
+		g.maxStatus, g.hasStatus = max(g.maxStatus, o.Object), true
+	}
+	if at, hard, ok := groupEnd(o); ok {
+		g.end = g.end.with(at, hard)
+	}
+	if o.Status == message.ObjectStatusEndOfTrack {
+		e.trackEnd, e.hasTrackEnd = message.Location{Group: o.Group, Object: o.Object}, true
+	}
+	if o.Datagram {
+		return
+	}
+	if g.subgroups == nil {
+		g.subgroups = make(map[uint64]subgroupLedger)
+	}
+	sg, seen := g.subgroups[o.Subgroup]
+	if !seen {
+		sg.priority = o.Priority
+	}
+	if normal {
+		sg.maxNormal, sg.hasNormal = max(sg.maxNormal, o.Object), true
+	} else {
+		sg.maxStatus, sg.hasStatus = max(sg.maxStatus, o.Object), true
+	}
+	g.subgroups[o.Subgroup] = sg
 }
 
 // deliveredGroup is one Group of the [TrackEntry.ClaimDelivered] ledger; g is
 // nil for a Group not yet seen.
 type deliveredGroup struct {
 	objects map[uint64]struct{}
+	// maxNormal and maxStatus are the largest Normal and status Object IDs
+	// received, if hasNormal and hasStatus.
+	maxNormal, maxStatus uint64
+	hasNormal, hasStatus bool
+	subgroups            map[uint64]subgroupLedger // created on first use
+	end                  end
 	// objectGaps are the Object ID ranges announced absent (§12.9).
 	objectGaps []idRange
 	// groupGap is the Group's Prior Group ID Gap (§12.8), if hasGroupGap.
 	groupGap    uint64
 	hasGroupGap bool
+}
+
+// pastEnd reports whether an Object received is past ended.
+func (g *deliveredGroup) pastEnd(ended end) bool {
+	return g.hasNormal && ended.past(g.maxNormal, true) || g.hasStatus && ended.past(g.maxStatus, false)
 }
 
 // idRange is an inclusive range of Group or Object IDs.

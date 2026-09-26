@@ -428,22 +428,43 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   subscription"), nor migrates to the New Session URI, nor closes the session
   once no subscriptions remain (§3.6 RECOMMENDED). It waits for the sender to
   close.
-- **Malformed tracks: per-Object conditions (§2.4.2, §12.8, §12.9)** — the
-  session reports Object Properties that make a track malformed
-  (`session.ErrMalformedTrack`), and the relay then ends the track: PUBLISH_DONE
-  MALFORMED_TRACK to every downstream subscriber, its subscription to that
-  publisher cancelled, the Object not cached. The relay also ends it for two
-  Prior Group ID Gap values in one Group, and for a duplicate that differs from
-  the cached first copy (§9.1; Payloads and Immutable Properties compared only
-  when both copies are Normal, since Normal may become End of Group). A
-  duplicate is not compared once the first copy left the cache (evicted or
-  expired), nor while a concurrent contributor has yet to cache it. Not
-  detected: the rest of §2.4.2's list other than an Object after END_OF_GROUP
-  on the same stream. A downstream FETCH already being served from the cache
-  when the track is found malformed is not reset: the relay does not track
-  fetch streams per track. One interpretation: an Object with two Immutable
-  Properties is treated as malformed, although §12.7 states "MUST NOT contain
-  more than one instance" outside its list of malformed conditions.
+- **Malformed tracks (§2.4.2, §9.1, §12.8, §12.9)** — the session reports
+  Object Properties that make a track malformed (`session.ErrMalformedTrack`),
+  and the relay then ends the track: PUBLISH_DONE MALFORMED_TRACK to every
+  downstream subscriber, its subscription to that publisher cancelled, the
+  Objects triggering it not cached (removed, if earlier ones were). The relay
+  also detects, on live subgroup and datagram Objects of any upstream, against
+  the last 32 Groups (`registry.TrackEntry.ClaimDelivered`, `SubgroupEnded`,
+  `RecordDuplicate`): §2.4.2's list — a Subgroup's Publisher Priority
+  changing; an Object past a Subgroup's, Group's or Track's end, or two
+  different ends; a duplicate that differs from the cached first copy (§9.1;
+  Payloads and Immutable Properties compared only when both copies are
+  Normal, since Normal may become End of Group) — and two Prior Group ID Gap
+  values in one Group. An end is the first missing ID: an END_OF_GROUP or
+  END_OF_TRACK status at M ends the Group at M (END_OF_TRACK the Track too),
+  and a FIN (§11.4.3; the Group's too with END_OF_GROUP set, §11.4.2) or a
+  datagram's END_OF_GROUP bit after Object N at N+1. Each end is also checked
+  against the Objects already received, duplicates included. Interpretations,
+  the first three chosen with the maintainer: §2.4.2 calls both the status
+  Object at M and the Object N the "final Object", which would make the
+  §9.1-equivalent M = N+1 two different finals; a Normal Object at an end is
+  past it only if a FIN or bit set it — with status Objects alone it is the
+  §9.1 existing-to-not-existing change or the §2.1 late Object; for the same
+  reason a status end at M and a FIN or bit end at M+1 agree, ending at M; a
+  datagram's END_OF_GROUP bit counts as a Group's end, which §2.4.2's
+  non-exhaustive list does not name; and §2.4.2 item 7 (another Forwarding
+  Preference) is read per Object, since it may vary within a Track (§11.2.1),
+  so it is the §9.1 duplicate check. Not detected: in upstream FETCH
+  responses (whose End of Track is not used either), in a session that is not
+  a relay's, past the window, and a duplicate once the first copy left the
+  cache (evicted or expired) or before a concurrent contributor cached it. An
+  Object another upstream had claimed but not yet cached when a later end put
+  it past that end stays cached. A downstream FETCH already being served from
+  the cache when the track is found malformed is not reset: the relay does not
+  track fetch streams per track. One interpretation: an Object with two
+  Immutable Properties is treated as malformed, although §12.7 states "MUST
+  NOT contain more than one instance" outside its list of malformed
+  conditions.
 - **Objects inside an announced gap are dropped, not malformed (§2.1, §9.1,
   §12.8, §12.9)** — an interpretation. §12.8 and §12.9 list "an Object with an
   ID within a previously communicated gap" and "a gap covering an Object it

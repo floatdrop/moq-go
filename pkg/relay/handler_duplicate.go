@@ -23,6 +23,9 @@ import (
 // A copy an announced gap says does not exist is compared too, when the
 // first copy is cached: §2.1 excuses its arrival, not a different content.
 //
+// On a difference the first copy is removed from the cache: it triggered the
+// Malformed Track status too, and such Objects MUST NOT be cached (§2.4.2).
+//
 // Limitation: nothing is compared when the first copy is not in the cache:
 // evicted, expired (§12.3), or not yet put there by a concurrent contributor.
 func checkDuplicate(c *cache.ObjectCache, dup *cache.CachedObject) error {
@@ -47,6 +50,7 @@ func checkDuplicate(c *cache.ObjectCache, dup *cache.CachedObject) error {
 	default:
 		return nil
 	}
+	c.Delete(dup.GroupID, dup.ObjectID)
 	return fmt.Errorf("%w: a duplicate of Object %d in Group %d has a different %s (§9.1, §2.4.2)",
 		session.ErrMalformedTrack, dup.ObjectID, dup.GroupID, field)
 }
