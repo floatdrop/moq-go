@@ -175,3 +175,41 @@ func TestRelay_DuplicateConsistency(t *testing.T) {
 		})
 	}
 }
+
+// TestRelay_DuplicateEndOfGroupEndsGroup: an END_OF_GROUP arriving as a
+// duplicate of a Normal Object (§9.1: existing to not existing) still ends the
+// Group, so an Object past it makes the track malformed (§2.4.2).
+func TestRelay_DuplicateEndOfGroupEndsGroup(t *testing.T) {
+	t.Parallel()
+	pubA, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	pubB := dialAnotherClient(t, pubA)
+	publishVideoTrack(t, pubA, "cam1", 1)
+	publishVideoTrack(t, pubB, "cam1", 2)
+	subSess := dialAnotherClient(t, pubA)
+	subReq := subscribeCam1(t, subSess)
+	received := make(chan got, 8)
+	go receiveDatagrams(t.Context(), subSess, received)
+
+	send := func(sess *session.Session, alias uint64, d *message.ObjectDatagram) {
+		t.Helper()
+		d.TrackAlias, d.GroupID = alias, 1
+		d.Type |= message.DatagramDefaultPriorityBit
+		if err := sess.SendDatagram(d); err != nil {
+			t.Fatalf("SendDatagram: %v", err)
+		}
+	}
+	send(pubA, 1, &message.ObjectDatagram{ObjectID: 2, ObjectPayload: []byte("x")})
+	select {
+	case <-received: // forwarded, so cached
+	case <-time.After(2 * time.Second):
+		t.Fatal("Object 2 not forwarded")
+	}
+	send(pubB, 2, &message.ObjectDatagram{
+		Type: message.DatagramStatusBit, ObjectID: 2, ObjectStatus: message.ObjectStatusEndOfGroup,
+	})
+	send(pubB, 2, &message.ObjectDatagram{ObjectID: 3, ObjectPayload: []byte("x")})
+	if pd := awaitPublishDone(t, subReq); pd.StatusCode != moqt.PublishDoneMalformedTrack {
+		t.Fatalf("PUBLISH_DONE %#x, want MALFORMED_TRACK", uint64(pd.StatusCode))
+	}
+}

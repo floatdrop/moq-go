@@ -79,6 +79,46 @@ func sendGapObjects(t *testing.T, pubSess *session.Session, alias uint64, objs [
 	}
 }
 
+// testStream is a subgroup stream for [sendStreams]: its Objects, each with a
+// Status, and whether it ends with a FIN or stays open.
+type testStream struct {
+	group, subgroup uint64
+	priority        uint8 // inline when set
+	endOfGroup      bool  // the header's END_OF_GROUP bit
+	objects         []uint64
+	status          uint64 // of the last Object
+	open            bool
+}
+
+// sendStreams sends each of streams from pubSess on alias. The relay may read
+// them in either order; each case using it is malformed in both.
+func sendStreams(t *testing.T, pubSess *session.Session, alias uint64, streams []testStream) {
+	t.Helper()
+	for _, s := range streams {
+		sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+			SubgroupIDMode: message.SubgroupIDExplicit, TrackAlias: alias, GroupID: s.group,
+			SubgroupID: s.subgroup, InlinePriority: s.priority != 0, PublisherPriority: s.priority,
+			EndOfGroup: s.endOfGroup,
+		})
+		if err != nil {
+			t.Errorf("OpenSubgroup: %v", err)
+			return
+		}
+		for i, id := range s.objects {
+			o := &message.SubgroupObject{Payload: []byte("x")}
+			if i == len(s.objects)-1 && s.status != 0 {
+				o = &message.SubgroupObject{ObjectStatus: s.status}
+			}
+			_ = sg.WriteObjectAt(id, o)
+		}
+		if s.open {
+			t.Cleanup(func() { _ = sg.Close() })
+			continue
+		}
+		_ = sg.Close()
+	}
+}
+
 // priorGap is Object Properties carrying a Prior Group or Object ID Gap.
 func priorGap(typ message.PropertyType, n uint64) []byte {
 	return message.AppendTrackProperties([]wire.KVPair{{Type: typ, IntVal: n}})
@@ -122,6 +162,50 @@ func TestRelay_MalformedObjectEndsTrack(t *testing.T) {
 			sendGapObjects(t, pubSess, alias, []gapObject{
 				{5, 0, 0, priorGap(message.PropertyPriorGroupIDGap, 2)},
 				{5, 1, 1, priorGap(message.PropertyPriorGroupIDGap, 1)},
+			})
+		}},
+		// §2.4.2 item 1: a Subgroup's Publisher Priority changes.
+		{"priority changes in a Subgroup", func(t *testing.T, pubSess *session.Session, alias uint64) {
+			sendStreams(t, pubSess, alias, []testStream{
+				{group: 1, priority: 1, objects: []uint64{0}, open: true},
+				{group: 1, priority: 2, objects: []uint64{1}, open: true},
+			})
+		}},
+		// §2.4.2 item 2: an Object past the last one before a Subgroup's FIN.
+		{"Object past a Subgroup's FIN", func(t *testing.T, pubSess *session.Session, alias uint64) {
+			sendStreams(t, pubSess, alias, []testStream{
+				{group: 1, objects: []uint64{0, 1}},
+				{group: 1, objects: []uint64{2}, open: true},
+			})
+		}},
+		// §2.4.2 item 4: an Object past an END_OF_GROUP.
+		{"Object past END_OF_GROUP", func(t *testing.T, pubSess *session.Session, alias uint64) {
+			sendStreams(t, pubSess, alias, []testStream{
+				{group: 1, objects: []uint64{2}, status: message.ObjectStatusEndOfGroup},
+				{group: 1, subgroup: 1, objects: []uint64{3}, open: true},
+			})
+		}},
+		{"Object past an END_OF_GROUP Subgroup's FIN", func(t *testing.T, pubSess *session.Session, alias uint64) {
+			sendStreams(t, pubSess, alias, []testStream{
+				{group: 1, endOfGroup: true, objects: []uint64{0, 1}},
+				{group: 1, subgroup: 1, objects: []uint64{2}, open: true},
+			})
+		}},
+		{"datagram past a datagram's END_OF_GROUP", func(t *testing.T, pubSess *session.Session, alias uint64) {
+			for _, d := range []*message.ObjectDatagram{
+				{Type: message.DatagramEndOfGroupBit, TrackAlias: alias, GroupID: 1, ObjectID: 2, ObjectPayload: []byte("x")},
+				{TrackAlias: alias, GroupID: 1, ObjectID: 3, ObjectPayload: []byte("x")},
+			} {
+				if err := pubSess.SendDatagram(d); err != nil {
+					t.Errorf("SendDatagram: %v", err)
+				}
+			}
+		}},
+		// §2.4.2 item 5: an Object past the END_OF_TRACK.
+		{"Object past END_OF_TRACK", func(t *testing.T, pubSess *session.Session, alias uint64) {
+			sendStreams(t, pubSess, alias, []testStream{
+				{group: 1, objects: []uint64{2}, status: message.ObjectStatusEndOfTrack},
+				{group: 2, objects: []uint64{0}, open: true},
 			})
 		}},
 		{"datagrams with different group gaps in a Group", func(t *testing.T, pubSess *session.Session, alias uint64) {
@@ -457,5 +541,48 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps, objProps []byte) {
 			obj.GroupID, obj.ObjectID)
 	case errors.Is(err, io.EOF):
 		t.Fatal("the FETCH stream completed; want it reset over what the upstream sent")
+	}
+}
+
+// TestRelay_EndSignalsAgree: an END_OF_GROUP status at 2 and a FIN after Object
+// 1 on a stream with END_OF_GROUP set end the Group at the same place
+// (§11.2.1.1, §11.4.2, §9.1), so the track goes on.
+func TestRelay_EndSignalsAgree(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	publishVideoTrack(t, pubSess, "cam1", 7)
+	subSess := dialAnotherClient(t, pubSess)
+	subscribeCam1(t, subSess)
+	events := make(chan objEvent, 16)
+	go readSubgroups(t.Context(), subSess, events)
+
+	sendStreams(t, pubSess, 7, []testStream{
+		{group: 1, endOfGroup: true, objects: []uint64{0, 1}},
+		{group: 1, subgroup: 1, objects: []uint64{2}, status: message.ObjectStatusEndOfGroup},
+	})
+	// Both downstream streams FIN only after the relay recorded both ends.
+	for fins := 0; fins < 2; {
+		select {
+		case ev := <-events:
+			if ev.err == nil {
+				continue
+			}
+			if !errors.Is(ev.err, io.EOF) {
+				t.Fatalf("a downstream stream ended with %v, want a FIN", ev.err)
+			}
+			fins++
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%d/2 downstream streams FIN'd", fins)
+		}
+	}
+	sendStreams(t, pubSess, 7, []testStream{{group: 2, objects: []uint64{0}, open: true}})
+	select {
+	case ev := <-events:
+		if ev.err != nil || ev.absID != 0 {
+			t.Fatalf("got %+v, want Object 0 of Group 2: the track ended", ev)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Group 2 not forwarded: the track ended")
 	}
 }

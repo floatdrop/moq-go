@@ -364,15 +364,8 @@ func TestFanout_MultiPublisher_MergesDisjointObjects(t *testing.T) {
 			t.Fatalf("B WriteObjectAt %d: %v", id, err)
 		}
 	}
-	if err := aSg.Close(); err != nil {
-		t.Fatalf("A Close: %v", err)
-	}
-	if err := bSg.Close(); err != nil {
-		t.Fatalf("B Close: %v", err)
-	}
-
-	// Collect every delivered object until the merged stream(s) finish. Six
-	// distinct objects must arrive, each exactly once.
+	// Collect every delivered object. Six distinct objects must arrive, each
+	// exactly once.
 	seen := map[uint64]int{}
 	deadline := time.After(3 * time.Second)
 	for len(seen) < 6 {
@@ -395,6 +388,14 @@ func TestFanout_MultiPublisher_MergesDisjointObjects(t *testing.T) {
 		if seen[id] != 1 {
 			t.Fatalf("object %d missing from delivered set %v", id, slices.Sorted(maps.Keys(seen)))
 		}
+	}
+
+	// A ends with a reset: a FIN would make its last Object, 4, the
+	// Subgroup's final one, and B's 5 past it would make the track malformed
+	// (§2.4.2).
+	aSg.Cancel(moqt.StreamResetCancelled)
+	if err := bSg.Close(); err != nil {
+		t.Fatalf("B Close: %v", err)
 	}
 }
 

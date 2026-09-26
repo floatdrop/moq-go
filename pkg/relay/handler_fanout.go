@@ -297,6 +297,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 
 	var (
 		firstObj = true
+		// last is the last Object read, which a FIN ends the Subgroup after.
+		last *message.SubgroupObject
 		// pos counts every Object read, dedup losers included: each is an
 		// Object between its neighbours (§11.4.3).
 		pos = inboundPos{src: stream}
@@ -320,25 +322,10 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			obj, err = stream.ReadObject()
 		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return // clean end of stream — last contributor will FIN.
-			}
-			if errors.Is(err, context.Canceled) {
-				// The session is going away: reset, never FIN.
-				inboundReset = true
-				return
-			}
-			if errors.Is(err, session.ErrMalformedTrack) {
-				malformed(err)
-				return
-			}
-			h.log.LogAttrs(ctx, slog.LevelDebug, "fanout: inbound ReadObject failed",
-				slog.String("err", err.Error()))
-			// An unparseable object leaves the publisher writing; stop it.
-			stream.Cancel(moqt.StreamResetInternalError)
-			inboundReset = true
+			inboundReset, inboundResetCode = h.inboundEnded(ctx, entry, stream, hdr, last, err)
 			return
 		}
+		last = obj
 
 		if terminalSeen {
 			h.log.LogAttrs(ctx, slog.LevelDebug,
@@ -360,7 +347,15 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// §9.3: the first upstream to deliver {GroupID, ObjectID} forwards it,
 		// unless an announced gap says it does not exist (§2.1, §9.1). Outside
 		// sg.Mu, so dedup losers never touch the writer set.
-		fresh, err := entry.ClaimDelivered(hdr.GroupID, objectID, message.ObjectPriorGaps(obj.Properties))
+		info := registry.ObjectInfo{
+			Group:    hdr.GroupID,
+			Object:   objectID,
+			Subgroup: hdr.SubgroupID,
+			Priority: hdr.PublisherPriority,
+			Status:   obj.ObjectStatus,
+			Gaps:     message.ObjectPriorGaps(obj.Properties),
+		}
+		fresh, err := entry.ClaimDelivered(info)
 		if err != nil {
 			malformed(err)
 			return
@@ -376,6 +371,10 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 				Properties:        obj.Properties,
 				Payload:           obj.Payload,
 			}); err != nil {
+				malformed(err)
+				return
+			}
+			if err := entry.RecordDuplicate(info); err != nil {
 				malformed(err)
 				return
 			}
@@ -435,6 +434,50 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		}
 		sg.Mu.Unlock()
 	}
+}
+
+// inboundEnded handles err, which ended the reads of stream (whose header is
+// hdr, and whose last Object read was last, nil if none), and reports whether
+// the stream counts as reset, and with which code, for the Subgroup's FIN
+// (§9.3).
+func (h *sessionHandler) inboundEnded(
+	ctx context.Context,
+	entry *registry.TrackEntry,
+	stream *session.IncomingSubgroupStream,
+	hdr message.SubgroupHeader,
+	last *message.SubgroupObject,
+	err error,
+) (reset bool, code moqt.StreamResetCode) {
+	switch {
+	case errors.Is(err, io.EOF):
+		// Clean end of stream; the last contributor will FIN. It ends the
+		// Subgroup after the last Object read (§2.4.2).
+		if last == nil {
+			return false, 0
+		}
+		err = entry.SubgroupEnded(registry.ObjectInfo{
+			Group:    hdr.GroupID,
+			Object:   stream.ObjectID(),
+			Subgroup: hdr.SubgroupID,
+			Priority: hdr.PublisherPriority,
+			Status:   last.ObjectStatus,
+		}, hdr.EndOfGroup)
+		if err == nil {
+			return false, 0
+		}
+	case errors.Is(err, context.Canceled):
+		// The session is going away: reset, never FIN.
+		return true, moqt.StreamResetCancelled
+	case !errors.Is(err, session.ErrMalformedTrack):
+		h.log.LogAttrs(ctx, slog.LevelDebug, "fanout: inbound ReadObject failed",
+			slog.String("err", err.Error()))
+		// An unparseable object leaves the publisher writing; stop it.
+		stream.Cancel(moqt.StreamResetInternalError)
+		return true, moqt.StreamResetCancelled
+	}
+	stream.Cancel(moqt.StreamResetMalformedTrack)
+	h.endMalformedTrack(ctx, entry, h.sess, err)
+	return true, moqt.StreamResetMalformedTrack
 }
 
 // openWriterForSub starts a subgroupWriter for sub and records it in writers
