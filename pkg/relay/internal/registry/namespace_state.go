@@ -175,12 +175,32 @@ func (e *SubscriberEntry) Finish(m message.Message) {
 
 func (e *SubscriberEntry) enqueue(m message.Message) { e.push(m, false) }
 
+// maxQueuedMessages bounds how many messages a namespace subscription may have
+// waiting to be sent. §10.19: "If the publisher is unable to send NAMESPACE or
+// NAMESPACE_DONE messages in a timely manner because the SUBSCRIBE_NAMESPACE
+// response stream is blocked by flow control, the publisher MAY reset the
+// SUBSCRIBE_NAMESPACE response stream." A queue this long means the subscriber
+// stopped reading; the same bound holds a SUBSCRIBE_TRACKS stream's
+// PUBLISH_SKIPPEDs.
+const maxQueuedMessages = 1024
+
 // push appends m, then the finish marker (a nil message) when last. Nothing
-// is queued once the request is finishing or its stream failed.
+// is queued once the request is finishing or its stream failed. A push that
+// would exceed maxQueuedMessages resets the stream with EXCESSIVE_LOAD instead
+// — both halves, which also unblocks a writer stuck in a flow-controlled
+// write, and ends the request's reader so the owner unregisters e.
 func (e *SubscriberEntry) push(m message.Message, last bool) {
 	e.outMu.Lock()
 	if e.stopped {
 		e.outMu.Unlock()
+		return
+	}
+	if len(e.outbox) >= maxQueuedMessages {
+		e.stopped = true
+		e.outbox = nil
+		e.outMu.Unlock()
+		e.Stream.CancelWrite(uint64(moqt.StreamResetExcessiveLoad))
+		e.Stream.CancelRead(uint64(moqt.StreamResetExcessiveLoad))
 		return
 	}
 	e.outbox = append(e.outbox, m)

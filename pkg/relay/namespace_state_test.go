@@ -3,6 +3,8 @@ package relay_test
 import (
 	"context"
 	"errors"
+	"io"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -490,4 +492,52 @@ func TestNamespace_RestartedWatchChangesOnlyWhatChanged(t *testing.T) {
 		delete(want, desc)
 	}
 	requireQuiet(t, msgs, "cam is still advertised")
+}
+
+// TestNamespace_BlockedSubscriberReset: §10.19 "If the publisher is unable to
+// send NAMESPACE or NAMESPACE_DONE messages in a timely manner because the
+// SUBSCRIBE_NAMESPACE response stream is blocked by flow control, the
+// publisher MAY reset the SUBSCRIBE_NAMESPACE response stream." A subscriber
+// that stops reading has its stream reset once its queue reaches the bound,
+// rather than the queue growing without one.
+func TestNamespace_BlockedSubscriberReset(t *testing.T) {
+	t.Parallel()
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+	ctx := t.Context()
+	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
+	defer relayA.stop(t)
+	s, err := dialClient(
+		t,
+		relayA,
+	).SubscribeNamespace(ctx, &message.SubscribeNamespace{TrackNamespacePrefix: ns("video")})
+	if err != nil {
+		t.Fatalf("SubscribeNamespace: %v", err)
+	}
+	defer s.Close()
+
+	const advertised = 1500 // more than the relay queues for one subscriber
+	for i := range advertised {
+		if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
+			Prefix: ns("video", strconv.Itoa(i)), RelayAddr: "relay-C",
+		}); err != nil {
+			t.Fatalf("PublishNamespace: %v", err)
+		}
+	}
+	time.Sleep(200 * time.Millisecond) // the relay queues what it can
+
+	n := 0
+	for {
+		_, err := message.Parse(s.Stream)
+		if err == nil {
+			if n++; n >= advertised {
+				t.Fatalf("all %d NAMESPACEs were delivered to a subscriber that was not reading", n)
+			}
+			continue
+		}
+		if errors.Is(err, io.EOF) {
+			t.Fatalf("stream FINed after %d messages; want it reset", n)
+		}
+		return
+	}
 }
