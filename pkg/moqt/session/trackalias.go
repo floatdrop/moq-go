@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 )
@@ -22,7 +23,8 @@ func (s *Session) AllocOutboundTrackAlias() uint64 {
 
 // ErrDuplicateTrackAlias is returned by [Session.RegisterInboundTrack] when the
 // peer assigns a Track Alias that is already in use for a different track
-// (§11.1). The caller MUST close the session with SessionDuplicateTrackAlias.
+// (§11.1). The session is already closed with
+// [moqt.SessionDuplicateTrackAlias].
 type ErrDuplicateTrackAlias struct {
 	Alias    uint64
 	Existing track.Key
@@ -64,20 +66,28 @@ type InboundTrack struct {
 // a shared alias carries, and a release cannot tell which registration it
 // ends, so the survivor may keep a released one's properties.
 //
-// If alias is registered for a different track, *ErrDuplicateTrackAlias is
-// returned and the caller MUST close the session with
-// SessionDuplicateTrackAlias (§11.1).
+// If alias is registered for a different track, the session is closed with
+// DUPLICATE_TRACK_ALIAS and *ErrDuplicateTrackAlias returned: "it MUST close
+// the session with error DUPLICATE_TRACK_ALIAS" (§11.1).
 func (s *Session) RegisterInboundTrack(alias uint64, key track.Key, trackProperties []byte) error {
 	in := InboundTrack{
 		Key:                      key,
 		DefaultPublisherPriority: message.TrackDefaultPublisherPriority(trackProperties),
 	}
 	in.MaxCacheDuration, in.HasMaxCacheDuration = message.TrackMaxCacheDuration(trackProperties)
+	if err := s.registerInboundTrack(alias, in); err != nil {
+		_ = s.Close(moqt.SessionDuplicateTrackAlias, err.Error())
+		return err
+	}
+	return nil
+}
+
+func (s *Session) registerInboundTrack(alias uint64, in InboundTrack) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if existing, ok := s.inboundAliases[alias]; ok {
-		if existing.Key != key {
-			return &ErrDuplicateTrackAlias{Alias: alias, Existing: existing.Key, New: key}
+		if existing.Key != in.Key {
+			return &ErrDuplicateTrackAlias{Alias: alias, Existing: existing.Key, New: in.Key}
 		}
 		s.inboundAliases[alias] = in
 		s.inboundAliasRefs[alias]++

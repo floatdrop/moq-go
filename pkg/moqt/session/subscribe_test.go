@@ -237,8 +237,8 @@ func TestSubscribe_ContextCancelUnblocksResponseWait(t *testing.T) {
 // TestRegisterInboundTrackAlias verifies the Session.RegisterInboundTrackAlias
 // method directly: same alias + same track is counted (§5.1 lets concurrent
 // subscriptions to one Track share an alias), and stays registered until each
-// registration is released; same alias + different track returns
-// *ErrDuplicateTrackAlias.
+// registration is released; same alias + different track closes the session
+// with DUPLICATE_TRACK_ALIAS and returns *ErrDuplicateTrackAlias (§11.1).
 func TestRegisterInboundTrackAlias(t *testing.T) {
 	cli, _ := openPair(t)
 
@@ -253,16 +253,6 @@ func TestRegisterInboundTrackAlias(t *testing.T) {
 	// A second registration with the same key succeeds, and is counted.
 	if err := cli.RegisterInboundTrackAlias(42, keyA); err != nil {
 		t.Fatalf("second register: %v", err)
-	}
-
-	// Same alias, different track → ErrDuplicateTrackAlias.
-	err := cli.RegisterInboundTrackAlias(42, keyB)
-	var dupErr *session.ErrDuplicateTrackAlias
-	if !errors.As(err, &dupErr) {
-		t.Fatalf("register different track: error = %v (%T), want *session.ErrDuplicateTrackAlias", err, err)
-	}
-	if dupErr.Alias != 42 {
-		t.Errorf("Alias = %d, want 42", dupErr.Alias)
 	}
 
 	// Different alias, same track → fine (multiple aliases can point to the same track).
@@ -286,63 +276,74 @@ func TestRegisterInboundTrackAlias(t *testing.T) {
 
 	// Unregistering a non-existent alias is a no-op.
 	cli.UnregisterInboundTrackAlias(12345)
+
+	// Same alias, different track → DUPLICATE_TRACK_ALIAS.
+	err := cli.RegisterInboundTrackAlias(99, keyB)
+	dupErr, ok := errors.AsType[*session.ErrDuplicateTrackAlias](err)
+	if !ok {
+		t.Fatalf("register different track: error = %v (%T), want *session.ErrDuplicateTrackAlias", err, err)
+	}
+	if dupErr.Alias != 99 {
+		t.Errorf("Alias = %d, want 99", dupErr.Alias)
+	}
+	requireClosedCode(t, cli, moqt.SessionDuplicateTrackAlias)
 }
 
-// TestSubscribeDuplicateTrackAlias verifies that when the server assigns the
-// same Track Alias to two different tracks via SUBSCRIBE_OK, the second
-// Subscribe call returns *ErrDuplicateTrackAlias.
-func TestSubscribeDuplicateTrackAlias(t *testing.T) {
-	cli, srv := openPair(t)
-	ctx := t.Context()
+// TestDuplicateTrackAliasCloses: a SUBSCRIBE_OK or PUBLISH that reuses the
+// Track Alias of a different Track with an Established subscription closes the
+// session with DUPLICATE_TRACK_ALIAS (§11.1), whichever message bound it
+// first.
+func TestDuplicateTrackAliasCloses(t *testing.T) {
+	const alias = uint64(7)
+	ns := wire.TrackNamespace{[]byte("ns")}
 
-	const sharedAlias = uint64(7)
-
-	// Helper: run one subscribe round-trip.
-	doSubscribe := func(ns wire.TrackNamespace, name []byte) error {
-		var (
-			wg     sync.WaitGroup
-			srvErr error
-			cliErr error
-		)
-		wg.Go(func() {
-			r, err := srv.AcceptRequest(ctx)
-			if err != nil {
-				srvErr = err
-				return
+	// subscribe has srv answer cli's SUBSCRIBE to name with alias, and
+	// returns cli's result.
+	subscribe := func(t *testing.T, cli, srv *session.Session, name string) error {
+		t.Helper()
+		go func() {
+			if r, err := srv.AcceptRequest(t.Context()); err == nil {
+				_ = r.Reply(&message.SubscribeOK{TrackAlias: alias})
 			}
-			srvErr = r.Reply(&message.SubscribeOK{TrackAlias: sharedAlias})
-		})
-		wg.Go(func() {
-			stream, err := cli.Subscribe(ctx, &message.Subscribe{
-				Namespace: ns,
-				Name:      name,
-			})
-			if err != nil {
-				cliErr = err
-				return
-			}
-			_ = stream.Close()
-		})
-		wg.Wait()
-		if srvErr != nil {
-			t.Fatalf("server: %v", srvErr)
+		}()
+		_, err := cli.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte(name)})
+		return err
+	}
+	// publish has srv PUBLISH name to cli with alias, and returns cli's
+	// AcceptPublish result.
+	publish := func(t *testing.T, cli, srv *session.Session, name string) error {
+		t.Helper()
+		go func() {
+			_, _ = srv.Publish(t.Context(), &message.Publish{Namespace: ns, Name: []byte(name), TrackAlias: alias})
+		}()
+		r, err := cli.AcceptRequest(t.Context())
+		if err != nil {
+			return err
 		}
-		return cliErr
+		_, err = r.AcceptPublish()
+		return err
 	}
 
-	// First subscribe: alias 7 → (ns, "trackA"). Should succeed.
-	if err := doSubscribe(wire.TrackNamespace{[]byte("ns")}, []byte("trackA")); err != nil {
-		t.Fatalf("first Subscribe: %v", err)
-	}
-
-	// Second subscribe: alias 7 → (ns, "trackB"). Should fail with ErrDuplicateTrackAlias.
-	err := doSubscribe(wire.TrackNamespace{[]byte("ns")}, []byte("trackB"))
-	var dupErr *session.ErrDuplicateTrackAlias
-	if !errors.As(err, &dupErr) {
-		t.Fatalf("second Subscribe: error = %v (%T), want *session.ErrDuplicateTrackAlias", err, err)
-	}
-	if dupErr.Alias != sharedAlias {
-		t.Errorf("Alias = %d, want %d", dupErr.Alias, sharedAlias)
+	for _, tc := range []struct {
+		name          string
+		first, second func(t *testing.T, cli, srv *session.Session, name string) error
+	}{
+		{"SUBSCRIBE_OK after SUBSCRIBE_OK", subscribe, subscribe},
+		{"PUBLISH after PUBLISH", publish, publish},
+		{"PUBLISH after SUBSCRIBE_OK", subscribe, publish},
+		{"SUBSCRIBE_OK after PUBLISH", publish, subscribe},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli, srv := openPair(t)
+			if err := tc.first(t, cli, srv, "trackA"); err != nil {
+				t.Fatalf("first: %v", err)
+			}
+			err := tc.second(t, cli, srv, "trackB")
+			if dupErr, ok := errors.AsType[*session.ErrDuplicateTrackAlias](err); !ok || dupErr.Alias != alias {
+				t.Fatalf("second: error = %v (%T), want *session.ErrDuplicateTrackAlias for %d", err, err, alias)
+			}
+			requireClosedCode(t, cli, moqt.SessionDuplicateTrackAlias)
+		})
 	}
 }
 

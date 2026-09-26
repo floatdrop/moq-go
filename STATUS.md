@@ -211,7 +211,7 @@ By package, bottom-up along the dependency stack:
 
 | §        | Feature                              | Status  | Notes |
 |----------|--------------------------------------|---------|-------|
-| 11.1     | Track alias                          | DONE    | In subgroup header + datagram; validated. |
+| 11.1     | Track alias                          | DONE    | In subgroup header + datagram; validated. A SUBSCRIBE_OK or PUBLISH reusing the alias of a different registered Track closes the session with DUPLICATE_TRACK_ALIAS (`Session.RegisterInboundTrack`). |
 | 11.2     | Objects / object header              | DONE    | All header fields encoded. |
 | 11.2.1.1 | Object status                        | DONE    | Normal / EndOfGroup / EndOfTrack. |
 | 11.2.1.2 | Object properties                    | DONE    | Length-prefixed KV pairs. |
@@ -518,10 +518,10 @@ already listed as Limitations above are not repeated here.
 
 Session layer:
 
-- DUPLICATE_TRACK_ALIAS never closes the session: the relay answers REQUEST_ERROR
-  MALFORMED_TRACK, `Session.Subscribe` and `AcceptPublish` return an error (§11.1).
-  A session-layer subscriber also never releases an alias when its subscription
-  ends.
+- A session-layer `Subscription` or `IncomingPublication` never releases its
+  Track Alias when it ends, so a publisher reusing it for another Track after
+  that closes the session with DUPLICATE_TRACK_ALIAS, which §11.1 reserves for
+  an alias of "a different Track with an Established subscription".
 - A GOAWAY on a request stream is ignored: a second one, or one carrying a New
   Session URI sent to a server, does not close the session (§10.4).
 - A REQUEST_ERROR Redirect is dropped after parsing: a server receiving a Connect

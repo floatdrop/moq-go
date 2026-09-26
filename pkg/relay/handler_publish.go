@@ -7,7 +7,6 @@ import (
 	"slices"
 	"sync/atomic"
 
-	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
@@ -61,15 +60,13 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	_, createdEntry := h.tracks.GetOrCreateNew(fullName)
 
 	// §11.1: register the publisher's chosen alias so the fanout path can map
-	// it back to the track and duplicates are detected. A duplicate alias is a
-	// session-level error per spec, but we scope the failure to this request.
+	// it back to the track. A duplicate closed the session.
 	if err := h.sess.RegisterInboundTrack(msg.TrackAlias, fullName.Key(), msg.TrackProperties); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH alias registration failed",
 			slog.String("err", err.Error()))
 		if createdEntry {
 			h.tracks.DeleteIfUnused(fullName)
 		}
-		_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
 		return
 	}
 	if hook := testHookAfterAliasRegistered.Load(); hook != nil {
