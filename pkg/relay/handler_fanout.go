@@ -189,7 +189,7 @@ func (h *sessionHandler) resolveInboundTrack(
 // §9.3: inbound streams carrying the same (GroupID, SubgroupID) share one
 // outbound writer per subscriber (§2.2: a Subgroup is not split across
 // streams), and [registry.TrackEntry.ClaimDelivered] drops duplicate objects
-// (§2.1). Each writer is a [subgroupWriter] goroutine behind a bounded queue.
+// (§9.3) and ones an announced gap says do not exist (§2.1, §9.1). Each writer is a [subgroupWriter] goroutine behind a bounded queue.
 // The inbound FIN-vs-reset reaches the outbound streams only when the last
 // contributor leaves.
 func (h *sessionHandler) runFanout(ctx context.Context, stream *session.IncomingSubgroupStream) {
@@ -305,6 +305,13 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// §2.4.2).
 		terminalSeen bool
 	)
+	// malformed ends the track for an Object read from stream (§2.4.2); the
+	// Object is neither cached nor forwarded.
+	malformed := func(err error) {
+		stream.Cancel(moqt.StreamResetMalformedTrack)
+		inboundReset, inboundResetCode = true, moqt.StreamResetMalformedTrack
+		h.endMalformedTrack(ctx, entry, h.sess, err)
+	}
 
 	for {
 		obj, err := pending, error(nil)
@@ -322,10 +329,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 				return
 			}
 			if errors.Is(err, session.ErrMalformedTrack) {
-				stream.Cancel(moqt.StreamResetMalformedTrack)
-				inboundReset = true
-				inboundResetCode = moqt.StreamResetMalformedTrack
-				h.endMalformedTrack(ctx, entry, h.sess, err)
+				malformed(err)
 				return
 			}
 			h.log.LogAttrs(ctx, slog.LevelDebug, "fanout: inbound ReadObject failed",
@@ -340,11 +344,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			h.log.LogAttrs(ctx, slog.LevelDebug,
 				"fanout: object after EndOfGroup/EndOfTrack — malformed track",
 				slog.Uint64("group", hdr.GroupID), slog.Uint64("subgroup", hdr.SubgroupID))
-			stream.Cancel(moqt.StreamResetMalformedTrack)
-			inboundReset = true
-			inboundResetCode = moqt.StreamResetMalformedTrack
-			h.endMalformedTrack(ctx, entry, h.sess,
-				fmt.Errorf("object after END_OF_GROUP / END_OF_TRACK in Group %d", hdr.GroupID))
+			malformed(fmt.Errorf("object after END_OF_GROUP / END_OF_TRACK in Group %d", hdr.GroupID))
 			return
 		}
 
@@ -356,9 +356,15 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// Tracked whether or not this copy wins the dedup claim below.
 		terminal := obj.IsTerminal()
 
-		// §2.1: the first upstream to deliver {GroupID, ObjectID} forwards it.
-		// Outside sg.Mu, so dedup losers never touch the writer set.
-		if !entry.ClaimDelivered(hdr.GroupID, objectID) {
+		// §9.3: the first upstream to deliver {GroupID, ObjectID} forwards it,
+		// unless an announced gap says it does not exist (§2.1, §9.1). Outside
+		// sg.Mu, so dedup losers never touch the writer set.
+		fresh, err := entry.ClaimDelivered(hdr.GroupID, objectID, message.ObjectPriorGaps(obj.Properties))
+		if err != nil {
+			malformed(err)
+			return
+		}
+		if !fresh {
 			if terminal {
 				terminalSeen = true
 			}
@@ -929,9 +935,8 @@ func (w *subgroupWriter) reopenCause(
 // stream; or its Prior Object ID Gap (§12.9) says the IDs between do not
 // exist. Knowing from the cache or the subscriber's filters that they are in
 // other Subgroups or filtered out is not used (a choice). A gap that also
-// covers prevID is not trusted. It is a §12.9 malformed-track condition, but
-// like the others that need earlier Objects it is not detected (see
-// [message.CheckObjectProperties]); the Object just goes on a new stream.
+// covers prevID says prevID no longer exists (§2.1), which shows nothing about
+// the order.
 func isNextObject(fwd fwdObject, prevID uint64, dropped bool) bool {
 	if fwd.absID == prevID+1 {
 		return true

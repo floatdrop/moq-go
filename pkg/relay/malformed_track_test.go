@@ -11,6 +11,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -49,6 +50,40 @@ func requireUpstreamCancelled(t *testing.T, pub *session.Publication) {
 	}
 }
 
+// gapObject is an Object for [sendGapObjects].
+type gapObject struct {
+	group, subgroup, object uint64
+	props                   []byte
+}
+
+// sendGapObjects sends each of objs on its own subgroup stream. The relay may
+// read the streams in either order; each case using it is malformed in both.
+func sendGapObjects(t *testing.T, pubSess *session.Session, alias uint64, objs []gapObject) {
+	t.Helper()
+	for _, o := range objs {
+		sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
+			SubgroupIDMode: message.SubgroupIDExplicit, TrackAlias: alias,
+			GroupID: o.group, SubgroupID: o.subgroup, Properties: true,
+		})
+		if err != nil {
+			t.Errorf("OpenSubgroup: %v", err)
+			return
+		}
+		if err := sg.WriteObjectAt(
+			o.object,
+			&message.SubgroupObject{Properties: o.props, Payload: []byte("x")},
+		); err != nil {
+			t.Errorf("WriteObjectAt: %v", err)
+		}
+		_ = sg.Close()
+	}
+}
+
+// priorGap is Object Properties carrying a Prior Group or Object ID Gap.
+func priorGap(typ message.PropertyType, n uint64) []byte {
+	return message.AppendTrackProperties([]wire.KVPair{{Type: typ, IntVal: n}})
+}
+
 // TestRelay_MalformedObjectEndsTrack: each kind of malformed Object ends the
 // downstream subscription with MALFORMED_TRACK and cancels the upstream one
 // (§2.4.2).
@@ -81,6 +116,23 @@ func TestRelay_MalformedObjectEndsTrack(t *testing.T) {
 			_ = sg.WriteObject(&message.SubgroupObject{ObjectStatus: message.ObjectStatusEndOfGroup})
 			_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte("x")})
 			_ = sg.Close()
+		}},
+		// §12.8: two Prior Group ID Gap values in one Group.
+		{"different group gaps in a Group", func(t *testing.T, pubSess *session.Session, alias uint64) {
+			sendGapObjects(t, pubSess, alias, []gapObject{
+				{5, 0, 0, priorGap(message.PropertyPriorGroupIDGap, 2)},
+				{5, 1, 1, priorGap(message.PropertyPriorGroupIDGap, 1)},
+			})
+		}},
+		{"datagrams with different group gaps in a Group", func(t *testing.T, pubSess *session.Session, alias uint64) {
+			for i, gap := range []uint64{2, 1} {
+				if err := pubSess.SendDatagram(&message.ObjectDatagram{
+					Type: message.DatagramPropertiesBit, TrackAlias: alias, GroupID: 5, ObjectID: uint64(i),
+					Properties: priorGap(message.PropertyPriorGroupIDGap, gap), ObjectPayload: []byte("x"),
+				}); err != nil {
+					t.Errorf("SendDatagram: %v", err)
+				}
+			}
 		}},
 		{"datagram Object Properties", func(t *testing.T, pubSess *session.Session, alias uint64) {
 			if err := pubSess.SendDatagram(&message.ObjectDatagram{

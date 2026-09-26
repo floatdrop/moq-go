@@ -217,8 +217,8 @@ func TestFanout_NextObject_AcrossUpstreams(t *testing.T) {
 		{"no gap property", nil, [][]uint64{{0}, {3}}},
 		{"gap short of the previous Object", priorObjectIDGap(1), [][]uint64{{0}, {3}}},
 		{"gap reaching the previous Object", priorObjectIDGap(2), [][]uint64{{0, 3}}},
-		// A gap covering an Object received before is not trusted. §12.9
-		// makes that a malformed track, which the relay does not detect.
+		// A gap covering an Object already sent says it no longer exists
+		// (§2.1), which shows nothing about the order.
 		{"gap covering the previous Object", priorObjectIDGap(3), [][]uint64{{0}, {3}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
