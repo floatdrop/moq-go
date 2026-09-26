@@ -17,10 +17,12 @@ import (
 func newWedgeableWriter(t *testing.T, cli *session.Session) *subgroupWriter {
 	t.Helper()
 	ioCtx, cancelIO := context.WithCancel(t.Context())
+	sub := registry.NewDownstreamSub(1, cli, nil, 42)
 	return &subgroupWriter{
-		sub:      registry.NewDownstreamSub(1, cli, nil, 42),
-		ctx:      ioCtx,
-		cancelIO: cancelIO,
+		sub:        sub,
+		ctx:        ioCtx,
+		cancelIO:   cancelIO,
+		unwatchSub: context.AfterFunc(sub.Cancelled(), cancelIO),
 		hdr: message.SubgroupHeader{
 			SubgroupIDMode: message.SubgroupIDImplicitZero,
 			TrackAlias:     42,

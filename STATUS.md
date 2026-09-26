@@ -108,9 +108,9 @@ By package, bottom-up along the dependency stack:
 | §       | Feature                          | Status | Notes |
 |---------|----------------------------------|--------|-------|
 | 5.1     | Subscriptions                    | DONE   | Subscribe/Publish/OK/Error state machine in `pubsub.go`. |
-| 5.1.1   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. |
+| 5.1.1   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. The relay resets a cancelled subscription's open subgroup and fill streams. |
 | 5.1.2   | Location filters                 | DONE   | Every start/end form (unfiltered, Next Object, relative and absolute start, absolute range) + `Matches`. |
-| 5.1.3   | Fill semantics                   | PARTIAL | Fill fetch streams from FILL_PARAMETERS on SUBSCRIBE / REQUEST_UPDATE (`handler_fill.go`), and on SUBSCRIBE_TRACKS, one per forwarded PUBLISH's subscription, keyed to the PUBLISH's Request ID (§10.1). A fill inherits the subscription's Range Filters; the ones inside FILL_PARAMETERS override per type. Not done: scheduling fills against their subscription (§7.2, see Limitations) and resetting open fills when the subscription is cancelled (§5.1.3.1). |
+| 5.1.3   | Fill semantics                   | PARTIAL | Fill fetch streams from FILL_PARAMETERS on SUBSCRIBE / REQUEST_UPDATE (`handler_fill.go`), and on SUBSCRIBE_TRACKS, one per forwarded PUBLISH's subscription, keyed to the PUBLISH's Request ID (§10.1). A fill inherits the subscription's Range Filters; the ones inside FILL_PARAMETERS override per type. A cancelled subscription's open fills are reset (§5.1.3.1). Not done: scheduling fills against their subscription (§7.2, see Limitations). |
 | 5.1.4   | Range filters                    | DONE    | Object filters (SUBGROUP/OBJECTID/PRIORITY/OBJECT_PROPERTY) enforced on SUBSCRIBE fanout, datagrams, and FETCH; TRACK_PROPERTY_FILTER gates PUBLISH forwarding on SUBSCRIBE_TRACKS; `MAX_FILTER_RANGES`/`INVALID_FILTER` gating in place. Object filters on a SUBSCRIBE_TRACKS apply to the subscriptions its forwarded PUBLISHes open. A zero-length filter is no filter; a subscription REQUEST_UPDATE replaces (or, zero-length, removes) the filter types it names and keeps the others. |
 | 5.1.5   | Combining filters                | DONE    | `ForwardDecision` ANDs Forward + Location + Range filters per object (§5.1.5); Range filters combine SetIDs via AND/OR. |
 | 5.1.6   | Joining an ongoing track         | DONE   | A Location Filter plus FILL_PARAMETERS, served as a fill fetch stream (draft-20 removed the Joining FETCH). |
@@ -506,9 +506,6 @@ High:
   a reset subgroup stream or a subgroup still in flight leaves such holes. §10.13:
   a relay that meets an uncached Object of unknown status "MUST pause subsequent
   delivery until it has confirmed the object's status upstream".
-- A subscriber's cancellation does not reset the subscription's open subgroup
-  streams or fill fetch streams: the relay keeps forwarding, then FINs (§5.1.1:
-  "MUST reset any open streams associated with the SUBSCRIBE"; §5.1.3.1).
 - A fill stream on a subscription that omits GROUP_ORDER is written Ascending,
   ignoring DEFAULT_PUBLISHER_GROUP_ORDER (§10.2.8, §10.2.15, §12.5). A subscriber
   decoding it Descending gets wrong Group IDs (§11.4.4.1).

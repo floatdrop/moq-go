@@ -96,6 +96,9 @@ func (h *sessionHandler) serveForwardedPublish(
 	ref := h.trackRef(fullName)
 	h.metrics.SubscriptionOpened(ref)
 	defer h.metrics.SubscriptionClosed(ref)
+	// §5.1.1: once the subscriber cancels, or the session ends, reset the
+	// streams still open for it.
+	defer sub.Cancel()
 	// §9.2: a forwarding subscriber resumes a paused upstream.
 	if sub.ForwardState() == 1 {
 		h.propagateForwardUpstream(ctx, fullName)
