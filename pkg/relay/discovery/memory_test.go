@@ -15,6 +15,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
 
+// ns builds a namespace from string fields.
 func ns(parts ...string) wire.TrackNamespace {
 	out := make(wire.TrackNamespace, len(parts))
 	for i, p := range parts {
@@ -23,6 +24,7 @@ func ns(parts ...string) wire.TrackNamespace {
 	return out
 }
 
+// newKey builds a track key from namespace fields and a name.
 func newKey(parts []string, name string) track.Key {
 	return track.NewKey(ns(parts...), []byte(name))
 }
@@ -253,7 +255,7 @@ func TestMemoryStore_WatchTracksReceivesEvents(t *testing.T) {
 	_ = s.PublishTrack(ctx, discovery.TrackInfo{Key: key, RelayAddr: "relay-A"})
 	_ = s.UnpublishTrack(ctx, key, "relay-A")
 
-	first, ok := receiveTrack(ch, 2*time.Second)
+	first, ok := receive(ch, 2*time.Second)
 	if !ok {
 		t.Fatal("did not receive publish event")
 	}
@@ -264,7 +266,7 @@ func TestMemoryStore_WatchTracksReceivesEvents(t *testing.T) {
 		t.Errorf("first event RelayAddr = %q, want relay-A", first.Info.RelayAddr)
 	}
 
-	second, ok := receiveTrack(ch, 2*time.Second)
+	second, ok := receive(ch, 2*time.Second)
 	if !ok {
 		t.Fatal("did not receive unpublish event")
 	}
@@ -361,14 +363,14 @@ func TestMemoryStore_WatchNamespacesReceivesEvents(t *testing.T) {
 	_ = s.PublishNamespace(ctx, discovery.NamespaceInfo{Prefix: ns("chat"), RelayAddr: "relay-A"})
 	_ = s.UnpublishNamespace(ctx, ns("chat"), "relay-A")
 
-	first, ok := receiveNamespace(ch, 2*time.Second)
+	first, ok := receive(ch, 2*time.Second)
 	if !ok {
 		t.Fatal("did not receive publish event")
 	}
 	if first.Op != discovery.OpPublish {
 		t.Errorf("first Op = %v, want publish", first.Op)
 	}
-	second, ok := receiveNamespace(ch, 2*time.Second)
+	second, ok := receive(ch, 2*time.Second)
 	if !ok {
 		t.Fatal("did not receive unpublish event")
 	}
@@ -442,7 +444,7 @@ func TestMemoryStore_WatchSeedsSnapshot(t *testing.T) {
 	// Snapshot: both track advertisements, as OpPublish, in some order.
 	seen := map[string]bool{}
 	for range 2 {
-		ev, ok := receiveTrack(trackCh, 2*time.Second)
+		ev, ok := receive(trackCh, 2*time.Second)
 		if !ok {
 			t.Fatal("timed out waiting for track snapshot event")
 		}
@@ -456,7 +458,7 @@ func TestMemoryStore_WatchSeedsSnapshot(t *testing.T) {
 	}
 	requireTrackSnapshotDone(t, trackCh)
 
-	nsEv, ok := receiveNamespace(nsCh, 2*time.Second)
+	nsEv, ok := receive(nsCh, 2*time.Second)
 	if !ok {
 		t.Fatal("timed out waiting for namespace snapshot event")
 	}
@@ -470,7 +472,7 @@ func TestMemoryStore_WatchSeedsSnapshot(t *testing.T) {
 	if err := s.PublishTrack(ctx, discovery.TrackInfo{Key: key2, RelayAddr: "relay-A"}); err != nil {
 		t.Fatalf("live PublishTrack: %v", err)
 	}
-	live, ok := receiveTrack(trackCh, 2*time.Second)
+	live, ok := receive(trackCh, 2*time.Second)
 	if !ok {
 		t.Fatal("timed out waiting for live track event")
 	}
@@ -479,44 +481,35 @@ func TestMemoryStore_WatchSeedsSnapshot(t *testing.T) {
 	}
 }
 
-// requireTrackSnapshotDone reads the OpSnapshotDone that ends a watch's
-// snapshot.
+// requireTrackSnapshotDone reads the OpSnapshotDone that ends a track watch's snapshot.
 func requireTrackSnapshotDone(t *testing.T, ch <-chan discovery.TrackEvent) {
 	t.Helper()
-	if ev, ok := receiveTrack(ch, 2*time.Second); !ok || ev.Op != discovery.OpSnapshotDone {
+	if ev, ok := receive(ch, 2*time.Second); !ok || ev.Op != discovery.OpSnapshotDone {
 		t.Fatalf("got %+v (ok %v), want OpSnapshotDone", ev, ok)
 	}
 }
 
+// requireNamespaceSnapshotDone reads the OpSnapshotDone that ends a namespace watch's snapshot.
 func requireNamespaceSnapshotDone(t *testing.T, ch <-chan discovery.NamespaceEvent) {
 	t.Helper()
-	if ev, ok := receiveNamespace(ch, 2*time.Second); !ok || ev.Op != discovery.OpSnapshotDone {
+	if ev, ok := receive(ch, 2*time.Second); !ok || ev.Op != discovery.OpSnapshotDone {
 		t.Fatalf("got %+v (ok %v), want OpSnapshotDone", ev, ok)
 	}
 }
 
-func receiveTrack(ch <-chan discovery.TrackEvent, d time.Duration) (discovery.TrackEvent, bool) {
+// receive reads one event from ch; ok is false if ch closed or d elapsed.
+func receive[T any](ch <-chan T, d time.Duration) (ev T, ok bool) {
 	select {
-	case ev, ok := <-ch:
+	case ev, ok = <-ch:
 		return ev, ok
 	case <-time.After(d):
-		return discovery.TrackEvent{}, false
+		return ev, false
 	}
 }
 
-func receiveNamespace(ch <-chan discovery.NamespaceEvent, d time.Duration) (discovery.NamespaceEvent, bool) {
-	select {
-	case ev, ok := <-ch:
-		return ev, ok
-	case <-time.After(d):
-		return discovery.NamespaceEvent{}, false
-	}
-}
-
-// TestMemoryStoreWithdraw pins the [discovery.DiscoveryStore.Withdraw] contract
-// on the reference implementation: it removes only the named relay's
-// advertisements, tells watchers about each removal, and is terminal for that
-// address so a late publisher cannot re-advertise a relay that is draining.
+// TestMemoryStoreWithdraw pins [discovery.DiscoveryStore.Withdraw]: it removes
+// only the named relay's advertisements, notifies watchers of each removal, and
+// is terminal for that address.
 func TestMemoryStoreWithdraw(t *testing.T) {
 	s := discovery.NewMemoryStore()
 	defer s.Close()
@@ -604,18 +597,14 @@ func TestMemoryStoreWithdraw(t *testing.T) {
 	}
 }
 
-// TestMemoryStore_WatchMarksSnapshotEnd: a watch delivers the snapshot, then
-// one OpSnapshotDone, then live events, so a consumer that restarts a watch
-// can reconcile against the snapshot rather than start over.
+// TestMemoryStore_WatchMarksSnapshotEnd: a watch delivers the snapshot, one
+// OpSnapshotDone, then live events, even when the snapshot is empty.
 func TestMemoryStore_WatchMarksSnapshotEnd(t *testing.T) {
 	s := discovery.NewMemoryStore()
 	defer s.Close()
 	ctx := t.Context()
 	for _, a := range []string{"relay-A", "relay-B"} {
-		if err := s.PublishNamespace(
-			ctx,
-			discovery.NamespaceInfo{Prefix: wire.TrackNamespace{[]byte("x")}, RelayAddr: a},
-		); err != nil {
+		if err := s.PublishNamespace(ctx, discovery.NamespaceInfo{Prefix: ns("x"), RelayAddr: a}); err != nil {
 			t.Fatalf("PublishNamespace: %v", err)
 		}
 	}
@@ -623,15 +612,12 @@ func TestMemoryStore_WatchMarksSnapshotEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchNamespaces: %v", err)
 	}
-	if err := s.PublishNamespace(
-		ctx,
-		discovery.NamespaceInfo{Prefix: wire.TrackNamespace{[]byte("y")}, RelayAddr: "relay-C"},
-	); err != nil {
+	if err := s.PublishNamespace(ctx, discovery.NamespaceInfo{Prefix: ns("y"), RelayAddr: "relay-C"}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 	var ops []discovery.Op
 	for range 4 {
-		ev, ok := receiveNamespace(ch, 2*time.Second)
+		ev, ok := receive(ch, 2*time.Second)
 		if !ok {
 			t.Fatalf("watch ended after %v", ops)
 		}
@@ -646,19 +632,11 @@ func TestMemoryStore_WatchMarksSnapshotEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WatchTracks: %v", err)
 	}
-	select {
-	case ev := <-tracks:
-		if ev.Op != discovery.OpSnapshotDone {
-			t.Fatalf("empty track snapshot: first event %v, want OpSnapshotDone", ev.Op)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("no OpSnapshotDone on an empty track watch")
-	}
+	requireTrackSnapshotDone(t, tracks) // empty snapshot
 }
 
-// TestMemoryStore_OverflowClosesWatch: a watcher too slow for a live event is
-// not silently skipped; its channel is closed, so the consumer notices and
-// restarts the watch, reconciling from the new snapshot.
+// TestMemoryStore_OverflowClosesWatch: a watcher too slow for a live event has
+// its channel closed rather than events silently skipped.
 func TestMemoryStore_OverflowClosesWatch(t *testing.T) {
 	s := discovery.NewMemoryStore(discovery.WithWatchBufferSize(2))
 	defer s.Close()
@@ -669,7 +647,7 @@ func TestMemoryStore_OverflowClosesWatch(t *testing.T) {
 	}
 	for i := range 5 {
 		_ = s.PublishNamespace(ctx, discovery.NamespaceInfo{
-			Prefix: wire.TrackNamespace{[]byte(strconv.Itoa(i))}, RelayAddr: "relay-C",
+			Prefix: ns(strconv.Itoa(i)), RelayAddr: "relay-C",
 		})
 	}
 	n := 0
@@ -689,9 +667,8 @@ func TestMemoryStore_OverflowClosesWatch(t *testing.T) {
 	}
 }
 
-// TestMemoryStore_OverflowReleasesWatch: a watch ended on overflow leaves
-// nothing behind, even while its ctx lives on — a consumer that keeps falling
-// behind and re-watching with the same ctx must not accumulate goroutines.
+// TestMemoryStore_OverflowReleasesWatch: a watch ended on overflow releases its
+// goroutine even while its ctx lives on.
 func TestMemoryStore_OverflowReleasesWatch(t *testing.T) {
 	s := discovery.NewMemoryStore(discovery.WithWatchBufferSize(1))
 	defer s.Close()
@@ -704,7 +681,7 @@ func TestMemoryStore_OverflowReleasesWatch(t *testing.T) {
 		}
 		for j := range 3 {
 			_ = s.PublishNamespace(ctx, discovery.NamespaceInfo{
-				Prefix: wire.TrackNamespace{[]byte(strconv.Itoa(i*3 + j))}, RelayAddr: "relay-C",
+				Prefix: ns(strconv.Itoa(i*3 + j)), RelayAddr: "relay-C",
 			})
 		}
 		for range ch { //nolint:revive // drain until the overflow close
