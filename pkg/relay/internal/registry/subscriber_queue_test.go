@@ -12,7 +12,8 @@ import (
 
 // stallingStream's first Write waits for release, then succeeds whatever
 // CancelWrite said meanwhile — the window where a write completes just as the
-// queue bound resets the stream. Later writes succeed at once.
+// queue bound resets the stream. Later writes succeed at once. It models only
+// what the registry uses: its Context never ends, unlike a real stream's.
 type stallingStream struct {
 	started, release chan struct{}
 	writes           int

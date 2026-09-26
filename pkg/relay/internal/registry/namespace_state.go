@@ -184,13 +184,17 @@ func (e *SubscriberEntry) enqueue(m message.Message) { e.push(m, false) }
 // response stream." The relay counts a stream as blocked when at least
 // maxQueuedMessages are unsent and the oldest of them has waited longer than
 // maxUnsentWait — whether the subscriber stopped reading or reads too slowly
-// to keep up. A burst (seeding a subscription, a prefix update, a Discovery
-// resync) that a reading subscriber drains within maxUnsentWait does not
-// count; one it needs longer for does, on the next message queued — so a
-// subscriber on a slow link under a prefix with thousands of namespaces can be
-// reset while it is still draining the seed. The check runs when a message is queued: a stream that is stuck
-// while nothing new arrives is left alone, its queue not growing. The same
-// bound holds a SUBSCRIBE_TRACKS stream's PUBLISH_SKIPPEDs.
+// to keep up.
+//
+// A burst (seeding a subscription, a prefix update, a Discovery resync) that a
+// reading subscriber drains within maxUnsentWait does not count; one it needs
+// longer for does, on the next message queued. So a subscriber on a slow link
+// under a prefix with thousands of namespaces can be reset while it is still
+// draining the seed.
+//
+// The check runs when a message is queued: a stream that is stuck while
+// nothing new arrives is left alone, its queue not growing. The same bound
+// holds a SUBSCRIBE_TRACKS stream's PUBLISH_SKIPPEDs.
 const (
 	maxQueuedMessages = 1024
 	maxUnsentWait     = time.Second
@@ -251,7 +255,7 @@ func (e *SubscriberEntry) blockedLocked(now time.Time) bool {
 }
 
 // RunWriter sends e's queued messages in order until e is unregistered, the
-// request finishes, or a write fails. Its owner runs it once, for the
+// request finishes, a write fails, or the queue bound resets the stream. Its owner runs it once, for the
 // subscription's lifetime. It takes one message at a time, so what it has not
 // sent yet stays counted (see maxQueuedMessages). After a failed write it also
 // stops reading the stream, so the request's reader returns and the owner
@@ -304,7 +308,8 @@ func (e *SubscriberEntry) RunWriter() {
 }
 
 // WriterDone is closed once RunWriter has returned: after the FIN that
-// [SubscriberEntry.Finish] asked for, a failed write, or unregistration.
+// [SubscriberEntry.Finish] asked for, a failed write, a reset by the queue
+// bound (see maxQueuedMessages), or unregistration.
 func (e *SubscriberEntry) WriterDone() <-chan struct{} { return e.writerDone }
 
 // PublishSkipped queues a PUBLISH_SKIPPED (§10.21) for the track (ns, name) on
