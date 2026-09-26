@@ -1,13 +1,11 @@
 package relay_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -38,7 +36,7 @@ func TestRelay_InboundGoawayLeavesSessionOpen(t *testing.T) {
 			}
 			// Still usable: requests from the GOAWAY sender are answered.
 			if _, err := clientSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-				Namespace: wire.TrackNamespace{[]byte("still-here")},
+				Namespace: ns("still-here"),
 			}); err != nil {
 				t.Fatalf("PublishNamespace after GOAWAY: %v", err)
 			}
@@ -53,8 +51,8 @@ func TestRelay_NoUpstreamSubscribeToGoingAwayPublisher(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-	ns := wire.TrackNamespace{[]byte("video")}
-	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	video := ns("video")
+	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 	subscribes := make(chan *session.Request, 4)
@@ -74,7 +72,7 @@ func TestRelay_NoUpstreamSubscribeToGoingAwayPublisher(t *testing.T) {
 	time.Sleep(200 * time.Millisecond) // let the relay read the GOAWAY
 
 	subSess := dialAnotherClient(t, pubSess)
-	_, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte("cam1")})
+	_, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: []byte("cam1")})
 	select {
 	case r := <-subscribes:
 		t.Fatalf("the relay sent %s to a publisher that had sent GOAWAY", r.First.Type())
@@ -93,7 +91,7 @@ func TestRelay_NoForwardedPublishToGoingAwayHolder(t *testing.T) {
 	defer teardown()
 	holder := dialAnotherClient(t, pubSess)
 	forwarded := forwardedPublishes(t, holder)
-	subscribeTracks(t, holder, "video")
+	subscribeTracks(t, holder, ns("video"))
 	if err := holder.SendGoaway(10*time.Second, ""); err != nil {
 		t.Fatalf("SendGoaway: %v", err)
 	}
@@ -111,9 +109,9 @@ func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam1")
-	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 	fetches := make(chan *session.Request, 4)
@@ -145,7 +143,7 @@ func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 	}()
 
 	live := dialAnotherClient(t, pubSess)
-	if _, err := live.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: name}); err != nil {
+	if _, err := live.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: name}); err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	go drainAll(t.Context(), live)
@@ -155,7 +153,7 @@ func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 	fc := dialAnotherClient(t, pubSess)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		objs, served := fetchRange(t, fc, ns, name,
+		objs, served := fetchRange(t, fc, video, name,
 			message.Location{Group: stitchLiveLo}, message.Location{Group: stitchLiveHi})
 		if served && len(objs) > 0 {
 			break
@@ -174,7 +172,7 @@ func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 	if _, served := fetchStitched(
 		t,
 		fc,
-		ns,
+		video,
 		name,
 		stitchLiveHi,
 		stitchOpts{fillTimeout: 300 * time.Millisecond},
@@ -185,45 +183,5 @@ func TestRelay_NoUpstreamFetchToGoingAwayPublisher(t *testing.T) {
 	case r := <-fetches:
 		t.Fatalf("the relay sent %s to a publisher that had sent GOAWAY", r.First.Type())
 	default:
-	}
-}
-
-// fetchRange FETCHes [start, end] from the relay and returns the Objects of
-// the response, or served false when the FETCH was refused or its stream did
-// not arrive.
-func fetchRange(
-	t *testing.T,
-	sess *session.Session,
-	ns wire.TrackNamespace,
-	name []byte,
-	start, end message.Location,
-) (objs []*session.DecodedFetchObject, served bool) {
-	t.Helper()
-	fr, err := sess.Fetch(t.Context(), &message.Fetch{
-		Namespace: ns, Name: name,
-		Parameters: message.Parameters{fetchRangeFilter(start, end)},
-	})
-	if err != nil {
-		return nil, false
-	}
-	defer fr.Close()
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	ds, err := sess.AcceptDataStream(ctx)
-	if err != nil {
-		return nil, false
-	}
-	fs, ok := ds.(*session.IncomingFetchStream)
-	if !ok {
-		return nil, false
-	}
-	for {
-		o, err := fs.ReadDecoded()
-		if err != nil {
-			return objs, true
-		}
-		if !o.IsEndOfRange() {
-			objs = append(objs, o)
-		}
 	}
 }

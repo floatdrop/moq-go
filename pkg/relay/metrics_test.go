@@ -10,7 +10,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -124,11 +123,11 @@ func TestMetricsHooks(t *testing.T) {
 	defer stop()
 
 	const alias = uint64(7)
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam1")
 
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: ns, Name: name, TrackAlias: alias,
+		Namespace: video, Name: name, TrackAlias: alias,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -136,7 +135,7 @@ func TestMetricsHooks(t *testing.T) {
 	defer pubReq.Close()
 
 	subSess := dialAnotherClient(t, pubSess)
-	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: name})
+	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: name})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -248,7 +247,7 @@ func TestMetricsHooks(t *testing.T) {
 
 	// FETCH the cached range and confirm FetchServed fires with the count.
 	fetchReq, err := subSess.Fetch(t.Context(), &message.Fetch{
-		Namespace: ns,
+		Namespace: video,
 		Name:      name,
 		Parameters: message.Parameters{
 			fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: uint64(sgCount - 2)}),
@@ -294,20 +293,6 @@ func drainFetch(t *testing.T, sess *session.Session) {
 		if _, err := fs.ReadObject(); err != nil {
 			return
 		}
-	}
-}
-
-func waitFor(t *testing.T, d time.Duration, cond func() bool, msg string) {
-	t.Helper()
-	deadline := time.Now().Add(d)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if !cond() {
-		t.Fatal(msg)
 	}
 }
 

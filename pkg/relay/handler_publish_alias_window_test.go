@@ -8,7 +8,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -33,7 +32,7 @@ import (
 // reports the alias routable, waits for the write, then holds the window open
 // while the relay routes (or drops) the stream.
 func TestPublish_TrackEntryPrecedesAliasRouting(t *testing.T) {
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam-publish-alias-window")
 	const alias, groupID = uint64(77), uint64(3)
 
@@ -66,7 +65,7 @@ func TestPublish_TrackEntryPrecedesAliasRouting(t *testing.T) {
 	pubErr := make(chan error, 1)
 	go func() {
 		_, err := pubSess.Publish(t.Context(), &message.Publish{
-			Namespace:  ns,
+			Namespace:  video,
 			Name:       name,
 			TrackAlias: alias,
 		})
@@ -95,7 +94,7 @@ func TestPublish_TrackEntryPrecedesAliasRouting(t *testing.T) {
 	// If the relay reset that stream for want of an entry, it never learns a
 	// LARGEST_OBJECT and TRACK_STATUS reports none.
 	probe := dialAnotherClient(t, pubSess)
-	waitRelayLargest(t, probe, ns, name, groupID, 0)
+	waitRelayLargest(t, probe, video, name, groupID, 0)
 }
 
 // TestPublish_RejectedAliasLeavesTrackUnknown pins the other half of the entry
@@ -109,7 +108,7 @@ func TestPublish_TrackEntryPrecedesAliasRouting(t *testing.T) {
 // deciding whether to retry, and nothing would reclaim the entry until an
 // unrelated session teardown swept it.
 func TestPublish_RejectedAliasLeavesTrackUnknown(t *testing.T) {
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	const alias = uint64(91)
 	first := []byte("cam-alias-taken")
 	second := []byte("cam-alias-duplicate")
@@ -118,7 +117,7 @@ func TestPublish_RejectedAliasLeavesTrackUnknown(t *testing.T) {
 	t.Cleanup(teardown)
 
 	pub, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: ns, Name: first, TrackAlias: alias,
+		Namespace: video, Name: first, TrackAlias: alias,
 	})
 	if err != nil {
 		t.Fatalf("first PUBLISH: %v", err)
@@ -128,14 +127,14 @@ func TestPublish_RejectedAliasLeavesTrackUnknown(t *testing.T) {
 	// §11.1: the alias is taken, so this PUBLISH is rejected — after the
 	// relay has already created the entry for `second`.
 	if _, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: ns, Name: second, TrackAlias: alias,
+		Namespace: video, Name: second, TrackAlias: alias,
 	}); err == nil {
 		t.Fatal("duplicate Track Alias PUBLISH was accepted, want rejection")
 	}
 
 	fetcher := dialAnotherClient(t, pubSess)
 	_, err = fetcher.Fetch(t.Context(), &message.Fetch{
-		Namespace: ns,
+		Namespace: video,
 		Name:      second,
 		Parameters: message.Parameters{
 			fetchRangeFilter(message.Location{}, message.Location{Group: 1, Object: 0}),

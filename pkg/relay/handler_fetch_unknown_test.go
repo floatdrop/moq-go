@@ -1,8 +1,6 @@
 package relay_test
 
 import (
-	"errors"
-	"io"
 	"math"
 	"testing"
 	"time"
@@ -13,13 +11,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
-
-// fetchElem is one decoded element of a FETCH response stream: a real object
-// (unknown == false) or a §11.4.4.2 End of Unknown Range marker.
-type fetchElem struct {
-	Group, Object uint64
-	Unknown       bool
-}
 
 // unknownGapTopology wires the stitch-test topology (upstream publisher →
 // relay ← live subscriber) with a configurable upstream FETCH answer, and
@@ -103,134 +94,24 @@ func unknownGapTopology(
 	return fetchClient
 }
 
-// tryFetchElems issues one standalone FETCH for [0, {lastGroup, 1}) with the
-// given parameters and returns the decoded response elements, markers
-// included (nil before the relay can service the request).
-func tryFetchElems(
-	t *testing.T,
-	sess *session.Session,
-	ns wire.TrackNamespace,
-	name []byte,
-	lastGroup uint64,
-	params message.Parameters,
-) []fetchElem {
-	t.Helper()
-	fetchReq, err := sess.Fetch(t.Context(), &message.Fetch{
-		Namespace: ns,
-		Name:      name,
-		Parameters: append(message.Parameters{
-			fetchRangeFilter(message.Location{}, message.Location{Group: lastGroup, Object: 0}),
-		}, params...),
-	})
-	if err != nil {
-		return nil // not yet serviceable — caller retries
-	}
-	defer fetchReq.Close()
-	order := message.GroupOrderAscending
-	if p, ok := params.Find(message.ParamGroupOrder); ok {
-		order = message.GroupOrder(p.Byte)
-	}
-	return collectFetchElems(t, sess, order, 3*time.Second)
-}
-
-// collectFetchElems accepts the next FETCH response data stream and returns
-// every decoded element — real objects and End-of-Range markers — in arrival
-// order.
-func collectFetchElems(
-	t *testing.T,
-	sess *session.Session,
-	order message.GroupOrder,
-	timeout time.Duration,
-) []fetchElem {
-	t.Helper()
-	type result struct {
-		elems []fetchElem
-		err   error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		ds, err := sess.AcceptDataStream(t.Context())
-		if err != nil {
-			ch <- result{err: err}
-			return
-		}
-		fs, ok := ds.(*session.IncomingFetchStream)
-		if !ok {
-			ch <- result{err: errors.New("not a fetch stream")}
-			return
-		}
-		fs.GroupOrder = order
-		var elems []fetchElem
-		for {
-			obj, err := fs.ReadDecoded()
-			if err != nil {
-				if !errors.Is(err, io.EOF) {
-					ch <- result{err: err}
-					return
-				}
-				ch <- result{elems: elems}
-				return
-			}
-			elems = append(elems, fetchElem{
-				Group:   obj.GroupID,
-				Object:  obj.ObjectID,
-				Unknown: obj.EndOfUnknownRange,
-			})
-		}
-	}()
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			t.Fatalf("reading FETCH response: %v", r.err)
-		}
-		return r.elems
-	case <-time.After(timeout):
-		t.Fatal("FETCH response did not arrive within deadline")
-		return nil
-	}
-}
-
-// realGroups extracts the group IDs of the non-marker elements.
-func realGroups(elems []fetchElem) []uint64 {
-	var out []uint64
-	for _, e := range elems {
-		if !e.Unknown {
-			out = append(out, e.Group)
-		}
-	}
-	return out
-}
-
-func groupsEqual(got []uint64, wantLo, wantHi uint64) bool {
-	if uint64(len(got)) != wantHi-wantLo+1 {
-		return false
-	}
-	for i, g := range got {
-		if g != wantLo+uint64(i) {
-			return false
-		}
-	}
-	return true
-}
-
 // TestFetch_UnknownRangeMarkerWhenUpstreamRejects pins the §11.4.4 truthfulness
 // fix: when the below-floor portion of a FETCH cannot be stitched (the upstream
 // rejects the FETCH), the relay must not leave it as a plain gap — a gap in a
 // FIN-terminated response asserts non-existence — but cover it with an End of
 // Unknown Range marker (0x10C) preceding the cached objects.
 func TestFetch_UnknownRangeMarkerWhenUpstreamRejects(t *testing.T) {
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam-unknown")
 	const liveLo, liveHi = uint64(5), uint64(9)
 
-	fc := unknownGapTopology(t, ns, name, liveLo, liveHi,
+	fc := unknownGapTopology(t, video, name, liveLo, liveHi,
 		func(_ *session.Session, req *session.Request, _ *message.Fetch) {
 			_ = req.RejectError(moqt.RequestDoesNotExist, "no FETCH here")
 		})
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		elems := tryFetchElems(t, fc, ns, name, liveHi, nil)
+		elems := tryFetchElems(t, fc, video, name, liveHi, nil)
 		if len(elems) > 0 && elems[0].Unknown && groupsEqual(realGroups(elems), liveLo, liveHi) {
 			// The marker covers [request start, cache floor): its Location
 			// is the floor's predecessor.
@@ -257,11 +138,11 @@ func TestFetch_UnknownRangeMarkerWhenUpstreamRejects(t *testing.T) {
 // the unserviceable below-floor range comes last in stream order, so the
 // marker must trail the cached objects, at the range's start Location.
 func TestFetch_UnknownRangeMarkerDescending(t *testing.T) {
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam-unknown-desc")
 	const liveLo, liveHi = uint64(5), uint64(9)
 
-	fc := unknownGapTopology(t, ns, name, liveLo, liveHi,
+	fc := unknownGapTopology(t, video, name, liveLo, liveHi,
 		func(_ *session.Session, req *session.Request, _ *message.Fetch) {
 			_ = req.RejectError(moqt.RequestDoesNotExist, "no FETCH here")
 		})
@@ -269,7 +150,7 @@ func TestFetch_UnknownRangeMarkerDescending(t *testing.T) {
 	params := message.Parameters{message.GroupOrderParam(message.GroupOrderDescending)}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		elems := tryFetchElems(t, fc, ns, name, liveHi, params)
+		elems := tryFetchElems(t, fc, video, name, liveHi, params)
 		got := realGroups(elems)
 		descOK := uint64(len(got)) == liveHi-liveLo+1
 		for i, g := range got {
@@ -297,12 +178,12 @@ func TestFetch_UnknownRangeMarkerDescending(t *testing.T) {
 // its own 0x10C marker and serves the rest; the relay must re-emit that
 // marker to the downstream fetcher instead of flattening it into a gap.
 func TestFetch_PreservesUpstreamUnknownMarker(t *testing.T) {
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam-propagate")
 	const liveLo, liveHi = uint64(5), uint64(9)
 	const unknownHi = uint64(2) // upstream declares groups 0..2 unknown
 
-	fc := unknownGapTopology(t, ns, name, liveLo, liveHi,
+	fc := unknownGapTopology(t, video, name, liveLo, liveHi,
 		func(upSess *session.Session, req *session.Request, m *message.Fetch) {
 			_, sfEnd, sfOK := fetchRequestRange(m)
 			if !sfOK {
@@ -343,7 +224,7 @@ func TestFetch_PreservesUpstreamUnknownMarker(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		elems := tryFetchElems(t, fc, ns, name, liveHi, nil)
+		elems := tryFetchElems(t, fc, video, name, liveHi, nil)
 		if len(elems) > 0 && elems[0].Unknown &&
 			groupsEqual(realGroups(elems), unknownHi+1, liveHi) {
 			if elems[0].Group != unknownHi || elems[0].Object != math.MaxUint64 {
@@ -367,12 +248,12 @@ func TestFetch_PreservesUpstreamUnknownMarker(t *testing.T) {
 // it must insert an unknown marker between the stitched head and the cached
 // tail rather than let that gap read as non-existence.
 func TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation(t *testing.T) {
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam-capped")
 	const liveLo, liveHi = uint64(5), uint64(9)
 	const upstreamHi = uint64(2) // upstream serves 0..2 and caps there
 
-	fc := unknownGapTopology(t, ns, name, liveLo, liveHi,
+	fc := unknownGapTopology(t, video, name, liveLo, liveHi,
 		func(upSess *session.Session, req *session.Request, m *message.Fetch) {
 			sfStart, _, sfOK := fetchRequestRange(m)
 			if !sfOK {
@@ -392,7 +273,7 @@ func TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		elems := tryFetchElems(t, fc, ns, name, liveHi, nil)
+		elems := tryFetchElems(t, fc, video, name, liveHi, nil)
 		got := realGroups(elems)
 		if len(got) > 0 && got[0] == 0 && got[len(got)-1] == liveHi &&
 			groupsEqual(got[:upstreamHi+1], 0, upstreamHi) &&
@@ -425,11 +306,11 @@ func TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation(t *testing.T) {
 // The relay falls back to declaring the whole sub-range unknown instead of
 // letting the rogue Location corrupt downstream Group IDs.
 func TestFetch_DiscardsOutOfRangeUpstreamElements(t *testing.T) {
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam-rogue")
 	const liveLo, liveHi = uint64(5), uint64(9)
 
-	fc := unknownGapTopology(t, ns, name, liveLo, liveHi,
+	fc := unknownGapTopology(t, video, name, liveLo, liveHi,
 		func(upSess *session.Session, req *session.Request, m *message.Fetch) {
 			_, sfEnd, sfOK := fetchRequestRange(m)
 			if !sfOK {
@@ -454,7 +335,7 @@ func TestFetch_DiscardsOutOfRangeUpstreamElements(t *testing.T) {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		elems := tryFetchElems(t, fc, ns, name, liveHi, nil)
+		elems := tryFetchElems(t, fc, video, name, liveHi, nil)
 		if len(elems) > 0 && elems[0].Unknown && groupsEqual(realGroups(elems), liveLo, liveHi) {
 			// The rogue marker must not appear; the below-floor range is
 			// covered by the relay's own whole-sub-range marker instead.

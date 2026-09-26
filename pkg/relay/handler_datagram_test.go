@@ -8,7 +8,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -24,7 +23,7 @@ func TestDatagram_PublisherToSubscriberSingleDatagram(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -35,7 +34,7 @@ func TestDatagram_PublisherToSubscriberSingleDatagram(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -97,7 +96,7 @@ func TestDatagram_FilterDropsBelowStart(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -108,7 +107,7 @@ func TestDatagram_FilterDropsBelowStart(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.LocationFilterParam(&message.LocationFilter{Fields: 2, StartGroup: 0, StartObject: 2}),
@@ -177,7 +176,7 @@ func TestDatagram_UnknownAliasDroppedSilently(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -188,7 +187,7 @@ func TestDatagram_UnknownAliasDroppedSilently(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -253,7 +252,7 @@ func TestDatagram_PausedSubscriptionReceivesNothing(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -264,7 +263,7 @@ func TestDatagram_PausedSubscriptionReceivesNothing(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
@@ -339,7 +338,7 @@ func TestDatagram_RedundantPublishersDeduped(t *testing.T) {
 	publish := func(sess *session.Session, alias uint64) {
 		t.Helper()
 		stream, err := sess.Publish(t.Context(), &message.Publish{
-			Namespace:  wire.TrackNamespace{[]byte("video")},
+			Namespace:  ns("video"),
 			Name:       []byte("cam1"),
 			TrackAlias: alias,
 		})
@@ -353,7 +352,7 @@ func TestDatagram_RedundantPublishersDeduped(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubA)
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {

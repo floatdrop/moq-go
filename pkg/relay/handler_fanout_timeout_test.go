@@ -23,27 +23,6 @@ import (
 // MaxFanoutLag is deliberately left at its zero value throughout, so the only
 // escalation that can fire is the one under test.
 
-// publishOneSubgroup writes n one-byte objects on (group, subgroup) and closes
-// the stream. Run in a goroutine: the in-process transport is synchronous, so
-// the first WriteObject blocks until the subscriber reads.
-func publishOneSubgroup(sess *session.Session, alias, group uint64, n int) {
-	sg, err := sess.OpenSubgroup(message.SubgroupHeader{
-		SubgroupIDMode: message.SubgroupIDExplicit,
-		TrackAlias:     alias,
-		GroupID:        group,
-		SubgroupID:     0,
-	})
-	if err != nil {
-		return
-	}
-	for range n {
-		if err := sg.WriteObject(&message.SubgroupObject{Payload: []byte("x")}); err != nil {
-			return
-		}
-	}
-	_ = sg.Close()
-}
-
 // countUntilEnd reads objects until the stream ends and returns how many
 // arrived. The in-process pipe transport does not carry §3.3.4 reset codes, so
 // a reset and a clean FIN look alike to the reader — the count is what
@@ -78,11 +57,11 @@ func TestFanout_DeliveryTimeoutKeepsSubscriptionAlive(t *testing.T) {
 	defer teardown()
 
 	const alias = uint64(7)
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam1")
 
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: ns, Name: name, TrackAlias: alias,
+		Namespace: video, Name: name, TrackAlias: alias,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -93,7 +72,7 @@ func TestFanout_DeliveryTimeoutKeepsSubscriptionAlive(t *testing.T) {
 	// none, so §8's "smaller of the two non-zero values" resolves to this one.
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: ns, Name: name,
+		Namespace: video, Name: name,
 		Parameters: message.Parameters{message.ObjectDeliveryTimeoutParam(timeout)},
 	})
 	if err != nil {
@@ -102,7 +81,7 @@ func TestFanout_DeliveryTimeoutKeepsSubscriptionAlive(t *testing.T) {
 	defer subReq.Close()
 
 	const objects = 6
-	go publishOneSubgroup(pubSess, alias, 0, objects)
+	go sendObjects(pubSess, alias, 0, objects)
 
 	ds, err := subSess.AcceptDataStream(t.Context())
 	if err != nil {
@@ -126,7 +105,7 @@ func TestFanout_DeliveryTimeoutKeepsSubscriptionAlive(t *testing.T) {
 
 	// The subscription must have survived: a fresh group still reaches us.
 	// Read promptly this time so the timeout has no chance to fire again.
-	go publishOneSubgroup(pubSess, alias, 1, 2)
+	go sendObjects(pubSess, alias, 1, 2)
 
 	ds2, err := subSess.AcceptDataStream(t.Context())
 	if err != nil {
@@ -171,12 +150,12 @@ func testPublisherTrackDeliveryTimeout(t *testing.T, timeout time.Duration, trac
 	defer teardown()
 
 	const alias = uint64(7)
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam1")
 
 	props := message.AppendTrackProperties(trackProps)
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: ns, Name: name, TrackAlias: alias, TrackProperties: props,
+		Namespace: video, Name: name, TrackAlias: alias, TrackProperties: props,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -184,14 +163,14 @@ func testPublisherTrackDeliveryTimeout(t *testing.T, timeout time.Duration, trac
 	defer pubReq.Close()
 
 	subSess := dialAnotherClient(t, pubSess)
-	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: name})
+	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: name})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer subReq.Close()
 
 	const objects = 6
-	go publishOneSubgroup(pubSess, alias, 0, objects)
+	go sendObjects(pubSess, alias, 0, objects)
 
 	ds, err := subSess.AcceptDataStream(t.Context())
 	if err != nil {
@@ -219,11 +198,11 @@ func TestFanout_NoDeliveryTimeoutLeavesStalledSubscriberAlone(t *testing.T) {
 	defer teardown()
 
 	const alias = uint64(7)
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam1")
 
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: ns, Name: name, TrackAlias: alias,
+		Namespace: video, Name: name, TrackAlias: alias,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -231,14 +210,14 @@ func TestFanout_NoDeliveryTimeoutLeavesStalledSubscriberAlone(t *testing.T) {
 	defer pubReq.Close()
 
 	subSess := dialAnotherClient(t, pubSess)
-	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: name})
+	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: name})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer subReq.Close()
 
 	const objects = 4
-	go publishOneSubgroup(pubSess, alias, 0, objects)
+	go sendObjects(pubSess, alias, 0, objects)
 
 	ds, err := subSess.AcceptDataStream(t.Context())
 	if err != nil {

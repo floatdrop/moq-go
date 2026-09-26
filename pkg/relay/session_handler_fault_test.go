@@ -9,7 +9,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -52,7 +51,7 @@ func TestSessionHandler_FailedRejectWriteKeepsTheSessionAlive(t *testing.T) {
 
 	sub := func() *message.Subscribe {
 		return &message.Subscribe{
-			Namespace: wire.TrackNamespace{[]byte("video")},
+			Namespace: ns("video"),
 			Name:      []byte("cam1"),
 		}
 	}

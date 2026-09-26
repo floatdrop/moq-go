@@ -8,7 +8,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -76,7 +75,7 @@ func firstObjectTopology(
 	t.Cleanup(teardown)
 
 	pub, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 7,
 	})
@@ -87,7 +86,7 @@ func firstObjectTopology(
 
 	sub = dialAnotherClient(t, pubSess)
 	subReq, err := sub.Subscribe(t.Context(), &message.Subscribe{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		Parameters: params,
 	})
@@ -256,7 +255,7 @@ func TestFanout_ResolvesImplicitFirstObjectSubgroupID(t *testing.T) {
 	// The cache must file the objects under subgroup 5 too: FETCH the range
 	// back and check the decoded Subgroup IDs.
 	fetchReq, err := sub.Fetch(t.Context(), &message.Fetch{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: 6}),

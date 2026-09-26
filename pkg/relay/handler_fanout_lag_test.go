@@ -6,7 +6,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -29,11 +28,11 @@ func TestFanout_LagWindowResetsSlowSubscriber(t *testing.T) {
 	defer teardown()
 
 	const alias = uint64(7)
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam1")
 
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: ns, Name: name, TrackAlias: alias,
+		Namespace: video, Name: name, TrackAlias: alias,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -41,7 +40,7 @@ func TestFanout_LagWindowResetsSlowSubscriber(t *testing.T) {
 	defer pubReq.Close()
 
 	subSess := dialAnotherClient(t, pubSess)
-	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: name})
+	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: name})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}

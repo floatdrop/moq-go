@@ -8,7 +8,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -28,7 +27,7 @@ func TestSessionCleanup_PublisherSessionDeath(t *testing.T) {
 	defer teardown()
 
 	if _, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 1,
 	}); err != nil {
@@ -49,7 +48,7 @@ func TestSessionCleanup_PublisherSessionDeath(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		sub, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-			Namespace: wire.TrackNamespace{[]byte("video")},
+			Namespace: ns("video"),
 			Name:      []byte("cam1"),
 		})
 		if err == nil {
@@ -83,7 +82,7 @@ func TestSessionCleanup_SubscriberSessionDeath(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 1,
 	})
@@ -94,7 +93,7 @@ func TestSessionCleanup_SubscriberSessionDeath(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	if _, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	}); err != nil {
 		t.Fatalf("Subscribe: %v", err)

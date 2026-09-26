@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"reflect"
@@ -14,180 +13,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
-	"github.com/floatdrop/moq-go/pkg/relay"
 )
-
-// fetchAndDrain issues a standalone FETCH and reads the response stream
-// to FIN. It returns the FETCH_OK plus the decoded absolute (group,
-// object) tuples and their payloads in arrival order. The decoded
-// values reverse §11.4.4's delta encoding so test assertions can
-// compare against the publisher's absolute IDs directly.
-//
-// orderHint is the GroupOrder the test expects the relay to use; the
-// delta-reversal must agree with it (§11.4.4.1).
-func fetchAndDrain(
-	t *testing.T,
-	sess *session.Session,
-	ns wire.TrackNamespace,
-	name []byte,
-	start, endIncl message.Location,
-	order message.GroupOrder,
-	extra ...message.Parameter,
-) (*message.FetchOK, []decodedFetchObject) {
-	t.Helper()
-
-	params := message.Parameters{message.GroupOrderParam(order), fetchRangeFilter(start, endIncl)}
-	params = append(params, extra...)
-
-	reqStream, err := sess.Fetch(t.Context(), &message.Fetch{
-		Namespace:  ns,
-		Name:       name,
-		Parameters: params,
-	})
-	if err != nil {
-		t.Fatalf("Fetch: %v", err)
-	}
-	t.Cleanup(func() { reqStream.Close() })
-
-	ds, err := sess.AcceptDataStream(t.Context())
-	if err != nil {
-		t.Fatalf("AcceptDataStream: %v", err)
-	}
-	fs, isFetch := ds.(*session.IncomingFetchStream)
-	if !isFetch {
-		t.Fatalf("got %T, want *IncomingFetchStream", ds)
-	}
-
-	objs := decodeFetchStream(t, fs, order)
-	return reqStream.OK, objs
-}
-
-type decodedFetchObject struct {
-	group, object uint64
-	payload       []byte
-}
-
-// decodeFetchStream reverses the §11.4.4 delta encoding and returns
-// every object until EOF.
-func decodeFetchStream(t *testing.T, fs *session.IncomingFetchStream, order message.GroupOrder) []decodedFetchObject {
-	t.Helper()
-	var (
-		out        []decodedFetchObject
-		prevGroup  uint64
-		prevObject uint64
-		havePrev   bool
-		descending = order == message.GroupOrderDescending
-	)
-	for {
-		fo, err := fs.ReadObject()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				return out
-			}
-			t.Fatalf("ReadObject: %v", err)
-		}
-
-		var g, o uint64
-		switch {
-		case !havePrev:
-			// First object: GroupIDDelta and ObjectIDDelta carry
-			// absolute values (§11.4.4.1).
-			g = fo.GroupIDDelta
-			o = fo.ObjectIDDelta
-		case fo.SerializationFlags&message.FetchFlagGroupIDDelta != 0:
-			if descending {
-				g = prevGroup - fo.GroupIDDelta - 1
-			} else {
-				g = prevGroup + fo.GroupIDDelta + 1
-			}
-			o = fo.ObjectIDDelta
-		default:
-			g = prevGroup
-			if fo.SerializationFlags&message.FetchFlagObjectIDDelta != 0 {
-				o = prevObject + fo.ObjectIDDelta // §11.4.4.1: no +1
-			} else {
-				o = prevObject + 1
-			}
-		}
-
-		out = append(out, decodedFetchObject{
-			group:   g,
-			object:  o,
-			payload: fo.ObjectPayload,
-		})
-		prevGroup = g
-		prevObject = o
-		havePrev = true
-	}
-}
-
-// publishObjects emits one subgroup with objects at IDs 0..n-1 on
-// the given (group, subgroup). The relay's fanout caches them as a
-// side effect.
-func publishObjects(
-	t *testing.T,
-	pubSess *session.Session,
-	trackAlias, group uint64,
-	count int,
-) {
-	t.Helper()
-	sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
-		SubgroupIDMode: message.SubgroupIDExplicit,
-		TrackAlias:     trackAlias,
-		GroupID:        group,
-		SubgroupID:     0,
-	})
-	if err != nil {
-		t.Fatalf("OpenSubgroup g=%d: %v", group, err)
-	}
-	for i := range count {
-		if err := sg.WriteObject(&message.SubgroupObject{
-			ObjectIDDelta: 0,
-			Payload:       []byte{byte('A' + i)},
-		}); err != nil {
-			t.Fatalf("WriteObject g=%d #%d: %v", group, i, err)
-		}
-	}
-	if err := sg.Close(); err != nil {
-		t.Fatalf("sg.Close g=%d: %v", group, err)
-	}
-}
-
-// publishAndCache sets up the publisher session, drains the
-// subscriber so the fanout doesn't deadlock on OpenSubgroup, and
-// returns the subscriber session ready for FETCH.
-func publishAndCache(t *testing.T) (*session.Session, *session.Session, uint64) {
-	t.Helper()
-	pubSess, teardown := connectRelay(t, relay.Config{})
-	t.Cleanup(teardown)
-
-	const publisherAlias = uint64(7)
-	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
-		Name:       []byte("cam1"),
-		TrackAlias: publisherAlias,
-	})
-	if err != nil {
-		t.Fatalf("Publish: %v", err)
-	}
-	t.Cleanup(func() { pubReq.Close() })
-
-	// A subscriber must exist before the fanout will accept inbound
-	// objects (otherwise drainInbound throws them away).
-	subSess := dialAnotherClient(t, pubSess)
-	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
-		Name:      []byte("cam1"),
-	})
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	t.Cleanup(func() { subReq.Close() })
-	go drainAllStreams(t.Context(), subSess)
-
-	return pubSess, subSess, publisherAlias
-}
 
 // TestFetch_DatagramObjectRoundTrips is the regression test for the §11.4.4.1
 // Datagram bit (0x40): an object published as an OBJECT_DATAGRAM and served
@@ -225,7 +51,7 @@ func TestFetch_DatagramObjectRoundTrips(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	reqStream, err := fetchSess.Fetch(t.Context(), &message.Fetch{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			fetchRangeFilter(message.Location{Group: 3, Object: 5}, message.Location{Group: 3, Object: 5}),
@@ -305,7 +131,7 @@ func TestFetch_StatusMarkersNotServed(t *testing.T) {
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, objs := fetchAndDrain(t,
 		fetchSess,
-		wire.TrackNamespace{[]byte("video")},
+		ns("video"),
 		[]byte("cam1"),
 		message.Location{Group: 0, Object: 0},
 		message.Location{Group: 0, Object: 3}, // inclusive: covers 0..3 incl. the marker
@@ -343,7 +169,7 @@ func TestFetch_WholeGroupEndForm(t *testing.T) {
 	fetchSess := dialAnotherClient(t, pubSess)
 	ok, objs := fetchAndDrain(t,
 		fetchSess,
-		wire.TrackNamespace{[]byte("video")},
+		ns("video"),
 		[]byte("cam1"),
 		message.Location{Group: 0, Object: 1},
 		message.Location{Group: 0, Object: math.MaxUint64}, // the rest of group 0
@@ -386,7 +212,7 @@ func TestFetch_FromCacheAscending(t *testing.T) {
 	fetchSess := dialAnotherClient(t, pubSess)
 	ok, objs := fetchAndDrain(t,
 		fetchSess,
-		wire.TrackNamespace{[]byte("video")},
+		ns("video"),
 		[]byte("cam1"),
 		message.Location{Group: 0, Object: 0},
 		message.Location{Group: 1, Object: 1}, // inclusive: covers {1,0} and {1,1}
@@ -424,7 +250,7 @@ func TestFetch_FromCacheDescending(t *testing.T) {
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, objs := fetchAndDrain(t,
 		fetchSess,
-		wire.TrackNamespace{[]byte("video")},
+		ns("video"),
 		[]byte("cam1"),
 		message.Location{Group: 0, Object: 0},
 		message.Location{Group: 2, Object: 1}, // inclusive: covers groups 0..2
@@ -456,7 +282,7 @@ func TestFetch_RejectsStartBeyondLargest(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, err := fetchSess.Fetch(t.Context(), &message.Fetch{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			fetchRangeFilter(
@@ -478,7 +304,7 @@ func TestFetch_RejectsEmptyTrack(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, err := fetchSess.Fetch(t.Context(), &message.Fetch{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			fetchRangeFilter(message.Location{}, message.Location{Group: 1, Object: math.MaxUint64}),
@@ -505,7 +331,7 @@ func TestSubscribe_FillCurrentGroup(t *testing.T) {
 	subSess := dialAnotherClient(t, pubSess)
 
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.NextObjectFilter(),
@@ -580,7 +406,7 @@ func TestSubscribe_FillWholeTrack(t *testing.T) {
 	subSess := dialAnotherClient(t, pubSess)
 
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.NextObjectFilter(),
@@ -628,7 +454,7 @@ func TestSubscribe_FillInheritsSubscriptionFilter(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.NextObjectFilter(),
@@ -671,7 +497,7 @@ func TestSubscribe_RequestUpdateOpensSecondFill(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.NextObjectFilter(),
@@ -721,7 +547,7 @@ func TestSubscribe_FillNotOpenedWhileForwardPaused(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.ForwardParam(false),
@@ -772,19 +598,6 @@ func acceptFillStream(t *testing.T, sess *session.Session) uint64 {
 	return fs.Header.RequestID
 }
 
-// tryAcceptDataStream waits up to d for a data stream, reporting whether one
-// arrived. Used by tests whose expected outcome is that none does.
-func tryAcceptDataStream(t *testing.T, sess *session.Session, d time.Duration) (session.DataStream, bool) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), d)
-	defer cancel()
-	ds, err := sess.AcceptDataStream(ctx)
-	if err != nil {
-		return nil, false
-	}
-	return ds, true
-}
-
 // TestSubscribe_NoFillParametersOpensNoStream pins the other half of §10.2.15:
 // "a subscription with no FILL_PARAMETERS opens none". Presence of the
 // parameter is the whole request signal, so a plain SUBSCRIBE must not produce
@@ -799,7 +612,7 @@ func TestSubscribe_NoFillParametersOpensNoStream(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		Parameters: message.Parameters{message.NextObjectFilter()},
 	})
@@ -835,7 +648,7 @@ func TestFetch_PartialRangeCarriesPriority(t *testing.T) {
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, objs := fetchAndDrain(t,
 		fetchSess,
-		wire.TrackNamespace{[]byte("video")},
+		ns("video"),
 		[]byte("cam1"),
 		message.Location{Group: 7, Object: 0},
 		message.Location{Group: 7, Object: 1},
@@ -860,7 +673,7 @@ func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 	fetchSess := dialAnotherClient(t, pubSess)
 	ok, _ := fetchAndDrain(t,
 		fetchSess,
-		wire.TrackNamespace{[]byte("video")},
+		ns("video"),
 		[]byte("cam1"),
 		message.Location{Group: 0, Object: 0},
 		message.Location{Group: 999, Object: math.MaxUint64}, // far past the watermark
@@ -869,43 +682,6 @@ func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 	want := message.Location{Group: 0, Object: 2} // Largest Object, inclusive
 	if ok.EndLocation != want {
 		t.Fatalf("FETCH_OK.EndLocation = %+v, want %+v", ok.EndLocation, want)
-	}
-}
-
-// waitRelayLargest polls TRACK_STATUS until the relay reports the given Largest
-// Location, so a test can depend on the fanout having observed objects without
-// sleeping for a duration that is either flaky or slow. TRACK_STATUS_OK carries
-// LARGEST_OBJECT (§10.2.17), which makes the relay's watermark observable over
-// the protocol itself.
-func waitRelayLargest(
-	t *testing.T,
-	sess *session.Session,
-	ns wire.TrackNamespace,
-	name []byte,
-	wantGroup, wantObject uint64,
-) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	var last string
-	for {
-		req, err := sess.TrackStatus(t.Context(), &message.TrackStatus{
-			Namespace: ns,
-			Name:      name,
-		})
-		if err == nil {
-			p, ok := req.OK.Parameters.Find(message.ParamLargestObject)
-			_ = req.Close()
-			if ok && p.Group == wantGroup && p.Object == wantObject {
-				return
-			}
-			last = fmt.Sprintf("largest={%d,%d} present=%t", p.Group, p.Object, ok)
-		} else {
-			last = err.Error()
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("relay never reported largest {%d,%d}: %s", wantGroup, wantObject, last)
-		}
-		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -925,7 +701,7 @@ func TestSubscribe_FillOpensNoStreamOnEmptyTrack(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.NextObjectFilter(),
@@ -965,11 +741,11 @@ func TestSubscribe_FillRelativeStartClampsAtOrigin(t *testing.T) {
 
 	// One group only, so any relative start above 1 reaches below the origin.
 	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, 3 /*count*/)
-	waitRelayLargest(t, pubSess, wire.TrackNamespace{[]byte("video")}, []byte("cam1"), 0, 2)
+	waitRelayLargest(t, pubSess, ns("video"), []byte("cam1"), 0, 2)
 
 	subSess := dialAnotherClient(t, pubSess)
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.NextObjectFilter(),
@@ -1004,42 +780,6 @@ func TestSubscribe_FillRelativeStartClampsAtOrigin(t *testing.T) {
 	}
 }
 
-// fetchRangeFilter builds the §5.1.2 LOCATION_FILTER carrying a FETCH's range.
-// draft-20 moved the range out of the FETCH message and made both ends
-// inclusive, so these tests name the last Object they expect rather than one
-// past it; an Object of MaxUint64 means "the whole end group", which is the
-// three-field form with EndObject omitted.
-func fetchRangeFilter(start, endIncl message.Location) message.Parameter {
-	if endIncl.Object == math.MaxUint64 {
-		return message.AbsoluteRangeFilter(start, endIncl.Group-start.Group)
-	}
-	return message.AbsoluteRangeObjectFilter(start, endIncl.Group-start.Group, endIncl.Object)
-}
-
-// fetchRequestRange returns the inclusive [start, end] range a FETCH asks for.
-// draft-20 carries it in the LOCATION_FILTER parameter (§5.1.2) rather than in
-// message fields, so the fake upstreams in these tests read it back the same
-// way a real publisher would. ok is false when the filter is absent or
-// open-ended; the relay always sends the absolute four-field form upstream.
-func fetchRequestRange(m *message.Fetch) (start, end message.Location, ok bool) {
-	f, err := message.LocationFilterFromParam(m.Parameters)
-	if err != nil || f == nil {
-		return start, end, false
-	}
-	end, hasEnd := f.End()
-	if !hasEnd {
-		return start, end, false
-	}
-	return message.Location{Group: f.StartGroup, Object: f.StartObject}, end, true
-}
-
-// fetchOKEnd is [fetchRequestRange]'s end alone, for fake upstreams that just
-// echo the requested end back in FETCH_OK.
-func fetchOKEnd(m *message.Fetch) message.Location {
-	_, end, _ := fetchRequestRange(m)
-	return end
-}
-
 // TestFetch_ObjectIDDeltaEncoding pins the relay's FETCH encoder to
 // §11.4.4.1 on the wire rather than through a decoder sharing its reading:
 // without a Group ID Delta "the Object ID is the prior Object's ID plus the
@@ -1048,8 +788,8 @@ func fetchOKEnd(m *message.Fetch) message.Location {
 // encode as: absolute 0, delta omitted, delta 4.
 func TestFetch_ObjectIDDeltaEncoding(t *testing.T) {
 	t.Parallel()
-	pubSess, alias := publishWithTrackProps(t, nil)
-	subSess := subscribeCam1(t, pubSess)
+	pubSess, alias := newCam1Publisher(t, nil)
+	subSess := newCam1Subscriber(t, pubSess)
 
 	go func() {
 		sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
@@ -1087,7 +827,7 @@ func TestFetch_ObjectIDDeltaEncoding(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	reqStream, err := fetchSess.Fetch(t.Context(), &message.Fetch{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			fetchRangeFilter(message.Location{Group: 3}, message.Location{Group: 3, Object: 5}),

@@ -26,7 +26,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -46,7 +45,7 @@ const (
 )
 
 var (
-	benchNS   = wire.TrackNamespace{[]byte("video")}
+	benchNS   = ns("video")
 	benchName = []byte("cam1")
 )
 

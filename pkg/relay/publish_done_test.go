@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"testing"
@@ -13,10 +14,115 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestPublishDone_AfterStreamsClose pins §10.12: "A sender MUST NOT send
-// PUBLISH_DONE until it has closed all streams it will ever open". The
-// publisher ends the track while its subgroup stream is still open, so the
-// relay's copy to the subscriber is open too; PUBLISH_DONE must wait for it.
+// PUBLISH_DONE (§10.12) as the relay sends it downstream: its status code,
+// its Stream Count, and its timing after every stream closes.
+
+// TestPublishDone_UpstreamCodeByMeaning: an upstream PUBLISH_DONE code about
+// the track is passed downstream as is; one about the relay's own upstream
+// subscription becomes INTERNAL_ERROR (§10.12).
+func TestPublishDone_UpstreamCodeByMeaning(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		upstream, want moqt.PublishDoneCode
+	}{
+		{moqt.PublishDoneTrackEnded, moqt.PublishDoneTrackEnded},
+		{moqt.PublishDoneMalformedTrack, moqt.PublishDoneMalformedTrack},
+		{moqt.PublishDoneInternalError, moqt.PublishDoneInternalError},
+		{moqt.PublishDoneTooFarBehind, moqt.PublishDoneInternalError},
+		{moqt.PublishDoneUpdateFailed, moqt.PublishDoneInternalError},
+		{moqt.PublishDoneUnauthorized, moqt.PublishDoneInternalError},
+	} {
+		t.Run(fmt.Sprintf("%#x", uint64(tc.upstream)), func(t *testing.T) {
+			t.Parallel()
+			pubSess, teardown := connectRelay(t, relay.Config{})
+			defer teardown()
+			pub := publishVideoTrack(t, pubSess, "cam1", 1)
+			subReq := subscribeCam1(t, dialAnotherClient(t, pubSess))
+			if err := pub.Done(tc.upstream, "upstream says"); err != nil {
+				t.Fatalf("Done: %v", err)
+			}
+			if pd := awaitPublishDone(t, subReq); pd.StatusCode != tc.want {
+				t.Fatalf("downstream PUBLISH_DONE %#x, want %#x for an upstream %#x",
+					pd.StatusCode, tc.want, tc.upstream)
+			}
+		})
+	}
+}
+
+// The StreamCount tests pin the exact count of data streams the relay opened
+// for the subscription, fill fetch streams included (§10.12).
+
+// TestPublishDone_StreamCount_NoStreams: no streams opened, count 0.
+func TestPublishDone_StreamCount_NoStreams(t *testing.T) {
+	t.Parallel()
+	pubSess, _ := newCam1Publisher(t, nil)
+	subReq := subscribeCam1(t, dialAnotherClient(t, pubSess))
+
+	_ = pubSess.Close(0, "publisher leaving")
+	if pd := awaitPublishDone(t, subReq); pd.StreamCount != 0 {
+		t.Errorf("StreamCount = %d, want 0 (no streams opened)", pd.StreamCount)
+	}
+}
+
+// TestPublishDone_StreamCount_SubgroupStreams: one subgroup stream per group.
+func TestPublishDone_StreamCount_SubgroupStreams(t *testing.T) {
+	t.Parallel()
+	pubSess, alias := newCam1Publisher(t, nil)
+	subSess := dialAnotherClient(t, pubSess)
+	subReq := subscribeCam1(t, subSess)
+
+	for _, group := range []uint64{3, 4} {
+		publishObjects(t, pubSess, alias, group, 1)
+		if !awaitSubgroupObject(t, subSess, 2*time.Second) {
+			t.Fatalf("group %d was not forwarded", group)
+		}
+	}
+
+	_ = pubSess.Close(0, "publisher leaving")
+	if pd := awaitPublishDone(t, subReq); pd.StreamCount != 2 {
+		t.Errorf("StreamCount = %d, want 2 (one subgroup stream per group)", pd.StreamCount)
+	}
+}
+
+// TestPublishDone_StreamCount_FillStream: the fill fetch stream counts.
+func TestPublishDone_StreamCount_FillStream(t *testing.T) {
+	t.Parallel()
+	pubSess, alias := newCam1Publisher(t, nil)
+	// A live subscriber first, so the relay caches group 3 for the fill.
+	liveSess := dialAnotherClient(t, pubSess)
+	liveReq := subscribeCam1(t, liveSess)
+	// Read the live subscription's own PUBLISH_DONE: the relay notifies
+	// subscribers one at a time, and an unread one blocks the unbuffered
+	// test pipe before it reaches the fill subscriber.
+	go func() { _, _ = message.Parse(liveReq) }()
+	publishObjects(t, pubSess, alias, 3, 1)
+	if !awaitSubgroupObject(t, liveSess, 2*time.Second) {
+		t.Fatal("group 3 was not forwarded")
+	}
+
+	subSess := dialAnotherClient(t, pubSess)
+	subReq := subscribeCam1(t, subSess,
+		message.NextObjectFilter(),
+		message.FillParametersParam(message.Parameters{message.UnfilteredFilter()}),
+	)
+	ds, err := subSess.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	fs, ok := ds.(*session.IncomingFetchStream)
+	if !ok {
+		t.Fatalf("got %T, want the fill *IncomingFetchStream", ds)
+	}
+	_ = decodeFetchStream(t, fs, message.GroupOrderAscending) // to FIN
+
+	_ = pubSess.Close(0, "publisher leaving")
+	if pd := awaitPublishDone(t, subReq); pd.StreamCount != 1 {
+		t.Errorf("StreamCount = %d, want 1 (the fill fetch stream)", pd.StreamCount)
+	}
+}
+
+// TestPublishDone_AfterStreamsClose: PUBLISH_DONE waits for the relay's open
+// subgroup stream to the subscriber to close (§10.12).
 func TestPublishDone_AfterStreamsClose(t *testing.T) {
 	t.Parallel()
 	const stillOpen = 300 * time.Millisecond
@@ -25,7 +131,7 @@ func TestPublishDone_AfterStreamsClose(t *testing.T) {
 	defer teardown()
 	pub := publishVideoTrack(t, pubSess, "cam1", 1)
 	subSess := dialAnotherClient(t, pubSess)
-	subReq := subscribeCam1Req(t, subSess)
+	subReq := subscribeCam1(t, subSess)
 
 	sg, err := pub.OpenSubgroup(message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit})
 	if err != nil {
@@ -78,27 +184,24 @@ func TestPublishDone_AfterStreamsClose(t *testing.T) {
 	}
 }
 
-// TestPublishDone_EndedSubscriptionStopsAtNextObject: a subscription the
-// relay ends while its upstream stays live (UPDATE_FAILED, §10.9) takes no
-// further Object. Its open stream is reset at the next Object, so its
-// PUBLISH_DONE, which waits for the stream (§10.12), is not held for as long
-// as the upstream subgroup runs.
+// TestPublishDone_EndedSubscriptionStopsAtNextObject: a subscription ended with
+// UPDATE_FAILED (§10.9) while its upstream stays live has its open stream reset
+// at the next Object, so PUBLISH_DONE is not held while the upstream runs.
 func TestPublishDone_EndedSubscriptionStopsAtNextObject(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 	pub := publishVideoTrack(t, pubSess, "cam1", 1)
 	subSess := dialAnotherClient(t, pubSess)
-	subReq := subscribeCam1Req(t, subSess)
+	subReq := subscribeCam1(t, subSess)
 
 	sg, err := pub.OpenSubgroup(message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit})
 	if err != nil {
 		t.Fatalf("OpenSubgroup: %v", err)
 	}
-	// One writer: Object 0, then, once the update is refused, an Object every
-	// 50ms, as a live upstream would, until the test ends. The relay latches
-	// the termination just after it sends REQUEST_ERROR, so the first Object
-	// after the refusal can still beat it; a later one cannot.
+	// Object 0, then, once the update is refused, an Object every 50ms as a
+	// live upstream would. The first one after the refusal may still beat
+	// the relay's termination; a later one cannot.
 	rejected := make(chan struct{})
 	stop := make(chan struct{})
 	defer close(stop)
@@ -162,7 +265,7 @@ func TestPublishDone_AfterGapReopen(t *testing.T) {
 	defer teardown()
 	pub := publishVideoTrack(t, pubSess, "cam1", 1)
 	subSess := dialAnotherClient(t, pubSess)
-	subReq := subscribeCam1Req(t, subSess)
+	subReq := subscribeCam1(t, subSess)
 
 	sg, err := pub.OpenSubgroup(message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit})
 	if err != nil {
@@ -222,7 +325,7 @@ func TestPublishDone_AfterDeliveryTimeout(t *testing.T) {
 	defer teardown()
 	pub := publishVideoTrack(t, pubSess, "cam1", 1)
 	subSess := dialAnotherClient(t, pubSess)
-	subReq := subscribeCam1Req(t, subSess, message.ObjectDeliveryTimeoutParam(timeout))
+	subReq := subscribeCam1(t, subSess, message.ObjectDeliveryTimeoutParam(timeout))
 
 	sg, err := pub.OpenSubgroup(message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit})
 	if err != nil {
@@ -272,23 +375,16 @@ func TestPublishDone_AfterFailedFill(t *testing.T) {
 	pub := publishVideoTrack(t, pubSess, "cam1", 1)
 	// Content first, so a fill has something to cover.
 	cacher := dialAnotherClient(t, pubSess)
-	subscribeCam1Req(t, cacher)
-	sg, err := pub.OpenSubgroup(message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit})
-	if err != nil {
-		t.Fatalf("OpenSubgroup: %v", err)
-	}
-	go func() {
-		_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte("x")})
-		_ = sg.Close()
-	}()
+	subscribeCam1(t, cacher)
+	publishSubgroupWith(t, pub, 0, 1, nil)
 	if !awaitSubgroupObject(t, cacher, 2*time.Second) {
 		t.Fatal("the object never reached the relay")
 	}
 
-	// A LOCATION_FILTER inside FILL_PARAMETERS that does not parse (five
-	// fields) fails the fill after SUBSCRIBE_OK.
+	// A five-field LOCATION_FILTER in FILL_PARAMETERS does not parse, which
+	// fails the fill after SUBSCRIBE_OK.
 	subSess := dialAnotherClient(t, pubSess)
-	subReq := subscribeCam1Req(t, subSess, message.FillParametersParam(message.Parameters{
+	subReq := subscribeCam1(t, subSess, message.FillParametersParam(message.Parameters{
 		message.BytesParam(message.ParamLocationFilter, []byte{0, 0, 0, 0, 0}),
 	}))
 	ds, err := subSess.AcceptDataStream(t.Context())

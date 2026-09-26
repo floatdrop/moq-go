@@ -6,7 +6,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -22,7 +21,7 @@ func TestFanout_NarrowingUpdateResetsOutOfRangeStream(t *testing.T) {
 
 	const alias = uint64(7)
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: alias,
 	})
@@ -33,7 +32,7 @@ func TestFanout_NarrowingUpdateResetsOutOfRangeStream(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			// AbsoluteRange covering groups 0..10 — group 2 is in range.

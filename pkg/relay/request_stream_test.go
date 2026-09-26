@@ -9,27 +9,24 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
-// §3.3.2: "A FIN only indicates that an endpoint will send no further messages
-// in that direction; it is not a request cancellation." "A requester, with the
-// exception of the sender of PUBLISH, MAY FIN immediately after sending a
-// message if it will not send a REQUEST_UPDATE." §3.3.3: "An endpoint that has
-// already sent a FIN on its sending direction and subsequently wishes to cancel
-// sends STOP_SENDING on the receiving direction."
+// Request stream lifecycle at the relay. A FIN is not a cancellation (§3.3.2);
+// after a FIN the cancel is STOP_SENDING (§3.3.3). Only the request's sender
+// may send REQUEST_UPDATE (§10.9), and only the publisher PUBLISH_STATE_NOTIFY
+// (§10.10).
 
 // TestRelay_SubscriberFINKeepsSubscription: a subscriber that FINs its side of
 // the SUBSCRIBE stream still receives objects, and its later STOP_SENDING is
 // what ends the subscription.
 func TestRelay_SubscriberFINKeepsSubscription(t *testing.T) {
 	t.Parallel()
-	pubSess, alias := publishWithTrackProps(t, nil)
+	pubSess, alias := newCam1Publisher(t, nil)
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -39,7 +36,7 @@ func TestRelay_SubscriberFINKeepsSubscription(t *testing.T) {
 		t.Fatalf("FIN: %v", err)
 	}
 
-	publishSubgroupObject(t, pubSess, alias, 3, -1)
+	publishObjects(t, pubSess, alias, 3, 1)
 	if !awaitSubgroupObject(t, subSess, 2*time.Second) {
 		t.Fatal("a FIN'd subscription stopped receiving objects")
 	}
@@ -50,16 +47,7 @@ func TestRelay_SubscriberFINKeepsSubscription(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	misses := 0
 	for group := uint64(4); ; group++ {
-		go func() {
-			sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
-				SubgroupIDMode: message.SubgroupIDExplicit, TrackAlias: alias, GroupID: group,
-			})
-			if err != nil {
-				return
-			}
-			_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte("x")})
-			_ = sg.Close()
-		}()
+		go sendObjects(pubSess, alias, group, 1)
 		// Three misses in a row, so a merely slow forward cannot pass.
 		if !awaitSubgroupObject(t, subSess, 200*time.Millisecond) {
 			if misses++; misses == 3 {
@@ -74,15 +62,14 @@ func TestRelay_SubscriberFINKeepsSubscription(t *testing.T) {
 	}
 }
 
-// TestRelay_PublishNamespaceFINStaysAdvertised: a publisher that FINs its
-// PUBLISH_NAMESPACE stream has not withdrawn it (§6.2: "withdrawn by
-// cancelling the request"), so SUBSCRIBEs for the namespace still reach it.
+// TestRelay_PublishNamespaceFINStaysAdvertised: a FIN'd PUBLISH_NAMESPACE is
+// not withdrawn (§6.2), so SUBSCRIBEs still reach its publisher.
 func TestRelay_PublishNamespaceFINStaysAdvertised(t *testing.T) {
 	t.Parallel()
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-	np, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns})
+	np, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
@@ -102,7 +89,7 @@ func TestRelay_PublishNamespaceFINStaysAdvertised(t *testing.T) {
 	}()
 	subSess := dialAnotherClient(t, pubSess)
 	go func() {
-		_, _ = subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte("cam1")})
+		_, _ = subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: []byte("cam1")})
 	}()
 	select {
 	case m := <-got:
@@ -114,22 +101,13 @@ func TestRelay_PublishNamespaceFINStaysAdvertised(t *testing.T) {
 	}
 }
 
-// TestRelay_FetchRequesterFINCompletesRequest: a FETCH requester that FINs will
-// send no REQUEST_UPDATE, and the relay has nothing more to send on the request
-// stream, so the relay FINs back and the request completes.
+// TestRelay_FetchRequesterFINCompletesRequest: after the FETCH requester's FIN
+// the relay FINs back and the request completes.
 func TestRelay_FetchRequesterFINCompletesRequest(t *testing.T) {
 	t.Parallel()
-	pubSess, alias := publishWithTrackProps(t, nil)
-	liveSess := dialAnotherClient(t, pubSess)
-	live, err := liveSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
-		Name:      []byte("cam1"),
-	})
-	if err != nil {
-		t.Fatalf("Subscribe: %v", err)
-	}
-	t.Cleanup(func() { _ = live.Close() })
-	publishSubgroupObject(t, pubSess, alias, 3, -1)
+	pubSess, alias := newCam1Publisher(t, nil)
+	liveSess := newCam1Subscriber(t, pubSess)
+	publishObjects(t, pubSess, alias, 3, 1)
 	if !awaitSubgroupObject(t, liveSess, 2*time.Second) {
 		t.Fatal("object not forwarded")
 	}
@@ -137,7 +115,7 @@ func TestRelay_FetchRequesterFINCompletesRequest(t *testing.T) {
 	fetchSess := dialAnotherClient(t, pubSess)
 	loc := message.Location{Group: 3}
 	fr, err := fetchSess.Fetch(t.Context(), &message.Fetch{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		Parameters: message.Parameters{fetchRangeFilter(loc, loc)},
 	})
@@ -168,15 +146,14 @@ func TestRelay_FetchRequesterFINCompletesRequest(t *testing.T) {
 	}
 }
 
-// TestRelay_SubscribeNamespaceFINKeepsSubscription: a SUBSCRIBE_NAMESPACE
-// ends only by "resetting or sending STOP_SENDING on the stream" (§6.1), so a
-// subscriber that FINs still hears about a publisher that arrives later.
+// TestRelay_SubscribeNamespaceFINKeepsSubscription: a FIN'd SUBSCRIBE_NAMESPACE
+// still hears about a later publisher (§6.1).
 func TestRelay_SubscribeNamespaceFINKeepsSubscription(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 	nsSub, err := subSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -188,7 +165,7 @@ func TestRelay_SubscribeNamespaceFINKeepsSubscription(t *testing.T) {
 
 	pubSess := dialAnotherClient(t, subSess)
 	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+		Namespace: ns("video", "cam1"),
 	}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
@@ -204,7 +181,7 @@ func TestRelay_SubscribeTracksFINKeepsSubscription(t *testing.T) {
 	subSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 	ts, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeTracks: %v", err)
@@ -216,7 +193,7 @@ func TestRelay_SubscribeTracksFINKeepsSubscription(t *testing.T) {
 
 	pubSess := dialAnotherClient(t, subSess)
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: wire.TrackNamespace{[]byte("video"), []byte("cam7")},
+		Namespace: ns("video", "cam7"),
 		Name:      []byte("rtp"),
 	})
 	if err != nil {
@@ -242,15 +219,14 @@ func TestRelay_SubscribeTracksFINKeepsSubscription(t *testing.T) {
 	}
 }
 
-// TestRelay_PublishNamespaceStopSendingAfterFINWithdraws: after a FIN, the
-// publisher's STOP_SENDING is the §3.3.3 cancel — the relay withdraws the
-// namespace and tells the subscribers it notified with NAMESPACE_DONE.
+// TestRelay_PublishNamespaceStopSendingAfterFINWithdraws: STOP_SENDING after a
+// FIN withdraws the namespace (§3.3.3); subscribers get NAMESPACE_DONE.
 func TestRelay_PublishNamespaceStopSendingAfterFINWithdraws(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 	nsSub, err := subSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -258,7 +234,7 @@ func TestRelay_PublishNamespaceStopSendingAfterFINWithdraws(t *testing.T) {
 
 	pubSess := dialAnotherClient(t, subSess)
 	np, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+		Namespace: ns("video", "cam1"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -272,5 +248,68 @@ func TestRelay_PublishNamespaceStopSendingAfterFINWithdraws(t *testing.T) {
 	np.Stream.CancelRead(uint64(moqt.StreamResetCancelled)) // then the cancel
 	if got := relaytest.ReadNextMessage(t, nsSub, time.After(2*time.Second)); !isNamespaceDone(got) {
 		t.Fatalf("got %T after the publisher's STOP_SENDING, want NAMESPACE_DONE", got)
+	}
+}
+
+// TestRelay_SubscriberPublishStateNotifyClosesSession: PUBLISH_STATE_NOTIFY
+// from the subscriber closes the session (§10.10).
+func TestRelay_SubscriberPublishStateNotifyClosesSession(t *testing.T) {
+	t.Parallel()
+	pubSess, _ := newCam1Publisher(t, nil)
+	subSess := dialAnotherClient(t, pubSess)
+	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
+		Namespace: ns("video"),
+		Name:      []byte("cam1"),
+	})
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	go func() { _ = message.Marshal(subReq.Stream, &message.PublishStateNotify{}) }()
+	requireSessionClosed(t, subSess, "a subscriber's PUBLISH_STATE_NOTIFY")
+}
+
+// TestRelay_UpstreamRequestUpdateOnSubscribeClosesSession: on the relay's own
+// upstream SUBSCRIBE the publisher is not the request's sender, so its
+// REQUEST_UPDATE is a PROTOCOL_VIOLATION (§10.9).
+func TestRelay_UpstreamRequestUpdateOnSubscribeClosesSession(t *testing.T) {
+	t.Parallel()
+	video := ns("video")
+	upSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	go func() {
+		r, err := upSess.AcceptRequest(t.Context())
+		if err != nil {
+			return
+		}
+		if _, err := r.AcceptSubscribe(nil); err != nil {
+			return
+		}
+		_ = message.Marshal(r.Stream, &message.RequestUpdate{RequestID: upSess.AllocRequestID()})
+	}()
+	live := dialAnotherClient(t, upSess)
+	go func() {
+		_, _ = live.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: []byte("cam1")})
+	}()
+	requireSessionClosed(t, upSess, "a REQUEST_UPDATE on the relay's own SUBSCRIBE")
+}
+
+// TestRelay_PublisherRequestUpdateOnPublishIsAllowed: the publisher of an
+// accepted PUBLISH may send REQUEST_UPDATE (§10.9); the relay declines it
+// without closing the session.
+func TestRelay_PublisherRequestUpdateOnPublishIsAllowed(t *testing.T) {
+	t.Parallel()
+	pubSess, _ := newCam1Publisher(t, nil)
+	pub := publish(t, pubSess, &message.Publish{Namespace: ns("video"), Name: []byte("cam2")})
+	_, err := pub.Update(t.Context(), message.Parameters{message.ForwardParam(true)})
+	if rej, ok := errors.AsType[*session.RequestRejectedError](err); !ok || rej.Code != moqt.RequestNotSupported {
+		t.Fatalf("Update on an accepted PUBLISH = %v, want REQUEST_ERROR NOT_SUPPORTED", err)
+	}
+	select {
+	case <-pubSess.Done():
+		t.Fatalf("relay closed the session on a legal REQUEST_UPDATE: %v", pubSess.Err())
+	case <-time.After(200 * time.Millisecond):
 	}
 }

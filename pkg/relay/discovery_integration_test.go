@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
@@ -34,7 +33,7 @@ func TestDiscovery_PublishOnFirstUpstream(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := clientSess.Publish(t.Context(), &message.Publish{
-		Namespace:       wire.TrackNamespace{[]byte("video")},
+		Namespace:       ns("video"),
 		Name:            []byte("cam1"),
 		TrackAlias:      1,
 		TrackProperties: []byte("rtp-h265"),
@@ -84,7 +83,7 @@ func TestDiscovery_UnpublishOnLastUpstream(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := clientSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 1,
 	})
@@ -136,7 +135,7 @@ func TestDiscovery_PublishNamespaceOnFirstAdvertise(t *testing.T) {
 	pubSess2 := dialAnotherClient(t, pubSess1)
 
 	pns1, err := pubSess1.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("chat")},
+		Namespace: ns("chat"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace #1: %v", err)
@@ -155,7 +154,7 @@ func TestDiscovery_PublishNamespaceOnFirstAdvertise(t *testing.T) {
 	// Second publish from a different session: SAME namespace, SAME relay.
 	// Discovery already has the entry — no new event.
 	pns2, err := pubSess2.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("chat")},
+		Namespace: ns("chat"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace #2: %v", err)
@@ -192,13 +191,13 @@ func TestDiscovery_UnpublishNamespaceOnLastWithdraw(t *testing.T) {
 	pubSess2 := dialAnotherClient(t, pubSess1)
 
 	pns1, err := pubSess1.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("chat")},
+		Namespace: ns("chat"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace #1: %v", err)
 	}
 	pns2, err := pubSess2.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("chat")},
+		Namespace: ns("chat"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace #2: %v", err)
@@ -239,7 +238,7 @@ func TestDiscovery_NilDiscoveryIsNoop(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := clientSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 1,
 	})

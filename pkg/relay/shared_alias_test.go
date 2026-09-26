@@ -7,7 +7,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -22,8 +21,8 @@ func TestRelay_SharedTrackAliasSurvivesFirstSubscriptionEnd(t *testing.T) {
 	const alias = uint64(42)
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-	ns := wire.TrackNamespace{[]byte("video")}
-	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	video := ns("video")
+	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 
@@ -63,7 +62,7 @@ func TestRelay_SharedTrackAliasSurvivesFirstSubscriptionEnd(t *testing.T) {
 	done := make(chan error, 2)
 	for _, s := range []*session.Session{subA, subB} {
 		go func() {
-			_, err := s.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte("cam1")})
+			_, err := s.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: []byte("cam1")})
 			done <- err
 		}()
 	}

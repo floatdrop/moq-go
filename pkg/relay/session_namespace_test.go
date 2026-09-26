@@ -2,14 +2,11 @@ package relay_test
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
-	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
@@ -23,7 +20,7 @@ func TestPublishNamespace_AcceptedAndRegistered(t *testing.T) {
 	defer teardown()
 
 	stream, err := clientSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+		Namespace: ns("video", "cam1"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -46,7 +43,7 @@ func TestSubscribeNamespace_AcceptedAndDeliversInitialNamespaces(t *testing.T) {
 
 	// First publisher: video/cam1.
 	pubStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+		Namespace: ns("video", "cam1"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -60,7 +57,7 @@ func TestSubscribeNamespace_AcceptedAndDeliversInitialNamespaces(t *testing.T) {
 	subSess := dialAnotherClient(t, pubSess)
 
 	subStream, err := subSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -88,7 +85,7 @@ func TestPublishNamespace_FanoutsToMatchingSubscriber(t *testing.T) {
 	defer teardown()
 
 	subStream, err := subSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -98,7 +95,7 @@ func TestPublishNamespace_FanoutsToMatchingSubscriber(t *testing.T) {
 	pubSess := dialAnotherClient(t, subSess)
 
 	pubStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video"), []byte("cam2")},
+		Namespace: ns("video", "cam2"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -140,7 +137,7 @@ func TestSubscribeTracks_AcceptedWithoutForwarding(t *testing.T) {
 	defer teardown()
 
 	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeTracks: %v", err)
@@ -162,7 +159,7 @@ func TestPublishNamespace_AuthDenialUsesPolicyCode(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
 	if got := auth.publishNamespaceCalls.Load(); got != 1 {
@@ -183,7 +180,7 @@ func TestSubscribeNamespace_AuthDenialUsesPolicyCode(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
 	if got := auth.subscribeNamespaceCalls.Load(); got != 1 {
@@ -200,7 +197,7 @@ func TestSubscribeTracks_AuthDenialUsesPolicyCode(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
 	if got := auth.subscribeTracksCalls.Load(); got != 1 {
@@ -209,86 +206,6 @@ func TestSubscribeTracks_AuthDenialUsesPolicyCode(t *testing.T) {
 }
 
 // ----- shared helpers --------------------------------------------------
-
-// dialAnotherClient opens a fresh client session on the same in-process
-// relay that `existing` is connected to. The implementation reaches into
-// the testing package's connectRelay scope via a side-channel: we keep a
-// per-test cache of (relayInstance, listener) tuples in the test file.
-//
-// In practice the simplest approach is: a brand-new pipe listener and relay
-// per call would defeat the purpose, so we instead store the listener on a
-// global init in connectRelay. Refactor: we expose newListenerForExisting()
-// via a package-level map keyed on the *session.Session of the first client.
-//
-// To keep the diff focused, the implementation uses a global mutex-guarded
-// map updated by connectRelay below.
-var (
-	pipeListenerMu sync.Mutex
-	pipeListenerOf = make(map[*session.Session]*pipeListener)
-)
-
-// dialAnotherClient accepts testing.TB so it serves both tests and
-// benchmarks. The handshake uses context.Background() rather than a
-// per-test context (testing.TB has no Context()); the returned session is
-// registered on the relay's client tracker, so connectRelay's teardown
-// closes it.
-func dialAnotherClient(tb testing.TB, existing *session.Session) *session.Session {
-	tb.Helper()
-	pipeListenerMu.Lock()
-	l, ok := pipeListenerOf[existing]
-	pipeListenerMu.Unlock()
-	if !ok {
-		tb.Fatal("dialAnotherClient: no pipeListener registered for the existing session; was connectRelay used?")
-	}
-	conn, err := l.Dial()
-	if err != nil {
-		tb.Fatalf("listener.Dial: %v", err)
-	}
-	sess, err := session.Client(context.Background(), conn)
-	if err != nil {
-		tb.Fatalf("session.Client: %v", err)
-	}
-	// Register on the same client tracker as the primary session so
-	// the teardown closes this dialled client too. See
-	// connectRelay for why this matters across
-	// -count=N runs.
-	pipeListenerClientsMu.Lock()
-	if tracker, ok := pipeListenerClients[existing]; ok {
-		tracker.add(sess)
-	}
-	pipeListenerClientsMu.Unlock()
-	return sess
-}
-
-// dialAnotherClientWithLimits is [dialAnotherClient] with explicit bidi-stream
-// credit caps on the new connection. serverBidi bounds how many bidi streams
-// the relay can open toward this client — set it low to force the relay's
-// PUBLISH fan-out into the PUBLISH_SKIPPED (§10.21) path.
-func dialAnotherClientWithLimits(t *testing.T, existing *session.Session, clientBidi, serverBidi int) *session.Session {
-	t.Helper()
-	pipeListenerMu.Lock()
-	l, ok := pipeListenerOf[existing]
-	pipeListenerMu.Unlock()
-	if !ok {
-		t.Fatal(
-			"dialAnotherClientWithLimits: no pipeListener registered for the existing session; was connectRelay used?",
-		)
-	}
-	conn, err := l.DialWithLimits(clientBidi, serverBidi)
-	if err != nil {
-		t.Fatalf("listener.DialWithLimits: %v", err)
-	}
-	sess, err := session.Client(t.Context(), conn)
-	if err != nil {
-		t.Fatalf("session.Client: %v", err)
-	}
-	pipeListenerClientsMu.Lock()
-	if tracker, ok := pipeListenerClients[existing]; ok {
-		tracker.add(sess)
-	}
-	pipeListenerClientsMu.Unlock()
-	return sess
-}
 
 // TestNamespaceStreams_AnswerRequestUpdate pins §10.9 on the namespace
 // request streams: the relay previously held them open with a drain that
@@ -303,7 +220,7 @@ func TestNamespaceStreams_AnswerRequestUpdate(t *testing.T) {
 	defer teardown()
 
 	nsPub, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -312,7 +229,7 @@ func TestNamespaceStreams_AnswerRequestUpdate(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	nsSub, err := subSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -334,4 +251,129 @@ func TestNamespaceStreams_AnswerRequestUpdate(t *testing.T) {
 	if _, err := subSess.UpdateRequest(ctx, nsSub.Stream, nil); err != nil {
 		t.Fatalf("SUBSCRIBE_NAMESPACE REQUEST_UPDATE unanswered (§10.9): %v", err)
 	}
+}
+
+// TestRelay_PrefixOverlap: within a session, a SUBSCRIBE_NAMESPACE or
+// SUBSCRIBE_TRACKS whose prefix overlaps an established one of the same type is
+// PREFIX_OVERLAP; the two types have independent spaces (§10.19, §10.20).
+func TestRelay_PrefixOverlap(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nested SUBSCRIBE_NAMESPACE is rejected", func(t *testing.T) {
+		t.Parallel()
+		sess, teardown := connectRelay(t, relay.Config{})
+		defer teardown()
+		first, err := sess.SubscribeNamespace(
+			t.Context(),
+			&message.SubscribeNamespace{TrackNamespacePrefix: ns("video")},
+		)
+		if err != nil {
+			t.Fatalf("first SubscribeNamespace: %v", err)
+		}
+		t.Cleanup(func() { _ = first.Close() })
+		_, err = sess.SubscribeNamespace(
+			t.Context(),
+			&message.SubscribeNamespace{TrackNamespacePrefix: ns("video", "cam1")},
+		)
+		requireRejectedWithCode(t, err, moqt.RequestPrefixOverlap)
+	})
+
+	t.Run("nested SUBSCRIBE_TRACKS is rejected", func(t *testing.T) {
+		t.Parallel()
+		sess, teardown := connectRelay(t, relay.Config{})
+		defer teardown()
+		first, err := sess.SubscribeTracks(
+			t.Context(),
+			&message.SubscribeTracks{TrackNamespacePrefix: ns("video", "cam1")},
+		)
+		if err != nil {
+			t.Fatalf("first SubscribeTracks: %v", err)
+		}
+		t.Cleanup(func() { _ = first.Close() })
+		_, err = sess.SubscribeTracks(t.Context(), &message.SubscribeTracks{TrackNamespacePrefix: ns("video")})
+		requireRejectedWithCode(t, err, moqt.RequestPrefixOverlap)
+	})
+
+	t.Run("the empty prefix overlaps everything", func(t *testing.T) {
+		t.Parallel()
+		sess, teardown := connectRelay(t, relay.Config{})
+		defer teardown()
+		first, err := sess.SubscribeNamespace(
+			t.Context(),
+			&message.SubscribeNamespace{TrackNamespacePrefix: ns("video")},
+		)
+		if err != nil {
+			t.Fatalf("first SubscribeNamespace: %v", err)
+		}
+		t.Cleanup(func() { _ = first.Close() })
+		_, err = sess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{})
+		requireRejectedWithCode(t, err, moqt.RequestPrefixOverlap)
+	})
+
+	t.Run("the two types have independent spaces", func(t *testing.T) {
+		t.Parallel()
+		sess, teardown := connectRelay(t, relay.Config{})
+		defer teardown()
+		a, err := sess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{TrackNamespacePrefix: ns("video")})
+		if err != nil {
+			t.Fatalf("SubscribeNamespace: %v", err)
+		}
+		t.Cleanup(func() { _ = a.Close() })
+		b, err := sess.SubscribeTracks(t.Context(), &message.SubscribeTracks{TrackNamespacePrefix: ns("video")})
+		if err != nil {
+			t.Fatalf("SubscribeTracks with the same prefix: %v", err)
+		}
+		t.Cleanup(func() { _ = b.Close() })
+	})
+
+	t.Run("disjoint prefixes are accepted", func(t *testing.T) {
+		t.Parallel()
+		sess, teardown := connectRelay(t, relay.Config{})
+		defer teardown()
+		a, err := sess.SubscribeNamespace(
+			t.Context(),
+			&message.SubscribeNamespace{TrackNamespacePrefix: ns("video", "a")},
+		)
+		if err != nil {
+			t.Fatalf("SubscribeNamespace a: %v", err)
+		}
+		t.Cleanup(func() { _ = a.Close() })
+		b, err := sess.SubscribeNamespace(
+			t.Context(),
+			&message.SubscribeNamespace{TrackNamespacePrefix: ns("video", "b")},
+		)
+		if err != nil {
+			t.Fatalf("SubscribeNamespace b (disjoint): %v", err)
+		}
+		t.Cleanup(func() { _ = b.Close() })
+	})
+
+	t.Run("a cancelled prefix can be reused", func(t *testing.T) {
+		t.Parallel()
+		sess, teardown := connectRelay(t, relay.Config{})
+		defer teardown()
+		first, err := sess.SubscribeNamespace(
+			t.Context(),
+			&message.SubscribeNamespace{TrackNamespacePrefix: ns("video")},
+		)
+		if err != nil {
+			t.Fatalf("first SubscribeNamespace: %v", err)
+		}
+		_ = first.Close() // cancels
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			again, err := sess.SubscribeNamespace(
+				t.Context(),
+				&message.SubscribeNamespace{TrackNamespacePrefix: ns("video")},
+			)
+			if err == nil {
+				t.Cleanup(func() { _ = again.Close() })
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("prefix never released after cancel: %v", err)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
 }

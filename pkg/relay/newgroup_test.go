@@ -6,47 +6,8 @@ import (
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
-	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
-
-// dynamicGroupsProperties builds raw Track Properties advertising
-// DYNAMIC_GROUPS (§12.6) with the given value.
-func dynamicGroupsProperties(value uint64) []byte {
-	return message.AppendTrackProperties([]wire.KVPair{
-		{Type: message.PropertyDynamicGroups, IntVal: value},
-	})
-}
-
-// watchUpstreamNewGroup reads the publisher's PUBLISH stream looking for the
-// relay's upstream REQUEST_UPDATE (§10.9, §10.2.19) and reports the first
-// NEW_GROUP_REQUEST value it carries on the returned channel. Any REQUEST_UPDATE
-// is answered with REQUEST_OK so the relay's UpdateRequest can complete.
-func watchUpstreamNewGroup(t *testing.T, pubStream session.Stream) <-chan uint64 {
-	t.Helper()
-	got := make(chan uint64, 1)
-	go func() {
-		for {
-			m, err := message.Parse(pubStream)
-			if err != nil {
-				return
-			}
-			upd, ok := m.(*message.RequestUpdate)
-			if !ok {
-				continue
-			}
-			_ = message.Marshal(pubStream, &message.RequestOK{})
-			if v, ok := newGroupReqValue(upd.Parameters); ok {
-				select {
-				case got <- v:
-				default:
-				}
-			}
-		}
-	}()
-	return got
-}
 
 func newGroupReqValue(ps message.Parameters) (uint64, bool) {
 	if p, ok := ps.Find(message.ParamNewGroupRequest); ok {
@@ -68,7 +29,7 @@ func TestNewGroupRequest_ForwardedUpstreamOnUpdate(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:       wire.TrackNamespace{[]byte("video")},
+		Namespace:       ns("video"),
 		Name:            []byte("cam1"),
 		TrackAlias:      publisherAlias,
 		TrackProperties: dynamicGroupsProperties(1),
@@ -82,7 +43,7 @@ func TestNewGroupRequest_ForwardedUpstreamOnUpdate(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
@@ -124,7 +85,7 @@ func TestNewGroupRequest_BackToBackUpdatesSurvive(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:       wire.TrackNamespace{[]byte("video")},
+		Namespace:       ns("video"),
 		Name:            []byte("cam1"),
 		TrackAlias:      publisherAlias,
 		TrackProperties: dynamicGroupsProperties(1),
@@ -156,7 +117,7 @@ func TestNewGroupRequest_BackToBackUpdatesSurvive(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
@@ -195,7 +156,7 @@ func TestNewGroupRequest_NotForwardedWithoutDynamicGroups(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 		// No DYNAMIC_GROUPS property.
@@ -209,7 +170,7 @@ func TestNewGroupRequest_NotForwardedWithoutDynamicGroups(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
