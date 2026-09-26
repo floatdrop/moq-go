@@ -285,12 +285,12 @@ func (s *IncomingFetchStream) Cancel(code moqt.StreamResetCode) {
 func (s *IncomingFetchStream) ReadObject() (*message.FetchObject, error) {
 	obj := &message.FetchObject{}
 	if err := obj.Parse(s.rd); err != nil {
+		// §11.4.4: a Serialization Flags value of 128 or more that is not
+		// an End of Range marker "is a PROTOCOL_VIOLATION".
+		if errors.Is(err, message.ErrInvalidFetchFlags) {
+			return nil, s.sess.closeProtocolViolation(fmt.Errorf("moqt/session: fetch object: %w", err))
+		}
 		return nil, s.sess.checkFINMidObject(err)
-	}
-	// §11.4.4: a Serialization Flags value of 128 or more that is not an
-	// End of Range marker "is a PROTOCOL_VIOLATION".
-	if err := obj.Validate(); err != nil {
-		return nil, s.sess.closeProtocolViolation(fmt.Errorf("moqt/session: fetch object: %w", err))
 	}
 	return obj, nil
 }

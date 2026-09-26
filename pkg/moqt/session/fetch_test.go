@@ -260,28 +260,53 @@ func TestFetchOKEndBeforeStartClosesSession(t *testing.T) {
 }
 
 // TestFetchObjectInvalidFlagsCloseSession: Serialization Flags of 128 and
-// above other than the End of Range values are a PROTOCOL_VIOLATION (§11.4.4).
+// above other than the End of Range values are a PROTOCOL_VIOLATION (§11.4.4),
+// decided on the flags alone: whatever follows them, a whole object, a reset
+// or a Payload Length too large to read, is never parsed as their fields.
 func TestFetchObjectInvalidFlagsCloseSession(t *testing.T) {
 	t.Parallel()
-	client, server := openPair(t)
-	go func() {
-		out, err := server.OpenFetchStream(message.FetchHeader{RequestID: 0})
-		if err != nil {
-			return
-		}
-		_ = out.WriteObject(&message.FetchObject{SerializationFlags: 0x81, ObjectPayload: []byte("x")})
-		_ = out.Close()
-	}()
-	ds, err := client.AcceptDataStream(t.Context())
-	if err != nil {
-		t.Fatalf("AcceptDataStream: %v", err)
+	// 0xFF sets every field bit, so read as flags it would parse a Group ID
+	// Delta, Subgroup ID, Object ID Delta, Priority and Properties first.
+	flags := func(v uint64) []byte { return wire.AppendVarint(nil, v) }
+	for _, tc := range []struct {
+		name  string
+		write func(out *session.OutgoingFetchStream)
+	}{
+		{"then a whole object", func(out *session.OutgoingFetchStream) {
+			_ = out.WriteObject(&message.FetchObject{SerializationFlags: 0x81, ObjectPayload: []byte("x")})
+			_ = out.Close()
+		}},
+		{"then a reset", func(out *session.OutgoingFetchStream) {
+			_, _ = out.Write(flags(0xFF))
+			out.Cancel(moqt.StreamResetCancelled)
+		}},
+		{"then an oversized Payload Length", func(out *session.OutgoingFetchStream) {
+			_, _ = out.Write(wire.AppendVarint(flags(0x81), 1<<62-1))
+			_ = out.Close()
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client, server := openPair(t)
+			go func() {
+				out, err := server.OpenFetchStream(message.FetchHeader{RequestID: 0})
+				if err != nil {
+					return
+				}
+				tc.write(out)
+			}()
+			ds, err := client.AcceptDataStream(t.Context())
+			if err != nil {
+				t.Fatalf("AcceptDataStream: %v", err)
+			}
+			fs, ok := ds.(*session.IncomingFetchStream)
+			if !ok {
+				t.Fatalf("AcceptDataStream = %T, want a FETCH stream", ds)
+			}
+			if _, err := fs.ReadObject(); err == nil {
+				t.Fatal("ReadObject accepted invalid Serialization Flags")
+			}
+			requireClosedProtocolViolation(t, client)
+		})
 	}
-	fs, ok := ds.(*session.IncomingFetchStream)
-	if !ok {
-		t.Fatalf("AcceptDataStream = %T, want a FETCH stream", ds)
-	}
-	if _, err := fs.ReadObject(); err == nil {
-		t.Fatal("ReadObject accepted Serialization Flags 0x81")
-	}
-	requireClosedProtocolViolation(t, client)
 }
