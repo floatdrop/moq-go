@@ -1,6 +1,7 @@
 package message
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -340,6 +341,32 @@ func TestObjectPriorGaps(t *testing.T) {
 	raw := AppendTrackProperties([]wire.KVPair{kv(PropertyPriorGroupIDGap, 2)})
 	if n := testing.AllocsPerRun(10, func() { ObjectPriorGaps(raw) }); n != 0 {
 		t.Errorf("ObjectPriorGaps allocates %v times, want 0", n)
+	}
+}
+
+// TestImmutableProperties: the Immutable Properties value is returned as sent,
+// its serialization included (§12.7).
+func TestImmutableProperties(t *testing.T) {
+	inner := AppendTrackProperties([]wire.KVPair{kv(0x40, 1)})
+	for _, tc := range []struct {
+		name string
+		raw  []byte
+		want []byte
+		ok   bool
+	}{
+		{"empty", nil, nil, false},
+		{"mutable only", AppendTrackProperties([]wire.KVPair{kv(0x40, 1)}), nil, false},
+		{"present", AppendTrackProperties([]wire.KVPair{kv(0x42, 2), immutable(kv(0x40, 1))}), inner, true},
+		{"unparseable", []byte{0x02}, nil, false},
+	} {
+		got, ok := ImmutableProperties(tc.raw)
+		if ok != tc.ok || !bytes.Equal(got, tc.want) {
+			t.Errorf("%s: ImmutableProperties = (%x, %v), want (%x, %v)", tc.name, got, ok, tc.want, tc.ok)
+		}
+	}
+	raw := AppendTrackProperties([]wire.KVPair{immutable(kv(0x40, 1))})
+	if n := testing.AllocsPerRun(10, func() { ImmutableProperties(raw) }); n != 0 {
+		t.Errorf("ImmutableProperties allocates %v times, want 0", n)
 	}
 }
 

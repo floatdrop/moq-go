@@ -7,6 +7,7 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/relay/cache"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
@@ -68,6 +69,17 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		return
 	}
 	if !fresh {
+		if err := checkDuplicate(entry.Cache, &cache.CachedObject{
+			GroupID:           d.GroupID,
+			ObjectID:          d.ObjectID,
+			PublisherPriority: d.PublisherPriority,
+			ForwardingPref:    cache.ForwardingDatagram,
+			Status:            d.ObjectStatus,
+			Properties:        d.Properties,
+			Payload:           d.ObjectPayload,
+		}); err != nil {
+			h.endMalformedTrack(ctx, entry, h.sess, err)
+		}
 		return
 	}
 

@@ -142,7 +142,7 @@ By package, bottom-up along the dependency stack:
 
 | §     | Feature                              | Status | Notes |
 |-------|--------------------------------------|--------|-------|
-| 9.1   | Caching relays                       | DONE   | LRU+TTL object cache (`cache/cache.go`); updates limited to non-existence/properties. |
+| 9.1   | Caching relays                       | DONE   | LRU+TTL object cache (`cache/cache.go`); updates limited to non-existence/properties. A duplicate of a cached Object with a different Forwarding Preference, Subgroup ID, Priority or Payload, or different Immutable Properties (§2.4.2, §12.7), ends the track as malformed (`relay/handler_duplicate.go`); not checked once the first copy left the cache — see Limitations. |
 | 9.2   | Forward handling                     | DONE   | FORWARD flag honoured; Forward=0 pauses delivery. Upstream Forward is set to 1 only when a downstream subscriber forwards, else the relay pauses it (Forward=0) and resumes on the first forwarding subscriber. |
 | 9.3   | Multiple publishers                  | DONE   | Per-track upstreams; dedup by `{GroupID, ObjectID}`. Upstreams of one Subgroup share one downstream stream per subscriber, with the first one's SUBGROUP_HEADER; a later one's Object Properties reopen it with PROPERTIES set, so none are dropped (§2.5). Like a §11.4.3 gap reopen, the reset keeps already-written Objects only where RESET_STREAM_AT is in use; always setting PROPERTIES would avoid it at a byte per Object. |
 | 9.4   | Subscriber interactions              | DONE   | Upstream subscription established before SUBSCRIBE_OK; aggregation. |
@@ -433,8 +433,12 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   (`session.ErrMalformedTrack`), and the relay then ends the track: PUBLISH_DONE
   MALFORMED_TRACK to every downstream subscriber, its subscription to that
   publisher cancelled, the Object not cached. The relay also ends it for two
-  Prior Group ID Gap values in one Group. Not detected: §2.4.2's list other
-  than an Object after END_OF_GROUP on the same stream. A downstream FETCH
+  Prior Group ID Gap values in one Group, and for a duplicate that differs from
+  the cached first copy (§9.1; Payloads compared only when both copies are
+  Normal, since Normal may become End of Group). A duplicate is not compared
+  once the first copy left the cache (evicted or expired), nor while a
+  concurrent contributor has yet to cache it. Not detected: the rest of
+  §2.4.2's list other than an Object after END_OF_GROUP on the same stream. A downstream FETCH
   already being served from the cache when the track is found malformed is not
   reset: the relay does not track fetch streams per track. One interpretation:
   an Object with two Immutable Properties is treated as malformed, although

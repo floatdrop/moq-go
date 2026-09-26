@@ -106,3 +106,24 @@ func PriorObjectIDGap(raw []byte) (uint64, bool) {
 	g := ObjectPriorGaps(raw)
 	return g.Object, g.HasObject
 }
+
+// ImmutableProperties returns the value of the Immutable Properties (§12.7) in
+// an Object's raw Properties, serialized as received, and whether there is one.
+// Properties that do not parse carry none.
+//
+// Must not allocate.
+func ImmutableProperties(raw []byte) ([]byte, bool) {
+	r := wire.NewReader(raw)
+	var prev uint64
+	for !r.Empty() {
+		kv, next, err := r.KVPairView(prev)
+		if err != nil {
+			return nil, false
+		}
+		if kv.Type == PropertyImmutableProperties {
+			return kv.ByteVal, true
+		}
+		prev = next
+	}
+	return nil, false
+}

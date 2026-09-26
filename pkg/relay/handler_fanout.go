@@ -353,8 +353,9 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		pos.seq++
 		objectID := stream.ObjectID() // resolved by ReadObject (§11.4.2)
 
-		// Tracked whether or not this copy wins the dedup claim below.
-		terminal := obj.IsTerminal()
+		// Whether or not this copy wins the dedup claim below; the next
+		// iteration acts on it, so it can be set now.
+		terminalSeen = obj.IsTerminal()
 
 		// §9.3: the first upstream to deliver {GroupID, ObjectID} forwards it,
 		// unless an announced gap says it does not exist (§2.1, §9.1). Outside
@@ -365,8 +366,18 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			return
 		}
 		if !fresh {
-			if terminal {
-				terminalSeen = true
+			if err := checkDuplicate(entry.Cache, &cache.CachedObject{
+				GroupID:           hdr.GroupID,
+				ObjectID:          objectID,
+				SubgroupID:        hdr.SubgroupID,
+				PublisherPriority: hdr.PublisherPriority,
+				ForwardingPref:    cache.ForwardingSubgroup,
+				Status:            obj.ObjectStatus,
+				Properties:        obj.Properties,
+				Payload:           obj.Payload,
+			}); err != nil {
+				malformed(err)
+				return
 			}
 			continue // redundant copy already forwarded by a peer upstream.
 		}
@@ -423,10 +434,6 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			}
 		}
 		sg.Mu.Unlock()
-
-		if terminal {
-			terminalSeen = true
-		}
 	}
 }
 
