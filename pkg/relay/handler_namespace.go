@@ -270,15 +270,8 @@ func (h *sessionHandler) handleSubscribeTracks(
 
 // subscribeTracksForwarding resolves a SUBSCRIBE_TRACKS's FORWARD (§10.2.18,
 // default true) and GROUP_ORDER (§10.2.8, 0 when omitted), which §10.20.1
-// copies onto forwarded PUBLISHes. An out-of-range value is a
-// *paramProtocolViolation.
-func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder byte, err error) {
-	if err := checkForwardParam(ps); err != nil {
-		return false, 0, err
-	}
-	if err := checkGroupOrderParam(ps); err != nil {
-		return false, 0, err
-	}
+// copies onto forwarded PUBLISHes.
+func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder byte) {
 	forward = true
 	if p, ok := ps.Find(message.ParamForward); ok {
 		forward = p.Byte != 0
@@ -286,7 +279,7 @@ func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder 
 	if p, ok := ps.Find(message.ParamGroupOrder); ok {
 		groupOrder = p.Byte
 	}
-	return forward, groupOrder, nil
+	return forward, groupOrder
 }
 
 // serveNamespaceFollowups holds a namespace request stream open and answers
@@ -449,15 +442,7 @@ func (h *sessionHandler) tracksUpdate(
 		tokens = updTokens
 		params, err := h.resolveTracksParams(merged)
 		if err != nil {
-			if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
-				_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
-				return false
-			}
-			code := moqt.RequestMalformedTrack
-			if errors.Is(err, message.ErrInvalidFilter) {
-				code = moqt.RequestInvalidFilter
-			}
-			e.Finish(&message.RequestError{ErrorCode: code, ErrorReason: err.Error()})
+			e.Finish(&message.RequestError{ErrorCode: moqt.RequestInvalidFilter, ErrorReason: err.Error()})
 			return endAfterFinish(ctx, e)
 		}
 		oldPrefix := *cur
@@ -571,15 +556,11 @@ func mergeTracksUpdate(stored, upd message.Parameters) message.Parameters {
 	return out
 }
 
-// resolveTracksParams validates a SUBSCRIBE_TRACKS's parameters on a
-// SUBSCRIBE's terms (§10.20.1; errors as for
-// [sessionHandler.refuseSubscriptionParams]) and MAX_FILTER_RANGES (§5.1.4),
-// and resolves what forwarding needs.
+// resolveTracksParams validates a SUBSCRIBE_TRACKS's Range Filters on a
+// SUBSCRIBE's terms (§10.20.1) and MAX_FILTER_RANGES (§5.1.4), and resolves
+// what forwarding needs. An error is INVALID_FILTER.
 func (h *sessionHandler) resolveTracksParams(ps message.Parameters) (*registry.TracksParams, error) {
-	forward, groupOrder, err := subscribeTracksForwarding(ps)
-	if err != nil {
-		return nil, err
-	}
+	forward, groupOrder := subscribeTracksForwarding(ps)
 	rangeFilters, err := message.RangeFiltersFromParams(ps)
 	if err == nil && rangeFilters != nil {
 		err = rangeFilters.Validate(h.sess.MaxFilterRanges())

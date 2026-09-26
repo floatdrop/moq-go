@@ -1,9 +1,11 @@
 package session_test
 
 import (
+	"math"
 	"testing"
 	"time"
 
+	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 )
@@ -247,4 +249,100 @@ func TestIncludePropertiesOutOfRangeCloses(t *testing.T) {
 			requireClosedProtocolViolation(t, server)
 		})
 	}
+}
+
+// TestParamValueOutOfRangeCloses: a value the draft makes session-fatal closes
+// the receiver, in an opener and inside its FILL_PARAMETERS: GROUP_ORDER
+// outside {1, 2} (§10.2.8), FORWARD above 1 (§10.2.18), and a LOCATION_FILTER
+// whose end Group overflows (§5.1.2) are PROTOCOL_VIOLATION; a LOCATION_FILTER
+// or FILL_PARAMETERS that does not parse is KEY_VALUE_FORMATTING_ERROR (§1.4.3).
+func TestParamValueOutOfRangeCloses(t *testing.T) {
+	t.Parallel()
+	overflow := message.AbsoluteRangeFilter(message.Location{Group: math.MaxUint64}, 1)
+	unparsable := message.BytesParam(message.ParamLocationFilter, []byte{0xFF})
+	fill := func(inner ...message.Parameter) message.Parameter { return message.FillParametersParam(inner) }
+	cases := []struct {
+		name string
+		msg  message.WithRequestID
+		want moqt.SessionErrorCode
+	}{
+		{"GROUP_ORDER 0 in SUBSCRIBE", &message.Subscribe{
+			Name: []byte("t"),
+			Parameters: message.Parameters{
+				message.ByteParam(message.ParamGroupOrder, 0),
+			},
+		}, moqt.SessionProtocolViolation},
+		{"GROUP_ORDER 3 in PUBLISH", &message.Publish{
+			Name:       []byte("t"),
+			TrackAlias: 1,
+			Parameters: message.Parameters{
+				message.ByteParam(message.ParamGroupOrder, 3),
+			},
+		}, moqt.SessionProtocolViolation},
+		{"GROUP_ORDER 5 in FETCH", &message.Fetch{
+			Name: []byte("t"),
+			Parameters: message.Parameters{
+				message.ByteParam(message.ParamGroupOrder, 5),
+			},
+		}, moqt.SessionProtocolViolation},
+		{"GROUP_ORDER 7 inside FILL_PARAMETERS", &message.Subscribe{
+			Name: []byte("t"),
+			Parameters: message.Parameters{
+				fill(message.ByteParam(message.ParamGroupOrder, 7)),
+			},
+		}, moqt.SessionProtocolViolation},
+		{"FORWARD 2 in PUBLISH", &message.Publish{Name: []byte("t"), TrackAlias: 1,
+			Parameters: message.Parameters{message.ByteParam(message.ParamForward, 2)}}, moqt.SessionProtocolViolation},
+		{"LOCATION_FILTER overflow in SUBSCRIBE", &message.Subscribe{Name: []byte("t"),
+			Parameters: message.Parameters{overflow}}, moqt.SessionProtocolViolation},
+		{"LOCATION_FILTER overflow in FETCH", &message.Fetch{Name: []byte("t"),
+			Parameters: message.Parameters{overflow}}, moqt.SessionProtocolViolation},
+		{"LOCATION_FILTER overflow inside FILL_PARAMETERS", &message.SubscribeTracks{TrackNamespacePrefix: videoNS,
+			Parameters: message.Parameters{fill(overflow)}}, moqt.SessionProtocolViolation},
+		{"LOCATION_FILTER that does not parse", &message.Subscribe{Name: []byte("t"),
+			Parameters: message.Parameters{unparsable}}, moqt.SessionKeyValueFormattingError},
+		{"unknown parameter inside FILL_PARAMETERS", &message.Subscribe{Name: []byte("t"),
+			Parameters: message.Parameters{fill(message.VarintParam(0x3E, 1))}}, moqt.SessionProtocolViolation},
+		{"FILL_PARAMETERS that does not parse", &message.Subscribe{Name: []byte("t"),
+			Parameters: message.Parameters{message.BytesParam(message.ParamFillParameters, []byte{0x05})}},
+			moqt.SessionKeyValueFormattingError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			client, server := openPair(t)
+			go func() {
+				tc.msg.SetRequestID(0)
+				_, _ = session.OpenRequestForTest(client, tc.msg)
+			}()
+			_, _ = server.AcceptRequest(t.Context())
+			requireClosedCode(t, server, tc.want)
+		})
+	}
+}
+
+// TestParamValueOutOfRangeInFollowupsCloses: the same holds for the
+// follow-ups a broker reads: FORWARD in PUBLISH_STATE_NOTIFY and in a
+// REQUEST_UPDATE (§10.2.18).
+func TestParamValueOutOfRangeInFollowupsCloses(t *testing.T) {
+	t.Parallel()
+	bad := message.Parameters{message.ByteParam(message.ParamForward, 3)}
+	t.Run("PUBLISH_STATE_NOTIFY", func(t *testing.T) {
+		t.Parallel()
+		client, server := openPair(t)
+		sub, pub := subscribePair(t, client, server)
+		go func() { _ = message.Marshal(pub.Stream, &message.PublishStateNotify{Parameters: bad}) }()
+		go func() { _ = sub.Broker().Serve(t.Context(), nil) }()
+		requireClosedProtocolViolation(t, client)
+	})
+	t.Run("REQUEST_UPDATE", func(t *testing.T) {
+		t.Parallel()
+		client, server := openPair(t)
+		sub, pub := subscribePair(t, client, server)
+		go func() {
+			_ = message.Marshal(sub.Stream, &message.RequestUpdate{RequestID: client.AllocRequestID(), Parameters: bad})
+		}()
+		go func() { _ = pub.Broker().Serve(t.Context(), nil) }()
+		requireClosedProtocolViolation(t, server)
+	})
 }

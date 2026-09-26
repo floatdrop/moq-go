@@ -1,6 +1,7 @@
 package message
 
 import (
+	"errors"
 	"fmt"
 	"math"
 
@@ -78,12 +79,15 @@ func (f *LocationFilter) Validate() error {
 		return fmt.Errorf("moqt/message: LOCATION_FILTER has %d fields, want 0-4 (§5.1.2)", f.Fields)
 	}
 	if f.HasEnd() && f.StartGroup > math.MaxUint64-f.EndGroupDelta {
-		return fmt.Errorf(
-			"moqt/message: LOCATION_FILTER end group overflow (start=%d delta=%d) (PROTOCOL_VIOLATION §5.1.2)",
-			f.StartGroup, f.EndGroupDelta)
+		return fmt.Errorf("%w (start=%d delta=%d)", errEndGroupOverflow, f.StartGroup, f.EndGroupDelta)
 	}
 	return nil
 }
+
+// errEndGroupOverflow is a LOCATION_FILTER whose StartGroup + EndGroupDelta
+// exceeds 2^64 - 1: a PROTOCOL_VIOLATION (§5.1.2), unlike a value that does
+// not parse ([ErrValueFormatting]).
+var errEndGroupOverflow = errors.New("moqt/message: LOCATION_FILTER end group overflow (PROTOCOL_VIOLATION §5.1.2)")
 
 // Start resolves the first Location that passes the filter, given the
 // publisher's current Largest Object. hasLargest is false before anything has

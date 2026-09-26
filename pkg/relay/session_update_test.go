@@ -2,7 +2,6 @@ package relay_test
 
 import (
 	"context"
-	"math"
 	"testing"
 	"time"
 
@@ -84,13 +83,9 @@ func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 	}
 	defer subStream.Close()
 
-	// An AbsoluteRange filter whose end-group delta overflows the start group
-	// (§5.1.2) fails installSubscribeParams' filter validation. Unlike an
-	// out-of-range GROUP_ORDER/FORWARD, a bad filter stays request-scoped, so
-	// the relay answers REQUEST_ERROR rather than closing the session.
-	_, err = subSess.UpdateRequest(t.Context(), subStream,
-		message.Parameters{message.AbsoluteRangeFilter(message.Location{Group: math.MaxUint64}, 1)})
-	requireRejectedWithCode(t, err, moqt.RequestMalformedTrack)
+	// An invalid Range Filter is refused per request (§5.1.4).
+	_, err = subSess.UpdateRequest(t.Context(), subStream, message.Parameters{badRangeFilter()})
+	requireRejectedWithCode(t, err, moqt.RequestInvalidFilter)
 
 	// §10.9: the failed update is followed by a PUBLISH_DONE with
 	// UPDATE_FAILED on the same stream.
