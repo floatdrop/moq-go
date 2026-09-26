@@ -506,10 +506,6 @@ High:
   a reset subgroup stream or a subgroup still in flight leaves such holes. §10.13:
   a relay that meets an uncached Object of unknown status "MUST pause subsequent
   delivery until it has confirmed the object's status upstream".
-- The relay's 32-Group dedup window measures Group ID distance, so an Object of a
-  Group 32 or more IDs below the newest is dropped as already delivered and the
-  downstream stream then FINs. §9.4: "MUST NOT reorder or drop objects received on
-  a multi-object stream"; §11.4.3 requires a reset when Objects were not delivered.
 - A subscriber's cancellation does not reset the subscription's open subgroup
   streams or fill fetch streams: the relay keeps forwarding, then FINs (§5.1.1:
   "MUST reset any open streams associated with the SUBSCRIBE"; §5.1.3.1).
