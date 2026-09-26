@@ -9,31 +9,18 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
-// endMalformedTrack is the relay's response to a malformed track (§2.4.2)
-// detected in an Object that src sent on entry's track. As a relay it "MUST
-// immediately terminate downstream subscriptions with PUBLISH_DONE [...] with
-// Status Code MALFORMED_TRACK": every downstream subscription, whichever
-// upstream fed it, since the track is malformed. As a subscriber it "MUST
-// cancel any corresponding subscription or fetches for that Track from that
-// publisher": the upstream subscriptions on src only, so a redundant publisher
-// (§9.5) keeps serving later subscribers. The Object is never cached — every
-// caller detects it before the cache is written.
+// endMalformedTrack handles a malformed track (§2.4.2) detected in an Object
+// src sent on entry's track: every downstream subscription ends with
+// PUBLISH_DONE MALFORMED_TRACK, and only the upstreams on src are cancelled,
+// so a redundant publisher (§9.5) keeps serving. Callers never cache the
+// Object. Open subgroup streams are reset now, since PUBLISH_DONE waits for
+// them (§10.12). Downstream fetch streams are not reset.
 //
-// The terminated subscriptions' open subgroup streams are reset with
-// MALFORMED_TRACK now: PUBLISH_DONE waits for them (§10.12), and one left
-// open by an idle upstream stream would hold it back indefinitely.
+// Downstreams are terminated before the upstream is cancelled: the first
+// termination wins, and the upstream's teardown would use its own code.
 //
-// The downstreams are terminated before the upstream is cancelled:
-// cancelling makes its owner unregister it, which terminates downstreams with
-// the upstream's own code, and the first termination wins.
-//
-// Cancelling the upstream uses MALFORMED_TRACK too. §3.3.4 defines it for "A
-// relay publisher detected that the track was malformed", the downstream
-// direction; saying why the relay cancels is this relay's choice under "SHOULD
-// use a relevant error code", where CANCELLED would say less.
-//
-// Downstream fetch streams already serving the track are not reset: the relay
-// does not track them per track.
+// Interpretation: the upstream cancel also uses MALFORMED_TRACK, which §3.3.4
+// defines for the downstream direction.
 func (h *sessionHandler) endMalformedTrack(
 	ctx context.Context,
 	entry *registry.TrackEntry,
@@ -53,8 +40,7 @@ func (h *sessionHandler) endMalformedTrack(
 			cancelled++
 		}
 	}
-	// Once per upstream at Info; a publisher that keeps sending (datagrams,
-	// other streams) after the cancel is logged at Debug.
+	// Info once per upstream; later detections are Debug.
 	level := slog.LevelDebug
 	if cancelled > 0 {
 		level = slog.LevelInfo
@@ -64,9 +50,7 @@ func (h *sessionHandler) endMalformedTrack(
 }
 
 // resetWriters resets the open subgroup writers of subs on entry with
-// MALFORMED_TRACK. Each writer's slot is set to nil, which also keeps the
-// joiner scan from reopening one for the same Subgroup. The writers drain in
-// the background, joined by the handler's wait group.
+// MALFORMED_TRACK. The nil slot keeps the joiner scan from reopening one.
 func (h *sessionHandler) resetWriters(entry *registry.TrackEntry, subs []*registry.DownstreamSub) {
 	if len(subs) == 0 {
 		return

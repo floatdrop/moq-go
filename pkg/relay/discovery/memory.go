@@ -26,13 +26,8 @@ var ErrClosed = errors.New("discovery: store closed")
 // relay is shutting down, and re-advertising it would undo the withdrawal.
 var ErrWithdrawn = errors.New("discovery: relay withdrawn")
 
-// defaultWatchBufferSize bounds the per-watcher event channel: how many live
-// events a watcher may fall behind before its watch is ended (see
-// [DiscoveryStore.WatchTracks]). The size is a compromise between burst tolerance
-// and memory pressure under a misbehaving subscriber; 32 is large enough
-// to absorb typical bursty publish patterns and small enough that a
-// stalled consumer is noticed within a few seconds at typical event
-// rates.
+// defaultWatchBufferSize is how many live events a watcher may fall behind
+// before its watch is ended (see [DiscoveryStore.WatchTracks]).
 const defaultWatchBufferSize = 32
 
 // MemoryStore is the in-process [DiscoveryStore] for single-relay
@@ -41,12 +36,8 @@ const defaultWatchBufferSize = 32
 // behaves identically to one with no discovery at all. Distributed
 // backends (NATS / Redis) replace this without touching relay internals.
 //
-// Concurrency: the store is safe for concurrent use. Internally a
-// single sync.RWMutex guards the maps and watcher lists — readers
-// (Find*, Watch*) take the RLock; writers (Publish/Unpublish/Close)
-// take the Lock. Watch delivery itself is non-blocking: the publish
-// path sends on the watcher channel with a default case so a slow
-// consumer cannot stall the publisher.
+// The store is safe for concurrent use. Watch delivery is non-blocking, so
+// a slow consumer cannot stall a publisher.
 type MemoryStore struct {
 	mu         sync.RWMutex
 	tracks     map[trackEntryKey]TrackInfo
@@ -76,9 +67,9 @@ type namespaceEntryKey struct {
 	addr   string
 }
 
-// NewMemoryStore constructs an empty in-memory store. The optional
-// logger is used for warn-level reports when a slow watcher causes
-// events to be dropped. A nil logger uses [slog.Default].
+// NewMemoryStore constructs an empty in-memory store. It logs a warning
+// when a slow watcher's watch is ended, to [slog.Default] unless a logger
+// is set.
 func NewMemoryStore(opts ...MemoryStoreOption) *MemoryStore {
 	s := &MemoryStore{
 		tracks:     make(map[trackEntryKey]TrackInfo),
@@ -127,10 +118,8 @@ func (s *MemoryStore) PublishTrack(_ context.Context, info TrackInfo) error {
 		info.PublishedAt = nowFunc()
 	}
 	s.tracks[trackEntryKey{key: info.Key, addr: info.RelayAddr}] = info
-	// Send under the lock (non-blocking) so a send can't race a watcher
-	// channel close (lifecycle / Close, which close under the same lock).
-	// Count the drops and log AFTER unlocking — a slow logger must not stall
-	// other store operations while s.mu is held.
+	// Send under the lock so it cannot race a watcher's close; log after
+	// unlocking so a slow logger cannot stall the store.
 	dropped := fanout(&s.trackWatch, TrackEvent{Op: OpPublish, Info: info})
 	s.mu.Unlock()
 	s.warnDropped(dropped, OpPublish, "key", info.Key)
@@ -253,13 +242,9 @@ func (s *MemoryStore) FindNamespacesUnder(_ context.Context, prefix wire.TrackNa
 	return out, nil
 }
 
-// WatchTracks delivers the current tracks as an OpPublish snapshot, then every
-// subsequent track event, until ctx is cancelled or the store is closed (see
-// [DiscoveryStore.WatchTracks]). Snapshotting and registering happen under the
-// same lock, so the handoff is gapless: a publish concurrent with this call
-// either lands in the snapshot or fans out to the channel afterwards, never
-// both and never neither. The channel is sized to hold the whole snapshot plus
-// the usual live headroom (see [WithWatchBufferSize]), so seeding never drops.
+// WatchTracks implements [DiscoveryStore.WatchTracks]. Snapshotting and
+// registering happen under one lock, which makes the handoff gapless; the
+// channel holds the whole snapshot plus the live headroom.
 func (s *MemoryStore) WatchTracks(ctx context.Context) (<-chan TrackEvent, error) {
 	s.mu.Lock()
 	if s.closed {
@@ -297,11 +282,7 @@ func (s *MemoryStore) WatchNamespaces(ctx context.Context) (<-chan NamespaceEven
 	return w.ch, nil
 }
 
-// Withdraw drops every track and namespace advertisement whose RelayAddr is
-// relayAddr, emitting an OpUnpublish for each so watchers converge exactly as
-// they would on individual Unpublish calls, and records the address so a later
-// Publish returns [ErrWithdrawn] instead of re-advertising it. See
-// [DiscoveryStore.Withdraw].
+// Withdraw implements [DiscoveryStore.Withdraw].
 func (s *MemoryStore) Withdraw(_ context.Context, relayAddr string) error {
 	s.mu.Lock()
 	if s.closed {
@@ -309,9 +290,7 @@ func (s *MemoryStore) Withdraw(_ context.Context, relayAddr string) error {
 		return ErrClosed
 	}
 	s.withdrawn[relayAddr] = struct{}{}
-	// Deleting the current key while ranging is defined behaviour in Go, and
-	// the events go out under the lock for the same reason the Publish paths
-	// do — see [MemoryStore.PublishTrack].
+	// Events go out under the lock — see [MemoryStore.PublishTrack].
 	dropped := 0
 	for idx, info := range s.tracks {
 		if idx.addr != relayAddr {
@@ -354,9 +333,8 @@ func (s *MemoryStore) Close() error {
 	return nil
 }
 
-// watcher is one watch: the channel its events go to, and done, closed
-// together with it so the watch's lifecycle goroutine is released however the
-// watch ends — ctx, Close, or overflow.
+// watcher is one watch. done closes with ch, releasing the lifecycle
+// goroutine however the watch ends: ctx, Close, or overflow.
 type watcher[T any] struct {
 	ch   chan T
 	done chan struct{}
@@ -390,14 +368,9 @@ func watchLifecycle[T any](ctx context.Context, mu sync.Locker, watchers *[]*wat
 	w.end()
 }
 
-// fanout delivers ev to each watcher with a non-blocking send. A watcher whose
-// buffer is full is removed and ended rather than skipped: a dropped event
-// would leave it silently out of date, while an ended watch is noticed and
-// re-watched (see [DiscoveryStore.WatchTracks]). It returns how many watchers
-// were ended. It MUST be called with s.mu held: the sends and closes are then
-// mutually exclusive with the other ends. The publish path still never blocks
-// on a slow watcher; the caller logs the count AFTER releasing s.mu so a slow
-// log sink cannot stall the store.
+// fanout delivers ev to each watcher with a non-blocking send, ending (not
+// skipping) any whose buffer is full, and returns how many it ended. It MUST
+// be called with s.mu held, so its sends and closes exclude the other ends.
 func fanout[T any](watchers *[]*watcher[T], ev T) int {
 	ended := 0
 	*watchers = slices.DeleteFunc(*watchers, func(w *watcher[T]) bool {
@@ -413,10 +386,8 @@ func fanout[T any](watchers *[]*watcher[T], ev T) int {
 	return ended
 }
 
-// warnDropped logs that n slow watchers had their watch ended, if any. Called
-// after s.mu is released so the (potentially blocking) log sink never contends
-// the store lock. keyAttr/keyVal carry the identifying field of the event that
-// overflowed (e.g. "key"/track.Key or "prefix"/wire.TrackNamespace).
+// warnDropped logs that n slow watchers had their watch ended, if any. Call
+// it after releasing s.mu.
 func (s *MemoryStore) warnDropped(n int, op Op, keyAttr string, keyVal any) {
 	if n == 0 {
 		return

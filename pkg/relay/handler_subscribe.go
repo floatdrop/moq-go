@@ -14,24 +14,11 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
-// handleSubscribe implements the SUBSCRIBE flow (§9.4, §10.7):
-//
-//  1. Authorize.
-//  2. Look up the track. If an Established upstream exists, serve from it
-//     (the §9.4 aggregation path).
-//  3. Otherwise look for a matching local publisher in the
-//     [registry.NamespaceRegistry] (§9.5 prefix matching). If one is found, issue an
-//     upstream SUBSCRIBE on its session with the Next Object filter
-//     (§9.4 lets relays aggregate subscriptions into "a single upstream
-//     subscription for the Track"; that filter keeps the upstream stable as
-//     downstream filters vary) and on SUBSCRIBE_OK
-//     register the resulting registry.UpstreamSub.
-//  4. If no local publisher is available either, reject with
-//     [moqt.RequestDoesNotExist]. Discovery-driven cross-relay lookup
-//     plugs in here.
-//  5. Allocate an outbound Track Alias, register a [registry.DownstreamSub] in
-//     [registry.SubEstablished], reply SUBSCRIBE_OK, and block reading the request
-//     stream until the subscriber cancels.
+// handleSubscribe implements the SUBSCRIBE flow (§9.4, §10.7): authorize,
+// serve from an Established upstream or establish one on demand (see
+// [sessionHandler.subscribeUpstream]), else reject with
+// [moqt.RequestDoesNotExist]; then register a [registry.DownstreamSub], reply
+// SUBSCRIBE_OK, and serve the request stream until it ends.
 func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Request, msg *message.Subscribe) {
 	h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE received",
 		slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
@@ -44,15 +31,11 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 
 	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 
-	// §10.2.19: a NEW_GROUP_REQUEST on the SUBSCRIBE either rides the upstream
-	// SUBSCRIBE we are about to open (rule 1, no Established upstream) or, when
-	// an upstream already exists, is evaluated against it as an Established
-	// subscription below.
+	// §10.2.19: a NEW_GROUP_REQUEST rides a new upstream SUBSCRIBE (rule 1),
+	// or is evaluated against an existing upstream below.
 	newGroupReqParam, hasNewGroupReq := msg.Parameters.Find(message.ParamNewGroupRequest)
 
-	// Allocate the Track Alias the relay uses when publishing this track
-	// downstream. Per §11.1 the outbound alias space is independent of the
-	// inbound aliases the peer chose for its own PUBLISHes.
+	// §11.1: outbound aliases are independent of the peer's inbound ones.
 	alias := h.sess.AllocOutboundTrackAlias()
 
 	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, req.Stream, alias)
@@ -61,11 +44,8 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		return
 	}
 
-	// Establish (or reuse) an upstream and register the downstream on it.
-	// Two attempts: AddDownstreamSnapshotLargest refuses to register on an
-	// entry whose last upstream vanished between the establish check and
-	// the registration (the §9.4 TOCTOU) — one retry re-runs the on-demand
-	// establish against the fresh state.
+	// Two attempts: registration fails if the last upstream vanished after
+	// the establish check, and the retry re-establishes.
 	var (
 		entry           *registry.TrackEntry
 		snapshotLargest message.Location
@@ -81,25 +61,15 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		if !ok || !hasEstablishedUpstream(e) {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE no established upstream, trying on-demand",
 				slog.Bool("entry_exists", ok))
-			// Try to establish an upstream subscription against a local
-			// publisher that has advertised the namespace. The established
-			// entry is fetched again below via AddDownstreamSnapshotLargest,
-			// so only the side effect (registering the upstream) and the
-			// established check matter here.
 			var extra message.Parameters
 			if hasNewGroupReq {
 				extra = message.Parameters{message.NewGroupRequestParam(newGroupReqParam.Varint)}
 			}
-			// §9.2: the upstream Forward value is MUST=1 only if a downstream
-			// subscriber wants forwarding. The triggering sub is not yet on the
-			// entry (AddDownstreamSnapshotLargest runs below), so consult it
-			// directly alongside any downstream already registered on e.
+			// §9.2: Forward=1 upstream only if some downstream forwards; sub
+			// is not on the entry yet, so it is checked directly.
 			wantForward := sub.ForwardState() == 1 || anyDownstreamForwards(e)
 			_, established, err := h.subscribeUpstream(ctx, fullName, extra, wantForward)
 			if err != nil {
-				// A candidate existed but every establish attempt errored. Log
-				// at Info with the underlying error so this transient failure is
-				// distinguishable in production from a genuine "nobody serves it".
 				h.log.LogAttrs(ctx, slog.LevelInfo, "SUBSCRIBE rejected: upstream subscribe failed",
 					slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
 					slog.String("name", string(msg.Name)),
@@ -111,10 +81,6 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 				return
 			}
 			if !established {
-				// No local publisher and no remote advertiser — a genuine miss
-				// or an advertise/subscribe race. Log at Info with the track
-				// identity + RequestID so it correlates with the client-side
-				// error (default level hides Debug).
 				h.log.LogAttrs(ctx, slog.LevelInfo, "SUBSCRIBE rejected: no publisher for namespace",
 					slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
 					slog.String("name", string(msg.Name)),
@@ -128,12 +94,8 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE serving from existing upstream")
 		}
 
-		// Atomically append sub to the entry's Downstream AND snapshot the
-		// current LargestObject under one entry.mu acquisition. The atomic
-		// pairing closes the race where a publisher write between separate
-		// Add + GetLargest calls would update LargestObject + cache the
-		// object without delivering it to us via live fanout — leaving a
-		// gap that neither live delivery nor a fill fetch stream covers.
+		// Register and snapshot Largest atomically, so no object falls between
+		// live delivery and the fill fetch stream.
 		entry, snapshotLargest, snapshotHas, added = h.tracks.AddDownstreamSnapshotLargest(fullName, sub)
 		if added {
 			break
@@ -147,11 +109,8 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	sub.SetLargestAtSubscribe(snapshotLargest, snapshotHas)
 	// §9.5: "Relays MUST send SUBSCRIBE messages to all matching publishers".
 	h.subscribeMissingPublishers(ctx, entry, reusedUpstream, pubSeq)
-	// §10.20: a track that just gained its upstream through this SUBSCRIBE is
-	// news to SUBSCRIBE_TRACKS holders under its namespace, which so far were
-	// offered only tracks a publisher PUBLISHed. Offered after this downstream
-	// is registered, so this subscriber, if it holds one, is not also sent a
-	// PUBLISH for the track it just subscribed to.
+	// §10.20: a newly upstreamed track is offered to SUBSCRIBE_TRACKS holders;
+	// after registration, so this subscriber is not offered its own track.
 	if !reusedUpstream {
 		h.forwardToTrackSubscribers(entry)
 	}
@@ -162,10 +121,8 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 
 	defer h.tracks.RemoveDownstream(fullName, sub.ID)
 
-	// §10.2.17: "If Objects have been published on this Track the
-	// Publisher MUST include this parameter." LARGEST_OBJECT in
-	// SUBSCRIBE_OK tells the subscriber where the live edge was when the
-	// subscription was accepted, which §5.1.6 has it use to size a fill.
+	// §10.2.17: "If Objects have been published on this Track the Publisher
+	// MUST include this parameter."
 	var okParams message.Parameters
 	if sub.HasLargestAtSubscribe {
 		okParams = message.Parameters{
@@ -179,12 +136,9 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	if sub.IncludesProperties() { // §10.2.21
 		properties = entry.GetProperties()
 	}
-	// sub.WriteSubscribeOK, not req.Reply: the sub is registered, so a
-	// registry teardown goroutine can already reach it — every write on this
-	// stream must go through the sub's write lock from here on, and the
-	// OK/termination race must resolve to exactly one §10.7 response
-	// (a terminator that wins answers with REQUEST_ERROR and this write is
-	// skipped; see [registry.DownstreamSub.WriteSubscribeOK]).
+	// Not req.Reply: the sub is registered, so every write must go through
+	// its write lock, and a racing termination yields exactly one response
+	// (see [registry.DownstreamSub.WriteSubscribeOK]).
 	if err := sub.WriteSubscribeOK(&message.SubscribeOK{
 		TrackAlias:      alias,
 		Parameters:      okParams,
@@ -198,51 +152,32 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		slog.String("name", string(msg.Name)),
 		slog.Uint64("alias", alias))
 
-	// §5.1.3: FILL_PARAMETERS on the SUBSCRIBE asks for a fill fetch stream,
-	// draft-20's replacement for the Joining FETCH. installSubscribeParams
-	// already rejected a malformed one, so an error here cannot be a protocol
-	// violation the peer has not been told about.
+	// §5.1.3: FILL_PARAMETERS asks for a fill fetch stream; a malformed one
+	// was already rejected by installSubscribeParams.
 	if err := h.maybeServeFill(ctx, sub, entry, fullName, msg.RequestID, msg.Parameters); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
 			slog.String("err", err.Error()))
 	}
 
-	// §10.2.19: when the SUBSCRIBE carried a NEW_GROUP_REQUEST and we are
-	// serving from an already-Established upstream (so the request did not ride
-	// a fresh upstream SUBSCRIBE), evaluate it against the upstream as an
-	// Established subscription and forward it if the rules call for it.
 	if hasNewGroupReq && reusedUpstream {
 		h.propagateNewGroupUpstream(ctx, fullName, newGroupReqParam.Varint)
 	}
 
-	// §9.2: a Forward=1 subscriber reusing an existing upstream that was paused
-	// (Forward=0, established when earlier downstreams didn't forward) MUST
-	// resume it. A freshly established upstream already reflects this subscriber
-	// via wantForward, so only the reuse path needs it; propagateForwardUpstream
-	// skips upstreams already forwarding, making this a no-op otherwise.
+	// §9.2: a Forward=1 subscriber resumes a paused upstream it reuses.
 	if reusedUpstream && sub.ForwardState() == 1 {
 		h.propagateForwardUpstream(ctx, fullName)
 	}
 
-	// Read follow-ups (§10.9 REQUEST_UPDATE) on the bidi stream until the
-	// subscriber cancels, the relay ends the subscription, or ctx is
-	// cancelled, dispatching REQUEST_UPDATE so Forward / priority / filter can
-	// change mid-flight. A subscriber FIN is not a cancel (§3.3.2).
 	h.readSubscribeUpdates(ctx, req.Stream, sub, fullName)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE stream ended",
 		slog.String("name", string(msg.Name)))
 }
 
-// readSubscribeUpdates is the follow-up dispatch loop for an established
-// downstream SUBSCRIBE. It parses messages off the bidi request stream and
-// routes REQUEST_UPDATE (§10.9) to [sessionHandler.handleSubscribeUpdate];
-// any other DECODABLE follow-up is ignored. An undecodable one ends the
-// loop and resets the read side (see [readRequestStream]). A reset (the
-// subscriber cancelled) or ctx cancellation (session shutdown) ends it too.
-// A subscriber FIN does not: §3.3.2 says it "is not a request cancellation",
-// so the subscription lives on in [awaitRequestEnd] until the subscriber's
-// STOP_SENDING or the relay's own PUBLISH_DONE + FIN. On return the deferred
-// cleanup in handleSubscribe evicts the subscription.
+// readSubscribeUpdates routes REQUEST_UPDATEs (§10.9) on a downstream
+// SUBSCRIBE's stream to [sessionHandler.handleSubscribeUpdate] until the
+// subscriber cancels, the stream turns undecodable (see [readRequestStream])
+// or ctx ends. A subscriber FIN is not a cancellation (§3.3.2): the
+// subscription lives on in [awaitRequestEnd].
 func (h *sessionHandler) readSubscribeUpdates(
 	ctx context.Context,
 	stream session.Stream,
@@ -280,20 +215,13 @@ func (h *sessionHandler) readSubscribeUpdates(
 		return true
 	})
 	if fin {
-		// The subscriber will send no more updates; the subscription lives
-		// on until it cancels or ends (§3.3.2).
 		awaitRequestEnd(ctx, stream)
 	}
 }
 
-// handleSubscribeUpdate applies a REQUEST_UPDATE (§10.9) to an established
-// downstream subscription. Per §10.9 only the parameters present in the
-// update change; omitted ones keep their prior value — which is exactly the
-// "override present" behaviour of [installSubscribeParams]. On success it
-// records whether the Forward State flipped 0→1 (so it can propagate Forward
-// upstream per §9.2) and replies with the single mandated REQUEST_OK. On a
-// malformed update it replies REQUEST_ERROR and terminates the subscription
-// with PUBLISH_DONE / UPDATE_FAILED.
+// handleSubscribeUpdate applies a REQUEST_UPDATE (§10.9) to a downstream
+// subscription: present parameters override, omitted ones are kept. A
+// malformed update gets REQUEST_ERROR and PUBLISH_DONE / UPDATE_FAILED.
 func (h *sessionHandler) handleSubscribeUpdate(
 	ctx context.Context,
 	sub *registry.DownstreamSub,
@@ -303,10 +231,7 @@ func (h *sessionHandler) handleSubscribeUpdate(
 	prevForward := sub.ForwardState()
 	if err := installSubscribeParams(sub, upd.Parameters); err != nil {
 		if _, ok := errors.AsType[*paramProtocolViolation](err); ok {
-			// §10.2.8 / §10.2.18: an out-of-range GROUP_ORDER/FORWARD is a
-			// session-level PROTOCOL_VIOLATION even in a REQUEST_UPDATE — the
-			// wire-level value is invalid, so it supersedes §10.9's
-			// request-scoped update-failure path.
+			// §10.2.8 / §10.2.18: session-level even in a REQUEST_UPDATE.
 			h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE parameter protocol violation",
 				slog.String("err", err.Error()))
 			_ = h.sess.Close(moqt.SessionProtocolViolation, err.Error())
@@ -314,11 +239,8 @@ func (h *sessionHandler) handleSubscribeUpdate(
 		}
 		h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE parameter parse failed",
 			slog.String("err", err.Error()))
-		// §10.9.1: a failed subscription update is answered with REQUEST_ERROR
-		// and the publisher MUST also terminate the subscription with
-		// PUBLISH_DONE / UPDATE_FAILED. A bad Range Filter uses INVALID_FILTER
-		// (§10.6); other malformed params use MALFORMED_TRACK. Writes go through
-		// the sub's lock — see [registry.DownstreamSub.WriteMessage].
+		// §10.9.1: REQUEST_ERROR, then PUBLISH_DONE / UPDATE_FAILED. Writes go
+		// through the sub's lock.
 		code := moqt.RequestMalformedTrack
 		if errors.Is(err, message.ErrInvalidFilter) {
 			code = moqt.RequestInvalidFilter
@@ -331,9 +253,7 @@ func (h *sessionHandler) handleSubscribeUpdate(
 		return
 	}
 
-	// §10.2.17: "If Objects have been published on this Track the Publisher
-	// MUST include" LARGEST_OBJECT, in REQUEST_UPDATE_OK as elsewhere; §10.9.1
-	// has the subscriber FETCH a widened range's gap up to it.
+	// §10.2.17: LARGEST_OBJECT in REQUEST_UPDATE_OK too.
 	reply := &message.RequestOK{}
 	if entry, ok := h.tracks.Get(fullName.Key()); ok {
 		if largest, has := entry.GetLargest(); has {
@@ -346,22 +266,18 @@ func (h *sessionHandler) handleSubscribeUpdate(
 		return
 	}
 
-	// §9.2: if this update flipped the downstream Forward State 0→1 and the
-	// relay's upstream subscriptions are paused (Forward 0), the relay MUST
-	// send REQUEST_UPDATE with Forward=1 to its publishers.
+	// §9.2: a 0→1 Forward flip resumes paused upstreams.
 	if prevForward == 0 && sub.ForwardState() == 1 {
 		h.propagateForwardUpstream(ctx, fullName)
 	}
 
-	// §10.2.19: a NEW_GROUP_REQUEST on a REQUEST_UPDATE for an Established
-	// subscription is forwarded upstream when the relay rules call for it.
+	// §10.2.19
 	if p, ok := upd.Parameters.Find(message.ParamNewGroupRequest); ok {
 		h.propagateNewGroupUpstream(ctx, fullName, p.Varint)
 	}
 
-	// §5.1.3: FILL_PARAMETERS on a REQUEST_UPDATE opens a further fill fetch
-	// stream, named by the REQUEST_UPDATE's own Request ID. It does not cancel
-	// any fill already in flight — a subscription can have several open at once.
+	// §5.1.3: a further fill fetch stream, named by the REQUEST_UPDATE's own
+	// Request ID; fills already in flight continue.
 	if entry, ok := h.tracks.Get(fullName.Key()); ok {
 		if err := h.maybeServeFill(ctx, sub, entry, fullName, upd.RequestID, upd.Parameters); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
@@ -370,12 +286,9 @@ func (h *sessionHandler) handleSubscribeUpdate(
 	}
 }
 
-// propagateNewGroupUpstream implements the §10.2.19 relay handling for a
-// NEW_GROUP_REQUEST received on an Established downstream subscription: when the
-// track supports dynamic Groups and the request is not already covered, the
-// relay sends a REQUEST_UPDATE carrying NEW_GROUP_REQUEST on each upstream
-// subscription's stream. [registry.TrackEntry.ConsiderNewGroupRequest] encapsulates the
-// decision and outstanding-request bookkeeping.
+// propagateNewGroupUpstream forwards a downstream NEW_GROUP_REQUEST to each
+// upstream as a REQUEST_UPDATE when §10.2.19 calls for it (see
+// [registry.TrackEntry.ConsiderNewGroupRequest]).
 func (h *sessionHandler) propagateNewGroupUpstream(
 	ctx context.Context,
 	fullName track.FullTrackName,
@@ -388,9 +301,7 @@ func (h *sessionHandler) propagateNewGroupUpstream(
 
 	dynamic, err := entry.DynamicGroups()
 	if err != nil {
-		// §12.6: a DYNAMIC_GROUPS value > 1 is a protocol violation by the
-		// upstream publisher. Scope the failure to declining the request
-		// rather than tearing the session down.
+		// §12.6: a bad DYNAMIC_GROUPS only declines the request here.
 		h.log.LogAttrs(ctx, slog.LevelDebug, "NEW_GROUP_REQUEST: bad DYNAMIC_GROUPS property",
 			slog.String("err", err.Error()))
 		return
@@ -409,20 +320,13 @@ func (h *sessionHandler) propagateNewGroupUpstream(
 				slog.String("err", err.Error()))
 			continue
 		}
-		// §10.2.17 item 1 names REQUEST_UPDATE_OK too, and this is one: the
-		// response was previously discarded, so a watermark the upstream
-		// reported here never reached the entry.
+		// §10.2.17 item 1 includes REQUEST_UPDATE_OK.
 		saveLargestLocation(entry, resp.Parameters)
 	}
 }
 
-// propagateForwardUpstream implements the §9.2 relay obligation: when a
-// downstream subscription becomes Forward=1 while the upstream subscriptions
-// feeding its track are Forward=0, the relay re-emits REQUEST_UPDATE with
-// Forward=1 on each upstream subscription's stream. The upstream's
-// REQUEST_UPDATE_OK may carry LARGEST_OBJECT (§10.2.17); we fold it into the
-// track entry's largest watermark so a subsequent fill fetch stream (§5.1.3)
-// is contiguous.
+// propagateForwardUpstream sends REQUEST_UPDATE Forward=1 to each paused
+// upstream of fullName (§9.2), saving any LARGEST_OBJECT in the reply.
 func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName track.FullTrackName) {
 	entry, ok := h.tracks.Get(fullName.Key())
 	if !ok {
@@ -443,29 +347,20 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 	}
 }
 
-// subscribeUpstream establishes upstream SUBSCRIBEs for fullName. Per §9.5 it
-// subscribes to EVERY matching source for fault tolerance — every local
-// publisher advertising a covering namespace and every remote relay Discovery
-// resolves (§9.4 cross-relay aggregation) — deduping already-subscribed
-// sessions and fanning the rest into one track. The remote-relay branch honors
-// an opt-in Config.UpstreamFanIn cap (see [upstreamPool.resolveUpstreams]); the
-// local-publisher branch always takes every match. A failed candidate does not
-// abort the others. Returns (entry, true, nil) when at least one upstream was
-// established, (nil, false, nil) when none is available anywhere, and
-// (nil, false, err) when every candidate failed with the last a hard error.
-//
-// extra carries parameters folded into each upstream SUBSCRIBE alongside the
-// Next Object filter (§5.1.2) — currently the NEW_GROUP_REQUEST a downstream
-// SUBSCRIBE arrived with (§10.2.19 rule 1).
+// subscribeUpstream subscribes fullName on every matching source (§9.5):
+// each local publisher of a covering namespace and each remote relay
+// Discovery resolves (capped by Config.UpstreamFanIn), skipping sessions
+// already subscribed. It returns (entry, true, nil) when any upstream was
+// established, (nil, false, nil) when there is no source, and
+// (nil, false, err) when every candidate failed. extra is added to each
+// upstream SUBSCRIBE.
 func (h *sessionHandler) subscribeUpstream(
 	ctx context.Context,
 	fullName track.FullTrackName,
 	extra message.Parameters,
 	wantForward bool,
 ) (*registry.TrackEntry, bool, error) {
-	// Source dedup: never open a second upstream to a session this track is
-	// already subscribed on (or to ourselves — a publisher session also owns its
-	// PUBLISH_NAMESPACE, so subscribing on it would self-loop).
+	// Never subscribe twice on one session, nor on our own (a self-loop).
 	subscribed := map[*session.Session]bool{h.sess: true}
 	if entry, ok := h.tracks.Get(fullName.Key()); ok {
 		for _, u := range entry.CopyUpstream() {
@@ -483,11 +378,8 @@ func (h *sessionHandler) subscribeUpstream(
 			return
 		}
 		subscribed[sess] = true // even on failure: don't retry the same source here
-		// Hold the claim when it is free, so a late-publisher SUBSCRIBE for the
-		// same (publisher, track) skips rather than duplicating this one. Never
-		// wait on another holder: its SUBSCRIBE carried its own Forward and
-		// NEW_GROUP_REQUEST and may fail for its own reasons, so this request
-		// subscribes for itself (§9.5), as it always has.
+		// Hold the claim when free, so a late-publisher SUBSCRIBE skips. Never
+		// wait on another holder: its SUBSCRIBE may fail for its own reasons.
 		if release, claimed := h.tracks.ClaimUpstream(sess, fullName.Key()); claimed {
 			defer release()
 		}
@@ -495,12 +387,8 @@ func (h *sessionHandler) subscribeUpstream(
 			slog.String("source", src))
 		entry, _, err := h.subscribeUpstreamOnSession(ctx, sess, fullName, extra, wantForward)
 		if err != nil {
-			// A candidate that fails (session dying, rejection) must not mask the
-			// other publishers or the Discovery fallback. Remember the error and
-			// keep going; surface it only if nothing else works out. A
-			// Track Properties refusal outranks any other failure: §2.5.1
-			// fixes the downstream code for it, so a later candidate's
-			// unrelated error must not replace it.
+			// Keep going. A Track Properties refusal outranks other errors:
+			// §2.5.1 fixes its downstream code.
 			if !isTrackPropertiesErr(lastErr) {
 				lastErr = err
 			}
@@ -514,7 +402,6 @@ func (h *sessionHandler) subscribeUpstream(
 		}
 	}
 
-	// 1. Every local publisher that advertised a namespace covering fullName.
 	publishers := h.names.MatchPublishers(fullName.Namespace)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: namespace registry lookup",
 		slog.String("namespace", fmt.Sprintf("%v", fullName.Namespace)),
@@ -523,11 +410,6 @@ func (h *sessionHandler) subscribeUpstream(
 		establish(pub.Session, "local-publisher")
 	}
 
-	// 2. Remote relays Discovery resolves for this namespace. §9.5 fans into
-	//    every advertiser by default; a positive Config.UpstreamFanIn instead
-	//    caps this to the top rendezvous-ranked few. The pool dials + reuses one
-	//    session per RelayAddr; resolveUpstreams returns nil when no other relay
-	//    (besides ourselves) serves the namespace.
 	remotes := h.upstreams.resolveUpstreams(ctx, fullName.Namespace)
 	for _, remote := range remotes {
 		establish(remote, "discovery-remote")
@@ -536,14 +418,6 @@ func (h *sessionHandler) subscribeUpstream(
 	if anyEstab {
 		return resultEntry, true, nil
 	}
-	// No upstream anywhere. Surface a candidate's failure if one occurred
-	// (a better diagnostic than a bare "no publisher"); otherwise (nil,false,nil)
-	// drives the §9.4 "does not exist" rejection.
-	//
-	// Log a summary at Info so the empty-result case is visible in production
-	// (default level hides Debug): it separates "no local publisher AND no
-	// remote advertiser" (a genuine miss or an advertise/subscribe race) from
-	// "candidates existed but every establish failed" (lastErr set).
 	logAttrs := []slog.Attr{
 		slog.String("namespace", fmt.Sprintf("%v", fullName.Namespace)),
 		slog.String("name", string(fullName.Name)),
@@ -557,16 +431,8 @@ func (h *sessionHandler) subscribeUpstream(
 	return nil, false, lastErr
 }
 
-// subscribeUpstreamOnSession issues the upstream SUBSCRIBE on sess and registers
-// the resulting [registry.UpstreamSub] on the track entry. sess is either a local
-// publisher's session or a Discovery-resolved remote relay's session — the body
-// is identical, only the source differs.
-//
-// The §9.4 aggregation rule applies: the upstream SUBSCRIBE always uses the
-// Next Object filter (§5.1.2) so the upstream subscription's lifetime is decoupled
-// from any specific downstream subscriber's filter. The relay can then serve
-// many disparate downstream filters from one upstream stream — the fanout
-// enforces each downstream filter on the wire.
+// subscribeUpstreamOnSession issues the upstream SUBSCRIBE on sess and
+// registers the resulting [registry.UpstreamSub] on the track entry.
 func (h *sessionHandler) subscribeUpstreamOnSession(
 	ctx context.Context,
 	sess *session.Session,
@@ -577,20 +443,12 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	if peerSentGoaway(sess) {
 		return nil, nil, errPeerGoingAway
 	}
-	// Next Object filter (§5.1.2) — keeps the upstream subscription stable
-	// as downstream subscribers come and go with varying filters.
+	// §9.4: always Next Object (§5.1.2), so one upstream serves every
+	// downstream filter; the fanout applies those.
 	filter := &message.LocationFilter{Fields: 2}
 
-	// Bind the SUBSCRIBE message so we can read back the Request ID the
-	// session assigned (Subscribe mutates m.RequestID via AllocRequestID).
-	// The relay reuses that ID when it later sends an upstream
-	// REQUEST_UPDATE for §9.2 Forward propagation.
 	params := message.Parameters{message.LocationFilterParam(filter)}
-	// §9.2: Forward=1 upstream is MUST only when a downstream subscriber wants
-	// Objects forwarded. When none does, the relay exercises its discretion by
-	// pausing the upstream with Forward=0 so it doesn't pull Objects nobody is
-	// consuming; propagateForwardUpstream resumes it when a downstream later
-	// sets Forward=1. Forward=1 stays implicit (omitted) per §10.2.18.
+	// §9.2: with no forwarding downstream, pause the upstream (Forward=0).
 	if !wantForward {
 		params = append(params, message.ForwardParam(false))
 	}
@@ -600,30 +458,17 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 		Name:       fullName.Name,
 		Parameters: params,
 	}
-	// Create the track entry before Subscribe, because Subscribe registers
-	// the SUBSCRIBE_OK's §11.1 Track Alias inside its own response handler —
-	// from the moment it returns the alias resolves on inbound data streams,
-	// and the publisher may already be writing. Until an entry exists there is
-	// nothing for runFanout to route to, so those streams are reset and their
-	// Objects lost from the cache and from live fanout alike (#85).
-	//
-	// Deliberately before rather than inside the round trip: anything done in
-	// the gap between SUBSCRIBE_OK arriving and the alias being registered
-	// widens a second window, in which the same streams wait for their alias
-	// (runFanout holds them only briefly; see resolveInboundTrack), and
-	// allocating an entry (a 1024-slot cache ring) there measurably does.
-	// Doing it up front costs an entry for a track that may turn out not to
-	// exist; trackKnown in handleFetch is what keeps that from being visible
-	// on the wire.
+	// Create the entry before Subscribe: the alias resolves as soon as
+	// Subscribe returns and streams may already be arriving, which runFanout
+	// can only route to an existing entry. Not inside the round trip, which
+	// would widen the window streams wait for their alias.
 	var entryCreated bool
 	_, entryCreated = h.tracks.GetOrCreateNew(fullName)
 
 	upstreamStream, err := sess.Subscribe(ctx, subMsg)
 	if err != nil {
 		if entryCreated {
-			// Nothing vouched for this track after all. Leaving the entry
-			// would grow the registry without bound on a session that
-			// SUBSCRIBEs to names that do not resolve.
+			// Don't let unresolved names grow the registry.
 			h.tracks.DeleteIfUnused(fullName)
 		}
 		return nil, nil, err
@@ -632,81 +477,47 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 		(*hook)(fullName)
 	}
 
-	// Register the upstream subscription on the upstream session as an
-	// registry.UpstreamSub. The upstream's TrackAlias is the alias the upstream peer
-	// assigned in SUBSCRIBE_OK; we use it for the fanout's alias remapping.
-	// The SUBSCRIBE's Request ID (assigned inside sess.Subscribe) is recorded
-	// for identity; a later upstream REQUEST_UPDATE rides this stream but
-	// consumes its own fresh ID (§10.1).
-	// On its own SUBSCRIBE the relay is the requester, so the publisher may
-	// not send REQUEST_UPDATE (§10.9).
+	// The relay is the requester, so the publisher may not send
+	// REQUEST_UPDATE (§10.9).
 	upstreamSub := registry.NewUpstreamSub(
 		h.allocSubID(), sess, upstreamStream, upstreamStream.OK.TrackAlias, subMsg.RequestID, false)
 	upstreamSub.SetFilter(filter)
 	if !wantForward {
-		// Match the local ForwardState to the Forward=0 we sent upstream, so a
-		// later §9.2 resume (propagateForwardUpstream) transitions 0→1 rather
-		// than treating the upstream as already forwarding. NewUpstreamSub
-		// seeds 1 (the omitted-FORWARD default).
 		upstreamSub.SetForwardState(0)
 	}
-	// This upstream is a relay/origin we SUBSCRIBE'd on demand, so it is
-	// expected to answer FETCH — eligible for §9.4 stitch backfill.
+	// Eligible for §9.4 stitch backfill.
 	upstreamSub.FetchCapable = true
-	// Mark it on-demand so the registry tears it down when its last
-	// downstream leaves (see [registry.TrackRegistry.RemoveDownstream]).
+	// Torn down with its last downstream.
 	upstreamSub.OnDemand = true
 	entry, _ := h.tracks.AddUpstream(fullName, upstreamSub, registry.WithProperties(upstreamStream.OK.TrackProperties))
-	// §10.2.17 item 1: a LARGEST_OBJECT in this SUBSCRIBE_OK is one of the
-	// values the relay's own watermark MUST be the largest of. Unconditional on
-	// purpose — see [saveLargestLocation] for why the §5.1 Forward-State
-	// qualifier must not be applied here.
+	// §10.2.17 item 1; unconditional, see [saveLargestLocation].
 	saveLargestLocation(entry, upstreamStream.OK.Parameters)
 
-	// The reader's lifetime is tied to the UPSTREAM stream, not to the
-	// downstream subscriber whose SUBSCRIBE happened to trigger this
-	// subscription — other sessions' subscribers share it (§9.4), so it
-	// must survive this handler's teardown. It runs relay-scoped (joined
-	// by Relay.Stop) with the stream's own context: the ctx dies when the
-	// upstream stream or session ends, and Stop force-closes sessions,
-	// which errors the reader's Parse either way.
+	// Relay-scoped, on the upstream stream's context: other sessions'
+	// subscribers share it (§9.4), so it outlives this handler.
 	h.relayGo(func() {
 		h.serveUpstreamStream(upstreamStream.Context(), upstreamSub)
 		h.tracks.RemoveUpstream(fullName, upstreamSub.ID)
-		// session.Subscribe registered the SUBSCRIBE_OK's Track Alias for
-		// inbound routing; drop it with the subscription so subscriber
-		// churn on a long-lived (pooled) upstream session doesn't accrete
-		// aliases (§11.1) — a peer reusing a retired alias would otherwise
-		// trip the duplicate-alias session error.
+		// Drop the alias with the subscription, so a peer may reuse it (§11.1).
 		sess.UnregisterInboundTrackAlias(upstreamStream.OK.TrackAlias)
 	})
 
 	return entry, upstreamSub, nil
 }
 
-// serveUpstreamStream owns ALL reads on an upstream request stream (the
-// relay's on-demand SUBSCRIBE to a publisher, or an accepted PUBLISH) via
-// the sub's [session.RequestBroker]: §10.9 responses route to in-flight
-// [registry.UpstreamSub.Update] calls; a peer REQUEST_UPDATE closes the
-// session with PROTOCOL_VIOLATION on the relay's own SUBSCRIBE (§10.9: the
-// publisher did not send the request) and is declined with NOT_SUPPORTED on an
-// accepted PUBLISH (the relay installs no update handler); and
-// AUTHORIZATION_TOKEN parameters
-// go through the session token cache (§10.2.2) — all inside Serve. Other
-// follow-ups need no action (PUBLISH_DONE precedes the FIN that ends the
-// loop); unsolicited responses are logged. It returns when the publisher
-// tears the stream down (EOF / reset) or ctx is cancelled.
+// serveUpstreamStream owns all reads on an upstream request stream (the
+// relay's SUBSCRIBE, or an accepted PUBLISH) via the sub's
+// [session.RequestBroker], which routes §10.9 responses to
+// [registry.UpstreamSub.Update]. It returns when the stream ends or ctx is
+// cancelled.
 //
-// Do NOT read the stream anywhere else (e.g. [session.DrainAndWait] or
-// [session.Session.UpdateRequest]) while this runs: a second reader races
+// Nothing else may read the stream while this runs: a second reader races
 // the broker for the §10.9 responses.
 func (h *sessionHandler) serveUpstreamStream(ctx context.Context, up *registry.UpstreamSub) {
 	err := up.Broker.Serve(ctx, func(m message.Message) bool {
 		switch m := m.(type) {
 		case *message.PublishDone:
-			// Kept for the downstream PUBLISH_DONE code (§10.12); the
-			// publisher FINs the stream afterwards, which ends the loop and
-			// lets the caller unregister the upstream.
+			// Kept for the downstream PUBLISH_DONE code (§10.12).
 			up.SetPublishDone(m)
 		case *message.RequestOK, *message.RequestError:
 			// Serve only hands responses here when no Update was pending.
@@ -722,10 +533,8 @@ func (h *sessionHandler) serveUpstreamStream(ctx context.Context, up *registry.U
 	}
 }
 
-// hasEstablishedUpstream reports whether the entry has at least one upstream
-// subscription in [registry.SubEstablished]. The §9.4 SUBSCRIBE handler uses this as
-// the test for "can we serve a new downstream subscription from existing
-// upstream state?".
+// hasEstablishedUpstream reports whether the entry has an upstream
+// subscription in [registry.SubEstablished].
 func hasEstablishedUpstream(entry *registry.TrackEntry) bool {
 	for _, u := range entry.CopyUpstream() {
 		if u.IsEstablished() {
@@ -735,24 +544,16 @@ func hasEstablishedUpstream(entry *registry.TrackEntry) bool {
 	return false
 }
 
-// anyDownstreamForwards reports whether any downstream subscriber already
-// registered on entry wants Objects forwarded (Forward=1). §9.2 uses it (with
-// the not-yet-registered triggering sub checked separately) to decide the
-// upstream Forward value. A nil entry (no track state yet) reports false.
+// anyDownstreamForwards reports whether a downstream on entry (which may be
+// nil) has Forward=1.
 func anyDownstreamForwards(entry *registry.TrackEntry) bool {
 	return entry != nil && slices.ContainsFunc(entry.CopyDownstream(),
 		func(d *registry.DownstreamSub) bool { return d.ForwardState() == 1 })
 }
 
-// installSubscribeParams extracts the per-subscription policy fields from the
-// SUBSCRIBE parameters (§10.2) and records them on sub: LOCATION_FILTER
-// (§10.2.9), SUBSCRIBER_PRIORITY (§10.2.7, advisory), GROUP_ORDER (§10.2.8),
-// OBJECT_DELIVERY_TIMEOUT (§10.2.4) and SUBGROUP_DELIVERY_TIMEOUT (§10.2.3).
-//
-// The §5.1.2 / §9.4 LargestObject snapshot is intentionally NOT taken here — the
-// caller captures it atomically via
-// [registry.TrackRegistry.AddDownstreamSnapshotLargest] and applies it with
-// [registry.DownstreamSub.SetLargestAtSubscribe].
+// installSubscribeParams records the subscription parameters present in ps
+// (§10.2) on sub, leaving absent ones unchanged. The Largest snapshot is the
+// caller's (see [registry.TrackRegistry.AddDownstreamSnapshotLargest]).
 func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) error {
 	filter, err := message.LocationFilterFromParam(ps)
 	if err != nil {
@@ -783,13 +584,8 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	}
 	sub.SetIncludeProperties(includeProperties(ps))
 
-	// §10.2.3 / §10.2.4 delivery timeouts, overridden per parameter — the same
-	// "override present" behaviour as the fields above, applied to each
-	// dimension separately rather than to the pair. They are independent values
-	// that merely travel together: an absent parameter decodes to zero and §8
-	// gives zero the meaning "no timeout", so installing the decoded pair
-	// whenever either is present would let a REQUEST_UPDATE that adjusts one
-	// timeout silently disable the other.
+	// §10.2.3 / §10.2.4: each timeout separately, so an update of one does
+	// not zero ("no timeout", §8) the other.
 	timeouts := sub.GetDeliveryTimeouts()
 	if p, ok := ps.Find(message.ParamObjectDeliveryTimeout); ok {
 		timeouts.Object = message.MillisecondTimeout(p.Varint)
@@ -799,12 +595,7 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	}
 	sub.SetDeliveryTimeouts(timeouts)
 
-	// §5.1.4 Range Filters, merged into the subscription's current ones: a
-	// type the parameters name is replaced (removed by a zero-length one), the
-	// others are unchanged. A new subscription has none, so this is simply
-	// its filters. A malformed/over-limit set is a §10.6 INVALID_FILTER
-	// (request-scoped) — the caller maps message.ErrInvalidFilter to
-	// REQUEST_ERROR INVALID_FILTER.
+	// §5.1.4: a named Range Filter type is replaced, others are kept.
 	if !slices.ContainsFunc(ps, func(p message.Parameter) bool { return message.IsRangeFilterParam(p.Type) }) {
 		return nil
 	}
@@ -837,10 +628,8 @@ func (h *sessionHandler) refuseSubscriptionParams(ctx context.Context, req *sess
 		_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
 		return
 	}
-	// §5.1.2 says a malformed LOCATION_FILTER is also a session-level
-	// PROTOCOL_VIOLATION. We scope that one to this request for now —
-	// unrelated subscriptions on the same session shouldn't die because
-	// one peer sent a bad filter.
+	// Deviation: §5.1.2 makes a malformed LOCATION_FILTER a session-level
+	// PROTOCOL_VIOLATION; the relay scopes it to the request.
 	h.log.LogAttrs(ctx, slog.LevelDebug, "subscription parameter parse failed",
 		slog.String("err", err.Error()))
 	_ = req.RejectError(moqt.RequestMalformedTrack, err.Error())
@@ -850,17 +639,14 @@ func (h *sessionHandler) refuseSubscriptionParams(ctx context.Context, req *sess
 // sent GOAWAY (§10.4; see [peerSentGoaway]).
 var errPeerGoingAway = errors.New("relay: peer sent GOAWAY; no new requests to it (§10.4)")
 
-// paramProtocolViolation marks a parameter value that the draft requires the
-// receiver answer with a session-level PROTOCOL_VIOLATION — an out-of-range
-// GROUP_ORDER (§10.2.8) or FORWARD (§10.2.18) — as opposed to a request-scoped
-// REQUEST_ERROR. Callers detect it with errors.AsType and close the session
-// with [moqt.SessionProtocolViolation].
+// paramProtocolViolation marks a parameter value that closes the session with
+// PROTOCOL_VIOLATION: an out-of-range GROUP_ORDER (§10.2.8) or FORWARD
+// (§10.2.18).
 type paramProtocolViolation struct{ reason string }
 
 func (e *paramProtocolViolation) Error() string { return e.reason }
 
-// checkForwardParam enforces the §10.2.18 FORWARD value range (0 or 1). An
-// out-of-range value is a *paramProtocolViolation; absent or valid → nil.
+// checkForwardParam enforces the §10.2.18 FORWARD range (0 or 1).
 func checkForwardParam(ps message.Parameters) error {
 	if p, ok := ps.Find(message.ParamForward); ok && p.Byte > 1 {
 		return &paramProtocolViolation{fmt.Sprintf("invalid FORWARD value 0x%X (§10.2.18)", p.Byte)}
@@ -868,9 +654,7 @@ func checkForwardParam(ps message.Parameters) error {
 	return nil
 }
 
-// checkGroupOrderParam enforces the §10.2.8 GROUP_ORDER value range (Ascending
-// 0x1 or Descending 0x2). An out-of-range value is a *paramProtocolViolation;
-// absent or valid → nil.
+// checkGroupOrderParam enforces the §10.2.8 GROUP_ORDER range (0x1 or 0x2).
 func checkGroupOrderParam(ps message.Parameters) error {
 	if p, ok := ps.Find(message.ParamGroupOrder); ok {
 		switch message.GroupOrder(p.Byte) {
@@ -882,11 +666,8 @@ func checkGroupOrderParam(ps message.Parameters) error {
 	return nil
 }
 
-// includeProperties reports whether a request's INCLUDE_PROPERTIES (§10.2.21)
-// asks for Track Properties in the response or the resulting PUBLISHes: yes
-// unless it is 0 ("If INCLUDE_PROPERTIES is 0, the Track Properties are still
-// present in the message, but they SHOULD be empty"). The session has already
-// closed over a value other than 0 or 1.
+// includeProperties reports whether INCLUDE_PROPERTIES (§10.2.21) asks for
+// Track Properties: yes unless it is 0.
 func includeProperties(ps message.Parameters) bool {
 	p, ok := ps.Find(message.ParamIncludeProperties)
 	return !ok || p.Byte != 0
@@ -895,31 +676,14 @@ func includeProperties(ps message.Parameters) bool {
 // upstreamRejection is the REQUEST_ERROR for a downstream SUBSCRIBE whose
 // upstream SUBSCRIBE failed with err.
 //
-// §2.5.1: when the upstream's track carries a Mandatory Track Property this
-// relay does not understand, a relay "MUST send REQUEST_ERROR with error code
-// UNSUPPORTED_EXTENSION to the downstream subscribers". Unparseable Track
-// Properties are MALFORMED_TRACK, which is this repo's choice: the draft does
-// not cover them.
-//
-// An upstream REQUEST_ERROR is passed on by meaning — §10.6.2: "The
-// application SHOULD use a relevant error code" — with its Retry Interval
-// kept, so "retry in N ms" does not become "SHOULD NOT be retried". A code
-// about the track or the publisher's load says the same thing to the
-// downstream subscriber and passes through. MALFORMED_TRACK is among them:
-// §10.6.2 scopes it to FETCH, but this relay already answers a SUBSCRIBE with
-// it over malformed Track Properties. One about the relay's own hop — its
-// authorization, the upstream going away, a REDIRECT the relay does not
-// follow — or about the relay's own upstream filter (INVALID_RANGE,
-// INVALID_FILTER), or a code this relay does not know, becomes
-// INTERNAL_ERROR. The upstream SUBSCRIBE always carries the relay's own Next
-// Object filter, which is its choice under §9.4's "MAY combine filters from
-// downstream subscribers"; if it ever combines them, INVALID_RANGE becomes
-// about the downstream request and this mapping must change.
-//
-// Any other failure (the upstream session died mid-request) reads as the
-// track not existing. There is no local deadline on the upstream SUBSCRIBE; one
-// that expired would be §10.6.2's TIMEOUT example, "a relay could not
-// establish an upstream subscription within the timeout".
+// An unknown Mandatory Track Property is UNSUPPORTED_EXTENSION (§2.5.1);
+// unparseable Track Properties are MALFORMED_TRACK (an interpretation: the
+// draft does not cover them). An upstream REQUEST_ERROR code about the track
+// or the publisher's load passes through with its Retry Interval (§10.6.2),
+// MALFORMED_TRACK included though §10.6.2 scopes it to FETCH; one about the relay's own hop or its Next Object filter, or an unknown one,
+// becomes INTERNAL_ERROR. If the relay ever combines downstream filters
+// upstream (§9.4), INVALID_RANGE must pass through too. Any other failure
+// reads as DOES_NOT_EXIST.
 func upstreamRejection(err error) *session.RequestRejectedError {
 	if isTrackPropertiesErr(err) {
 		return &session.RequestRejectedError{Code: session.TrackPropertiesRejectCode(err)}

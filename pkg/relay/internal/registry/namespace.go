@@ -32,35 +32,29 @@ type PublisherEntry struct {
 	// the owner that closes/cancels it on teardown.
 	Stream session.Stream
 
-	// announced is set by [NamespaceRegistry.AnnouncePublisher]: from then
-	// on the entry is a source of its namespace for SUBSCRIBE_NAMESPACE
-	// subscribers. Guarded by the registry's mu.
+	// announced is set by [NamespaceRegistry.AnnouncePublisher], making the
+	// entry a source for SUBSCRIBE_NAMESPACE subscribers. Guarded by the
+	// registry's mu.
 	announced bool
 
-	// Seq orders registrations: each RegisterPublisher assigns the next
-	// value, so Seq > [NamespaceRegistry.Seq] read earlier means the
-	// publisher registered since.
+	// Seq orders registrations: Seq > [NamespaceRegistry.Seq] read earlier
+	// means the publisher registered since.
 	Seq uint64
 }
 
-// TracksParams are a SUBSCRIBE_TRACKS's parameters: "the initial Subscription
-// parameters when a PUBLISH is sent as a result of SUBSCRIBE_TRACKS"
-// (§10.20.1). A REQUEST_UPDATE replaces the whole value, and it applies to the
-// PUBLISHes sent from then on — "Existing subscriptions are unaffected"
-// (§10.2.18) — so a value is never modified once stored.
+// TracksParams are a SUBSCRIBE_TRACKS's parameters, the initial parameters of
+// each PUBLISH it causes (§10.20.1). A REQUEST_UPDATE replaces the whole value
+// and affects only later PUBLISHes, so a value is never modified once stored.
 type TracksParams struct {
 	// Params are the parameters as sent, merged with each update.
 	Params message.Parameters
 
 	// Forward and GroupOrder are the resolved FORWARD (§10.2.18) and
-	// GROUP_ORDER (§10.2.8): Forward is true unless FORWARD is 0; GroupOrder
-	// is 0 when omitted (the publisher's default applies).
+	// GROUP_ORDER (§10.2.8); GroupOrder is 0 when omitted.
 	Forward    bool
 	GroupOrder byte
 
-	// RangeFilters are the §5.1.4 Range Filters; a PUBLISH whose Track
-	// Properties fail the TRACK_PROPERTY_FILTER is not forwarded. nil = no
-	// restriction.
+	// RangeFilters are the §5.1.4 Range Filters. nil = no restriction.
 	RangeFilters *message.RangeFilterSet
 }
 
@@ -73,9 +67,8 @@ var defaultTracksParams = &TracksParams{Forward: true}
 // matching PUBLISH_NAMESPACE / PUBLISH back to the subscriber as long as the
 // subscription is alive.
 type SubscriberEntry struct {
-	// prefix is the namespace prefix the subscriber asked to be notified
-	// about; see [SubscriberEntry.Prefix]. Stored only under the registry
-	// lock, by registration and [NamespaceRegistry.UpdatePrefix].
+	// prefix is stored only under the registry lock; see
+	// [SubscriberEntry.Prefix].
 	prefix atomic.Pointer[wire.TrackNamespace]
 
 	// Session is the MOQT session that owns the SUBSCRIBE_NAMESPACE /
@@ -83,9 +76,8 @@ type SubscriberEntry struct {
 	Session *session.Session
 
 	// Stream is the bidi request stream the subscription arrived on. After
-	// the REQUEST_OK, every message the relay sends on it — NAMESPACE,
-	// NAMESPACE_DONE, PUBLISH_SKIPPED, replies to REQUEST_UPDATE — is queued
-	// through the entry and written by [SubscriberEntry.RunWriter], in order.
+	// the REQUEST_OK, every write to it goes through the entry's queue and
+	// [SubscriberEntry.RunWriter].
 	Stream session.Stream
 
 	// WantsTracks distinguishes SUBSCRIBE_TRACKS (true: forward PUBLISH
@@ -95,24 +87,22 @@ type SubscriberEntry struct {
 	// dispatches on this flag.
 	WantsTracks bool
 
-	// tracks holds the SUBSCRIBE_TRACKS parameters as last updated; see
-	// [SubscriberEntry.TracksParams]. Meaningful only when WantsTracks.
+	// tracks is meaningful only when WantsTracks; see
+	// [SubscriberEntry.TracksParams].
 	tracks atomic.Pointer[TracksParams]
 
 	// ForwardTrack forwards a PUBLISH for a track to a SUBSCRIBE_TRACKS
-	// subscriber (§6.1, §10.20). It is the subscriber's handler's, set at
-	// registration: the forwarded subscription belongs to its session.
+	// subscriber (§10.20), on the subscriber's session.
 	ForwardTrack func(sub *SubscriberEntry, track *TrackEntry)
 
-	// forwarding holds the tracks with a forwarded PUBLISH in flight, one
-	// per track; see [SubscriberEntry.ClaimForward].
+	// forwarding holds the tracks with a forwarded PUBLISH in flight; see
+	// [SubscriberEntry.ClaimForward].
 	fwdMu      sync.Mutex
 	forwarding map[track.Key]struct{}
 	fwdClosed  bool // the entry is unregistered: no more forwards
 
-	// announced counts the sources of each namespace announced to a
-	// SUBSCRIBE_NAMESPACE subscriber, by wire key (see namespace_state.go).
-	// Guarded by the owning registry's mu.
+	// announced counts the sources of each announced namespace, by wire key
+	// (see namespace_state.go). Guarded by the owning registry's mu.
 	announced map[string]int
 
 	// outbox holds the messages queued for [SubscriberEntry.RunWriter], in
@@ -122,21 +112,17 @@ type SubscriberEntry struct {
 	outbox   []queuedMessage
 	stopped  bool
 	outReady chan struct{}
-	// writing is the message RunWriter is sending now (zero when idle);
-	// guarded by outMu. Together with outbox it is what is still unsent.
+	// writing is the message RunWriter is sending now; guarded by outMu.
 	writing queuedMessage
-	// writerDone is closed when RunWriter returns; see
-	// [SubscriberEntry.WriterDone].
+	// writerDone is closed when RunWriter returns.
 	writerDone chan struct{}
 	closed     chan struct{}
 	closeOnce  sync.Once
 }
 
 // ClaimForward reserves key while a forwarded PUBLISH for it is being opened
-// and registered, and reports whether it was free; [SubscriberEntry.ReleaseForward]
-// frees it once the subscription is registered. It reports false once the
-// entry is unregistered: §6.1, relays "MUST NOT send any further PUBLISH
-// messages to a client without knowing the client is interested".
+// and registered, and reports whether it was free. It reports false once the
+// entry is unregistered (§6.1: "MUST NOT send any further PUBLISH messages").
 func (e *SubscriberEntry) ClaimForward(key track.Key) bool {
 	e.fwdMu.Lock()
 	defer e.fwdMu.Unlock()
@@ -157,9 +143,9 @@ func (e *SubscriberEntry) ReleaseForward(key track.Key) {
 	delete(e.forwarding, key)
 }
 
-// Prefix is the namespace prefix the subscriber asked to be notified about. A
-// zero-field prefix means "all namespaces" (§6.1). A TRACK_NAMESPACE_PREFIX
-// update (§10.9.2) changes it.
+// Prefix is the namespace prefix the subscriber asked to be notified about,
+// which a TRACK_NAMESPACE_PREFIX update (§10.9.2) changes. A zero-field prefix
+// means "all namespaces" (§6.1).
 func (e *SubscriberEntry) Prefix() wire.TrackNamespace { return *e.prefix.Load() }
 
 // TracksParams returns the SUBSCRIBE_TRACKS parameters now in effect.
@@ -300,10 +286,8 @@ func (r *NamespaceRegistry) RegisterPublisher(
 
 // AnnouncePublisher makes entry a source of its namespace for
 // SUBSCRIBE_NAMESPACE subscribers, announcing the namespace to those that had
-// no source for it. It is separate from registration, which already makes the
-// publisher routable for SUBSCRIBEs: the relay announces only once the
-// publisher has its REQUEST_OK, since one that never got it does not believe
-// it is publishing.
+// no source for it. Call it only once the publisher has its REQUEST_OK;
+// registration alone already makes it routable for SUBSCRIBEs.
 func (r *NamespaceRegistry) AnnouncePublisher(entry *PublisherEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -347,8 +331,7 @@ func (r *NamespaceRegistry) UnregisterPublisher(entry *PublisherEntry) bool {
 // RegisterSubscriber records a subscriber's SUBSCRIBE_NAMESPACE (when
 // wantsTracks is false) or SUBSCRIBE_TRACKS (when true). params are the
 // SUBSCRIBE_TRACKS parameters (§10.20.1), ignored unless wantsTracks; nil
-// means none.
-// Returns the canonical pointer for use with
+// means none. Returns the canonical pointer for use with
 // [NamespaceRegistry.UnregisterSubscriber].
 func (r *NamespaceRegistry) RegisterSubscriber(
 	prefix wire.TrackNamespace,
@@ -374,11 +357,10 @@ func (r *NamespaceRegistry) RegisterSubscriber(
 	r.subscribers = append(r.subscribers, entry)
 	if !wantsTracks {
 		// §6.1: announce every namespace already known under the prefix,
-		// under the same lock that orders later changes to them.
+		// under the same lock that orders later changes to them. Local
+		// publishers first, in registration order, then remote-only ones.
 		counts, names := r.namespaceSources(prefix)
 		entry.announced = counts
-		// Local publishers first, in registration order, then namespaces
-		// only other relays advertise.
 		for _, p := range r.publishers {
 			k := namespaceWireKey(p.Namespace)
 			if _, pending := names[k]; pending && p.announced {

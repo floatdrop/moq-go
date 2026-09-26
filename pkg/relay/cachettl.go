@@ -45,16 +45,9 @@ const CacheTTLInfinite = time.Duration(-1)
 // same retention. That fits the MSF per-broadcaster catalog model, where each
 // participant owns a namespace but they all share one catalog Name.
 //
-// This lives here, rather than in the binary that wants it, because it is the
-// rule two binaries need and only one of them had. A relay serving MSF must
-// retain catalogs longer than media: a catalog is published once on join and
-// republished only when tracks change, so under the default 30-second
-// retention it is evicted from the cache within the first minute of a call.
-// After that a participant who joins later gets nothing from the fill fetch
-// stream that backfills it — and since the live SUBSCRIBE starts at the
-// largest object, they never learn that participant's nickname, version or
-// tracks at all. The bug is invisible from the publisher's side, because the
-// people already in the room are unaffected.
+// An MSF relay needs it for catalogs: published once on join, they would
+// otherwise expire under the default retention and a late joiner's fill fetch
+// stream would find nothing.
 //
 // The choice of which Name and how long still belongs to the binary; only the
 // shape of the predicate is shared.

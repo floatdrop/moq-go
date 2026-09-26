@@ -65,12 +65,9 @@ type CachedObject struct {
 	ReceivedAt        time.Time
 
 	// MaxCacheDuration is the MAX_CACHE_DURATION (§12.3) of the upstream the
-	// Object arrived through, and HasMaxCacheDuration whether it sent one:
-	// §12.3 limits "any individual Object received through this subscription
-	// or fetch", so two upstreams of a track can differ. The Object is not
-	// served once that long has passed since ReceivedAt; a present 0 means it
-	// is never served from the cache (this implementation's reading; live
-	// forwarding is unaffected).
+	// Object arrived through (per upstream, so it can differ within a track),
+	// and HasMaxCacheDuration whether it sent one. A present 0 means never
+	// serve from the cache (this implementation's reading).
 	MaxCacheDuration    time.Duration
 	HasMaxCacheDuration bool
 
@@ -201,8 +198,7 @@ func (c *ObjectCache) Put(obj *CachedObject) {
 // into a CachedObject and stores it. Datagrams have no subgroup, so
 // SubgroupID is 0; ForwardingPref records the wire shape so a FETCH
 // response can replay it as a datagram even if the subscriber's transport
-// supports both. maxAge / hasMaxAge are the MAX_CACHE_DURATION of the
-// upstream it arrived through (see CachedObject.MaxCacheDuration).
+// supports both. maxAge / hasMaxAge are CachedObject.MaxCacheDuration.
 func (c *ObjectCache) PutDatagram(d *message.ObjectDatagram, maxAge time.Duration, hasMaxAge bool) {
 	if d == nil {
 		return
@@ -263,11 +259,8 @@ func (c *ObjectCache) notExpiredLocked(obj *CachedObject) bool {
 }
 
 // Expired reports whether obj, taken from this cache, may no longer be
-// served — §12.3: "the relay MUST NOT start forwarding any individual Object
-// [...] after the specified number of milliseconds has elapsed since the
-// beginning of the Object was received". A FETCH writer asks just before each
-// write. Elements the cache did not store (range markers, Objects stitched
-// from upstream) are never expired.
+// served (§12.3: "MUST NOT start forwarding"). Elements the cache did not
+// store (range markers, Objects stitched from upstream) never expire.
 func (c *ObjectCache) Expired(obj *CachedObject) bool {
 	if obj.ReceivedAt.IsZero() {
 		return false
@@ -357,12 +350,9 @@ func (c *ObjectCache) GetRange(start, end message.Location, order message.GroupO
 			continue
 		}
 		if !c.notExpiredLocked(obj) {
-			// §12.3: "Once Objects have expired from cache, their state
-			// becomes unknown". Below the floor the whole span is the
-			// caller's to account for (see OldestRetained); above it, an
-			// Object that expired out of arrival order would otherwise
-			// leave a plain gap, which a FETCH response asserts as
-			// non-existence (§11.4.4).
+			// §12.3: expired state "becomes unknown". Above the floor a
+			// plain gap would assert non-existence (§11.4.4), so mark it;
+			// below it the caller accounts for the span (OldestRetained).
 			if hasFloor && floor.Less(loc) {
 				out = append(out, &CachedObject{GroupID: obj.GroupID, ObjectID: obj.ObjectID, EndOfUnknownRange: true})
 			}

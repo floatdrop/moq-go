@@ -125,10 +125,8 @@ type NamespaceEvent struct {
 //
 // Implementations MUST honor ctx cancellation and deadlines on every
 // call: the relay's registries invoke Publish/Unpublish while holding
-// their internal locks (that is what keeps the store's record order
-// consistent with registry state), bounding each call with a short
-// deadline. A backend that ignores ctx and blocks on a dead network
-// connection would stall the whole registry, not just the call.
+// their internal locks (keeping store order consistent with registry
+// state), so a backend that ignores ctx stalls the whole registry.
 //
 // Close releases backend resources (network connections, goroutines).
 // Watch channels MUST be drained or their owning context cancelled
@@ -168,10 +166,7 @@ type DiscoveryStore interface {
 	// it returns every advertisement whose Prefix extends (is at or below)
 	// prefix. A query for ["a"] matches advertised prefixes ["a"], ["a","b"],
 	// and ["a","b","c"]; ["x"] does NOT match. A zero-length prefix matches
-	// every advertisement. It answers "which namespaces advertised across the
-	// deployment fall under this SUBSCRIBE_NAMESPACE prefix?". The relay no
-	// longer calls it (its namespace registry is seeded from WatchNamespaces);
-	// it stays for other consumers of the interface.
+	// every advertisement. The relay itself seeds from WatchNamespaces instead.
 	FindNamespacesUnder(ctx context.Context, prefix wire.TrackNamespace) ([]NamespaceInfo, error)
 
 	// WatchTracks returns a channel that first delivers the current set of
@@ -180,38 +175,27 @@ type DiscoveryStore interface {
 	// backend observes (local + remote), until ctx is cancelled or the store
 	// is closed. The channel is closed when the watch ends.
 	//
-	// The snapshot→follow handoff is gapless: across it no event is missed or
-	// duplicated. A consumer that wants "current state plus every change from
-	// here on" therefore needs only this call, never a separate Find followed
-	// by a Watch (which would race any event landing between the two).
+	// The snapshot→follow handoff is gapless: no event is missed or
+	// duplicated across it, so no separate Find is needed.
 	//
-	// The initial snapshot is delivered in full — a consumer interested only in
-	// deltas can skip everything up to OpSnapshotDone, and one that restarts a
-	// watch can reconcile what it knew against the new snapshot. For events
-	// after the snapshot a slow consumer must not block other watchers, and
-	// must not silently miss one either: a backend that cannot deliver a live
-	// event to a watcher MUST end that watch (close its channel) instead of
-	// dropping the event, so the consumer notices and re-watches.
+	// The snapshot is delivered in full. After it, a slow consumer must not
+	// block other watchers, and a backend that cannot deliver a live event
+	// MUST end that watch (close its channel) rather than drop the event, so
+	// the consumer notices and re-watches.
 	WatchTracks(ctx context.Context) (<-chan TrackEvent, error)
 
 	// WatchNamespaces streams namespace events. Same snapshot-then-follow
 	// contract as WatchTracks.
 	WatchNamespaces(ctx context.Context) (<-chan NamespaceEvent, error)
 
-	// Withdraw removes every advertisement this store published for relayAddr.
-	// It is the graceful-shutdown counterpart of the Publish calls: a relay
-	// calls it before it stops accepting connections so peers stop resolving it
-	// as an upstream while it drains (§3.6) rather than dialing an endpoint that
-	// is about to close. Peers observe the removals as OpUnpublish events on
-	// their watches, exactly as they would individual Unpublish calls.
+	// Withdraw removes every advertisement published for relayAddr, so peers
+	// stop resolving it as an upstream while it drains (§3.6). Peers observe
+	// the removals as OpUnpublish events.
 	//
 	// Withdraw is terminal for that address's advertising side: afterwards
-	// PublishTrack / PublishNamespace for relayAddr MUST NOT restore an
-	// advertisement, and MUST return [ErrWithdrawn] — a publisher arriving while
-	// the relay drains must not put it back into the fabric. Everything else
-	// stays usable: the relay keeps resolving *other* relays' advertisements
-	// through Find / Watch for the rest of its drain, and the per-track
-	// Unpublish calls that session teardown issues degrade to no-ops.
+	// PublishTrack / PublishNamespace for relayAddr MUST return [ErrWithdrawn]
+	// without restoring anything. Find / Watch stay usable, and Unpublish
+	// calls for relayAddr become no-ops.
 	//
 	// Withdrawing an address that advertised nothing, or withdrawing twice, is a
 	// silent no-op. Unlike Close, Withdraw releases no backend resources.

@@ -75,14 +75,11 @@ type Config struct {
 	SessionOptions []session.Option
 
 	// KnownMandatoryTrackProperties lists the Mandatory Track Property types
-	// (0x4000–0x7FFF) the relay may forward. §2.5.1: an endpoint that does
-	// not understand one "MUST NOT process or forward that track", so a
-	// PUBLISH or upstream SUBSCRIBE_OK carrying any other type is refused
-	// with UNSUPPORTED_EXTENSION. Empty (the default) forwards no track that
-	// carries a Mandatory Track Property; tracks without one are unaffected.
-	// Set it here, not with session.WithKnownMandatoryTrackProperties in
-	// SessionOptions: an entry there overrides this field, and a nil map
-	// there turns the check off.
+	// (0x4000–0x7FFF) the relay may forward; a track carrying any other is
+	// refused with UNSUPPORTED_EXTENSION (§2.5.1). Empty (the default)
+	// refuses every Mandatory Track Property. Set it here rather than with
+	// session.WithKnownMandatoryTrackProperties in SessionOptions, which
+	// overrides this field (and turns the check off with a nil map).
 	KnownMandatoryTrackProperties []message.PropertyType
 
 	// Logger is used for relay-level events (accept loop start/stop,
@@ -348,8 +345,7 @@ func New(listener Listener, cfg Config) *Relay {
 	// Prepended, so it is the SETUP budget unless the caller states one — and
 	// stated twice it is advertised twice, which is why [Config.MaxFilterRanges]
 	// is the way to change it rather than another WithMaxFilterRanges here.
-	// Always non-nil, so every session enforces §2.5.1 — an empty set refuses
-	// every Mandatory Track Property.
+	// Always non-nil, so every session enforces §2.5.1.
 	knownMandatory := make(map[message.PropertyType]struct{}, len(cfg.KnownMandatoryTrackProperties))
 	for _, t := range cfg.KnownMandatoryTrackProperties {
 		knownMandatory[t] = struct{}{}
