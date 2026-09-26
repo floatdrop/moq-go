@@ -264,20 +264,28 @@ func TestPublishDone_AfterGapReopen(t *testing.T) {
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 	pub := publishVideoTrack(t, pubSess, "cam1", 1)
+	other := publishVideoTrack(t, dialAnotherClient(t, pubSess), "cam1", 2)
 	subSess := dialAnotherClient(t, pubSess)
 	subReq := subscribeCam1(t, subSess)
 
-	sg, err := pub.OpenSubgroup(message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit})
+	hdr := message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit}
+	sg, err := pub.OpenSubgroup(hdr)
 	if err != nil {
 		t.Fatalf("OpenSubgroup: %v", err)
+	}
+	otherSg, err := other.OpenSubgroup(hdr)
+	if err != nil {
+		t.Fatalf("other OpenSubgroup: %v", err)
 	}
 	wrote := make(chan struct{})
 	go func() {
 		defer close(wrote)
 		_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte("0")})
-		// Object 2 after object 0: the relay may not carry it on the same
-		// stream (§11.4.3), so it resets that one and opens another.
-		_ = sg.WriteObject(&message.SubgroupObject{ObjectIDDelta: 1, Payload: []byte("2")})
+		// Objects 0 and 2 from two upstreams: in either order, neither is the
+		// next Object after the other (§11.4.3), so the relay resets the
+		// first stream and opens another.
+		_ = otherSg.WriteObjectAt(2, &message.SubgroupObject{Payload: []byte("2")})
+		_ = otherSg.Close()
 	}()
 	ended := make(chan struct{}, 2)
 	for range 2 {
@@ -299,6 +307,10 @@ func TestPublishDone_AfterGapReopen(t *testing.T) {
 		}()
 	}
 
+	// PUBLISH_DONE goes out once both upstreams are done.
+	if err := other.Done(moqt.PublishDoneTrackEnded, "done"); err != nil {
+		t.Fatalf("other Done: %v", err)
+	}
 	if err := pub.Done(moqt.PublishDoneTrackEnded, "done"); err != nil {
 		t.Fatalf("Done: %v", err)
 	}

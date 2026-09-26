@@ -76,3 +76,17 @@ func (c *objectPropertiesCheck) walk(raw []byte, nested bool) error {
 	}
 	return nil
 }
+
+// PriorObjectIDGap returns the Prior Object ID Gap (§12.9) in an Object's raw
+// Properties and whether there is one, searching Immutable Properties too
+// (§12.7). Properties that [CheckObjectProperties] rejects for a reason it can
+// see without the Object's ID carry none.
+//
+// Must not allocate: per-Object path.
+func PriorObjectIDGap(raw []byte) (uint64, bool) {
+	var c objectPropertiesCheck
+	if c.walk(raw, false) != nil || c.objectGaps != 1 {
+		return 0, false
+	}
+	return c.objectGap, true
+}
