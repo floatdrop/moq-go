@@ -10,35 +10,18 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/cache"
 )
 
-// putAt is a one-liner Put for tests that don't care about payload /
-// timestamps — they only assert which Locations come back out of
-// GetRange in which order.
+// putAt puts an empty Object at {group, object}.
 func putAt(c *cache.ObjectCache, group, object uint64) {
 	c.Put(&cache.CachedObject{GroupID: group, ObjectID: object})
 }
 
-// locs projects a CachedObject slice to (group, object) tuples so
-// failed assertions print readable diffs.
+// locs projects cached Objects to their Locations for readable diffs.
 func locs(objs []*cache.CachedObject) []message.Location {
 	out := make([]message.Location, len(objs))
 	for i, o := range objs {
 		out[i] = message.Location{Group: o.GroupID, Object: o.ObjectID}
 	}
 	return out
-}
-
-// equalLocs is a tiny comparator kept local so the assertion code
-// stays a single line.
-func equalLocs(a, b []message.Location) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // TestObjectCache_OldestRetained pins the eviction-floor accessor: false on an
@@ -71,62 +54,46 @@ func TestObjectCache_OldestRetained(t *testing.T) {
 	}
 }
 
-// TestObjectCache_GetRange_AscendingOrder pins the sort contract for
-// ascending mode: groups asc, objects asc within each group. Insertion
-// order is deliberately scrambled so the test fails if GetRange leaks
-// FIFO order instead of sorting.
-func TestObjectCache_GetRange_AscendingOrder(t *testing.T) {
+// TestObjectCache_GetRange_Order pins GetRange's sort: groups in the requested
+// order, Objects ascending within a group (§10.13). Inserts are scrambled so
+// FIFO order cannot pass.
+func TestObjectCache_GetRange_Order(t *testing.T) {
 	t.Parallel()
-
-	c := cache.NewObjectCache(0, 0)
-	for _, l := range []message.Location{
-		{Group: 2, Object: 1}, {Group: 0, Object: 1}, {Group: 1, Object: 0},
-		{Group: 2, Object: 0}, {Group: 0, Object: 0}, {Group: 1, Object: 1},
+	for _, tc := range []struct {
+		name  string
+		order message.GroupOrder
+		want  []message.Location
+	}{
+		{"ascending", message.GroupOrderAscending, []message.Location{
+			{Group: 0, Object: 0}, {Group: 0, Object: 1},
+			{Group: 1, Object: 0}, {Group: 1, Object: 1},
+			{Group: 2, Object: 0}, {Group: 2, Object: 1},
+		}},
+		{"descending", message.GroupOrderDescending, []message.Location{
+			{Group: 2, Object: 0}, {Group: 2, Object: 1},
+			{Group: 1, Object: 0}, {Group: 1, Object: 1},
+			{Group: 0, Object: 0}, {Group: 0, Object: 1},
+		}},
 	} {
-		putAt(c, l.Group, l.Object)
-	}
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			c := cache.NewObjectCache(0, 0)
+			for _, l := range []message.Location{
+				{Group: 2, Object: 1}, {Group: 0, Object: 1}, {Group: 1, Object: 0},
+				{Group: 2, Object: 0}, {Group: 0, Object: 0}, {Group: 1, Object: 1},
+			} {
+				putAt(c, l.Group, l.Object)
+			}
 
-	got := c.GetRange(
-		message.Location{Group: 0, Object: 0},
-		message.Location{Group: 2, Object: 99},
-		message.GroupOrderAscending,
-	)
-	want := []message.Location{
-		{Group: 0, Object: 0}, {Group: 0, Object: 1},
-		{Group: 1, Object: 0}, {Group: 1, Object: 1},
-		{Group: 2, Object: 0}, {Group: 2, Object: 1},
-	}
-	if !equalLocs(locs(got), want) {
-		t.Fatalf("ascending GetRange = %+v, want %+v", locs(got), want)
-	}
-}
-
-// TestObjectCache_GetRange_DescendingOrder pins the §11.4.3 rule that
-// descending order applies to GROUPS only — objects within a group
-// stay ascending.
-func TestObjectCache_GetRange_DescendingOrder(t *testing.T) {
-	t.Parallel()
-
-	c := cache.NewObjectCache(0, 0)
-	putAt(c, 0, 0)
-	putAt(c, 0, 1)
-	putAt(c, 1, 0)
-	putAt(c, 1, 1)
-	putAt(c, 2, 0)
-	putAt(c, 2, 1)
-
-	got := c.GetRange(
-		message.Location{Group: 0, Object: 0},
-		message.Location{Group: 2, Object: 99},
-		message.GroupOrderDescending,
-	)
-	want := []message.Location{
-		{Group: 2, Object: 0}, {Group: 2, Object: 1},
-		{Group: 1, Object: 0}, {Group: 1, Object: 1},
-		{Group: 0, Object: 0}, {Group: 0, Object: 1},
-	}
-	if !equalLocs(locs(got), want) {
-		t.Fatalf("descending GetRange = %+v, want %+v", locs(got), want)
+			got := c.GetRange(
+				message.Location{Group: 0, Object: 0},
+				message.Location{Group: 2, Object: 99},
+				tc.order,
+			)
+			if !slices.Equal(locs(got), tc.want) {
+				t.Fatalf("%s GetRange = %+v, want %+v", tc.name, locs(got), tc.want)
+			}
+		})
 	}
 }
 
@@ -155,7 +122,7 @@ func TestObjectCache_GetRange_StartEndFiltering(t *testing.T) {
 		{Group: 1, Object: 2}, {Group: 1, Object: 3},
 		{Group: 2, Object: 0}, {Group: 2, Object: 1},
 	}
-	if !equalLocs(locs(got), want) {
+	if !slices.Equal(locs(got), want) {
 		t.Fatalf("filtered GetRange = %+v, want %+v", locs(got), want)
 	}
 }
@@ -200,12 +167,9 @@ func TestObjectCache_Delete(t *testing.T) {
 	c.Delete(0, 0)
 }
 
-// TestPerObjectMaxCacheDuration: each Object carries the MAX_CACHE_DURATION of
-// the upstream it arrived through (§12.3). An expired Object above the oldest
-// served one reads as an End of Unknown Range marker in GetRange ("Once
-// Objects have expired from cache, their state becomes unknown"); below it,
-// the caller accounts for the span (see OldestRetained). A present 0 is never
-// served; an absent value leaves only the relay's TTL.
+// TestPerObjectMaxCacheDuration: each Object keeps its upstream's
+// MAX_CACHE_DURATION (§12.3). Expired above the oldest served Object it reads
+// as End of Unknown Range; a present 0 is never served; absent means relay TTL.
 func TestPerObjectMaxCacheDuration(t *testing.T) {
 	c := cache.NewObjectCache(16, 0)
 	put := func(group uint64, maxAge time.Duration, has bool) *cache.CachedObject {
