@@ -15,19 +15,14 @@ import (
 )
 
 // maybeServeFill opens and serves a fill fetch stream for a subscription when
-// the SUBSCRIBE or REQUEST_UPDATE carried FILL_PARAMETERS (§5.1.3), which is
-// draft-20's replacement for the Joining FETCH.
+// the SUBSCRIBE or REQUEST_UPDATE carried FILL_PARAMETERS (§5.1.3).
 //
-// requestID is the Request ID of the message that asked for the fill — the
-// SUBSCRIBE's for an initial fill, the REQUEST_UPDATE's for a later one — and
-// it is what the FETCH_HEADER carries, so a subscription can have several fill
-// fetch streams open at once, each named by its own Request ID.
+// requestID is the Request ID of the message that asked for the fill; the
+// FETCH_HEADER carries it, so one subscription can have several fills open.
 //
 // It returns an error only for a malformed FILL_PARAMETERS, which the caller
-// MUST turn into a session-level PROTOCOL_VIOLATION (§10.2.15). Everything
-// else is best-effort: §5.1.3.1 has no REQUEST_ERROR for a fill, so a failure
-// is signalled by resetting the stream, and the subscription itself is
-// unaffected either way.
+// MUST turn into a session-level PROTOCOL_VIOLATION (§10.2.15). Any other
+// failure resets the fill stream and leaves the subscription unaffected.
 func (h *sessionHandler) maybeServeFill(
 	ctx context.Context,
 	sub *registry.DownstreamSub,
@@ -44,20 +39,14 @@ func (h *sessionHandler) maybeServeFill(
 		return nil
 	}
 
-	// From here the peer has asked for a fill, so §5.1.3.1's failure signal
-	// applies to everything that can still go wrong: "Because there is no
-	// REQUEST_ERROR associated with a fill fetch stream, the publisher signals a
-	// fill failure by resetting the stream; it MUST open a fill fetch stream and
-	// reset it immediately after the FETCH_HEADER if necessary."
+	// §5.1.3.1: from here a failure MUST open the fill stream and reset it.
 	fail := func(err error) error {
 		h.resetFillStream(ctx, sub, requestID)
 		return err
 	}
 
-	// §5.1.3.1: "A publisher opens a fill fetch stream when it processes a
-	// SUBSCRIBE or REQUEST_UPDATE that carries FILL_PARAMETERS while Forward
-	// State is 1." FILL_PARAMETERS arriving while paused opens nothing, and a
-	// later unpause does not retroactively open one.
+	// §5.1.3.1: only "while Forward State is 1"; a later unpause does not
+	// open one retroactively.
 	if sub.ForwardState() != 1 {
 		return nil
 	}
@@ -100,12 +89,9 @@ func (h *sessionHandler) maybeServeFill(
 	}
 	fillTimeout := resolveFillBudget(inner)
 
-	// §5.1.3: "The fill fetch stream inherits the subscription's parameters,
-	// including subscriber priority, range filters and authorization;
-	// parameters carried inside FILL_PARAMETERS override them". A filter type
-	// named inside overrides the subscription's filter of that type, as a
-	// REQUEST_UPDATE would (§5.1.4: non-zero replaces, zero-length removes);
-	// the other types are inherited.
+	// §5.1.3: the fill "inherits the subscription's parameters". A filter
+	// type inside FILL_PARAMETERS overrides that type as a REQUEST_UPDATE
+	// would (§5.1.4); the other types are inherited.
 	rangeFilters := sub.GetRangeFilters()
 	if slices.ContainsFunc(inner, func(p message.Parameter) bool { return message.IsRangeFilterParam(p.Type) }) {
 		rangeFilters, err = rangeFilters.Update(inner)
@@ -123,15 +109,12 @@ func (h *sessionHandler) maybeServeFill(
 	return nil
 }
 
-// TODO(draft-20): §5.1.3.1 also requires "When the subscription is cancelled,
-// the publisher MUST reset any open fill fetch streams." That needs a watchdog
-// resetting the stream on ctx cancellation mid-write, which is a concurrency
-// change worth landing with -race coverage — i.e. with the test slice.
+// TODO(draft-20): §5.1.3.1 "When the subscription is cancelled, the publisher
+// MUST reset any open fill fetch streams" needs a watchdog on ctx cancellation
+// mid-write.
 
-// serveFill writes one fill fetch stream and closes it. §5.1.3.1: the FIN is
-// what signals the fill is complete, and because a fill has no REQUEST_ERROR
-// of its own, a failure is signalled by resetting the stream —
-// [sessionHandler.streamFetchRange] does that on a write error.
+// serveFill writes one fill fetch stream; the FIN signals completion
+// (§5.1.3.1), and [sessionHandler.streamFetchRange] resets it on a write error.
 func (h *sessionHandler) serveFill(
 	ctx context.Context,
 	sub *registry.DownstreamSub,
@@ -153,9 +136,8 @@ func (h *sessionHandler) serveFill(
 }
 
 // resetFillStream signals a fill failure the only way §5.1.3.1 allows: open the
-// fill fetch stream and reset it immediately after the FETCH_HEADER. Without
-// it the subscriber cannot tell a failed fill from the legitimate "fill range
-// is empty, so no stream" case (§5.1.3), and waits forever.
+// fill fetch stream and reset it right after the FETCH_HEADER. Otherwise the
+// subscriber cannot tell it from an empty fill range, which opens no stream.
 func (h *sessionHandler) resetFillStream(ctx context.Context, sub *registry.DownstreamSub, requestID uint64) {
 	out, err := openFillOrFetchStream(h.sess, sub, requestID)
 	if err != nil {
@@ -173,8 +155,7 @@ func (h *sessionHandler) resetFillStream(ctx context.Context, sub *registry.Down
 var errSubscriptionTerminated = errors.New("relay: subscription terminated before the stream opened")
 
 // openFillOrFetchStream opens a FETCH_HEADER stream. A fill fetch stream
-// belongs to sub's subscription and is counted for its §10.12 PUBLISH_DONE
-// Stream Count ("including any fill fetch streams"); a standalone FETCH
+// counts toward sub's §10.12 PUBLISH_DONE Stream Count; a standalone FETCH
 // response passes a nil sub.
 func openFillOrFetchStream(
 	sess *session.Session,

@@ -40,8 +40,7 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 	hasProperties := known && len(entry.GetProperties()) > 0
 	if known && (hasProperties || hasLargest) {
 		reply := &message.TrackStatusOK{}
-		// §10.2.21: INCLUDE_PROPERTIES=0 empties the Track Properties; it
-		// does not change whether the track is answered.
+		// §10.2.21: INCLUDE_PROPERTIES=0 empties the Track Properties only.
 		if hasProperties && includeProperties(msg.Parameters) {
 			reply.TrackProperties = entry.GetProperties()
 		}
@@ -51,8 +50,7 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 			reply.Parameters = append(reply.Parameters,
 				message.LargestObjectParam(largest.Group, largest.Object))
 		}
-		// AcceptTrackStatus FINs after the reply (§10.15) and closes the
-		// session on any follow-up from the requester (§10.9).
+		// AcceptTrackStatus FINs after the reply (§10.15).
 		if err := req.AcceptTrackStatus(reply); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "TRACK_STATUS_OK write failed",
 				slog.String("err", err.Error()))

@@ -12,14 +12,10 @@ import (
 )
 
 // forwardTrack is a SUBSCRIBE_TRACKS subscriber's [registry.SubscriberEntry.ForwardTrack]:
-// it sends the subscriber a PUBLISH for te (§6.1: "the publisher sends PUBLISH
-// messages for tracks within matching namespaces") and serves the subscription
-// that opens, on this handler's session. The SUBSCRIBE_TRACKS parameters in
-// effect now are "the initial Subscription parameters when a PUBLISH is sent as
-// a result of SUBSCRIBE_TRACKS" (§10.20.1); see [registry.TracksParams].
-//
-// The subscriber gets one forwarded PUBLISH per track, and none for a track it
-// publishes itself or already receives.
+// it sends the subscriber a PUBLISH for te (§6.1) with the current
+// SUBSCRIBE_TRACKS parameters (§10.20.1) and serves the resulting
+// subscription. At most one PUBLISH per track, and none for a track the
+// subscriber publishes or already receives.
 func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.SubscriberEntry, *registry.TrackEntry) {
 	return func(sub *registry.SubscriberEntry, te *registry.TrackEntry) {
 		if peerSentGoaway(h.sess) {
@@ -29,9 +25,7 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 		if !fullName.Namespace.HasPrefix(sub.Prefix()) {
 			return // a TRACK_NAMESPACE_PREFIX update moved the subscription away
 		}
-		// §5.1.4: "PUBLISH messages which pass the filter will be forwarded
-		// while those which do not pass it will not be forwarded nor will any
-		// Objects."
+		// §5.1.4: PUBLISHes that fail the Range Filters are not forwarded.
 		tp := sub.TracksParams()
 		if !tp.RangeFilters.MatchesTrack(te.GetProperties()) {
 			return
@@ -40,9 +34,7 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 		if te.HasUpstreamOn(h.sess) || te.HasDownstreamOn(h.sess) {
 			return
 		}
-		// The check above misses a forward whose downstream is not
-		// registered yet; the claim covers that window, until
-		// serveForwardedPublish registers it.
+		// The claim covers a forward whose downstream is not registered yet.
 		key := fullName.Key()
 		if !sub.ClaimForward(key) {
 			return
@@ -54,14 +46,12 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 		fwd := &message.Publish{
 			Namespace: fullName.Namespace,
 			Name:      fullName.Name,
-			// §11.1: aliases are per session; the subscriber's session
-			// allocates the ones the relay publishes on.
+			// §11.1: aliases are per session.
 			TrackAlias:      h.sess.AllocOutboundTrackAlias(),
 			Parameters:      publishParamsForSubscriber(tp, te),
 			TrackProperties: properties,
 		}
-		// Non-blocking (§6.1): with no bidi-stream credit left the relay
-		// sends PUBLISH_SKIPPED on the SUBSCRIBE_TRACKS stream instead.
+		// §6.1: without bidi-stream credit, send PUBLISH_SKIPPED instead.
 		stream, err := h.sess.OpenPublish(fwd)
 		if err != nil {
 			sub.ReleaseForward(key)
@@ -78,15 +68,10 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 	}
 }
 
-// serveForwardedPublish serves the subscription a forwarded PUBLISH opened: a
-// downstream on te like a SUBSCRIBE's, registered before the response arrives,
-// since "If the FORWARD parameter is omitted or equal to 1, the publisher will
-// start transmitting objects immediately, possibly before PUBLISH_OK" (§10.11).
-// A REQUEST_ERROR (e.g. UNINTERESTED) ends it; otherwise the subscriber's
-// REQUEST_UPDATEs are answered (§10.9) until it cancels or the track ends,
-// which sends PUBLISH_DONE (§10.12) through the downstream like any other.
-// FILL_PARAMETERS and NEW_GROUP_REQUEST among params apply to this
-// subscription as they would to a SUBSCRIBE's.
+// serveForwardedPublish serves the subscription a forwarded PUBLISH opened,
+// as a downstream on te registered before PUBLISH_OK, since objects may flow
+// before it (§10.11). A REQUEST_ERROR ends it; otherwise it
+// is served like a SUBSCRIBE's.
 func (h *sessionHandler) serveForwardedPublish(
 	ctx context.Context,
 	stream session.Stream,
@@ -98,9 +83,7 @@ func (h *sessionHandler) serveForwardedPublish(
 	fullName := te.FullName
 	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, stream, fwd.TrackAlias)
 	sub.OpenedByPublish()
-	// handleSubscribeTracks refused parameters this would reject. "Delivery
-	// starts at the Next Object relative to the Largest Object" (§10.11) is
-	// the live fanout's default.
+	// handleSubscribeTracks already refused parameters this would reject.
 	_ = installSubscribeParams(sub, params)
 	_, largest, has, added := h.tracks.AddDownstreamSnapshotLargest(fullName, sub)
 	registered()
@@ -121,26 +104,18 @@ func (h *sessionHandler) serveForwardedPublish(
 	if _, err := h.sess.AwaitPublishOK(ctx, stream); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "forwarded PUBLISH refused",
 			slog.String("name", string(fullName.Name)), slog.String("err", err.Error()))
-		// The request is over (§3.3.3); end this side too, with no
-		// PUBLISH_DONE after the subscriber's REQUEST_ERROR.
+		// §3.3.3: no PUBLISH_DONE after the subscriber's REQUEST_ERROR.
 		sub.EndRefused()
 		return
 	}
-	// §10.20.1: "To join Tracks initiated via the resulting PUBLISHes, the
-	// subscriber can specify a Location Filter and optionally include
-	// FILL_PARAMETERS". Each forwarded subscription gets its own fill fetch
-	// stream, once the subscriber has accepted the PUBLISH, carrying the
-	// PUBLISH's Request ID — §10.1: "fetch streams reference the Request ID
-	// of a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE" — the one ID that
-	// names this subscription alone. (§5.1.3 names only the SUBSCRIBE and
-	// REQUEST_UPDATE cases.) The SUBSCRIBE_TRACKS was validated, so a
-	// malformed FILL_PARAMETERS cannot reach here.
+	// §10.20.1: each forwarded subscription gets its own fill fetch stream,
+	// named by the PUBLISH's Request ID (§10.1; §5.1.3 names only SUBSCRIBE
+	// and REQUEST_UPDATE).
 	if err := h.maybeServeFill(ctx, sub, te, fullName, fwd.RequestID, params); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
 			slog.String("err", err.Error()))
 	}
-	// §10.2.19: a NEW_GROUP_REQUEST is handled as for a SUBSCRIBE served
-	// from the track's existing upstream.
+	// §10.2.19
 	if p, ok := params.Find(message.ParamNewGroupRequest); ok {
 		h.propagateNewGroupUpstream(ctx, fullName, p.Varint)
 	}

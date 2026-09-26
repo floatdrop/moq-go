@@ -179,9 +179,8 @@ func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamesp
 			continue // fall through to the next-ranked relay
 		}
 		if peerSentGoaway(sess) {
-			// A relay that sent GOAWAY takes no new requests (§10.4), so it
-			// must not hold a fan-in slot: fall through to the next-ranked
-			// one while it drains.
+			// §10.4: a draining relay takes no new requests, so it must not
+			// hold a fan-in slot.
 			continue
 		}
 		out = append(out, sess)

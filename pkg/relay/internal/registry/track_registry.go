@@ -181,8 +181,7 @@ func (r *TrackRegistry) Get(key track.Key) (*TrackEntry, bool) {
 }
 
 // MatchNamespace returns every entry whose Track Namespace has prefix as a
-// prefix — §9.5 Namespace Prefix Matching from the publisher's side: the
-// tracks a PUBLISH_NAMESPACE for prefix covers.
+// prefix: the tracks a PUBLISH_NAMESPACE for prefix covers (§9.5).
 func (r *TrackRegistry) MatchNamespace(prefix wire.TrackNamespace) []*TrackEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -196,10 +195,9 @@ func (r *TrackRegistry) MatchNamespace(prefix wire.TrackNamespace) []*TrackEntry
 }
 
 // ClaimUpstream marks an upstream SUBSCRIBE for key on sess as in flight, so a
-// relay-initiated SUBSCRIBE for an existing track (§9.5 late publisher) can
-// tell it would duplicate one. On success the caller opens and registers the
-// upstream, then calls release. ok is false when sess already has a registered
-// upstream for key or another claim is in flight.
+// §9.5 late-publisher SUBSCRIBE does not duplicate one. On success the caller
+// opens and registers the upstream, then calls release. ok is false when sess
+// already has a registered upstream for key or another claim is in flight.
 func (r *TrackRegistry) ClaimUpstream(sess *session.Session, key track.Key) (release func(), ok bool) {
 	c := upstreamClaim{sess: sess, key: key}
 	r.mu.Lock()
@@ -222,12 +220,10 @@ func (r *TrackRegistry) ClaimUpstream(sess *session.Session, key track.Key) (rel
 }
 
 // ReleaseIfUnsubscribed removes the on-demand upstream up from the entry for
-// fullName and tears it down if the entry has no downstream left — what
-// [TrackRegistry.RemoveDownstream] does when the last downstream leaves. It
-// is for an upstream opened for an existing track: its last downstream can
-// leave during the SUBSCRIBE round trip, before up is registered and so
-// before RemoveDownstream could strip it, and nothing would ever release it.
-// Reports whether up was released.
+// fullName and tears it down if the entry has no downstream left. It covers
+// an upstream whose last downstream left during the SUBSCRIBE round trip,
+// before [TrackRegistry.RemoveDownstream] could strip it. Reports whether up
+// was released.
 func (r *TrackRegistry) ReleaseIfUnsubscribed(fullName track.FullTrackName, up *UpstreamSub) bool {
 	key := fullName.Key()
 	r.mu.Lock()
@@ -585,8 +581,7 @@ func (r *TrackRegistry) RemoveUpstream(
 	r.mu.Unlock()
 
 	if upstreamEmpty {
-		// §10.12: carry the last upstream's reason where it is about the
-		// track (see DownstreamDoneCode).
+		// §10.12: carry the last upstream's reason; see DownstreamDoneCode.
 		code := DownstreamDoneCode(gone.publishDone())
 		for _, sub := range notifyDownstreams {
 			sub.TerminateWithPublishDone(code, "relay: upstream gone")

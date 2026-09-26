@@ -125,54 +125,27 @@ func (h *sessionHandler) trackRef(name track.FullTrackName) TrackRef {
 }
 
 // saveLargestLocation folds a LARGEST_OBJECT parameter the upstream sent into
-// the track's watermark.
+// the track's watermark. §10.2.17: a relay advertises the largest of the
+// values received in SUBSCRIBE_OK, PUBLISH or REQUEST_UPDATE_OK and the
+// Objects it received.
 //
-// §10.2.17 is the operative rule and it is addressed to relays specifically: a
-// relay MUST set LARGEST_OBJECT to the largest of (1) any value received from
-// the upstream publisher in SUBSCRIBE_OK, PUBLISH or REQUEST_UPDATE_OK, and
-// (2) the largest Location of an Object received on an upstream subscription.
-// §9.4 makes that binding here ("Relays MUST follow the constraints on
-// LARGEST_OBJECT defined in Section 10.2.17"). Only (2) was implemented, so the
-// relay advertised a watermark built purely from objects it had watched arrive.
-//
-// Call this on every path carrying the parameter, unconditionally.
-// [registry.TrackEntry.UpdateLargest] keeps the maximum, which is exactly what
-// §10.2.17 asks for, so a value already overtaken changes nothing.
-//
-// Do NOT narrow this to the Forward-State transition. Draft-19's §5.1 had a
-// publisher save only the Largest Location from a message that changed the
-// Forward State from 0 to 1; draft-20 dropped that requirement (#1872), and
-// §10.2.17's relay rule never had the condition. It matters here:
-// subscribeUpstreamOnSession sends FORWARD=0 whenever no downstream wants
-// forwarding, so gating on the transition would reintroduce the bug below.
-//
-// What that bug was: a relay is the publisher for its own downstream
-// subscribers (§9.4), so a freshly established cross-relay subscription
-// reported no Largest Object until the first object happened to flow. For a
-// track published *once* that never happens — the live subscription carries
-// only future objects, and no §5.1.3 fill fetch stream opens to backfill the
-// rest, since the fill range never extends beyond Largest Object. An MSF
-// catalog is exactly that shape, so across two relays the participant its
-// catalog described stayed invisible for the whole call.
+// Call it on every path carrying the parameter, unconditionally, and not only
+// on a Forward State 0→1 transition: subscribeUpstreamOnSession sends
+// FORWARD=0 when no downstream forwards, and a track published once would then
+// report no Largest Object, so no fill fetch stream could backfill it.
 func saveLargestLocation(entry *registry.TrackEntry, ps message.Parameters) {
 	if p, ok := ps.Find(message.ParamLargestObject); ok {
 		entry.UpdateLargest(message.Location{Group: p.Group, Object: p.Object})
 	}
 }
 
-// logInboundGoaway records the peer's GOAWAY (§10.4). The relay does not
-// close the session for it: the Timeout is "The time in milliseconds the
-// sender will wait for graceful closure", after which the sender "closes the
-// session with GOAWAY_TIMEOUT [...] if there are still open requests"; a
-// Timeout of 0 sets no deadline at all. What the relay owes the peer is to
-// stop initiating requests to it (see [peerSentGoaway]).
+// logInboundGoaway records the peer's GOAWAY (§10.4). The relay does not close
+// the session: enforcing the Timeout is the sender's job. It only stops
+// initiating requests to the peer (see [peerSentGoaway]).
 //
-// As the subscriber on such a session the relay does not do the rest of what
-// §9.4.1 and §3.6 describe: it neither moves its subscriptions to the peer's
-// NewSessionURI nor closes the session itself once none remain. Dependent
-// DownstreamSubs see their tracks end when the session does, and clients
-// re-subscribe, which may re-establish the track via the on-demand upstream
-// subscribe path.
+// Deviation: the relay neither migrates its subscriptions to NewSessionURI nor
+// closes the session once none remain (§9.4.1, §3.6); downstream clients
+// re-subscribe when the session ends.
 func (h *sessionHandler) logInboundGoaway(ctx context.Context) {
 	g := h.sess.PeerGoaway()
 	//nolint:gosec // G115: g.Timeout is a peer-supplied ms value; an out-of-range value yields a wrong duration, not a memory-safety issue.
@@ -182,13 +155,9 @@ func (h *sessionHandler) logInboundGoaway(ctx context.Context) {
 		slog.String("new_session_uri", string(g.NewSessionURI)))
 }
 
-// peerSentGoaway reports whether sess's peer has sent GOAWAY on the control
-// stream. §10.4: "Upon receiving a GOAWAY on the control stream, an endpoint
-// SHOULD NOT initiate new requests to the peer including SUBSCRIBE, PUBLISH,
-// FETCH, PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS and
-// TRACK_STATUS." The relay initiates SUBSCRIBE (on demand and to late
-// publishers), FETCH (stitching) and PUBLISH (to SUBSCRIBE_TRACKS holders);
-// each checks this first.
+// peerSentGoaway reports whether sess's peer has sent GOAWAY. §10.4: an
+// endpoint "SHOULD NOT initiate new requests to the peer"; every relay-initiated
+// SUBSCRIBE, FETCH and PUBLISH checks this first.
 func peerSentGoaway(sess *session.Session) bool { return sess.PeerGoaway() != nil }
 
 // subIDCounter allocates process-globally unique subscription IDs. It MUST
@@ -210,8 +179,7 @@ func (h *sessionHandler) allocSubID() uint64 {
 // not close the session itself except on a protocol violation detected by a loop.
 func (h *sessionHandler) run(ctx context.Context) error {
 	// Watcher ties runCtx to the parent ctx and the session's Done channel so
-	// loops unblock as soon as the session terminates. An inbound GOAWAY is
-	// only logged (see logInboundGoaway); the session runs on until it ends.
+	// loops unblock as soon as the session terminates.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -282,11 +250,9 @@ func (h *sessionHandler) run(ctx context.Context) error {
 //   - the session emits an unrecoverable error from AcceptRequest,
 //   - a non-shutdown read failure occurs.
 //
-// Per-request failures (auth, rejected requests) do NOT terminate the loop —
-// the relay rejects the individual request and continues serving the session.
-// A stream opened by anything but a request message is different: §3.3 makes
-// it session-fatal, and AcceptRequest has closed the session by the time the
-// loop sees the error.
+// Per-request failures (auth, rejected requests) do NOT terminate the loop.
+// A stream opened by anything but a request message is session-fatal (§3.3);
+// AcceptRequest has already closed the session.
 func (h *sessionHandler) runRequestLoop(ctx context.Context) error {
 	err := h.requestMux(ctx).Run(ctx, h.sess)
 	// A malformed / duplicate / overflowing / unknown AUTHORIZATION_TOKEN alias
@@ -299,9 +265,6 @@ func (h *sessionHandler) runRequestLoop(ctx context.Context) error {
 			slog.Uint64("code", uint64(tce.Code)))
 		_ = h.sess.Close(tce.Code, tce.Error())
 	}
-	// A request stream opened by anything but a Table 5 "First" message
-	// (REQUEST_UPDATE, PUBLISH_STATE_NOTIFY, a response, ...) is a
-	// PROTOCOL_VIOLATION that AcceptRequest has already closed the session on.
 	return err
 }
 
@@ -309,9 +272,8 @@ func (h *sessionHandler) runRequestLoop(ctx context.Context) error {
 // streams to [sessionHandler.runFanout], fetch response streams to the fetch
 // router (see the inline comments below).
 //
-// AcceptDataStream skips streams abandoned mid-header (§11.4.1) itself and
-// closes the session on a session-fatal header (§3.4, §11.4.2), so any error
-// other than a padding stream means the session is gone and the loop ends.
+// AcceptDataStream skips abandoned streams and closes the session on a fatal
+// header itself, so any error it returns ends the loop.
 func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 	for {
 		ds, err := h.sess.AcceptDataStream(ctx)
@@ -359,9 +321,8 @@ func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 // namespaceRequest folds in the §13.7.1 per-session cap for the three
 // namespace-state requests (the §13.1 subscription cap is inline on SUBSCRIBE).
 //
-// All seven request types are registered. Any other first message is a §3.3
-// PROTOCOL_VIOLATION that [session.Session.AcceptRequest] closes the session on
-// before dispatch, so no OnUnknown fallback is needed.
+// Any other first message is a §3.3 PROTOCOL_VIOLATION that
+// [session.Session.AcceptRequest] handles before dispatch.
 func (h *sessionHandler) requestMux(ctx context.Context) *session.RequestMux {
 	mux := session.NewRequestMux()
 
@@ -458,15 +419,13 @@ func (h *sessionHandler) rejectAuth(ctx context.Context, req *session.Request, k
 	}
 }
 
-// excessiveLoadRetry is the least wait an EXCESSIVE_LOAD rejection invites. A
-// per-session cap frees up when one of the session's earlier requests ends,
-// which the relay cannot predict, so this is a guess, not a promise.
+// excessiveLoadRetry is the least wait an EXCESSIVE_LOAD rejection invites; a
+// guess, since the relay cannot predict when a per-session cap frees up.
 const excessiveLoadRetry = time.Second
 
 // excessiveLoadRetryInterval is the Retry Interval for an EXCESSIVE_LOAD
-// rejection: excessiveLoadRetry plus up to half again of random jitter, which
-// §10.6.2 suggests "to minimize the risk of synchronized retry storms",
-// encoded as milliseconds plus one.
+// rejection (§10.6.2): excessiveLoadRetry plus up to 50% jitter, encoded as
+// milliseconds plus one.
 func excessiveLoadRetryInterval() uint64 {
 	const ms = uint64(excessiveLoadRetry / time.Millisecond)
 	return ms + rand.Uint64N(ms/2) + 1 //nolint:gosec // G404: retry jitter, not a secret.
@@ -474,8 +433,6 @@ func excessiveLoadRetryInterval() uint64 {
 
 // rejectExcessiveLoad rejects a request that exceeds a per-session resource cap
 // (§13.1 / §13.7.1) with REQUEST_ERROR EXCESSIVE_LOAD and FINs the bidi stream.
-// §10.6.2: for EXCESSIVE_LOAD "The sender SHOULD use the Retry Interval to
-// indicate when the request can be retried" — see [excessiveLoadRetryInterval].
 // what names the limit category for the log/reason. The reject happens before
 // any registry mutation, so no cleanup is needed.
 func (h *sessionHandler) rejectExcessiveLoad(ctx context.Context, req *session.Request, what string) {
@@ -578,19 +535,11 @@ func (h *sessionHandler) handleFollowupTokens(ctx context.Context, msg message.M
 // or ctx is cancelled (the read side is then reset with
 // StreamResetSessionClosed to unblock the parse). A follow-up that cannot be
 // read — any non-EOF error — resets the read side with
-// StreamResetInternalError so the peer learns reads stopped instead of
-// filling flow control into a void; a malformed one also closes the session
-// with PROTOCOL_VIOLATION (§10).
+// StreamResetInternalError so the peer learns reads stopped; a malformed one
+// also closes the session (§10).
 //
-// This is the single scaffolding under readSubscribeUpdates,
-// readFetchUpdates — the responder-side follow-up loops, which differ only
-// in their per-message dispatch. (Requester-side upstream streams use
-// [session.RequestBroker.Serve] instead, which additionally routes §10.9
-// responses to in-flight Update calls.)
-//
-// It reports fin when the requester ended its side with a FIN. That is not a
-// cancellation (§3.3.2); callers decide what the request does next — see
-// [awaitRequestEnd].
+// It reports fin when the requester ended its side with a FIN, which is not a
+// cancellation (§3.3.2); see [awaitRequestEnd].
 func readRequestStream(
 	ctx context.Context,
 	sess *session.Session,
@@ -611,9 +560,7 @@ func readRequestStream(
 				if !eof {
 					stream.CancelRead(uint64(moqt.StreamResetInternalError))
 				}
-				// §10: an unknown type, or a body that does not match its
-				// Length, "MUST close the session"; §10.2 says the same of an
-				// unknown Message Parameter, which fails the body.
+				// §10, §10.2: a malformed message MUST close the session.
 				if errors.Is(err, message.ErrMalformedMessage) {
 					_ = sess.Close(moqt.SessionProtocolViolation, err.Error())
 				}
@@ -636,11 +583,9 @@ func readRequestStream(
 	}
 }
 
-// isPeerStateNotify reports a PUBLISH_STATE_NOTIFY arriving on a request the
-// relay is answering, and closes the session for it. The peer there is the
-// requester, and PUBLISH_STATE_NOTIFY "is sent only by the publisher" of a
-// subscription; one "for any other request type, or from the subscriber, MUST
-// close the session with a PROTOCOL_VIOLATION" (§10.10).
+// isPeerStateNotify reports a PUBLISH_STATE_NOTIFY from the requester of a
+// request the relay is answering, and closes the session for it (§10.10: "is
+// sent only by the publisher").
 func (h *sessionHandler) isPeerStateNotify(m message.Message) bool {
 	if _, ok := m.(*message.PublishStateNotify); !ok {
 		return false
@@ -651,11 +596,9 @@ func (h *sessionHandler) isPeerStateNotify(m message.Message) bool {
 }
 
 // awaitRequestEnd keeps a request whose requester FINned its side alive until
-// it really ends. §3.3.2: a FIN "is not a request cancellation"; §3.3.3: a
-// requester that has FINned "and subsequently wishes to cancel sends
-// STOP_SENDING on the receiving direction". The stream's send Context ends on
-// exactly that STOP_SENDING — or when the relay itself finishes or resets its
-// side (e.g. PUBLISH_DONE + FIN) — and ctx ends with the session.
+// it really ends (§3.3.2: a FIN "is not a request cancellation"). The send
+// Context ends on the requester's STOP_SENDING (§3.3.3) or when the relay ends
+// its own side.
 func awaitRequestEnd(ctx context.Context, stream session.Stream) {
 	select {
 	case <-stream.Context().Done():
@@ -663,12 +606,9 @@ func awaitRequestEnd(ctx context.Context, stream session.Stream) {
 	}
 }
 
-// serveFetchObjects is the response tail of the FETCH handler: open the data
-// stream, stream the stitched range,
-// count the objects actually written (the FetchServed metric), FIN, and
-// park in the §10.9 follow-up loop until the requester resets or FINs the
-// request stream — on a FIN the relay FINs back, completing the request.
-// kind tags log lines with the kind of stream ("fetch").
+// serveFetchObjects is the response tail of the FETCH handler: stream the
+// stitched range, FIN, and park in the §10.9 follow-up loop until the
+// requester resets or FINs the request stream. kind tags log lines.
 func (h *sessionHandler) serveFetchObjects(
 	ctx context.Context,
 	req *session.Request,
@@ -687,9 +627,6 @@ func (h *sessionHandler) serveFetchObjects(
 		return
 	}
 
-	// Read follow-ups (§10.9 REQUEST_UPDATE) on the bidi request stream until
-	// the requester resets or FINs it or ctx is cancelled, so each update is
-	// answered.
 	h.readFetchUpdates(ctx, req)
 }
 
@@ -700,8 +637,7 @@ func (h *sessionHandler) serveFetchObjects(
 // a fill is simply done.
 //
 // It reports false when the stream could not be opened, the write failed, or
-// the upstream refused the track's Track Properties (§2.5.1); the stream is
-// already reset in the latter two cases, and closed (FIN) otherwise.
+// the upstream refused the track (§2.5.1); the stream is then already reset.
 func (h *sessionHandler) streamFetchRange(
 	ctx context.Context,
 	kind string,
@@ -721,8 +657,8 @@ func (h *sessionHandler) streamFetchRange(
 		return false
 	}
 	if sub != nil {
-		// Both exits below close the stream; a fill stream's subscription
-		// holds its PUBLISH_DONE until then (§10.12).
+		// A fill stream's subscription holds its PUBLISH_DONE until the
+		// stream closes (§10.12).
 		defer sub.StreamClosed()
 	}
 
@@ -730,16 +666,10 @@ func (h *sessionHandler) streamFetchRange(
 	// when the cache doesn't cover the whole range (§9.4).
 	objs, refusal := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
 	if refusal != nil {
-		// §2.5.1, for a FETCH_OK with a Mandatory Track Property the relay
-		// does not understand: REQUEST_ERROR UNSUPPORTED_EXTENSION if nothing
-		// was sent downstream yet, a reset "If the relay has already
-		// forwarded data on a fetch stream". Here FETCH_OK (or, for a fill,
-		// SUBSCRIBE_OK) went out and this stream's FETCH_HEADER is open, but
-		// no Object: between the two cases, and only the reset is left
-		// (an interpretation). Track Properties that do not parse get the
-		// same, with MALFORMED_TRACK (§3.3.4), as does a malformed Object in
-		// the upstream's response: §2.4.2 "reset any fetch streams with
-		// Status Code MALFORMED_TRACK".
+		// §2.5.1: with FETCH_OK (or SUBSCRIBE_OK) already sent, only a
+		// reset is left (an interpretation: no Object was forwarded yet).
+		// Unparseable Track Properties (§3.3.4) and a malformed upstream
+		// Object (§2.4.2) reset with MALFORMED_TRACK.
 		code := moqt.StreamResetInternalError
 		if errors.Is(refusal, session.ErrMalformedTrackProperties) || errors.Is(refusal, session.ErrMalformedTrack) {
 			code = moqt.StreamResetMalformedTrack

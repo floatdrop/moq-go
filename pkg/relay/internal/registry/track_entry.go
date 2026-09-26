@@ -205,9 +205,8 @@ func (e *TrackEntry) AcquireSubgroup(key SubgroupKey, newSet func() any) (sg *Sh
 	return sg, true
 }
 
-// CopySubgroups returns the Subgroups currently being fanned out, for a
-// caller that must act on every open writer at once (see the relay's
-// malformed-track handling). The caller takes each one's Mu itself.
+// CopySubgroups returns the Subgroups currently being fanned out. The caller
+// takes each one's Mu itself.
 func (e *TrackEntry) CopySubgroups() []*SharedSubgroup {
 	e.sgMu.Lock()
 	defer e.sgMu.Unlock()
@@ -463,8 +462,7 @@ func (e *TrackEntry) HasUpstreamOn(sess *session.Session) bool {
 
 // NoteRefusal records that pub refused a late-publisher SUBSCRIBE for this
 // track and may not be asked again before retryAt; a zero retryAt means not
-// while this entry and that PUBLISH_NAMESPACE registration both last. A new
-// registration is a new *PublisherEntry and starts clean.
+// while this entry and that registration both last.
 func (e *TrackEntry) NoteRefusal(pub *PublisherEntry, retryAt time.Time) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -484,7 +482,6 @@ func (e *TrackEntry) Refused(pub *PublisherEntry, now time.Time) bool {
 
 // RetainRefusals forgets refusals that no longer stand at now or whose
 // publisher is not in current, the registrations still covering the track.
-// The write lock is taken only when there is one to forget.
 func (e *TrackEntry) RetainRefusals(current []*PublisherEntry, now time.Time) {
 	stale := func(p *PublisherEntry, retryAt time.Time) bool {
 		return (!retryAt.IsZero() && !now.Before(retryAt)) || !slices.Contains(current, p)

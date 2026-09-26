@@ -10,28 +10,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
-// runDatagramLoop is the datagram fanout entry point. It pulls
-// [message.ObjectDatagram]s off the session and forwards each to every
-// downstream subscriber whose §5.1.2 filter passes, with the Track Alias
-// remapped to that subscriber's per-session outbound alias.
-//
-// Per §11.3 a datagram is a fire-and-forget delivery — the underlying
-// transport drops oversized or unschedulable datagrams without notification.
-// The loop therefore swallows per-send failures: there is no slow-reader
-// escalation analogous to the subgroup path, and there is no
-// stream-lifecycle propagation — each datagram is its own self-contained
-// §11.4.3-style "stream".
-//
-// Termination:
-//
-//   - Transport-level errors from [session.Session.ReceiveDatagram]
-//     (session closed, ctx cancelled, PROTOCOL_VIOLATION on parse) end
-//     the loop and propagate to [sessionHandler.run]'s aggregator.
-//   - Per-datagram lookup misses (unknown Track Alias, evicted track entry)
-//     drop the datagram silently — §11.3 explicitly permits this.
-//   - A datagram that makes its track malformed ends that track (§2.4.2,
-//     see [sessionHandler.endMalformedTrack]) and is not forwarded or cached;
-//     the loop reads on.
+// runDatagramLoop forwards each received [message.ObjectDatagram] to the
+// downstream subscribers, until a session-level receive error, which it
+// returns. Send failures and lookup misses drop the datagram (§11.3); a
+// malformed track is ended (§2.4.2) and the loop reads on.
 func (h *sessionHandler) runDatagramLoop(ctx context.Context) error {
 	for {
 		d, err := h.sess.ReceiveDatagram(ctx)
@@ -54,15 +36,12 @@ func (h *sessionHandler) runDatagramLoop(ctx context.Context) error {
 	}
 }
 
-// handleDatagram is the per-datagram fanout. It mirrors [runFanout]'s
-// per-object body but with a flat structure: no per-subscriber writer
-// goroutine, no §11.4.3 stream-lifecycle bookkeeping, no ObjectIDDelta
-// re-encoding (datagrams carry an absolute Object ID, §11.3.1).
+// handleDatagram is the per-datagram counterpart of [runFanout]'s
+// per-object body.
 func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDatagram) {
 	in, ok := h.sess.LookupInboundTrack(d.TrackAlias)
 	if !ok {
-		// §11.3: an unknown Track Alias MAY be dropped or briefly buffered for
-		// reordering against the establishing control message. We drop.
+		// §11.3: an unknown Track Alias MAY be dropped.
 		h.log.LogAttrs(ctx, slog.LevelDebug, "datagram: unknown inbound Track Alias",
 			slog.Uint64("alias", d.TrackAlias))
 		return
@@ -75,52 +54,34 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		return
 	}
 
-	// §11.3.1: a DEFAULT_PRIORITY datagram inherits the DEFAULT_PUBLISHER_PRIORITY
-	// (§12.4) of the message that bound its alias; resolve it before the cache
-	// and the PRIORITY_FILTER read it. The Type keeps the bit, so the forwarded copy
-	// still omits the byte.
+	// §11.3.1: resolve the inherited DEFAULT_PUBLISHER_PRIORITY (§12.4) for
+	// the cache and PRIORITY_FILTER; the forwarded Type still omits the byte.
 	if d.HasDefaultPriority() {
 		d.PublisherPriority = in.DefaultPublisherPriority
 	}
 
-	// §2.1 dedup across redundant upstream publishers, same ledger as the
-	// subgroup path (handler_fanout): the first copy of {GroupID, ObjectID}
-	// wins; later copies from peer upstreams are dropped so each subscriber
-	// sees the object exactly once — and the loser neither re-caches nor
-	// re-bumps the watermark.
+	// §2.1: the first copy of {GroupID, ObjectID} wins.
 	if !entry.ClaimDelivered(d.GroupID, d.ObjectID) {
 		return
 	}
 
-	// §10.2.17: a forwarded datagram counts towards the track's
-	// LARGEST_OBJECT watermark just like a subgroup object does.
+	// §10.2.17
 	entry.UpdateLargest(message.Location{Group: d.GroupID, Object: d.ObjectID})
 
-	// Cache via the per-track ObjectCache. The cache retains the payload +
-	// properties BY REFERENCE (see cache.PutDatagram); ReceiveDatagram
-	// hands out caller-owned buffers, so nothing here mutates them after
-	// the Put.
+	// The cache keeps the buffers by reference; nothing mutates them after.
 	entry.Cache.PutDatagram(d, in.MaxCacheDuration, in.HasMaxCacheDuration)
 
 	downstream := entry.CopyDownstream()
 	for _, sub := range downstream {
-		// The same decision as the subgroup fanout: a paused subscription
-		// (Forward State 0) receives no datagrams. With no stream to end,
-		// only whether to send matters; the skip kinds do not.
-		// Datagrams have no subgroup; §5.1.4 SUBGROUP_FILTER treats them as
-		// subgroup 0. Object ID / Priority / Properties feed the other filters.
+		// §5.1.4: a datagram counts as subgroup 0.
 		if sub.ForwardDecision(d.GroupID, d.ObjectID, 0, d.PublisherPriority, d.Properties) != registry.Forward {
 			continue
 		}
-		// Re-encode the datagram with the subscriber's outbound
-		// Track Alias. Per §9.7 the relay does not modify any other
-		// object fields — Group ID, Object ID, Priority, Properties,
-		// Status, Payload all forward verbatim, and so does Type, but
-		// for the one exception below.
+		// §9.7: only the Track Alias changes, bar the exception below.
 		out := *d
 		out.TrackAlias = sub.TrackAlias
 		// A subscriber without Track Properties (§10.2.21) cannot inherit
-		// the DEFAULT_PUBLISHER_PRIORITY resolved above, so it is written out.
+		// DEFAULT_PUBLISHER_PRIORITY, so the priority is written out.
 		if !sub.IncludesProperties() {
 			out.Type &^= message.DatagramDefaultPriorityBit
 		}
@@ -132,9 +93,7 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		err := sub.Session.SendDatagram(&out)
 		sub.EndDatagram()
 		if err != nil {
-			// Per §11.3 datagrams may be dropped silently when
-			// the transport can't deliver them; treat send errors
-			// the same way and log at Debug for postmortem.
+			// §11.3: datagrams may be dropped.
 			h.log.LogAttrs(ctx, slog.LevelDebug, "datagram: SendDatagram failed",
 				slog.Uint64("sub_id", sub.ID),
 				slog.String("err", err.Error()))

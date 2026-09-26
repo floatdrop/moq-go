@@ -174,9 +174,8 @@ func (h *sessionHandler) fetchRangeFilters(
 
 // readFetchUpdates is the follow-up dispatch loop for an established FETCH:
 // REQUEST_UPDATE (§10.9) routes to [sessionHandler.handleFetchUpdate]; any
-// other follow-up is ignored. A requester FIN means no more updates; the
-// response is already complete, so the relay FINs back (§3.3.2). Scaffolding
-// lives in [readRequestStream].
+// other follow-up is ignored. On the requester's FIN the relay FINs back
+// (§3.3.2).
 func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Request) {
 	updates := h.sess.NewRequestUpdateLimiter()
 	fin := readRequestStream(ctx, h.sess, req.Stream, func(m message.Message) bool {
@@ -184,8 +183,7 @@ func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Requ
 			return false
 		}
 		if upd, ok := m.(*message.RequestUpdate); ok {
-			// §10.2.1: parameters outside a FETCH update's scope are
-			// session-fatal.
+			// §10.2.1: out-of-scope parameters are session-fatal.
 			if h.sess.CheckPeerParams(message.ScopeUpdateFetch, upd) != nil {
 				return false
 			}
@@ -209,19 +207,13 @@ func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Requ
 		return true
 	})
 	if fin {
-		// The requester will send no REQUEST_UPDATE, and the response is
-		// complete: FIN this side too, which completes the request (§3.3.2).
 		_ = req.Stream.Close()
 	}
 }
 
-// handleFetchUpdate answers a REQUEST_UPDATE (§10.9) to an in-flight FETCH.
-// A FETCH response is a finished snapshot by the time the data stream is
-// FIN'd, so the relay has no live parameters to mutate, but it must still
-// answer with the single mandated REQUEST_OK. Parameters outside a FETCH
-// update's scope (§10.2.1) closed the session before this runs; the ones left
-// in scope (SUBSCRIBER_PRIORITY, the delivery timeouts, AUTHORIZATION_TOKEN)
-// have nothing to change on a finished snapshot.
+// handleFetchUpdate answers a REQUEST_UPDATE (§10.9) to an in-flight FETCH
+// with REQUEST_OK: the in-scope parameters have nothing to change on a
+// finished snapshot.
 func (h *sessionHandler) handleFetchUpdate(ctx context.Context, req *session.Request) {
 	if err := req.Reply(&message.RequestOK{}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH REQUEST_UPDATE_OK write failed",
@@ -229,10 +221,9 @@ func (h *sessionHandler) handleFetchUpdate(ctx context.Context, req *session.Req
 	}
 }
 
-// TODO: §10.2.8 says an out-of-range GROUP_ORDER "MUST close the
-// session with PROTOCOL_VIOLATION". The SUBSCRIBE / SUBSCRIBE_TRACKS paths do
-// (see [checkGroupOrderParam]); the FETCH path still
-// read an invalid value here as Ascending.
+// TODO: §10.2.8: an out-of-range GROUP_ORDER MUST close the session, as
+// [checkGroupOrderParam] does for SUBSCRIBE; the FETCH path reads it as
+// Ascending.
 //
 // fetchGroupOrder pulls the GROUP_ORDER parameter (§10.2.8) out of a
 // FETCH's Parameters list. Defaults to ascending when omitted; the
@@ -285,9 +276,8 @@ func capFetchEndLocation(filter *message.LocationFilter, largest message.Locatio
 // back: the FIFO ring is keyed by arrival, so old backfill would evict live
 // objects.
 //
-// refusal is non-nil when the upstream's FETCH_OK carried Track Properties
-// this relay cannot accept (§2.5.1); the track must not be forwarded, and no
-// objects are returned.
+// A non-nil refusal (see fetchUpstreamRange) means the track must not be
+// forwarded; no objects are returned.
 func (h *sessionHandler) stitchedFetchObjects(
 	ctx context.Context,
 	entry *registry.TrackEntry,
@@ -398,12 +388,9 @@ func (h *sessionHandler) pickFetchUpstream(entry *registry.TrackEntry) *registry
 //     §11.4.4's delta encoding wherever the element after a marker would be
 //     a same-group, lower-Object-ID transition.
 //
-// The one exception is a FETCH_OK whose Track Properties this relay cannot
-// accept — an unknown Mandatory Track Property, or ones that do not parse
-// (§2.5.1): Session.Fetch has cancelled that fetch, and it is returned as a
-// refusal instead, since the track MUST NOT be forwarded at all — as is a
-// response Object that makes the track malformed (§2.4.2), wrapping
-// [session.ErrMalformedTrack].
+// It returns a refusal instead when the track MUST NOT be forwarded: a
+// FETCH_OK with unacceptable Track Properties (§2.5.1), or a response Object
+// that makes the track malformed (§2.4.2, wrapping [session.ErrMalformedTrack]).
 func (h *sessionHandler) fetchUpstreamRange(
 	ctx context.Context,
 	up *registry.UpstreamSub,
@@ -415,10 +402,8 @@ func (h *sessionHandler) fetchUpstreamRange(
 	unknownWhole := unknownWholeRange(start, endIncl, order)
 	timedOutWhole := timedOutWholeRange(start, endIncl, order)
 
-	// §10.2.5: a value of 0 means "the relay MUST NOT wait for upstream
-	// delivery and MUST report any unavailable Objects as Timed-Out gaps".
-	// fillTimeout arrives already resolved (see [resolveFillBudget]), so a zero
-	// here is the subscriber's explicit 0, not an absent parameter.
+	// §10.2.5: an explicit 0 means "MUST NOT wait for upstream delivery"
+	// (fillTimeout is already resolved, see [resolveFillBudget]).
 	if fillTimeout == 0 {
 		return timedOutWhole, nil
 	}
@@ -448,10 +433,8 @@ func (h *sessionHandler) fetchUpstreamRange(
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH failed",
 			slog.String("err", err.Error()))
-		// §2.5.1: a FETCH_OK carrying a Mandatory Track Property this
-		// relay does not understand (Session.Fetch has cancelled that
-		// fetch) means the track MUST NOT be forwarded; the caller resets
-		// the downstream stream.
+		// §2.5.1: Session.Fetch has cancelled it; the caller resets the
+		// downstream stream.
 		if isTrackPropertiesErr(err) {
 			return nil, err
 		}
@@ -495,8 +478,8 @@ func (h *sessionHandler) fetchUpstreamRange(
 			break // clean FIN: the upstream's gaps are authoritative (§11.4.4)
 		}
 		if errors.Is(err, session.ErrMalformedTrack) {
-			// §2.4.2: cancel the fetch (fr.Close, deferred) and stop the
-			// response stream; the caller resets the downstream one.
+			// §2.4.2: fr.Close (deferred) cancels the fetch; the caller
+			// resets the downstream stream.
 			fs.Cancel(moqt.StreamResetMalformedTrack)
 			return nil, err
 		}
@@ -700,9 +683,8 @@ func mergeFetchObjects(order message.GroupOrder, lower, upper []*cache.CachedObj
 		splice = 0
 	}
 	// cut is where upper's trailing seam-group run starts. A plain group
-	// comparison suffices: the only markers in upper are the ones GetRange
-	// makes for expired Objects (§12.3), each at its own Location, so they
-	// move with the run like the Objects around them.
+	// comparison suffices: upper's only markers are GetRange's expired-Object
+	// markers, each at its own Location.
 	cut := len(upper)
 	for cut > 0 && upper[cut-1].GroupID == seamG {
 		cut--
@@ -771,12 +753,8 @@ func streamFetchObjects(
 	)
 
 	for _, o := range objs {
-		// §12.3: "the relay MUST NOT start forwarding any individual Object
-		// [...] after" its MAX_CACHE_DURATION; a slow reader can hold the
-		// stream until a cached Object in it expires. Its state is then
-		// unknown ("Once Objects have expired from cache, their state
-		// becomes unknown"), which an End of Unknown Range at its Location
-		// says; a plain gap would assert non-existence (§11.4.4).
+		// §12.3: a slow reader can hold the stream until a cached Object
+		// expires; mark it unknown, since a gap asserts non-existence.
 		if !o.IsRangeMarker() && !o.IsStatusMarker() && expired != nil && expired(o) {
 			o = &cache.CachedObject{GroupID: o.GroupID, ObjectID: o.ObjectID, EndOfUnknownRange: true}
 		}
@@ -860,9 +838,7 @@ func streamFetchObjects(
 					"relay: fetch serialization order violation: {%d,%d} after {%d,%d}",
 					o.GroupID, o.ObjectID, prevGroup, prevObject)
 			}
-			// §11.4.4.1: omit ObjectIDDelta when consecutive (prior + 1);
-			// otherwise the delta is added to the prior ID as is — no +1,
-			// unlike the §11.4.2 subgroup rule.
+			// §11.4.4.1: no +1, unlike the §11.4.2 subgroup rule.
 			if o.ObjectID != prevObject+1 {
 				fo.SerializationFlags |= message.FetchFlagObjectIDDelta
 				fo.ObjectIDDelta = o.ObjectID - prevObject
