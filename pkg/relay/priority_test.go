@@ -9,7 +9,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -133,7 +132,7 @@ func TestFanout_AppliesEffectivePriorityOnStreamOpen(t *testing.T) {
 	}
 	const publisherAlias = uint64(7)
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -155,7 +154,7 @@ func TestFanout_AppliesEffectivePriorityOnStreamOpen(t *testing.T) {
 		t.Fatalf("subscriber session.Client: %v", err)
 	}
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.SubscriberPriorityParam(42),
@@ -168,7 +167,7 @@ func TestFanout_AppliesEffectivePriorityOnStreamOpen(t *testing.T) {
 
 	// Drain the subscriber's accept-side in the background so the relay
 	// can complete its OpenSubgroup synchronously.
-	go drainAllStreams(t.Context(), subSess)
+	go drainAll(t.Context(), subSess)
 
 	pubSubgroup, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDExplicit,

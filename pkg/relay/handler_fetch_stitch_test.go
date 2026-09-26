@@ -1,15 +1,10 @@
 package relay_test
 
 import (
-	"context"
-	"errors"
-	"io"
 	"testing"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
-	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -31,12 +26,12 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 	upSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam1")
 	const liveLo, liveHi = uint64(5), uint64(9) // cached → floor = group 5
 	const upstreamAlias = uint64(42)
 
-	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 
@@ -103,7 +98,7 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 	// Live subscriber S triggers the on-demand upstream subscription and lets
 	// the relay cache the tail. Its data streams are drained and ignored.
 	live := dialAnotherClient(t, upSess)
-	liveReq, err := live.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: name})
+	liveReq, err := live.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: name})
 	if err != nil {
 		t.Fatalf("live Subscribe: %v", err)
 	}
@@ -114,147 +109,15 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 	// Retrying absorbs the caching timing (the relay populates the cache as it
 	// reads the tail) without polling relay internals.
 	fc := dialAnotherClient(t, upSess)
-	want := liveHi + 1 // groups 0..liveHi
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		got := tryStitchFetch(t, fc, ns, name, liveHi)
-		if uint64(len(got)) == want && contiguousFromZero(got) {
-			break // success: groups 0..liveHi, in order
+		got := objectGroups(tryFetchElems(t, fc, video, name, liveHi, nil))
+		if groupsEqual(got, 0, liveHi) {
+			break
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("stitched FETCH never returned groups 0..%d; last saw %v", liveHi, got)
 		}
 		time.Sleep(50 * time.Millisecond)
-	}
-}
-
-// tryStitchFetch issues one standalone FETCH for [0, lastGroup] and returns the
-// decoded group IDs from the response (empty on a REQUEST_ERROR, e.g. before
-// the relay has observed any object).
-func tryStitchFetch(
-	t *testing.T,
-	sess *session.Session,
-	ns wire.TrackNamespace,
-	name []byte,
-	lastGroup uint64,
-) []uint64 {
-	t.Helper()
-	fetchReq, err := sess.Fetch(t.Context(), &message.Fetch{
-		Namespace: ns,
-		Name:      name,
-		Parameters: message.Parameters{
-			fetchRangeFilter(message.Location{}, message.Location{Group: lastGroup, Object: 0}),
-		},
-	})
-	if err != nil {
-		return nil // not yet serviceable (e.g. no objects observed) — caller retries
-	}
-	defer fetchReq.Close()
-	return collectFetchGroups(t, sess, 3*time.Second)
-}
-
-func contiguousFromZero(groups []uint64) bool {
-	for i, g := range groups {
-		if g != uint64(i) {
-			return false
-		}
-	}
-	return true
-}
-
-// writeFetchGroupRange writes single-object groups [startG, endG] (one object
-// at ID 0 per group) onto a FETCH response stream using §11.4.4 ascending delta
-// encoding: the first object carries the absolute start group, and each
-// consecutive group encodes a GroupIDDelta of 0 (newGroup = prevGroup + 0 + 1).
-func writeFetchGroupRange(out *session.OutgoingFetchStream, startG, endG uint64) {
-	first := true
-	for g := startG; g <= endG; g++ {
-		fo := &message.FetchObject{}
-		fo.SerializationFlags |= message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta
-		if first {
-			fo.GroupIDDelta = g                                // absolute group ID of the first object
-			fo.SerializationFlags |= message.FetchFlagPriority // first object spells priority out
-			first = false
-		} else {
-			fo.GroupIDDelta = 0 // consecutive group
-		}
-		fo.ObjectIDDelta = 0
-		fo.ObjectPayload = []byte{byte('a' + g)}
-		if err := out.WriteObject(fo); err != nil {
-			return
-		}
-	}
-}
-
-// drainAll consumes and discards every data stream on sess until ctx ends.
-func drainAll(ctx context.Context, sess *session.Session) {
-	for {
-		ds, err := sess.AcceptDataStream(ctx)
-		if err != nil {
-			return
-		}
-		switch s := ds.(type) {
-		case *session.IncomingSubgroupStream:
-			for {
-				if _, err := s.ReadObject(); err != nil {
-					break
-				}
-			}
-		case *session.IncomingFetchStream:
-			for {
-				if _, err := s.ReadObject(); err != nil {
-					break
-				}
-			}
-		}
-	}
-}
-
-// collectFetchGroups accepts the next FETCH response data stream and returns
-// the decoded group IDs in arrival order.
-func collectFetchGroups(t *testing.T, sess *session.Session, timeout time.Duration) []uint64 {
-	t.Helper()
-	type result struct {
-		groups []uint64
-		err    error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		ds, err := sess.AcceptDataStream(t.Context())
-		if err != nil {
-			ch <- result{err: err}
-			return
-		}
-		fs, ok := ds.(*session.IncomingFetchStream)
-		if !ok {
-			ch <- result{err: errors.New("not a fetch stream")}
-			return
-		}
-		var groups []uint64
-		for {
-			obj, err := fs.ReadDecoded()
-			if err != nil {
-				if !errors.Is(err, io.EOF) {
-					ch <- result{err: err}
-					return
-				}
-				ch <- result{groups: groups}
-				return
-			}
-			if obj.IsEndOfRange() {
-				continue
-			}
-			groups = append(groups, obj.GroupID)
-		}
-	}()
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			t.Fatalf("reading FETCH response: %v", r.err)
-		}
-		return r.groups
-	case <-time.After(timeout):
-		t.Fatal("FETCH response did not arrive within deadline")
-		return nil
 	}
 }

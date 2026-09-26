@@ -27,7 +27,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
@@ -45,7 +44,7 @@ func TestPublishSubscribeE2E(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -56,7 +55,7 @@ func TestPublishSubscribeE2E(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -190,7 +189,7 @@ func TestSubscriptionAggregation(t *testing.T) {
 	// subscribe path has somewhere to dial. It then accepts inbound
 	// SUBSCRIBEs from the relay; we count them.
 	pubNS, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -223,7 +222,7 @@ func TestSubscriptionAggregation(t *testing.T) {
 	// First downstream subscriber → triggers upstream SUBSCRIBE.
 	sub1 := dialAnotherClient(t, pubSess)
 	subReq1, err := sub1.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -244,7 +243,7 @@ func TestSubscriptionAggregation(t *testing.T) {
 	// upstream; the publisher must NOT see a second SUBSCRIBE.
 	sub2 := dialAnotherClient(t, pubSess)
 	subReq2, err := sub2.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -276,7 +275,7 @@ func TestPublishNamespaceRouting(t *testing.T) {
 	defer teardown()
 
 	nsReq, err := subSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -285,7 +284,7 @@ func TestPublishNamespaceRouting(t *testing.T) {
 
 	pubSess := dialAnotherClient(t, subSess)
 	pubNS, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+		Namespace: ns("video", "cam1"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -319,7 +318,7 @@ func TestDeliveryTimeouts(t *testing.T) {
 	defer teardown()
 
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 1,
 		Parameters: message.Parameters{
@@ -334,7 +333,7 @@ func TestDeliveryTimeouts(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -361,7 +360,7 @@ func TestGracefulMigration(t *testing.T) {
 
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	pubNS, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)

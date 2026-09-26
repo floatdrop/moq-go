@@ -100,19 +100,19 @@ func requireNoSubscribe(t *testing.T, subs <-chan acceptedSubscribe) {
 // downstream subscriber.
 func TestRelay_LatePublishNamespaceJoinsOnDemandSubscription(t *testing.T) {
 	t.Parallel()
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	early, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-	if _, err := early.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := early.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("early PublishNamespace: %v", err)
 	}
 	earlySubs := acceptSubscribes(t, early)
-	subSess := subscribeCam1(t, early)
+	subSess := newCam1Subscriber(t, early)
 	awaitAcceptedSubscribe(t, earlySubs, "video/cam1")
 
-	late, lateSubs := publishNamespaceLate(t, early, ns)
+	late, lateSubs := publishNamespaceLate(t, early, video)
 	got := awaitAcceptedSubscribe(t, lateSubs, "video/cam1")
-	publishSubgroupObject(t, late, got.alias, 5, -1)
+	publishObjects(t, late, got.alias, 5, 1)
 	if !awaitSubgroupObject(t, subSess, 2*time.Second) {
 		t.Fatal("the late publisher's Object never reached the subscriber")
 	}
@@ -122,9 +122,9 @@ func TestRelay_LatePublishNamespaceJoinsOnDemandSubscription(t *testing.T) {
 // a PUBLISH from another session.
 func TestRelay_LatePublishNamespaceJoinsPublishedTrack(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
-	subscribeCam1(t, pubSess)
-	_, lateSubs := publishNamespaceLate(t, pubSess, wire.TrackNamespace{[]byte("video")})
+	pubSess, _ := newCam1Publisher(t, nil)
+	newCam1Subscriber(t, pubSess)
+	_, lateSubs := publishNamespaceLate(t, pubSess, ns("video"))
 	awaitAcceptedSubscribe(t, lateSubs, "video/cam1")
 }
 
@@ -133,8 +133,8 @@ func TestRelay_LatePublishNamespaceJoinsPublishedTrack(t *testing.T) {
 // on-demand upstream would have no downstream whose departure releases it.
 func TestRelay_LatePublishNamespaceSkipsTrackWithoutSubscribers(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
-	_, lateSubs := publishNamespaceLate(t, pubSess, wire.TrackNamespace{[]byte("video")})
+	pubSess, _ := newCam1Publisher(t, nil)
+	_, lateSubs := publishNamespaceLate(t, pubSess, ns("video"))
 	requireNoSubscribe(t, lateSubs)
 }
 
@@ -142,9 +142,9 @@ func TestRelay_LatePublishNamespaceSkipsTrackWithoutSubscribers(t *testing.T) {
 // whose namespace the PUBLISH_NAMESPACE covers are sent to the new publisher.
 func TestRelay_LatePublishNamespaceIgnoresOtherNamespaces(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
-	subscribeCam1(t, pubSess)
-	_, lateSubs := publishNamespaceLate(t, pubSess, wire.TrackNamespace{[]byte("audio")})
+	pubSess, _ := newCam1Publisher(t, nil)
+	newCam1Subscriber(t, pubSess)
+	_, lateSubs := publishNamespaceLate(t, pubSess, ns("audio"))
 	requireNoSubscribe(t, lateSubs)
 }
 
@@ -179,15 +179,15 @@ func awaitRequest(t *testing.T, reqs <-chan *session.Request) *session.Request {
 // with nothing that would ever release it.
 func TestRelay_LatePublisherReleasedWhenSubscriberLeavesMidSubscribe(t *testing.T) {
 	t.Parallel()
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	early, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-	if _, err := early.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := early.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("early PublishNamespace: %v", err)
 	}
 	earlySubs := acceptSubscribes(t, early)
 	subSess := dialAnotherClient(t, early)
-	sub, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte("cam1")})
+	sub, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: []byte("cam1")})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestRelay_LatePublisherReleasedWhenSubscriberLeavesMidSubscribe(t *testing.
 
 	late := dialAnotherClient(t, early)
 	lateReqs := acceptOneSubscribeRequest(t, late)
-	if _, err := late.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := late.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("late PublishNamespace: %v", err)
 	}
 	r := awaitRequest(t, lateReqs)
@@ -225,16 +225,16 @@ func TestRelay_LatePublisherReleasedWhenSubscriberLeavesMidSubscribe(t *testing.
 // cancels the request". SUBSCRIBEs for existing tracks stop with it.
 func TestRelay_WithdrawnPublishNamespaceGetsNoMoreSubscribes(t *testing.T) {
 	t.Parallel()
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	early, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-	if _, err := early.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := early.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("early PublishNamespace: %v", err)
 	}
 	earlySubs := acceptSubscribes(t, early)
 	subSess := dialAnotherClient(t, early)
 	for _, name := range []string{"cam1", "cam2"} {
-		sub, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte(name)})
+		sub, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: []byte(name)})
 		if err != nil {
 			t.Fatalf("Subscribe %s: %v", name, err)
 		}
@@ -244,7 +244,7 @@ func TestRelay_WithdrawnPublishNamespaceGetsNoMoreSubscribes(t *testing.T) {
 
 	late := dialAnotherClient(t, early)
 	lateReqs := acceptOneSubscribeRequest(t, late)
-	nsPub, err := late.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns})
+	nsPub, err := late.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video})
 	if err != nil {
 		t.Fatalf("late PublishNamespace: %v", err)
 	}
@@ -263,11 +263,11 @@ func TestRelay_WithdrawnPublishNamespaceGetsNoMoreSubscribes(t *testing.T) {
 // PUBLISH_NAMESPACE is handled. It must still be subscribed once the
 // downstream is registered.
 func TestRelay_PublishNamespaceDuringPendingSubscribe(t *testing.T) {
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := "cam-late-pending"
 	early, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-	if _, err := early.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := early.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("early PublishNamespace: %v", err)
 	}
 	acceptSubscribes(t, early)
@@ -280,7 +280,7 @@ func TestRelay_PublishNamespaceDuringPendingSubscribe(t *testing.T) {
 			return
 		}
 		once.Do(func() {
-			if _, err := late.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+			if _, err := late.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 				t.Errorf("late PublishNamespace: %v", err)
 			}
 			// Let the relay handle it while the track still has no
@@ -291,7 +291,7 @@ func TestRelay_PublishNamespaceDuringPendingSubscribe(t *testing.T) {
 	t.Cleanup(restore)
 
 	subSess := dialAnotherClient(t, early)
-	sub, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte(name)})
+	sub, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: []byte(name)})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -305,12 +305,12 @@ func TestRelay_PublishNamespaceDuringPendingSubscribe(t *testing.T) {
 // the requesting session.
 func TestRelay_LatePublishNamespaceSkipsItsOwnDownstream(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
-	subSess := subscribeCam1(t, pubSess)
+	pubSess, _ := newCam1Publisher(t, nil)
+	subSess := newCam1Subscriber(t, pubSess)
 	own := acceptSubscribes(t, subSess)
 	if _, err := subSess.PublishNamespace(
 		t.Context(),
-		&message.PublishNamespace{Namespace: wire.TrackNamespace{[]byte("video")}},
+		&message.PublishNamespace{Namespace: ns("video")},
 	); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
@@ -322,8 +322,8 @@ func TestRelay_LatePublishNamespaceSkipsItsOwnDownstream(t *testing.T) {
 // session one SUBSCRIBE for it, not one per namespace.
 func TestRelay_OverlappingPublishNamespacesSubscribeOnce(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
-	subscribeCam1(t, pubSess)
+	pubSess, _ := newCam1Publisher(t, nil)
+	newCam1Subscriber(t, pubSess)
 
 	late := dialAnotherClient(t, pubSess)
 	reqs := make(chan *session.Request, 4)
@@ -369,16 +369,16 @@ func requireNoSubscribeRequest(t *testing.T, reqs <-chan *session.Request) {
 // reach the late upstream yet, so the relay must resume it once registered.
 func TestRelay_LatePublisherResumedWhenForwardChangesMidSubscribe(t *testing.T) {
 	t.Parallel()
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	early, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
-	if _, err := early.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := early.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("early PublishNamespace: %v", err)
 	}
 	earlySubs := acceptSubscribes(t, early)
 	subSess := dialAnotherClient(t, early)
 	sub, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace:  ns,
+		Namespace:  video,
 		Name:       []byte("cam1"),
 		Parameters: message.Parameters{message.ForwardParam(false)},
 	})
@@ -391,7 +391,7 @@ func TestRelay_LatePublisherResumedWhenForwardChangesMidSubscribe(t *testing.T) 
 
 	late := dialAnotherClient(t, early)
 	lateReqs := acceptOneSubscribeRequest(t, late)
-	if _, err := late.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := late.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("late PublishNamespace: %v", err)
 	}
 	r := awaitRequest(t, lateReqs)
@@ -422,10 +422,10 @@ func TestRelay_LatePublisherResumedWhenForwardChangesMidSubscribe(t *testing.T) 
 // SUBSCRIBE; it does not drop it.
 func TestRelay_SkippedLatePublisherSubscribedWhenFirstSubscriberArrives(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
-	_, lateSubs := publishNamespaceLate(t, pubSess, wire.TrackNamespace{[]byte("video")})
+	pubSess, _ := newCam1Publisher(t, nil)
+	_, lateSubs := publishNamespaceLate(t, pubSess, ns("video"))
 	requireNoSubscribe(t, lateSubs) // skipped: no subscriber yet
-	subscribeCam1(t, pubSess)
+	newCam1Subscriber(t, pubSess)
 	awaitAcceptedSubscribe(t, lateSubs, "video/cam1")
 }
 
@@ -434,7 +434,7 @@ func TestRelay_SkippedLatePublisherSubscribedWhenFirstSubscriberArrives(t *testi
 // subscriber that later joins the reused upstream set.
 func TestRelay_RefusingLatePublisherNotReaskedPerSubscriber(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
+	pubSess, _ := newCam1Publisher(t, nil)
 	late := dialAnotherClient(t, pubSess)
 	reqs := make(chan *session.Request, 8)
 	go func() {
@@ -449,14 +449,14 @@ func TestRelay_RefusingLatePublisherNotReaskedPerSubscriber(t *testing.T) {
 	}()
 	if _, err := late.PublishNamespace(
 		t.Context(),
-		&message.PublishNamespace{Namespace: wire.TrackNamespace{[]byte("video")}},
+		&message.PublishNamespace{Namespace: ns("video")},
 	); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
-	subscribeCam1(t, pubSess)
+	newCam1Subscriber(t, pubSess)
 	awaitRequest(t, reqs) // the deferred SUBSCRIBE, refused
-	subscribeCam1(t, pubSess)
-	subscribeCam1(t, pubSess)
+	newCam1Subscriber(t, pubSess)
+	newCam1Subscriber(t, pubSess)
 	requireNoSubscribeRequest(t, reqs)
 }
 
@@ -465,9 +465,9 @@ func TestRelay_RefusingLatePublisherNotReaskedPerSubscriber(t *testing.T) {
 // next subscriber gets it SUBSCRIBEd again.
 func TestRelay_LatePublisherResubscribedForNextSubscriber(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
-	_, lateSubs := publishNamespaceLate(t, pubSess, wire.TrackNamespace{[]byte("video")})
-	first := subscribeCam1Req(t, dialAnotherClient(t, pubSess))
+	pubSess, _ := newCam1Publisher(t, nil)
+	_, lateSubs := publishNamespaceLate(t, pubSess, ns("video"))
+	first := subscribeCam1(t, dialAnotherClient(t, pubSess))
 	up := awaitAcceptedSubscribe(t, lateSubs, "video/cam1")
 	_ = first.Close()
 	select {
@@ -475,7 +475,7 @@ func TestRelay_LatePublisherResubscribedForNextSubscriber(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("late upstream not released after the last subscriber left")
 	}
-	subscribeCam1(t, pubSess)
+	newCam1Subscriber(t, pubSess)
 	awaitAcceptedSubscribe(t, lateSubs, "video/cam1")
 }
 
@@ -485,12 +485,12 @@ func TestRelay_LatePublisherResubscribedForNextSubscriber(t *testing.T) {
 // subscriptions).
 func TestRelay_WithdrawnSkippedPublisherNotAsked(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
+	pubSess, _ := newCam1Publisher(t, nil)
 	late := dialAnotherClient(t, pubSess)
 	lateSubs := acceptSubscribes(t, late)
 	nsPub, err := late.PublishNamespace(
 		t.Context(),
-		&message.PublishNamespace{Namespace: wire.TrackNamespace{[]byte("video")}},
+		&message.PublishNamespace{Namespace: ns("video")},
 	)
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -498,7 +498,7 @@ func TestRelay_WithdrawnSkippedPublisherNotAsked(t *testing.T) {
 	requireNoSubscribe(t, lateSubs) // skipped: no subscriber yet
 	_ = nsPub.Close()
 	time.Sleep(100 * time.Millisecond)
-	subscribeCam1(t, pubSess)
+	newCam1Subscriber(t, pubSess)
 	requireNoSubscribe(t, lateSubs)
 }
 
@@ -524,7 +524,7 @@ func latePublisherAnswering(
 	}()
 	if _, err := late.PublishNamespace(
 		t.Context(),
-		&message.PublishNamespace{Namespace: wire.TrackNamespace{[]byte("video")}},
+		&message.PublishNamespace{Namespace: ns("video")},
 	); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
@@ -536,7 +536,7 @@ func latePublisherAnswering(
 // after the interval asks again.
 func TestRelay_RetryableLatePublisherRefusalIsRetried(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
+	pubSess, _ := newCam1Publisher(t, nil)
 	reqs := latePublisherAnswering(t, pubSess, func(r *session.Request) {
 		_ = message.Marshal(r.Stream, &message.RequestError{
 			ErrorCode:     moqt.RequestExcessiveLoad,
@@ -545,10 +545,10 @@ func TestRelay_RetryableLatePublisherRefusalIsRetried(t *testing.T) {
 		})
 		_ = r.Stream.Close()
 	})
-	subscribeCam1(t, pubSess)
+	newCam1Subscriber(t, pubSess)
 	awaitRequest(t, reqs)
 	time.Sleep(50 * time.Millisecond) // let the refusal land
-	subscribeCam1(t, pubSess)
+	newCam1Subscriber(t, pubSess)
 	awaitRequest(t, reqs)
 }
 
@@ -557,13 +557,13 @@ func TestRelay_RetryableLatePublisherRefusalIsRetried(t *testing.T) {
 // (§2.5.1) and, like a refusal, not asked again per subscriber.
 func TestRelay_MandatoryPropertyLatePublisherNotReasked(t *testing.T) {
 	t.Parallel()
-	pubSess, _ := publishWithTrackProps(t, nil)
+	pubSess, _ := newCam1Publisher(t, nil)
 	reqs := latePublisherAnswering(t, pubSess, func(r *session.Request) {
 		_, _ = r.AcceptSubscribe(&message.SubscribeOK{TrackProperties: mandatoryProps()})
 	})
-	subscribeCam1(t, pubSess)
+	newCam1Subscriber(t, pubSess)
 	awaitRequest(t, reqs)
-	subscribeCam1(t, pubSess)
-	subscribeCam1(t, pubSess)
+	newCam1Subscriber(t, pubSess)
+	newCam1Subscriber(t, pubSess)
 	requireNoSubscribeRequest(t, reqs)
 }

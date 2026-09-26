@@ -1,7 +1,6 @@
 package relay_test
 
 import (
-	"context"
 	"errors"
 	"io"
 	"reflect"
@@ -11,7 +10,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -29,7 +27,7 @@ func TestFanout_PublisherToSubscriberSingleObject(t *testing.T) {
 	const publisherAlias = uint64(7)
 
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -40,7 +38,7 @@ func TestFanout_PublisherToSubscriberSingleObject(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReqStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -135,7 +133,7 @@ func TestFanout_StalledSubscriberDoesNotBlockFastOne(t *testing.T) {
 	const publisherAlias = uint64(7)
 
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -149,7 +147,7 @@ func TestFanout_StalledSubscriberDoesNotBlockFastOne(t *testing.T) {
 	slowSess := dialAnotherClient(t, pubSess)
 
 	fastReq, err := fastSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -158,7 +156,7 @@ func TestFanout_StalledSubscriberDoesNotBlockFastOne(t *testing.T) {
 	defer fastReq.Close()
 
 	slowReq, err := slowSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -292,7 +290,7 @@ func TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -306,7 +304,7 @@ func TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup(t *testing.T) {
 	// complete on the in-process unbuffered pipes.
 	deadSess := dialAnotherClient(t, pubSess)
 	deadReq, err := deadSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -316,7 +314,7 @@ func TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup(t *testing.T) {
 
 	liveSess := dialAnotherClient(t, pubSess)
 	liveReq, err := liveSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -379,7 +377,7 @@ func TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -390,7 +388,7 @@ func TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.LocationFilterParam(&message.LocationFilter{Fields: 2, StartGroup: 0, StartObject: 2}),
@@ -496,7 +494,7 @@ func TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -507,7 +505,7 @@ func TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.LocationFilterParam(
@@ -610,7 +608,7 @@ func TestSubscribe_InstallsPriorityAndGroupOrder(t *testing.T) {
 	defer teardown()
 
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 7,
 	})
@@ -621,7 +619,7 @@ func TestSubscribe_InstallsPriorityAndGroupOrder(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.SubscriberPriorityParam(42),
@@ -657,7 +655,7 @@ func TestFanout_GapInForwardedObjectIDsOpensNewStream(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -668,7 +666,7 @@ func TestFanout_GapInForwardedObjectIDsOpensNewStream(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -796,7 +794,7 @@ func TestFanout_InboundResetCancelsDownstream(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -807,7 +805,7 @@ func TestFanout_InboundResetCancelsDownstream(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -890,7 +888,7 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -905,14 +903,14 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 	// subscriber 2) doesn't deadlock on a missing acceptor.
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer subReq.Close()
-	go drainAllStreams(t.Context(), subSess)
+	go drainAll(t.Context(), subSess)
 
 	// Phase 1: publish three objects (absIDs 0, 1, 2) on group 4. After
 	// this the relay's TrackEntry.LargestObject must be {Group: 4,
@@ -956,7 +954,7 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 	// object at a Location <= {4, 2} should be filtered out.
 	subSess2 := dialAnotherClient(t, pubSess)
 	subReq2, err := subSess2.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.LocationFilterParam(&message.LocationFilter{Fields: 2}),
@@ -1059,35 +1057,6 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 	}
 }
 
-// drainAllStreams accepts every data stream the session yields and reads
-// it to EOF. Used by tests that need a "background drain" so the relay
-// doesn't block on OpenSubgroup for an unread acceptor.
-//
-// The ctx must be cancellable (typically t.Context()) so this goroutine
-// exits when the test finishes. Without an explicit cancellation
-// signal, AcceptDataStream blocks indefinitely on its underlying
-// AcceptUniStream — it does not observe session shutdown directly —
-// and the leaked goroutine accumulates across repeated test runs
-// (go test -count=N), eventually wedging the process at exit when the
-// runtime waits for all goroutines.
-func drainAllStreams(ctx context.Context, s *session.Session) {
-	for {
-		ds, err := s.AcceptDataStream(ctx)
-		if err != nil {
-			return
-		}
-		sg, ok := ds.(*session.IncomingSubgroupStream)
-		if !ok {
-			continue
-		}
-		for {
-			if _, err := sg.ReadObject(); err != nil {
-				break
-			}
-		}
-	}
-}
-
 // TestSubscribe_InvalidGroupOrderRejected pins the §10.2.8 rule: GROUP_ORDER
 // values other than 0x1 (Ascending) and 0x2 (Descending) are a session-level
 // PROTOCOL_VIOLATION, so a SUBSCRIBE carrying one closes the whole session.
@@ -1098,7 +1067,7 @@ func TestSubscribe_InvalidGroupOrderRejected(t *testing.T) {
 	defer teardown()
 
 	pubReqStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 7,
 	})
@@ -1109,16 +1078,12 @@ func TestSubscribe_InvalidGroupOrderRejected(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	_, _ = subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.ByteParam(message.ParamGroupOrder, 0x05),
 		},
 	})
 
-	select {
-	case <-subSess.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("session not closed after out-of-range GROUP_ORDER SUBSCRIBE (§10.2.8)")
-	}
+	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER SUBSCRIBE (§10.2.8)")
 }

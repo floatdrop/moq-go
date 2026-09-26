@@ -1,10 +1,12 @@
 package relay_test
 
 import (
+	"context"
 	"errors"
 	"io"
 	"math"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -32,7 +34,7 @@ func TestSubscribe_RangeFilterProhibitedWhenConfiguredOff(t *testing.T) {
 	defer teardown()
 
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"), TrackAlias: 7,
+		Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: 7,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -41,7 +43,7 @@ func TestSubscribe_RangeFilterProhibitedWhenConfiguredOff(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	_, err = subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.RangeFilterParam(&message.RangeFilter{
@@ -64,7 +66,7 @@ func TestFanout_ObjectIDRangeFilter(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"), TrackAlias: publisherAlias,
+		Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: publisherAlias,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -73,7 +75,7 @@ func TestFanout_ObjectIDRangeFilter(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.RangeFilterParam(&message.RangeFilter{
@@ -166,7 +168,7 @@ func TestSubscribeTracks_TrackPropertyFilter(t *testing.T) {
 
 	const propType = 0x40 // even → single-integer Track Property
 	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 		Parameters: message.Parameters{
 			message.RangeFilterParam(&message.RangeFilter{
 				Type: message.ParamTrackPropertyFilter, PropertyType: propType,
@@ -229,7 +231,7 @@ func TestFetch_ObjectIDRangeFilter(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"), TrackAlias: publisherAlias,
+		Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: publisherAlias,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -239,20 +241,20 @@ func TestFetch_ObjectIDRangeFilter(t *testing.T) {
 	// An unfiltered subscriber lets the fanout accept + cache the objects.
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"),
+		Namespace: ns("video"), Name: []byte("cam1"),
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer subReq.Close()
-	go drainAllStreams(t.Context(), subSess)
+	go drainAll(t.Context(), subSess)
 
 	publishObjects(t, pubSess, publisherAlias, 0 /*group*/, 4 /*count → IDs 0..3*/)
 	time.Sleep(50 * time.Millisecond) // let the cache settle
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, objs := fetchAndDrain(t, fetchSess,
-		wire.TrackNamespace{[]byte("video")}, []byte("cam1"),
+		ns("video"), []byte("cam1"),
 		message.Location{Group: 0, Object: 0}, message.Location{Group: 0, Object: 3},
 		message.GroupOrderAscending,
 		message.RangeFilterParam(&message.RangeFilter{
@@ -294,7 +296,7 @@ func TestFetch_SubgroupFilterSelectsOneLayer(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"), TrackAlias: publisherAlias,
+		Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: publisherAlias,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
@@ -304,13 +306,13 @@ func TestFetch_SubgroupFilterSelectsOneLayer(t *testing.T) {
 	// An unfiltered subscriber lets the fanout accept + cache the objects.
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")}, Name: []byte("cam1"),
+		Namespace: ns("video"), Name: []byte("cam1"),
 	})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer subReq.Close()
-	go drainAllStreams(t.Context(), subSess)
+	go drainAll(t.Context(), subSess)
 
 	// Each layer numbers its objects from its own base, because IDs must be
 	// unique within a group and consecutive within a subgroup at once. Base
@@ -322,7 +324,7 @@ func TestFetch_SubgroupFilterSelectsOneLayer(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	_, objs := fetchAndDrain(t, fetchSess,
-		wire.TrackNamespace{[]byte("video")}, []byte("cam1"),
+		ns("video"), []byte("cam1"),
 		message.Location{Group: 0, Object: 0}, message.Location{Group: 0, Object: math.MaxUint64}, // whole group
 		message.GroupOrderAscending,
 		message.RangeFilterParam(&message.RangeFilter{
@@ -369,5 +371,174 @@ func publishLayer(
 	}
 	if err := sg.Close(); err != nil {
 		t.Fatalf("sg.Close g=%d sg=%d: %v", group, subgroup, err)
+	}
+}
+
+// A zero-length Range Filter is no filter; in REQUEST_UPDATE it removes that
+// filter type, a non-zero one replaces it, and an omitted one is unchanged
+// (§5.1.4).
+
+// TestSubscribe_ZeroLengthRangeFilterIsNoFilter: a zero-length Range Filter on
+// SUBSCRIBE is accepted as no filter.
+func TestSubscribe_ZeroLengthRangeFilterIsNoFilter(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	publishVideoTrack(t, pubSess, "cam1", 1)
+	subSess := dialAnotherClient(t, pubSess)
+	subscribeCam1(t, subSess, message.BytesParam(message.ParamObjectIDFilter, nil))
+}
+
+// TestRequestUpdate_ZeroLengthRemovesOneRangeFilterType: an update removing
+// OBJECTID_FILTER lets every Object through again, while the SUBGROUP_FILTER it
+// does not name still holds.
+func TestRequestUpdate_ZeroLengthRemovesOneRangeFilterType(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	pub := publishVideoTrack(t, pubSess, "cam1", 1)
+	subSess := dialAnotherClient(t, pubSess)
+	subReq := subscribeCam1(t, subSess,
+		message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamObjectIDFilter, Ranges: []message.Range{{Start: 1, End: 1}},
+		}),
+		message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamSubgroupFilter, Ranges: []message.Range{{Start: 0, End: 0}},
+		}),
+	)
+	if _, err := subSess.UpdateRequest(t.Context(), subReq,
+		message.Parameters{message.BytesParam(message.ParamObjectIDFilter, nil)}); err != nil {
+		t.Fatalf("UpdateRequest removing OBJECTID_FILTER: %v", err)
+	}
+
+	// Subgroup 0 of Group 0: three Objects, all of which now pass. Subgroup 1
+	// (in Group 1, so its Object IDs do not collide): still outside the
+	// SUBGROUP_FILTER.
+	for _, sgID := range []uint64{0, 1} {
+		sg, err := pub.OpenSubgroup(message.SubgroupHeader{
+			SubgroupIDMode: message.SubgroupIDExplicit, GroupID: sgID, SubgroupID: sgID,
+		})
+		if err != nil {
+			t.Fatalf("OpenSubgroup %d: %v", sgID, err)
+		}
+		go func() {
+			for range 3 {
+				if sg.WriteObject(&message.SubgroupObject{Payload: []byte("x")}) != nil {
+					return
+				}
+			}
+			_ = sg.Close()
+		}()
+	}
+
+	acceptCtx, cancelAccept := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancelAccept()
+	ds, err := subSess.AcceptDataStream(acceptCtx)
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v (no stream for subgroup 0)", err)
+	}
+	in, ok := ds.(*session.IncomingSubgroupStream)
+	if !ok {
+		t.Fatalf("AcceptDataStream = %T, want a subgroup stream", ds)
+	}
+	if in.Header.SubgroupID != 0 {
+		t.Fatalf("got subgroup %d; the SUBGROUP_FILTER the update did not name admits only 0", in.Header.SubgroupID)
+	}
+	n := 0
+	for {
+		if _, err := in.ReadObject(); err != nil {
+			break
+		}
+		n++
+	}
+	if n != 3 {
+		t.Fatalf("subgroup 0 carried %d Objects after OBJECTID_FILTER was removed, want 3", n)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	if ds, err := subSess.AcceptDataStream(ctx); err == nil {
+		t.Fatalf("got a second data stream (%T); subgroup 1 is outside the kept SUBGROUP_FILTER", ds)
+	}
+}
+
+// TestRequestUpdate_RangeFilterLimitCountsMergedSet: MAX_FILTER_RANGES applies
+// to the filters merged from an update, not the update alone (§5.1.4).
+func TestRequestUpdate_RangeFilterLimitCountsMergedSet(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{MaxFilterRanges: 2})
+	defer teardown()
+	publishVideoTrack(t, pubSess, "cam1", 1)
+	subSess := dialAnotherClient(t, pubSess)
+	subReq := subscribeCam1(t, subSess,
+		message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamSubgroupFilter, Ranges: []message.Range{{Start: 0, End: 0}},
+		}),
+		message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamPriorityFilter, Ranges: []message.Range{{Start: 0, End: 10}},
+		}),
+	)
+	// One range on its own, a third one merged.
+	_, err := subSess.UpdateRequest(t.Context(), subReq, message.Parameters{
+		message.RangeFilterParam(&message.RangeFilter{
+			Type: message.ParamObjectIDFilter, Ranges: []message.Range{{Start: 1, End: 1}},
+		}),
+	})
+	requireRejectedWithCode(t, err, moqt.RequestInvalidFilter)
+}
+
+// TestSubscribe_FillInheritsRangeFilters: the fill fetch stream inherits the
+// subscription's Range Filters (§5.1.3); one inside FILL_PARAMETERS replaces or,
+// zero-length, removes that type (§5.1.4).
+func TestSubscribe_FillInheritsRangeFilters(t *testing.T) {
+	t.Parallel()
+	objectIDs := func(ranges ...message.Range) message.Parameter {
+		return message.RangeFilterParam(&message.RangeFilter{Type: message.ParamObjectIDFilter, Ranges: ranges})
+	}
+	for _, tc := range []struct {
+		name  string
+		inner message.Parameters // besides the whole-track Location filter
+		want  []decodedFetchObject
+	}{
+		{"inherited", nil, []decodedFetchObject{{group: 0, object: 1}}},
+		{"overridden", message.Parameters{objectIDs(message.Range{Start: 2, End: 2})},
+			[]decodedFetchObject{{group: 0, object: 2}}},
+		{"removed", message.Parameters{message.BytesParam(message.ParamObjectIDFilter, nil)},
+			[]decodedFetchObject{{group: 0, object: 0}, {group: 0, object: 1}, {group: 0, object: 2}, {group: 1, object: 0}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pubSess, _, alias := publishAndCache(t)
+			publishObjects(t, pubSess, alias, 0, 3)
+			publishObjects(t, pubSess, alias, 1, 1)
+			time.Sleep(50 * time.Millisecond)
+
+			subSess := dialAnotherClient(t, pubSess)
+			inner := append(message.Parameters{message.UnfilteredFilter()}, tc.inner...)
+			subscribeCam1(t, subSess,
+				message.NextObjectFilter(),
+				objectIDs(message.Range{Start: 1, End: 1}),
+				message.FillParametersParam(inner),
+			)
+
+			ds, err := subSess.AcceptDataStream(t.Context())
+			if err != nil {
+				t.Fatalf("AcceptDataStream: %v", err)
+			}
+			fs, ok := ds.(*session.IncomingFetchStream)
+			if !ok {
+				t.Fatalf("got %T, want the fill stream", ds)
+			}
+			got := decodeFetchStream(t, fs, message.GroupOrderAscending)
+			ids := func(objs []decodedFetchObject) [][2]uint64 {
+				var out [][2]uint64
+				for _, o := range objs {
+					out = append(out, [2]uint64{o.group, o.object})
+				}
+				return out
+			}
+			if !slices.Equal(ids(got), ids(tc.want)) {
+				t.Fatalf("fill delivered %v, want %v", ids(got), ids(tc.want))
+			}
+		})
 	}
 }

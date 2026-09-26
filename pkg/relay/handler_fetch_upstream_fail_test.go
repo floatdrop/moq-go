@@ -1,9 +1,7 @@
 package relay_test
 
 import (
-	"errors"
 	"fmt"
-	"io"
 	"sync"
 	"testing"
 	"time"
@@ -293,11 +291,11 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 	upSess, teardown := connectRelay(t, relay.Config{})
 	t.Cleanup(teardown)
 
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam1")
 	const upstreamAlias = uint64(42)
 
-	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 
@@ -373,7 +371,7 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 
 	// Trigger the on-demand upstream subscription so the relay caches the tail.
 	live := dialAnotherClient(t, upSess)
-	liveReq, err := live.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: name})
+	liveReq, err := live.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: name})
 	if err != nil {
 		t.Fatalf("live Subscribe: %v", err)
 	}
@@ -391,12 +389,12 @@ func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 		// response is non-empty".
 		probe := opts
 		probe.extraParams = nil
-		objs, served := fetchStitched(t, fc, ns, name, stitchLiveHi, probe)
+		objs, served := fetchStitched(t, fc, video, name, stitchLiveHi, probe)
 		if served && len(stitchedGroups(objs)) > 0 {
 			if len(opts.extraParams) == 0 {
 				return objs
 			}
-			filtered, ok := fetchStitched(t, fc, ns, name, stitchLiveHi, opts)
+			filtered, ok := fetchStitched(t, fc, video, name, stitchLiveHi, opts)
 			if !ok {
 				t.Fatalf("the filtered stitch FETCH was not served%s", upstreamNote())
 			}
@@ -440,46 +438,9 @@ func fetchStitched(
 		return nil, false
 	}
 	defer fetchReq.Close()
-
-	type result struct {
-		objs []*session.DecodedFetchObject
-		err  error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		ds, err := sess.AcceptDataStream(t.Context())
-		if err != nil {
-			ch <- result{err: err}
-			return
-		}
-		fs, ok := ds.(*session.IncomingFetchStream)
-		if !ok {
-			ch <- result{err: errors.New("not a fetch stream")}
-			return
-		}
-		var r result
-		for {
-			obj, err := fs.ReadDecoded()
-			if err != nil {
-				if !errors.Is(err, io.EOF) {
-					r.err = err
-				}
-				ch <- r
-				return
-			}
-			r.objs = append(r.objs, obj)
-		}
-	}()
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			t.Fatalf("reading FETCH response: %v", r.err)
-		}
-		return r.objs, true
-	case <-time.After(5 * time.Second):
-		t.Fatal("FETCH response did not arrive within deadline")
-		return nil, false
-	}
+	// Decoded ascending whatever opts.order: the descending case asserts only
+	// on its marker, whose IDs are absolute.
+	return readFetchResponse(t, sess, message.GroupOrderAscending, 5*time.Second), true
 }
 
 // stitchMarker names which §11.4.4.2 outcome a stitched response encoded for
@@ -530,36 +491,6 @@ func stitchedGroups(objs []*session.DecodedFetchObject) []uint64 {
 		groups = append(groups, o.GroupID)
 	}
 	return groups
-}
-
-// openSubgroupWaiting opens a subgroup stream, waiting out a temporarily
-// exhausted stream limit instead of treating it as fatal.
-//
-// sessiontest hands opened streams to the peer through a bounded queue and
-// reports a full one as [session.ErrNoStreamCredit] — the in-process stand-in
-// for a peer that has not raised MAX_STREAMS yet. The relay drains that queue
-// continuously, so the condition clears on its own; a publisher pushing a
-// burst of groups just has to wait, exactly as it would against a real peer.
-// Treating it as terminal would end the upstream loop over a transient
-// condition.
-func openSubgroupWaiting(
-	t *testing.T,
-	sess *session.Session,
-	hdr message.SubgroupHeader,
-) (*session.OutgoingSubgroupStream, error) {
-	t.Helper()
-	deadline := time.Now().After
-	start := time.Now()
-	for {
-		sg, err := sess.OpenSubgroup(hdr)
-		if !errors.Is(err, session.ErrNoStreamCredit) {
-			return sg, err
-		}
-		if deadline(start.Add(5 * time.Second)) {
-			return nil, err
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
 }
 
 // TestFetch_RangeFilterKeepsTimedOutMarker pins that the §5.1.4 Range Filter

@@ -3,207 +3,14 @@ package relay_test
 import (
 	"context"
 	"errors"
-	"runtime"
-	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
-
-// connectRelay starts a relay backed by the in-process pipeListener, dials a
-// client session into it, and returns the client *session.Session plus a
-// teardown closure that stops the relay and waits for clean shutdown.
-//
-// The caller supplies a complete relay.Config; GoawayTimeout is forced to a
-// small value so teardown is quick if the caller didn't set it. Pass the
-// zero relay.Config{} for the common "no special configuration" case, or set
-// individual fields (Authorizer, SendQueueSize, MaxDropsBeforeReset,
-// Discovery, RelayAddr, MaxCacheSize, …) as the test requires.
-// connectRelay accepts testing.TB so it serves both tests and benchmarks.
-// testing.TB does not expose Context() (that lives only on *testing.T /
-// *testing.B), so the relay-Start and client-handshake context is created
-// here and cancelled via tb.Cleanup.
-func connectRelay(tb testing.TB, cfg relay.Config) (clientSess *session.Session, teardown func()) {
-	tb.Helper()
-	return connectRelayOn(tb, cfg, newPipeListener())
-}
-
-// connectRelayOn is [connectRelay] against a caller-supplied listener, for
-// tests that need to configure it first — setting pipeListener.fault to make
-// the relay's own writes fail, for one.
-func connectRelayOn(
-	tb testing.TB,
-	cfg relay.Config,
-	l *pipeListener,
-) (clientSess *session.Session, teardown func()) {
-	tb.Helper()
-	if cfg.GoawayTimeout == 0 {
-		cfg.GoawayTimeout = 50 * time.Millisecond
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	tb.Cleanup(cancel)
-	r := relay.New(l, cfg)
-	startErr := make(chan error, 1)
-	go func() { startErr <- r.Start(ctx) }()
-
-	clientConn, err := l.Dial()
-	if err != nil {
-		tb.Fatalf("Dial: %v", err)
-	}
-	sess, err := session.Client(ctx, clientConn)
-	if err != nil {
-		tb.Fatalf("session.Client: %v", err)
-	}
-
-	pipeListenerMu.Lock()
-	pipeListenerOf[sess] = l
-	pipeListenerMu.Unlock()
-
-	// Track every client session associated with this relay so the
-	// teardown closes them before Relay.Stop tries to drain. Without
-	// this, Relay.Stop's r.handlers.Wait() blocks forever waiting on
-	// the relay-side handlePublish goroutines, which themselves block
-	// on DrainAndWait reading from a publisher stream the client side
-	// never closed. Under `go test -count=N` those leaked goroutines
-	// accumulate across runs and eventually wedge the process at the
-	// per-test timeout. Pinned here rather than asking each test to
-	// close its dialled sessions because dialAnotherClient hands out
-	// sessions without a natural cleanup hook.
-	clientsForRelay := newClientSessionTracker()
-	clientsForRelay.add(sess)
-	pipeListenerClientsMu.Lock()
-	pipeListenerClients[sess] = clientsForRelay
-	pipeListenerClientsMu.Unlock()
-
-	return sess, func() {
-		pipeListenerMu.Lock()
-		delete(pipeListenerOf, sess)
-		pipeListenerMu.Unlock()
-		pipeListenerClientsMu.Lock()
-		delete(pipeListenerClients, sess)
-		pipeListenerClientsMu.Unlock()
-
-		// Stop the relay FIRST. Tests that exercise GOAWAY-driven
-		// cooperative migration (e.g. TestGracefulMigration) expect
-		// the GOAWAY broadcast to reach their clients while those
-		// clients are still alive — closing the clients up front
-		// would preempt that contract.
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		stopDone := make(chan error, 1)
-		go func() { stopDone <- r.Stop(ctx) }()
-
-		// A relay handler blocked in DrainAndWait reading a client stream
-		// the test never closed keeps Relay.Stop's (unbounded)
-		// r.handlers.Wait() from returning; closing the client gives that
-		// read an EOF so the handler exits. Give cooperative-migration
-		// clients a brief window to close themselves first, then force-close
-		// every tracked client.
-		//
-		// Exactly ONE goroutine — this one — ever receives from stopDone.
-		// An earlier version ran a second goroutine that also selected on
-		// stopDone to drive the force-close; when Stop finished within the
-		// window the two receivers raced for the single buffered value, and
-		// if the helper won, the teardown below blocked on stopDone forever
-		// (a ~10-minute CI hang that looked like a flake). Driving the
-		// window inline keeps stopDone single-consumer.
-		const cooperativeWindow = 250 * time.Millisecond
-		select {
-		case <-stopDone:
-			// Stop drained within the window (clients closed cooperatively
-			// or no handler was wedged); no force-close needed to unblock it.
-		case <-time.After(cooperativeWindow):
-			clientsForRelay.closeAll()
-			// Closing the clients should let every wedged handler exit well
-			// within Stop's 5s ctx budget. Bound the wait so a genuine
-			// deadlock fails fast with a goroutine dump instead of hanging
-			// until the package test timeout (~10 min).
-			select {
-			case <-stopDone:
-			case <-time.After(8 * time.Second):
-				dumpGoroutines(tb, "relay teardown: Relay.Stop did not return "+
-					"within 8s after closing all clients (wedged session handler?)")
-				return
-			}
-		}
-		clientsForRelay.closeAll() // idempotent final sweep
-
-		select {
-		case err := <-startErr:
-			if err != nil {
-				tb.Errorf("Start returned: %v", err)
-			}
-		case <-time.After(time.Second):
-			tb.Error("Start did not return after Stop")
-		}
-	}
-}
-
-// pipeListenerClients tracks the set of client sessions opened against
-// a given pipe listener (keyed by the *first* client session, matching
-// the existing pipeListenerOf indexing). dialAnotherClient appends to
-// the set so the teardown can close every client. See
-// connectRelay for why this is needed.
-var (
-	pipeListenerClientsMu sync.Mutex
-	pipeListenerClients   = make(map[*session.Session]*clientSessionTracker)
-)
-
-type clientSessionTracker struct {
-	mu       sync.Mutex
-	sessions []*session.Session
-}
-
-func newClientSessionTracker() *clientSessionTracker {
-	return &clientSessionTracker{}
-}
-
-func (t *clientSessionTracker) add(s *session.Session) {
-	t.mu.Lock()
-	t.sessions = append(t.sessions, s)
-	t.mu.Unlock()
-}
-
-func (t *clientSessionTracker) closeAll() {
-	t.mu.Lock()
-	sessions := append([]*session.Session(nil), t.sessions...)
-	t.sessions = nil
-	t.mu.Unlock()
-	for _, s := range sessions {
-		_ = s.Close(moqt.SessionNoError, "test teardown")
-	}
-}
-
-// dumpGoroutines fails the test with msg and a full goroutine stack dump. Used
-// by the relay teardown when Relay.Stop does not return in bounded time, so a
-// wedged session handler surfaces as a fast, diagnosable failure with the
-// blocking stacks attached instead of a silent ~10-minute package timeout.
-func dumpGoroutines(tb testing.TB, msg string) {
-	tb.Helper()
-	buf := make([]byte, 1<<20)
-	n := runtime.Stack(buf, true)
-	tb.Errorf("%s; goroutine dump follows:\n%s", msg, buf[:n])
-}
-
-// requireRejectedWithCode asserts that err is a *session.RequestRejectedError
-// carrying the expected REQUEST_ERROR code. Failures point at the actual code
-// so debugging a misrouted dispatch is obvious.
-func requireRejectedWithCode(t *testing.T, err error, want moqt.RequestErrorCode) {
-	t.Helper()
-	var rejected *session.RequestRejectedError
-	if !errors.As(err, &rejected) {
-		t.Fatalf("want *RequestRejectedError, got %T: %v", err, err)
-	}
-	if rejected.Code != want {
-		t.Fatalf("rejected code = %#x, want %#x; reason=%q", uint64(rejected.Code), uint64(want), rejected.Reason)
-	}
-}
 
 // (Earlier scaffolding tests for SUBSCRIBE / PUBLISH "rejects with
 // NotSupported" were removed once those handlers became real. See
@@ -231,7 +38,7 @@ func TestSessionHandler_AuthDenialMapsToRequestError(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
@@ -263,7 +70,7 @@ func TestSessionHandler_DispatchSurvivesPerRequestRejection(t *testing.T) {
 
 	for range 3 {
 		_, err := clientSess.Subscribe(t.Context(), &message.Subscribe{
-			Namespace: wire.TrackNamespace{[]byte("video")},
+			Namespace: ns("video"),
 			Name:      []byte("cam1"),
 		})
 		requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)

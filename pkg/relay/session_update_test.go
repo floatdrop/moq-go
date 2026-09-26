@@ -27,7 +27,7 @@ func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 7,
 	})
@@ -38,7 +38,7 @@ func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
@@ -71,7 +71,7 @@ func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 7,
 	})
@@ -82,7 +82,7 @@ func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
@@ -124,7 +124,7 @@ func TestRequestUpdate_InvalidGroupOrderClosesSession(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 7,
 	})
@@ -135,7 +135,7 @@ func TestRequestUpdate_InvalidGroupOrderClosesSession(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -148,11 +148,7 @@ func TestRequestUpdate_InvalidGroupOrderClosesSession(t *testing.T) {
 	_, _ = subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.ByteParam(message.ParamGroupOrder, 0x05)})
 
-	select {
-	case <-subSess.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("session not closed after out-of-range GROUP_ORDER REQUEST_UPDATE (§10.2.8)")
-	}
+	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER REQUEST_UPDATE (§10.2.8)")
 }
 
 // TestRequestUpdate_ForwardPauseAndResume is the §9.2 data-plane test:
@@ -168,7 +164,7 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 
 	const publisherAlias = uint64(7)
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: publisherAlias,
 	})
@@ -179,7 +175,7 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subMsg := &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	}
 	subStream, err := subSess.Subscribe(t.Context(), subMsg)
@@ -309,7 +305,7 @@ func TestRequestUpdate_FetchValidUpdateReturnsOK(t *testing.T) {
 
 	fetchSess := dialAnotherClient(t, pubSess)
 	fetchMsg := &message.Fetch{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			message.GroupOrderParam(message.GroupOrderAscending),
@@ -362,7 +358,7 @@ func TestRequestUpdate_InvalidRequestIDClosesSession(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 7,
 	})
@@ -373,7 +369,7 @@ func TestRequestUpdate_InvalidRequestIDClosesSession(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -387,9 +383,135 @@ func TestRequestUpdate_InvalidRequestIDClosesSession(t *testing.T) {
 		t.Fatalf("write REQUEST_UPDATE: %v", err)
 	}
 
-	select {
-	case <-subSess.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("session not closed after wrong-parity REQUEST_UPDATE (§10.1)")
+	requireSessionClosed(t, subSess, "wrong-parity REQUEST_UPDATE (§10.1)")
+}
+
+// TestRequestUpdateOK_CarriesLargestObject: REQUEST_UPDATE_OK carries
+// LARGEST_OBJECT once Objects were published, and omits it before (§10.2.17).
+func TestRequestUpdateOK_CarriesLargestObject(t *testing.T) {
+	t.Parallel()
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	pub := publishVideoTrack(t, pubSess, "cam1", 1)
+	subSess := dialAnotherClient(t, pubSess)
+	subReq := subscribeCam1(t, subSess)
+
+	ok, err := subSess.UpdateRequest(t.Context(), subReq, message.Parameters{message.SubscriberPriorityParam(7)})
+	if err != nil {
+		t.Fatalf("UpdateRequest before any Object: %v", err)
 	}
+	if p, has := ok.Parameters.Find(message.ParamLargestObject); has {
+		t.Fatalf("REQUEST_UPDATE_OK carried LARGEST_OBJECT {%d,%d} before any Object was published", p.Group, p.Object)
+	}
+
+	publishSubgroupWith(t, pub, 3, 1, nil)
+	if !awaitSubgroupObject(t, subSess, 2*time.Second) {
+		t.Fatal("the Object never reached the subscriber")
+	}
+	ok, err = subSess.UpdateRequest(t.Context(), subReq, message.Parameters{message.SubscriberPriorityParam(9)})
+	if err != nil {
+		t.Fatalf("UpdateRequest after an Object: %v", err)
+	}
+	p, has := ok.Parameters.Find(message.ParamLargestObject)
+	if !has {
+		t.Fatal("REQUEST_UPDATE_OK omitted LARGEST_OBJECT after Object {3,0} was published")
+	}
+	if p.Group != 3 || p.Object != 0 {
+		t.Fatalf("LARGEST_OBJECT = {%d,%d}, want {3,0}", p.Group, p.Object)
+	}
+}
+
+// The ParamScope tests: a REQUEST_UPDATE parameter outside the update's scope
+// (§10.2.1), or an unknown one (§10.2), closes the session.
+
+// sendUpdateRaw writes a REQUEST_UPDATE on stream from a goroutine, without
+// awaiting a reply.
+func sendUpdateRaw(t *testing.T, sess *session.Session, stream session.Stream, params message.Parameters) {
+	t.Helper()
+	go func() {
+		_ = message.Marshal(stream, &message.RequestUpdate{RequestID: sess.AllocRequestID(), Parameters: params})
+	}()
+}
+
+// TestRelay_ParamScopeSubscribeUpdate: on a SUBSCRIBE.
+func TestRelay_ParamScopeSubscribeUpdate(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		params message.Parameters
+	}{
+		{"TRACK_NAMESPACE_PREFIX", message.Parameters{message.TrackNamespacePrefixParam(ns("video"))}},
+		{"unknown parameter", message.Parameters{message.VarintParam(0x3E, 1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pubSess, _ := newCam1Publisher(t, nil)
+			subSess := dialAnotherClient(t, pubSess)
+			sub := subscribeCam1(t, subSess)
+			sendUpdateRaw(t, subSess, sub.Stream, tc.params)
+			requireSessionClosed(t, subSess, "a REQUEST_UPDATE parameter outside its scope")
+		})
+	}
+}
+
+// TestRelay_ParamScopeNamespaceUpdate: FORWARD on a SUBSCRIBE_NAMESPACE
+// (§10.2.18).
+func TestRelay_ParamScopeNamespaceUpdate(t *testing.T) {
+	t.Parallel()
+	sess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	nsSub, err := sess.SubscribeNamespace(
+		t.Context(),
+		&message.SubscribeNamespace{TrackNamespacePrefix: ns("video")},
+	)
+	if err != nil {
+		t.Fatalf("SubscribeNamespace: %v", err)
+	}
+	sendUpdateRaw(t, sess, nsSub.Stream, message.Parameters{message.ForwardParam(true)})
+	requireSessionClosed(t, sess, "FORWARD in a SUBSCRIBE_NAMESPACE update")
+}
+
+// TestRelay_ParamScopeFetchUpdate: LOCATION_FILTER on a FETCH (§10.2.9).
+func TestRelay_ParamScopeFetchUpdate(t *testing.T) {
+	t.Parallel()
+	pubSess, alias := newCam1Publisher(t, nil)
+	publishObjects(t, pubSess, alias, 3, 1)
+	fetchSess := dialAnotherClient(t, pubSess)
+	go drainAll(t.Context(), fetchSess) // the relay reads updates once the data is written
+	// The Object reaches the relay's cache asynchronously; until it does the
+	// FETCH is refused, so retry.
+	var fr *session.FetchRequest
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var err error
+		fr, err = fetchSess.Fetch(t.Context(), &message.Fetch{
+			Namespace: ns("video"), Name: []byte("cam1"),
+		})
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Fetch: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	sendUpdateRaw(t, fetchSess, fr.Stream, message.Parameters{
+		message.LocationFilterParam(&message.LocationFilter{Fields: 2}),
+	})
+	requireSessionClosed(t, fetchSess, "LOCATION_FILTER in a FETCH update")
+}
+
+// TestRelay_MalformedUpdateClosesSession: a REQUEST_UPDATE whose Length does
+// not match its body closes the session (§10).
+func TestRelay_MalformedUpdateClosesSession(t *testing.T) {
+	t.Parallel()
+	pubSess, _ := newCam1Publisher(t, nil)
+	subSess := dialAnotherClient(t, pubSess)
+	sub := subscribeCam1(t, subSess)
+	enc := wire.NewWriter(nil)
+	(&message.RequestUpdate{RequestID: subSess.AllocRequestID()}).Append(enc)
+	go func() {
+		_ = wire.WriteFrame(sub.Stream, uint64(message.TypeRequestUpdate), append(enc.Bytes(), 0x00))
+	}()
+	requireSessionClosed(t, subSess, "a REQUEST_UPDATE whose Length exceeds its body")
 }

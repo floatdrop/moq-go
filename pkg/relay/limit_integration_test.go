@@ -8,7 +8,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -22,7 +21,7 @@ func TestRelay_SubscriptionLimit(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 7,
 	})
@@ -34,7 +33,7 @@ func TestRelay_SubscriptionLimit(t *testing.T) {
 	subSess := dialAnotherClient(t, pubSess)
 	newSub := func() *message.Subscribe {
 		return &message.Subscribe{
-			Namespace: wire.TrackNamespace{[]byte("video")},
+			Namespace: ns("video"),
 			Name:      []byte("cam1"),
 		}
 	}
@@ -77,7 +76,7 @@ func TestRelay_NamespaceRequestLimit(t *testing.T) {
 	defer teardown()
 
 	ns1, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("first PublishNamespace: %v", err)
@@ -85,7 +84,7 @@ func TestRelay_NamespaceRequestLimit(t *testing.T) {
 	defer ns1.Close()
 
 	_, err = pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("audio")},
+		Namespace: ns("audio"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestExcessiveLoad)
 	requireRetryInvited(t, err)

@@ -6,7 +6,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
@@ -29,7 +28,7 @@ func TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 	subSess := dialAnotherClientWithLimits(t, primary, -1 /*client*/, 0 /*server*/)
 
 	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeTracks: %v", err)
@@ -38,7 +37,7 @@ func TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 
 	pubSess := dialAnotherClient(t, primary)
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video"), []byte("cam7")},
+		Namespace:  ns("video", "cam7"),
 		Name:       []byte("rtp"),
 		TrackAlias: 99,
 	})
@@ -89,7 +88,7 @@ func TestPublishSkipped_NotStickyAcrossRePublish(t *testing.T) {
 
 	subSess := dialAnotherClientWithLimits(t, primary, -1 /*client*/, 0 /*server*/)
 	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeTracks: %v", err)
@@ -98,7 +97,7 @@ func TestPublishSkipped_NotStickyAcrossRePublish(t *testing.T) {
 
 	pub := func() session.Stream {
 		s, err := dialAnotherClient(t, primary).Publish(t.Context(), &message.Publish{
-			Namespace:  wire.TrackNamespace{[]byte("video"), []byte("cam7")},
+			Namespace:  ns("video", "cam7"),
 			Name:       []byte("rtp"),
 			TrackAlias: 99,
 		})

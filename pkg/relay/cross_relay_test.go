@@ -71,8 +71,6 @@ func dialClient(t *testing.T, tr *testRelay) *session.Session {
 	return sess
 }
 
-func videoNS() wire.TrackNamespace { return wire.TrackNamespace{[]byte("video")} }
-
 // TestCrossRelay_OnDemandSubscribe is the end-to-end happy path: a subscriber
 // on relay A receives objects published to relay B, routed across the boundary
 // purely through Discovery + the Dialer. B advertises the "video" namespace;
@@ -101,13 +99,13 @@ func TestCrossRelay_OnDemandSubscribe(t *testing.T) {
 	// Publisher connects to B, advertises the namespace (so FindNamespace can
 	// route here) and PUBLISHes the track (so B has an established upstream).
 	pubSess := dialClient(t, relayB)
-	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()})
+	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 	const pubAlias = uint64(7)
 	pubReq, err := pubSess.Publish(ctx, &message.Publish{
-		Namespace:  videoNS(),
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: pubAlias,
 	})
@@ -120,7 +118,7 @@ func TestCrossRelay_OnDemandSubscribe(t *testing.T) {
 	// publisher), so the full chain is live by the time we push objects.
 	subSess := dialClient(t, relayA)
 	subReq, err := subSess.Subscribe(ctx, &message.Subscribe{
-		Namespace: videoNS(),
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -226,14 +224,14 @@ func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
 
 	// Healthy publisher on B serves video/cam1.
 	pubB := dialClient(t, relayB)
-	pnsB, err := pubB.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()})
+	pnsB, err := pubB.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
 	if err != nil {
 		t.Fatalf("B PublishNamespace: %v", err)
 	}
 	const pubAlias = uint64(9)
 	pubReqB, err := pubB.Publish(
 		ctx,
-		&message.Publish{Namespace: videoNS(), Name: []byte("cam1"), TrackAlias: pubAlias},
+		&message.Publish{Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: pubAlias},
 	)
 	if err != nil {
 		t.Fatalf("B Publish: %v", err)
@@ -242,7 +240,7 @@ func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
 	// A local publisher on A advertises the same namespace but REJECTS every
 	// upstream SUBSCRIBE — the relay must try it, fail, then fall back to B.
 	pLocal := dialClient(t, relayA)
-	pnsLocal, err := pLocal.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()})
+	pnsLocal, err := pLocal.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
 	if err != nil {
 		t.Fatalf("local PublishNamespace: %v", err)
 	}
@@ -260,7 +258,7 @@ func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
 
 	// Subscriber on A: the local publisher rejects, so A must reach B.
 	subSess := dialClient(t, relayA)
-	subReq, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	subReq, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
 	if err != nil {
 		t.Fatalf("Subscribe should have fallen back to Discovery, got: %v", err)
 	}
@@ -361,10 +359,10 @@ func TestCrossRelay_MultiRemoteFanIn(t *testing.T) {
 	// A redundant publisher on each of B and C: same track, same namespace.
 	startPub := func(tr *testRelay) (*session.Session, *session.Publication) {
 		ps := dialClient(t, tr)
-		if _, err := ps.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()}); err != nil {
+		if _, err := ps.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")}); err != nil {
 			t.Fatalf("PublishNamespace: %v", err)
 		}
-		p, err := ps.Publish(ctx, &message.Publish{Namespace: videoNS(), Name: []byte("cam1"), TrackAlias: 7})
+		p, err := ps.Publish(ctx, &message.Publish{Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: 7})
 		if err != nil {
 			t.Fatalf("Publish: %v", err)
 		}
@@ -376,7 +374,7 @@ func TestCrossRelay_MultiRemoteFanIn(t *testing.T) {
 	// Subscriber on A. Subscribe returns only after A has established BOTH
 	// upstreams (to B and C), so both Dialer calls have happened by here.
 	subSess := dialClient(t, relayA)
-	subReq, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	subReq, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
 	if err != nil {
 		t.Fatalf("cross-relay Subscribe: %v", err)
 	}
@@ -476,7 +474,7 @@ func TestCrossRelay_SelfExclusion(t *testing.T) {
 
 	// Seed the store with a namespace advertised by relay-A itself.
 	if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
-		Prefix:    videoNS(),
+		Prefix:    ns("video"),
 		RelayAddr: "relay-A",
 	}); err != nil {
 		t.Fatalf("seed PublishNamespace: %v", err)
@@ -484,7 +482,7 @@ func TestCrossRelay_SelfExclusion(t *testing.T) {
 
 	subSess := dialClient(t, relayA)
 	_, err := subSess.Subscribe(ctx, &message.Subscribe{
-		Namespace: videoNS(),
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err == nil {
@@ -527,25 +525,25 @@ func TestCrossRelay_PoolReuse(t *testing.T) {
 
 	// Publisher on B advertises the namespace and PUBLISHes two tracks.
 	pubSess := dialClient(t, relayB)
-	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()})
+	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
-	pub1, err := pubSess.Publish(ctx, &message.Publish{Namespace: videoNS(), Name: []byte("cam1"), TrackAlias: 1})
+	pub1, err := pubSess.Publish(ctx, &message.Publish{Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: 1})
 	if err != nil {
 		t.Fatalf("Publish cam1: %v", err)
 	}
-	pub2, err := pubSess.Publish(ctx, &message.Publish{Namespace: videoNS(), Name: []byte("cam2"), TrackAlias: 2})
+	pub2, err := pubSess.Publish(ctx, &message.Publish{Namespace: ns("video"), Name: []byte("cam2"), TrackAlias: 2})
 	if err != nil {
 		t.Fatalf("Publish cam2: %v", err)
 	}
 
 	subSess := dialClient(t, relayA)
-	sub1, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	sub1, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
 	if err != nil {
 		t.Fatalf("Subscribe cam1: %v", err)
 	}
-	sub2, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam2")})
+	sub2, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam2")})
 	if err != nil {
 		t.Fatalf("Subscribe cam2: %v", err)
 	}
@@ -580,7 +578,7 @@ func TestCrossRelay_WatchNamespacesForward(t *testing.T) {
 
 	subSess := dialClient(t, relayA)
 	nsReq, err := subSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: videoNS(),
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -601,7 +599,7 @@ func TestCrossRelay_WatchNamespacesForward(t *testing.T) {
 		defer ticker.Stop()
 		for {
 			_ = store.PublishNamespace(ctx, discovery.NamespaceInfo{
-				Prefix:    wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+				Prefix:    ns("video", "cam1"),
 				RelayAddr: "relay-C",
 			})
 			select {
@@ -651,13 +649,13 @@ func TestCrossRelay_WatchNamespacesForwardsUnpublish(t *testing.T) {
 
 	subSess := dialClient(t, relayA)
 	nsReq, err := subSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: videoNS(),
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
 	}
 
-	remoteNS := wire.TrackNamespace{[]byte("video"), []byte("cam1")}
+	remoteNS := ns("video", "cam1")
 
 	// Same re-advertise ticker as TestCrossRelay_WatchNamespacesForward, and for
 	// the same reason: the watcher registers asynchronously in Start and
@@ -747,7 +745,7 @@ func TestCrossRelay_WatchNamespacesSkipsTrackSubscribers(t *testing.T) {
 	// each tick below is offered to both and only the skip separates them.
 	nsSess := dialClient(t, relayA)
 	nsReq, err := nsSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: videoNS(),
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -755,7 +753,7 @@ func TestCrossRelay_WatchNamespacesSkipsTrackSubscribers(t *testing.T) {
 
 	trSess := dialClient(t, relayA)
 	trSub, err := trSess.SubscribeTracks(ctx, &message.SubscribeTracks{
-		TrackNamespacePrefix: videoNS(),
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeTracks: %v", err)
@@ -767,7 +765,7 @@ func TestCrossRelay_WatchNamespacesSkipsTrackSubscribers(t *testing.T) {
 		defer ticker.Stop()
 		for {
 			_ = store.PublishNamespace(ctx, discovery.NamespaceInfo{
-				Prefix:    wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+				Prefix:    ns("video", "cam1"),
 				RelayAddr: "relay-C",
 			})
 			select {
@@ -839,7 +837,7 @@ func TestCrossRelay_SubscribeNamespaceSeedsRemote(t *testing.T) {
 
 	// Remote advertisement exists before the subscriber (and before relay A).
 	if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
-		Prefix:    wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+		Prefix:    ns("video", "cam1"),
 		RelayAddr: "relay-C",
 	}); err != nil {
 		t.Fatalf("seed PublishNamespace: %v", err)
@@ -849,7 +847,7 @@ func TestCrossRelay_SubscribeNamespaceSeedsRemote(t *testing.T) {
 
 	subSess := dialClient(t, relayA)
 	nsReq, err := subSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: videoNS(),
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -889,7 +887,7 @@ func TestCrossRelay_ConcurrentSubscriberWrites(t *testing.T) {
 	// writes never block.
 	subSess := dialClient(t, relayA)
 	nsReq, err := subSess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("room")},
+		TrackNamespacePrefix: ns("room"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -992,7 +990,7 @@ func TestCrossRelay_NoDialerNoop(t *testing.T) {
 	// Seed a remote namespace; without a Dialer the relay must not try to use
 	// it.
 	if err := store.PublishNamespace(ctx, discovery.NamespaceInfo{
-		Prefix:    videoNS(),
+		Prefix:    ns("video"),
 		RelayAddr: "relay-B",
 	}); err != nil {
 		t.Fatalf("seed PublishNamespace: %v", err)
@@ -1001,7 +999,7 @@ func TestCrossRelay_NoDialerNoop(t *testing.T) {
 	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A"})
 
 	subSess := dialClient(t, relayA)
-	_, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	_, err := subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
 	if err == nil {
 		t.Fatal("Subscribe succeeded; want rejection (no Dialer, no local publisher)")
 	}
@@ -1039,12 +1037,12 @@ func TestCrossRelay_UpstreamFanInCapConverges(t *testing.T) {
 	var pubSessions []*session.Session
 	for addr, tr := range remotes {
 		ps := dialClient(t, tr)
-		if _, err := ps.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()}); err != nil {
+		if _, err := ps.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")}); err != nil {
 			t.Fatalf("%s PublishNamespace: %v", addr, err)
 		}
 		if _, err := ps.Publish(
 			ctx,
-			&message.Publish{Namespace: videoNS(), Name: []byte("cam1"), TrackAlias: 7},
+			&message.Publish{Namespace: ns("video"), Name: []byte("cam1"), TrackAlias: 7},
 		); err != nil {
 			t.Fatalf("%s Publish: %v", addr, err)
 		}
@@ -1096,12 +1094,12 @@ func TestCrossRelay_UpstreamFanInCapConverges(t *testing.T) {
 	// Subscribe blocks until the (single) upstream is established, so the dial
 	// logs are settled by the time each call returns.
 	sub1 := dialClient(t, relayA1)
-	req1, err := sub1.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	req1, err := sub1.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
 	if err != nil {
 		t.Fatalf("A1 Subscribe: %v", err)
 	}
 	sub2 := dialClient(t, relayA2)
-	req2, err := sub2.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+	req2, err := sub2.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
 	if err != nil {
 		t.Fatalf("A2 Subscribe: %v", err)
 	}
@@ -1166,7 +1164,7 @@ func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 	// resolves it as an upstream, and serve the far end of the dialled pipe here.
 	const peerAddr = "peer:4433"
 	if err := store.PublishNamespace(ctx,
-		discovery.NamespaceInfo{Prefix: videoNS(), RelayAddr: peerAddr}); err != nil {
+		discovery.NamespaceInfo{Prefix: ns("video"), RelayAddr: peerAddr}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 
@@ -1199,7 +1197,7 @@ func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 	// does, and this peer deliberately never replies — the dial is all we need.
 	subSess := dialClient(t, r)
 	go func() {
-		_, _ = subSess.Subscribe(ctx, &message.Subscribe{Namespace: videoNS(), Name: []byte("cam1")})
+		_, _ = subSess.Subscribe(ctx, &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
 	}()
 
 	var peer *session.Session
@@ -1282,13 +1280,13 @@ func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 	// Publisher on B publishes the whole track, then stops. Nothing is written
 	// after the subscriber joins, so live delivery cannot cover any of it.
 	pubSess := dialClient(t, relayB)
-	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()})
+	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 	const pubAlias = uint64(7)
 	pubReq, err := pubSess.Publish(ctx, &message.Publish{
-		Namespace:  videoNS(),
+		Namespace:  ns("video"),
 		Name:       []byte("catalog"),
 		TrackAlias: pubAlias,
 	})
@@ -1327,7 +1325,7 @@ func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 	// to B. Bind the message so its assigned Request ID can anchor the Joining
 	// FETCH below (Subscribe mutates RequestID via AllocRequestID).
 	subSess := dialClient(t, relayA)
-	subMsg := &message.Subscribe{Namespace: videoNS(), Name: []byte("catalog")}
+	subMsg := &message.Subscribe{Namespace: ns("video"), Name: []byte("catalog")}
 	subReq, err := subSess.Subscribe(ctx, subMsg)
 	if err != nil {
 		t.Fatalf("cross-relay Subscribe: %v", err)
@@ -1439,7 +1437,7 @@ func TestCrossRelay_PublishDoneCodeCrossesRelays(t *testing.T) {
 
 	pubSess := dialClient(t, relayB)
 	defer func() { _ = pubSess.Close(0, "done") }()
-	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: videoNS()})
+	pns, err := pubSess.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns("video")})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
@@ -1448,7 +1446,7 @@ func TestCrossRelay_PublishDoneCodeCrossesRelays(t *testing.T) {
 
 	subSess := dialClient(t, relayA)
 	defer func() { _ = subSess.Close(0, "done") }()
-	subReq := subscribeCam1Req(t, subSess)
+	subReq := subscribeCam1(t, subSess)
 
 	if err := pub.Done(moqt.PublishDoneMalformedTrack, "bad track"); err != nil {
 		t.Fatalf("Done: %v", err)

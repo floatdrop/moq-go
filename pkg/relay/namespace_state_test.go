@@ -12,7 +12,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
@@ -23,38 +22,6 @@ import (
 // stops "serving new subscriptions for tracks within the provided Track
 // Namespace" (§10.18) — so it is per namespace, not per publisher. §10.9.2
 // covers TRACK_NAMESPACE_PREFIX updates.
-
-// streamMessages reads stream on one goroutine for the test's lifetime, so a
-// test can assert that nothing arrives without leaving a reader behind.
-func streamMessages(t *testing.T, stream session.Stream) <-chan message.Message {
-	t.Helper()
-	out := make(chan message.Message, 16)
-	go func() {
-		defer close(out)
-		for {
-			m, err := message.Parse(stream)
-			if err != nil {
-				return
-			}
-			out <- m
-		}
-	}()
-	return out
-}
-
-func nextMessage(t *testing.T, msgs <-chan message.Message) message.Message {
-	t.Helper()
-	select {
-	case m, ok := <-msgs:
-		if !ok {
-			t.Fatal("stream ended")
-		}
-		return m
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout waiting for a message")
-	}
-	return nil
-}
 
 func requireQuiet(t *testing.T, msgs <-chan message.Message, what string) {
 	t.Helper()
@@ -68,8 +35,8 @@ func requireQuiet(t *testing.T, msgs <-chan message.Message, what string) {
 func requireNamespace(t *testing.T, msgs <-chan message.Message, suffix ...string) {
 	t.Helper()
 	m := nextMessage(t, msgs)
-	ns, ok := m.(*message.Namespace)
-	if !ok || relaytest.FormatNamespace(ns.TrackNamespaceSuffix) != relaytest.FormatNamespace(nsFields(suffix)) {
+	n, ok := m.(*message.Namespace)
+	if !ok || relaytest.FormatNamespace(n.TrackNamespaceSuffix) != relaytest.FormatNamespace(ns(suffix...)) {
 		t.Fatalf("got %T %+v, want NAMESPACE %v", m, m, suffix)
 	}
 }
@@ -78,12 +45,10 @@ func requireNamespaceDone(t *testing.T, msgs <-chan message.Message, suffix ...s
 	t.Helper()
 	m := nextMessage(t, msgs)
 	d, ok := m.(*message.NamespaceDone)
-	if !ok || relaytest.FormatNamespace(d.TrackNamespaceSuffix) != relaytest.FormatNamespace(nsFields(suffix)) {
+	if !ok || relaytest.FormatNamespace(d.TrackNamespaceSuffix) != relaytest.FormatNamespace(ns(suffix...)) {
 		t.Fatalf("got %T %+v, want NAMESPACE_DONE %v", m, m, suffix)
 	}
 }
-
-func nsFields(fields []string) wire.TrackNamespace { return ns(fields...) }
 
 func publishNS(t *testing.T, sess *session.Session, fields ...string) *session.NamespacePublication {
 	t.Helper()

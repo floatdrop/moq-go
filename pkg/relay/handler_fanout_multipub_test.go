@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -65,21 +65,6 @@ func readSubgroups(ctx context.Context, sub *session.Session, out chan<- objEven
 	}
 }
 
-// publishTrack opens a PUBLISH request stream for (video, cam1) with the given
-// inbound alias, returning the request stream (kept open by the caller).
-func publishTrack(t *testing.T, sess *session.Session, alias uint64) *session.Publication {
-	t.Helper()
-	p, err := sess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
-		Name:       []byte("cam1"),
-		TrackAlias: alias,
-	})
-	if err != nil {
-		t.Fatalf("Publish(alias=%d): %v", alias, err)
-	}
-	return p
-}
-
 // TestFanout_MultiPublisher_DeduplicatesObjects pins §9.5 / §2.1: two publishers
 // claim the same Full Track Name and push the SAME {GroupID, ObjectID} objects.
 // The relay must merge them into ONE outbound subgroup stream per subscriber
@@ -95,13 +80,13 @@ func TestFanout_MultiPublisher_DeduplicatesObjects(t *testing.T) {
 	pubB := dialAnotherClient(t, pubA)
 	subSess := dialAnotherClient(t, pubA)
 
-	aPub := publishTrack(t, pubA, 1)
+	aPub := publishVideoTrack(t, pubA, "cam1", 1)
 	defer aPub.Close()
-	bPub := publishTrack(t, pubB, 2)
+	bPub := publishVideoTrack(t, pubB, "cam1", 2)
 	defer bPub.Close()
 
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -160,7 +145,7 @@ func TestFanout_MultiPublisher_DeduplicatesObjects(t *testing.T) {
 	if !errors.Is(end.err, io.EOF) {
 		t.Fatalf("merged stream ended with %v, want io.EOF (clean FIN)", end.err)
 	}
-	if want := []uint64{0, 1, 2}; !equalIDs(got, want) {
+	if want := []uint64{0, 1, 2}; !slices.Equal(got, want) {
 		t.Fatalf("subscriber saw object IDs %v, want %v (each delivered exactly once)", got, want)
 	}
 	if end.stream != 1 {
@@ -183,13 +168,13 @@ func TestFanout_MultiPublisher_DedupSurvivesCacheEviction(t *testing.T) {
 	pubB := dialAnotherClient(t, pubA)
 	subSess := dialAnotherClient(t, pubA)
 
-	aPub := publishTrack(t, pubA, 1)
+	aPub := publishVideoTrack(t, pubA, "cam1", 1)
 	defer aPub.Close()
-	bPub := publishTrack(t, pubB, 2)
+	bPub := publishVideoTrack(t, pubB, "cam1", 2)
 	defer bPub.Close()
 
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -251,7 +236,7 @@ func TestFanout_MultiPublisher_DedupSurvivesCacheEviction(t *testing.T) {
 		t.Fatalf("objects spanned %d outbound streams, want 1 (a re-delivered evicted object would reopen)", end.stream)
 	}
 	want := []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
-	if !equalIDs(got, want) {
+	if !slices.Equal(got, want) {
 		t.Fatalf("subscriber saw %v, want %v (each delivered exactly once despite eviction)", got, want)
 	}
 }
@@ -269,13 +254,13 @@ func TestFanout_MultiPublisher_FailoverContinuesFromSurvivor(t *testing.T) {
 	pubB := dialAnotherClient(t, pubA)
 	subSess := dialAnotherClient(t, pubA)
 
-	aPub := publishTrack(t, pubA, 1)
+	aPub := publishVideoTrack(t, pubA, "cam1", 1)
 	defer aPub.Close()
-	bPub := publishTrack(t, pubB, 2)
+	bPub := publishVideoTrack(t, pubB, "cam1", 2)
 	defer bPub.Close()
 
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -333,7 +318,7 @@ func TestFanout_MultiPublisher_FailoverContinuesFromSurvivor(t *testing.T) {
 	if end.stream != 1 {
 		t.Fatalf("objects spanned %d streams, want 1 (failover must not reopen)", end.stream)
 	}
-	if want := []uint64{0, 1, 2}; !equalIDs(got, want) {
+	if want := []uint64{0, 1, 2}; !slices.Equal(got, want) {
 		t.Fatalf("subscriber saw %v, want %v across the failover", got, want)
 	}
 }
@@ -351,13 +336,13 @@ func TestFanout_MultiPublisher_MergesDisjointObjects(t *testing.T) {
 	pubB := dialAnotherClient(t, pubA)
 	subSess := dialAnotherClient(t, pubA)
 
-	aPub := publishTrack(t, pubA, 1)
+	aPub := publishVideoTrack(t, pubA, "cam1", 1)
 	defer aPub.Close()
-	bPub := publishTrack(t, pubB, 2)
+	bPub := publishVideoTrack(t, pubB, "cam1", 2)
 	defer bPub.Close()
 
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -421,7 +406,7 @@ func TestFanout_MultiPublisher_MergesDisjointObjects(t *testing.T) {
 	}
 	for _, id := range []uint64{0, 1, 2, 3, 4, 5} {
 		if seen[id] != 1 {
-			t.Fatalf("object %d missing from delivered set %v", id, sortedKeys(seen))
+			t.Fatalf("object %d missing from delivered set %v", id, slices.Sorted(maps.Keys(seen)))
 		}
 	}
 }
@@ -455,25 +440,4 @@ func awaitStreamEnd(t *testing.T, events <-chan objEvent) objEvent {
 		t.Fatal("timed out waiting for stream end")
 		return objEvent{}
 	}
-}
-
-func equalIDs(got, want []uint64) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	for i := range got {
-		if got[i] != want[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func sortedKeys(m map[uint64]int) []uint64 {
-	out := make([]uint64, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
 }

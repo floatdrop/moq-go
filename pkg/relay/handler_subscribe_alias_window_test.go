@@ -8,7 +8,6 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -28,7 +27,7 @@ import (
 // TestFetch_UnknownRangeMarkerDescending fail on CI while passing everywhere
 // else: it asserts on a complete tail and the floor kept going missing.
 func TestSubscribeUpstream_TrackEntryPrecedesAliasRouting(t *testing.T) {
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam-subscribe-alias-window")
 	const liveLo, liveHi = uint64(5), uint64(9)
 
@@ -46,7 +45,7 @@ func TestSubscribeUpstream_TrackEntryPrecedesAliasRouting(t *testing.T) {
 	// unknownGapTopology's own barrier waits for LARGEST_OBJECT {liveHi,0},
 	// which cannot arrive if the Groups carrying it were dropped, so a
 	// regression fails inside the helper before reaching the assert below.
-	fc := unknownGapTopology(t, ns, name, liveLo, liveHi,
+	fc := unknownGapTopology(t, video, name, liveLo, liveHi,
 		func(_ *session.Session, req *session.Request, _ *message.Fetch) {
 			_ = req.RejectError(moqt.RequestDoesNotExist, "no FETCH here")
 		})
@@ -54,7 +53,7 @@ func TestSubscribeUpstream_TrackEntryPrecedesAliasRouting(t *testing.T) {
 	// The watermark only proves the newest Group landed; assert the whole
 	// tail is served, which is the property a dropped floor violates.
 	waitFor(t, 5*time.Second, func() bool {
-		return groupsEqual(realGroups(tryFetchElems(t, fc, ns, name, liveHi, nil)), liveLo, liveHi)
+		return groupsEqual(realGroups(tryFetchElems(t, fc, video, name, liveHi, nil)), liveLo, liveHi)
 	}, "relay never served the full tail; the oldest Group was dropped in the alias window")
 }
 
@@ -74,13 +73,13 @@ func TestSubscribeUpstream_TrackEntryPrecedesAliasRouting(t *testing.T) {
 // rather than a single probe because the first FETCH may land before the entry
 // exists, which is DOES_NOT_EXIST for the uninteresting reason.
 func TestFetch_UnconfirmedTrackIsNotKnown(t *testing.T) {
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	name := []byte("cam-never-answered")
 
 	upSess, teardown := connectRelay(t, relay.Config{})
 	t.Cleanup(teardown)
 
-	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns}); err != nil {
+	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 	// Accept the relay's SUBSCRIBE and never reply to it.
@@ -95,14 +94,14 @@ func TestFetch_UnconfirmedTrackIsNotKnown(t *testing.T) {
 	// Trigger the on-demand upstream SUBSCRIBE, which will hang.
 	live := dialAnotherClient(t, upSess)
 	go func() {
-		_, _ = live.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: name})
+		_, _ = live.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: name})
 	}()
 
 	fetcher := dialAnotherClient(t, upSess)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		_, err := fetcher.Fetch(t.Context(), &message.Fetch{
-			Namespace: ns,
+			Namespace: video,
 			Name:      name,
 			Parameters: message.Parameters{
 				fetchRangeFilter(message.Location{}, message.Location{Group: 1, Object: 0}),

@@ -7,7 +7,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -19,7 +18,7 @@ func TestFetch_RejectsUnknownTrack(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.Fetch(t.Context(), &message.Fetch{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
 			fetchRangeFilter(message.Location{}, message.Location{Group: 1, Object: math.MaxUint64}),
@@ -37,7 +36,7 @@ func TestFetch_AuthDenialUsesPolicyCode(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.Fetch(t.Context(), &message.Fetch{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
@@ -55,7 +54,7 @@ func TestTrackStatus_ReplyForKnownTrack(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:       wire.TrackNamespace{[]byte("video")},
+		Namespace:       ns("video"),
 		Name:            []byte("cam1"),
 		TrackAlias:      1,
 		TrackProperties: []byte("rtp-h265"),
@@ -67,7 +66,7 @@ func TestTrackStatus_ReplyForKnownTrack(t *testing.T) {
 
 	querySess := dialAnotherClient(t, pubSess)
 	tsStream, err := querySess.TrackStatus(t.Context(), &message.TrackStatus{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -91,7 +90,7 @@ func TestTrackStatus_ReplyEmptyPropertiesForKnownNamespace(t *testing.T) {
 	defer teardown()
 
 	pnsStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -100,7 +99,7 @@ func TestTrackStatus_ReplyEmptyPropertiesForKnownNamespace(t *testing.T) {
 
 	querySess := dialAnotherClient(t, pubSess)
 	tsStream, err := querySess.TrackStatus(t.Context(), &message.TrackStatus{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam-anything"),
 	})
 	if err != nil {
@@ -122,7 +121,7 @@ func TestTrackStatus_RejectsUnknownTrack(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.TrackStatus(t.Context(), &message.TrackStatus{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("phantom"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
@@ -137,7 +136,7 @@ func TestTrackStatus_AuthDenialUsesPolicyCode(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.TrackStatus(t.Context(), &message.TrackStatus{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)

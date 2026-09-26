@@ -8,7 +8,6 @@ import (
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
-	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
@@ -75,7 +74,7 @@ func TestPublishNamespace_FailedRequestOKIsNotAdvertised(t *testing.T) {
 	defer teardown()
 
 	subStream, err := subSess.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeNamespace: %v", err)
@@ -89,7 +88,7 @@ func TestPublishNamespace_FailedRequestOKIsNotAdvertised(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_, _ = faultedPub.PublishNamespace(ctx, &message.PublishNamespace{
-			Namespace: wire.TrackNamespace{[]byte("video"), []byte("faulted")},
+			Namespace: ns("video", "faulted"),
 		})
 	}()
 	awaitFault(t, fired)
@@ -99,7 +98,7 @@ func TestPublishNamespace_FailedRequestOKIsNotAdvertised(t *testing.T) {
 	// despite its failed OK, "faulted" would already be queued ahead of it.
 	okPub := dialAnotherClient(t, subSess)
 	if _, err := okPub.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video"), []byte("ok")},
+		Namespace: ns("video", "ok"),
 	}); err != nil {
 		t.Fatalf("healthy PublishNamespace: %v", err)
 	}
@@ -137,7 +136,7 @@ func TestSubscribeNamespace_FailedRequestOKLeavesNoSubscriber(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_, _ = faultedSub.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-			TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+			TrackNamespacePrefix: ns("video"),
 		})
 	}()
 	awaitFault(t, fired)
@@ -147,7 +146,7 @@ func TestSubscribeNamespace_FailedRequestOKLeavesNoSubscriber(t *testing.T) {
 	// subscriber have run to completion.
 	goodSub := dialAnotherClient(t, faultedSub)
 	goodStream, err := goodSub.SubscribeNamespace(t.Context(), &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("healthy SubscribeNamespace: %v", err)
@@ -156,7 +155,7 @@ func TestSubscribeNamespace_FailedRequestOKLeavesNoSubscriber(t *testing.T) {
 
 	pub := dialAnotherClient(t, faultedSub)
 	pubStream, err := pub.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video"), []byte("cam1")},
+		Namespace: ns("video", "cam1"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -179,14 +178,4 @@ func TestSubscribeNamespace_FailedRequestOKLeavesNoSubscriber(t *testing.T) {
 		t.Errorf("relay attempted %d writes on the faulted subscriber's stream, want 1 "+
 			"(only the REQUEST_OK) — it was registered despite the failed ack", n)
 	}
-}
-
-func isNamespace(m message.Message) bool {
-	_, ok := m.(*message.Namespace)
-	return ok
-}
-
-func isNamespaceDone(m message.Message) bool {
-	_, ok := m.(*message.NamespaceDone)
-	return ok
 }

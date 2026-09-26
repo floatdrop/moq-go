@@ -25,7 +25,7 @@ func TestPublish_AcceptedAndRegistered(t *testing.T) {
 	defer teardown()
 
 	stream, err := clientSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 1,
 	})
@@ -47,7 +47,7 @@ func TestSubscribe_RejectsWhenNoUpstream(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
@@ -64,7 +64,7 @@ func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 	defer teardown()
 
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:       wire.TrackNamespace{[]byte("video")},
+		Namespace:       ns("video"),
 		Name:            []byte("cam1"),
 		TrackAlias:      42,
 		TrackProperties: opaqueProps("hello props"),
@@ -77,7 +77,7 @@ func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 	subSess := dialAnotherClient(t, pubSess)
 
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -116,7 +116,7 @@ func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	defer teardown()
 
 	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeTracks: %v", err)
@@ -126,7 +126,7 @@ func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	pubSess := dialAnotherClient(t, subSess)
 
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video"), []byte("cam7")},
+		Namespace:  ns("video", "cam7"),
 		Name:       []byte("rtp"),
 		TrackAlias: 99,
 	})
@@ -180,7 +180,7 @@ func TestPublish_ForwardedAliasDoesNotCollide(t *testing.T) {
 	pub1, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 	pub1Req, err := pub1.Publish(t.Context(), &message.Publish{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -190,7 +190,7 @@ func TestPublish_ForwardedAliasDoesNotCollide(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pub1)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -199,7 +199,7 @@ func TestPublish_ForwardedAliasDoesNotCollide(t *testing.T) {
 	defer subReq.Close()
 
 	tracksReq, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeTracks: %v", err)
@@ -208,7 +208,7 @@ func TestPublish_ForwardedAliasDoesNotCollide(t *testing.T) {
 
 	pub2 := dialAnotherClient(t, pub1)
 	pub2Req, err := pub2.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video"), []byte("cam7")},
+		Namespace:  ns("video", "cam7"),
 		Name:       []byte("rtp"),
 		TrackAlias: subReq.OK.TrackAlias, // the alias the subscriber already holds for cam1
 	})
@@ -242,7 +242,7 @@ func TestPublish_ForwardsSubscribeTracksParams(t *testing.T) {
 	defer teardown()
 
 	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 		Parameters: message.Parameters{
 			message.ForwardParam(false),
 			message.GroupOrderParam(message.GroupOrderDescending),
@@ -255,7 +255,7 @@ func TestPublish_ForwardsSubscribeTracksParams(t *testing.T) {
 
 	pubSess := dialAnotherClient(t, subSess)
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video"), []byte("cam7")},
+		Namespace:  ns("video", "cam7"),
 		Name:       []byte("rtp"),
 		TrackAlias: 99,
 	})
@@ -290,17 +290,13 @@ func TestSubscribeTracks_InvalidGroupOrderClosesSession(t *testing.T) {
 	defer teardown()
 
 	_, _ = subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 		Parameters: message.Parameters{
 			message.GroupOrderParam(message.GroupOrder(0x07)), // out of range
 		},
 	})
 
-	select {
-	case <-subSess.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("session not closed after out-of-range GROUP_ORDER SUBSCRIBE_TRACKS (§10.2.8)")
-	}
+	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER SUBSCRIBE_TRACKS (§10.2.8)")
 }
 
 // TestPublish_DuplicateAliasRejected pins the §11.1 duplicate-alias rule:
@@ -313,7 +309,7 @@ func TestPublish_DuplicateAliasRejected(t *testing.T) {
 	defer teardown()
 
 	stream1, err := clientSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 7,
 	})
@@ -323,7 +319,7 @@ func TestPublish_DuplicateAliasRejected(t *testing.T) {
 	defer stream1.Close()
 
 	_, err = clientSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam2"),
 		TrackAlias: 7,
 	})
@@ -345,7 +341,7 @@ func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 	// goroutine that accepts the upstream SUBSCRIBE the relay will issue
 	// and replies SUBSCRIBE_OK.
 	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -380,7 +376,7 @@ func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 	subSess := dialAnotherClient(t, pubSess)
 
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -446,7 +442,7 @@ func TestSubscribe_UpstreamForwardPausedWhenDownstreamForwardZero(t *testing.T) 
 	defer teardown()
 
 	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -457,7 +453,7 @@ func TestSubscribe_UpstreamForwardPausedWhenDownstreamForwardZero(t *testing.T) 
 
 	subSess := dialAnotherClient(t, pubSess)
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		Parameters: message.Parameters{message.ForwardParam(false)},
 	})
@@ -481,7 +477,7 @@ func TestSubscribe_UpstreamForwardOmittedWhenDownstreamForwards(t *testing.T) {
 	defer teardown()
 
 	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -492,7 +488,7 @@ func TestSubscribe_UpstreamForwardOmittedWhenDownstreamForwards(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -516,7 +512,7 @@ func TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins(t *testing.T) {
 	defer teardown()
 
 	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -576,7 +572,7 @@ func TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins(t *testing.T) {
 	// Subscriber A (Forward=0) establishes the paused upstream.
 	subA := dialAnotherClient(t, pubSess)
 	subAStream, err := subA.Subscribe(t.Context(), &message.Subscribe{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		Parameters: message.Parameters{message.ForwardParam(false)},
 	})
@@ -588,7 +584,7 @@ func TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins(t *testing.T) {
 	// Subscriber B (Forward omitted → 1) reuses the upstream and must resume it.
 	subB := dialAnotherClient(t, pubSess)
 	subBStream, err := subB.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -648,7 +644,7 @@ func TestSubscribe_UpstreamSurvivesInitiatingSubscriber(t *testing.T) {
 	defer teardown()
 
 	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -660,7 +656,7 @@ func TestSubscribe_UpstreamSurvivesInitiatingSubscriber(t *testing.T) {
 
 	subA := dialAnotherClient(t, pubSess)
 	subAStream, err := subA.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -670,7 +666,7 @@ func TestSubscribe_UpstreamSurvivesInitiatingSubscriber(t *testing.T) {
 
 	subB := dialAnotherClient(t, pubSess)
 	subBStream, err := subB.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -740,7 +736,7 @@ func TestSubscribe_LastDownstreamTearsDownUpstream(t *testing.T) {
 	defer teardown()
 
 	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -751,7 +747,7 @@ func TestSubscribe_LastDownstreamTearsDownUpstream(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subStream, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -779,7 +775,7 @@ func TestSubscribe_NoMatchingPublisher_RejectsDoesNotExist(t *testing.T) {
 	defer teardown()
 
 	pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
@@ -788,7 +784,7 @@ func TestSubscribe_NoMatchingPublisher_RejectsDoesNotExist(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	_, err = subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("audio")}, // no publisher for this namespace
+		Namespace: ns("audio"), // no publisher for this namespace
 		Name:      []byte("mic"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
@@ -826,7 +822,7 @@ func TestSubscribe_UpstreamRejects_PropagatesRejection(t *testing.T) {
 			defer teardown()
 
 			pubNSStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-				Namespace: wire.TrackNamespace{[]byte("video")},
+				Namespace: ns("video"),
 			})
 			if err != nil {
 				t.Fatalf("PublishNamespace: %v", err)
@@ -845,7 +841,7 @@ func TestSubscribe_UpstreamRejects_PropagatesRejection(t *testing.T) {
 
 			subSess := dialAnotherClient(t, pubSess)
 			_, err = subSess.Subscribe(t.Context(), &message.Subscribe{
-				Namespace: wire.TrackNamespace{[]byte("video")},
+				Namespace: ns("video"),
 				Name:      []byte("cam1"),
 			})
 			requireRejectedWithCode(t, err, tc.want)
@@ -866,7 +862,7 @@ func TestSubscribe_AuthDenialUsesPolicyCode(t *testing.T) {
 	defer teardown()
 
 	_, err := clientSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
@@ -888,7 +884,7 @@ func TestSubscribe_PublisherDisappears_EmitsPublishDone(t *testing.T) {
 	defer teardown()
 
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 1,
 	})
@@ -899,7 +895,7 @@ func TestSubscribe_PublisherDisappears_EmitsPublishDone(t *testing.T) {
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -943,7 +939,7 @@ func TestSubscribe_PublisherDisappears_StreamClosesAfterPublishDone(t *testing.T
 	defer teardown()
 
 	pubReq, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("video")},
+		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
 		TrackAlias: 1,
 	})
@@ -954,7 +950,7 @@ func TestSubscribe_PublisherDisappears_StreamClosesAfterPublishDone(t *testing.T
 
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("video")},
+		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 	})
 	if err != nil {
@@ -999,7 +995,7 @@ func TestSubscribe_NoAliasCollisionWhenAlsoPublishing(t *testing.T) {
 
 	// The client publishes its own track, taking inbound alias 0.
 	pubStream, err := clientSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("room"), []byte("self")},
+		Namespace:  ns("room", "self"),
 		Name:       []byte("video"),
 		TrackAlias: 0,
 	})
@@ -1011,7 +1007,7 @@ func TestSubscribe_NoAliasCollisionWhenAlsoPublishing(t *testing.T) {
 	// A peer publishes a track the client will subscribe to.
 	peerSess := dialAnotherClient(t, clientSess)
 	peerStream, err := peerSess.Publish(t.Context(), &message.Publish{
-		Namespace:  wire.TrackNamespace{[]byte("room"), []byte("peer")},
+		Namespace:  ns("room", "peer"),
 		Name:       []byte("video"),
 		TrackAlias: 0,
 	})
@@ -1024,7 +1020,7 @@ func TestSubscribe_NoAliasCollisionWhenAlsoPublishing(t *testing.T) {
 	// published alias 0 must succeed — the relay's outbound alias (also
 	// starting at 0) must not collide with the inbound alias 0.
 	subStream, err := clientSess.Subscribe(t.Context(), &message.Subscribe{
-		Namespace: wire.TrackNamespace{[]byte("room"), []byte("peer")},
+		Namespace: ns("room", "peer"),
 		Name:      []byte("video"),
 	})
 	if err != nil {
@@ -1048,9 +1044,9 @@ func TestPublish_SavesLargestObjectFromPublish(t *testing.T) {
 	pubSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 
-	ns := wire.TrackNamespace{[]byte("video")}
+	video := ns("video")
 	pubStream, err := pubSess.Publish(t.Context(), &message.Publish{
-		Namespace:  ns,
+		Namespace:  video,
 		Name:       []byte("cam1"),
 		TrackAlias: 42,
 		Parameters: message.Parameters{message.LargestObjectParam(5, 9)},
@@ -1061,7 +1057,7 @@ func TestPublish_SavesLargestObjectFromPublish(t *testing.T) {
 	defer pubStream.Close()
 
 	subSess := dialAnotherClient(t, pubSess)
-	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte("cam1")})
+	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: video, Name: []byte("cam1")})
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
 	}
@@ -1095,11 +1091,11 @@ func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
 	pubA, teardown := connectRelay(t, relay.Config{})
 	defer teardown()
 
-	ns := wire.TrackNamespace{[]byte("video"), []byte("cam7")}
+	tns := ns("video", "cam7")
 
 	// First publisher sets the entry's watermark to {9,9}.
 	pubStreamA, err := pubA.Publish(t.Context(), &message.Publish{
-		Namespace:  ns,
+		Namespace:  tns,
 		Name:       []byte("rtp"),
 		TrackAlias: 99,
 		Parameters: message.Parameters{message.LargestObjectParam(9, 9)},
@@ -1112,7 +1108,7 @@ func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
 	// Second publisher on the SAME track announces a lower one.
 	pubB := dialAnotherClient(t, pubA)
 	pubStreamB, err := pubB.Publish(t.Context(), &message.Publish{
-		Namespace:  ns,
+		Namespace:  tns,
 		Name:       []byte("rtp"),
 		TrackAlias: 100,
 		Parameters: message.Parameters{message.LargestObjectParam(3, 4)},
@@ -1126,7 +1122,7 @@ func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
 	// are forwarded when the SUBSCRIBE_TRACKS arrives).
 	subSess := dialAnotherClient(t, pubA)
 	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
-		TrackNamespacePrefix: wire.TrackNamespace{[]byte("video")},
+		TrackNamespacePrefix: ns("video"),
 	})
 	if err != nil {
 		t.Fatalf("SubscribeTracks: %v", err)
