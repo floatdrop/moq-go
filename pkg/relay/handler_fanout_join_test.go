@@ -51,15 +51,9 @@ func joinOrFatal(t *testing.T, w *subgroupWriter) {
 	}
 }
 
-// TestSubgroupWriter_JoinUnwedgesBlockedWrite pins the bounded teardown join:
-// a writer wedged inside a blocking stream write — the subscriber's session
-// is alive but the data stream is not being read, so the synchronous
-// in-process pipe never drains — used to hold the last contributor's
-// <-w.done join hostage until the session died. joinWriters escalates after
-// the deadline by cancelling the writer's stream I/O. Both wedge points are
-// covered: the SUBGROUP_HEADER write inside the open (peer never accepts the
-// stream) and an object write on an established stream (peer accepted —
-// header consumed — but reads no objects).
+// TestSubgroupWriter_JoinUnwedgesBlockedWrite: joinWriters cancels a writer
+// wedged in a stream write after its deadline, whether blocked on the
+// SUBGROUP_HEADER (stream never accepted) or on an Object (never read).
 func TestSubgroupWriter_JoinUnwedgesBlockedWrite(t *testing.T) {
 	t.Parallel()
 

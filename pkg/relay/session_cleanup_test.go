@@ -11,15 +11,9 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestSessionCleanup_PublisherSessionDeath verifies the per-session
-// belt-and-suspenders sweep: when a publisher session closes ungracefully
-// (e.g. the underlying conn dies), the relay's handleConn defer evicts
-// every registry entry that referenced it.
-//
-// We can't directly observe the relay's registries from the test, so we
-// assert the externally-visible consequence: a fresh subscriber on a fresh
-// session that tries to SUBSCRIBE for the dead publisher's track gets
-// RequestDoesNotExist rather than succeeding from stale upstream state.
+// TestSessionCleanup_PublisherSessionDeath: after a publisher session dies, a
+// SUBSCRIBE for its track is refused DOES_NOT_EXIST rather than served from
+// stale upstream state.
 func TestSessionCleanup_PublisherSessionDeath(t *testing.T) {
 	t.Parallel()
 
@@ -66,15 +60,8 @@ func TestSessionCleanup_PublisherSessionDeath(t *testing.T) {
 	}
 }
 
-// TestSessionCleanup_SubscriberSessionDeath verifies the dual: when a
-// subscriber session dies, its DownstreamSub on a still-active publisher's
-// track is evicted. Without the sweep the registry would hold a dangling
-// reference to a dead session, and shutdown would have to scan and reap it
-// independently.
-//
-// Observable: the publisher session stays alive and usable; shutdown
-// completes cleanly within the test deadline (the harness's `teardown`
-// closure would time out otherwise).
+// TestSessionCleanup_SubscriberSessionDeath: after a subscriber session dies the
+// publisher's session stays usable and teardown completes.
 func TestSessionCleanup_SubscriberSessionDeath(t *testing.T) {
 	t.Parallel()
 

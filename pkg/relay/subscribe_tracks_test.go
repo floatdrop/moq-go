@@ -17,6 +17,8 @@ import (
 // alias it chose (§10.11), REQUEST_UPDATE answered (§10.9), REQUEST_ERROR ends
 // it, PUBLISH_DONE closes it (§10.12).
 
+// TestForwardedPublish_DeliversObjects: Objects of a forwarded track arrive on
+// the alias of the forwarded PUBLISH (§10.11).
 func TestForwardedPublish_DeliversObjects(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -535,6 +537,8 @@ func priorityTrackProps() []wire.KVPair {
 // noProps is INCLUDE_PROPERTIES=0.
 func noProps() message.Parameter { return message.IncludePropertiesParam(false) }
 
+// TestIncludeProperties_SubscribeOK: SUBSCRIBE_OK has empty Track Properties,
+// and forwarded subgroups carry the priority inline.
 func TestIncludeProperties_SubscribeOK(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, priorityTrackProps())
@@ -562,6 +566,8 @@ func TestIncludeProperties_SubscribeOK(t *testing.T) {
 	}
 }
 
+// TestIncludeProperties_Datagram: forwarded datagrams carry the priority
+// explicitly.
 func TestIncludeProperties_Datagram(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, priorityTrackProps())
@@ -584,6 +590,8 @@ func TestIncludeProperties_Datagram(t *testing.T) {
 	}
 }
 
+// TestIncludeProperties_FetchAndTrackStatus: TRACK_STATUS_OK and FETCH_OK have
+// empty Track Properties.
 func TestIncludeProperties_FetchAndTrackStatus(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, priorityTrackProps())
@@ -618,6 +626,8 @@ func TestIncludeProperties_FetchAndTrackStatus(t *testing.T) {
 	go drainAll(t.Context(), c)
 }
 
+// TestIncludeProperties_SubscribeTracks: the forwarded PUBLISH has empty Track
+// Properties, and its subgroups carry the priority inline.
 func TestIncludeProperties_SubscribeTracks(t *testing.T) {
 	t.Parallel()
 	holder, teardown := connectRelay(t, relay.Config{})

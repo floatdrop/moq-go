@@ -9,19 +9,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestFanout_LagWindowResetsSlowSubscriber pins §8 latency-window
-// backpressure. A subscriber that accepts its stream but then stalls lets the
-// relay's send queue back up; once a queued object has waited longer than
-// MaxFanoutLag the relay resets the outbound stream and terminates the
-// subscription. This is a latency measure, not a cumulative drop count: a
-// subscriber that keeps up (the fast path in
-// TestFanout_SlowSubscriberGetsResetWithoutBlockingFastOne) is left alone.
-//
-// The in-process transport is synchronous (a write blocks until the peer
-// reads), so while the subscriber stalls the relay's first WriteObject blocks
-// and the remaining objects age in the queue. When the subscriber finally
-// reads the first object the writer dequeues the next — now aged past the
-// window — and escalates.
+// TestFanout_LagWindowResetsSlowSubscriber: once a queued Object has waited
+// longer than MaxFanoutLag the relay resets the stream and ends the
+// subscription (§8). The synchronous pipe lets Objects age while the
+// subscriber stalls.
 func TestFanout_LagWindowResetsSlowSubscriber(t *testing.T) {
 	const lag = 100 * time.Millisecond
 	pubSess, teardown := connectRelay(t, relay.Config{MaxFanoutLag: lag})

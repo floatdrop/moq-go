@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -233,6 +234,7 @@ type clientSessionTracker struct {
 	sessions []*session.Session
 }
 
+// newClientSessionTracker returns an empty tracker.
 func newClientSessionTracker() *clientSessionTracker {
 	return &clientSessionTracker{}
 }
@@ -245,7 +247,7 @@ func (t *clientSessionTracker) add(s *session.Session) {
 
 func (t *clientSessionTracker) closeAll() {
 	t.mu.Lock()
-	sessions := append([]*session.Session(nil), t.sessions...)
+	sessions := slices.Clone(t.sessions)
 	t.sessions = nil
 	t.mu.Unlock()
 	for _, s := range sessions {

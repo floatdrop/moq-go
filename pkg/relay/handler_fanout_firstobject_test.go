@@ -143,11 +143,8 @@ func TestFanout_FirstObjectBitOnPlainForward(t *testing.T) {
 	}
 }
 
-// TestFanout_FirstObjectBitClearedForFilteredHead pins the filtered-head
-// case: a subscriber whose filter starts mid-subgroup gets a stream whose
-// first object is NOT the subgroup's first — the FIRST_OBJECT bit must be
-// clear (ReplayingSubgroup true), where it previously advertised the stream
-// as starting at the subgroup's origin.
+// TestFanout_FirstObjectBitClearedForFilteredHead: a stream starting
+// mid-subgroup because of the filter does not claim FIRST_OBJECT.
 func TestFanout_FirstObjectBitClearedForFilteredHead(t *testing.T) {
 	t.Parallel()
 	filter := &message.LocationFilter{Fields: 2, StartGroup: 0, StartObject: 2}
@@ -168,10 +165,8 @@ func TestFanout_FirstObjectBitClearedForFilteredHead(t *testing.T) {
 	}
 }
 
-// TestFanout_FirstObjectBitAcrossGapReopen pins the §11.4.3 gap-reopen case:
-// when the inbound subgroup skips object IDs, the relay resets the outbound
-// stream and opens a fresh one — whose first object is mid-subgroup, so only
-// the ORIGINAL stream may carry FIRST_OBJECT.
+// TestFanout_FirstObjectBitAcrossGapReopen: after a gap reopen (§11.4.3) only
+// the original stream carries FIRST_OBJECT.
 func TestFanout_FirstObjectBitAcrossGapReopen(t *testing.T) {
 	t.Parallel()
 	pub, sub := firstObjectTopology(t, nil)
@@ -204,10 +199,8 @@ func TestFanout_FirstObjectBitAcrossGapReopen(t *testing.T) {
 	}
 }
 
-// TestFanout_FirstObjectBitNotInvented pins the propagation rule: when the
-// INBOUND header already declared the stream a replay (FIRST_OBJECT clear),
-// the relay must not invent the bit on the outbound stream even though it
-// forwards from the inbound stream's first object.
+// TestFanout_FirstObjectBitNotInvented: an inbound replay stream (FIRST_OBJECT
+// clear) is not forwarded with the bit set.
 func TestFanout_FirstObjectBitNotInvented(t *testing.T) {
 	t.Parallel()
 	pub, sub := firstObjectTopology(t, nil)
@@ -227,12 +220,9 @@ func TestFanout_FirstObjectBitNotInvented(t *testing.T) {
 	}
 }
 
-// TestFanout_ResolvesImplicitFirstObjectSubgroupID pins the §11.4.2
-// mode-0b01 resolution at ingest: a SUBGROUP_HEADER whose Subgroup ID is
-// implied by its first object (here ID 5) must be attributed to subgroup 5
-// everywhere — the forwarded header (rewritten to the explicit form, since
-// the fanout re-encodes object deltas) and the cached objects a later FETCH
-// serves. Previously the whole pipeline filed such subgroups under ID 0.
+// TestFanout_ResolvesImplicitFirstObjectSubgroupID: a mode-0b01 header's
+// Subgroup ID comes from its first Object (§11.4.2), in the forwarded header
+// and in the cache a FETCH serves.
 func TestFanout_ResolvesImplicitFirstObjectSubgroupID(t *testing.T) {
 	t.Parallel()
 	pub, sub := firstObjectTopology(t, nil)
@@ -294,11 +284,9 @@ func TestFanout_ResolvesImplicitFirstObjectSubgroupID(t *testing.T) {
 	}
 }
 
-// TestFanout_ImplicitFirstObjectEdgeStreams pins the mode-0b01 pre-read's
-// edge behaviour: a terminal-status first object still drives the §11.4.3
-// post-terminal enforcement through the pending handoff, and an empty 0b01
-// stream (whose Subgroup ID never resolves) leaves no state behind — a
-// following normal subgroup fans out untouched.
+// TestFanout_ImplicitFirstObjectEdgeStreams: a terminal-status first Object on
+// a mode-0b01 stream still enforces §11.4.3, and an empty 0b01 stream leaves no
+// state behind.
 func TestFanout_ImplicitFirstObjectEdgeStreams(t *testing.T) {
 	t.Parallel()
 	pub, sub := firstObjectTopology(t, nil)

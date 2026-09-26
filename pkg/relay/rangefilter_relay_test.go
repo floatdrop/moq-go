@@ -17,10 +17,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// filterRelayConfig is a relay that accepts Range Filters. It is the zero
-// Config: [relay.DefaultMaxFilterRanges] is what a relay advertises unless it
-// says otherwise, because §10.3.1.6's own default of 0 prohibits them and a
-// relay that inherited it would reject filters it fully implements.
+// filterRelayConfig is a relay that accepts Range Filters: the zero Config,
+// which advertises [relay.DefaultMaxFilterRanges] rather than §10.3.1.6's 0.
 func filterRelayConfig() relay.Config {
 	return relay.Config{}
 }
@@ -54,11 +52,9 @@ func TestSubscribe_RangeFilterProhibitedWhenConfiguredOff(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestInvalidFilter)
 }
 
-// TestFanout_ObjectIDRangeFilter pins §5.1.4 object filtering on live fanout: an
-// OBJECTID_FILTER selecting [1,2] drops object 0 and 3, so the subscriber sees
-// only IDs 1 and 2 (with deltas re-encoded against the forwarded IDs). The
-// stream then ends with a reset, not a FIN: §11.4.3 allows a FIN only after
-// every Object of the Subgroup (bar those before the Start Location).
+// TestFanout_ObjectIDRangeFilter: OBJECTID_FILTER [1,2] forwards only Objects 1
+// and 2 (§5.1.4), and the stream ends with a reset, since Objects were omitted
+// (§11.4.3).
 func TestFanout_ObjectIDRangeFilter(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, filterRelayConfig())
@@ -271,24 +267,9 @@ func TestFetch_ObjectIDRangeFilter(t *testing.T) {
 	}
 }
 
-// TestFetch_SubgroupFilterSelectsOneLayer is the temporal-layer backfill a live
-// media application needs, on a relay configured with nothing.
-//
-// A group carrying L1T2 video is two subgroups: subgroup 0 is the base layer,
-// which every later base frame references back to the keyframe, and subgroup 1
-// is an enhancement layer nothing references. A subscriber joining mid-group
-// needs the base layer replayed from the keyframe and none of the enhancement
-// layer — those frames are already past and nothing depends on them.
-//
-// SUBGROUP_FILTER is what says that, and it is the difference between a
-// streamable backfill and a buffered one: a FETCH answers in ascending Object
-// ID, so filtered to one subgroup the response is already decode order and can
-// go frame by frame to a decoder, where the unfiltered answer interleaves two
-// layers' ID ranges and has to be held whole and sorted first.
-//
-// The relay is [relay.Config]{} — the point of the test. §10.3.1.6's own
-// MAX_FILTER_RANGES default is 0, which prohibits Range Filters, so a relay
-// that inherited it would answer INVALID_FILTER to a filter it implements.
+// TestFetch_SubgroupFilterSelectsOneLayer: on a default-configured relay, a
+// SUBGROUP_FILTER FETCH returns one temporal layer (the base subgroup) alone,
+// in ascending Object ID, which is decode order.
 func TestFetch_SubgroupFilterSelectsOneLayer(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})

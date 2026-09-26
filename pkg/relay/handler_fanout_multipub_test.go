@@ -23,11 +23,9 @@ type objEvent struct {
 	err    error  // non-nil marks a stream end (io.EOF = FIN, else reset) or accept error
 }
 
-// readSubgroups loops AcceptDataStream on sub, decoding every object on every
-// outbound subgroup stream into absolute Object IDs and emitting each on the
-// returned channel. A per-stream read error is emitted as an objEvent with err
-// set (and stream index) so callers can distinguish a clean FIN (io.EOF) from a
-// reset. The goroutine exits when AcceptDataStream fails (session torn down).
+// readSubgroups emits every Object of every subgroup stream sub accepts, with
+// its absolute Object ID, and each stream's end as an event with err set
+// (io.EOF for a FIN). It returns when AcceptDataStream fails.
 func readSubgroups(ctx context.Context, sub *session.Session, out chan<- objEvent) {
 	streamIdx := 0
 	for {
@@ -65,13 +63,9 @@ func readSubgroups(ctx context.Context, sub *session.Session, out chan<- objEven
 	}
 }
 
-// TestFanout_MultiPublisher_DeduplicatesObjects pins §9.5 / §2.1: two publishers
-// claim the same Full Track Name and push the SAME {GroupID, ObjectID} objects.
-// The relay must merge them into ONE outbound subgroup stream per subscriber
-// (§2.2) and deliver each object exactly once — the second publisher's copies
-// are dropped by the dedup gate. The writes are serialised (publisher B writes
-// only after the subscriber has drained A's objects) so every one of B's objects
-// is a pure duplicate, making the assertion deterministic.
+// TestFanout_MultiPublisher_DeduplicatesObjects: two publishers sending the
+// same Objects of one track reach the subscriber as one stream with each Object
+// once (§9.3, §2.1, §2.2).
 func TestFanout_MultiPublisher_DeduplicatesObjects(t *testing.T) {
 	t.Parallel()
 
@@ -153,12 +147,8 @@ func TestFanout_MultiPublisher_DeduplicatesObjects(t *testing.T) {
 	}
 }
 
-// TestFanout_MultiPublisher_DedupSurvivesCacheEviction is the regression test
-// for the dedup ledger being independent of the size-bounded Object Cache: a
-// redundant publisher lagging by MORE than the cache capacity must still have
-// its already-delivered objects dropped, not re-forwarded out of order. With a
-// 4-object cache, publisher A streams 0..9 (so 0..5 are evicted); publisher B
-// then replays 0..9. The subscriber must see exactly 0..9 once each, in order.
+// TestFanout_MultiPublisher_DedupSurvivesCacheEviction: dedup holds for a
+// redundant publisher lagging by more than the cache capacity.
 func TestFanout_MultiPublisher_DedupSurvivesCacheEviction(t *testing.T) {
 	t.Parallel()
 
@@ -241,11 +231,9 @@ func TestFanout_MultiPublisher_DedupSurvivesCacheEviction(t *testing.T) {
 	}
 }
 
-// TestFanout_MultiPublisher_FailoverContinuesFromSurvivor pins §9.5 fault
-// tolerance: with two publishers feeding one track, resetting one mid-stream
-// must NOT tear down the subscriber's stream — the surviving publisher keeps
-// delivering on the same outbound stream, which FINs cleanly at the end. This
-// is the §2.2 reset/"upstream conditions" carve-out put to work.
+// TestFanout_MultiPublisher_FailoverContinuesFromSurvivor: resetting one of two
+// publishers mid-stream leaves the subscriber's stream to the survivor, which
+// FINs it cleanly (§9.3, §2.2).
 func TestFanout_MultiPublisher_FailoverContinuesFromSurvivor(t *testing.T) {
 	t.Parallel()
 
@@ -323,11 +311,8 @@ func TestFanout_MultiPublisher_FailoverContinuesFromSurvivor(t *testing.T) {
 	}
 }
 
-// TestFanout_MultiPublisher_MergesDisjointObjects pins the fan-in union: two
-// publishers contribute DIFFERENT objects of the same track (A: evens, B: odds).
-// Every object must be delivered exactly once. Interleaving across upstreams may
-// trigger §11.4.3 stream reopens, so the assertion is on the delivered set (full
-// coverage, no duplicates) rather than the stream count.
+// TestFanout_MultiPublisher_MergesDisjointObjects: two publishers contributing
+// different Objects of one track deliver each exactly once.
 func TestFanout_MultiPublisher_MergesDisjointObjects(t *testing.T) {
 	t.Parallel()
 

@@ -51,11 +51,8 @@ func TestRelay_SubscriptionLimit(t *testing.T) {
 	requireRetryInvited(t, err)
 }
 
-// requireRetryInvited: §10.6.2 "EXCESSIVE_LOAD: The responder is overloaded
-// and cannot process the request at this time. The sender SHOULD use the
-// Retry Interval to indicate when the request can be retried." A per-session
-// cap frees up when an earlier request ends, so the relay invites a retry
-// after about a second, jittered against synchronized retries.
+// requireRetryInvited requires an EXCESSIVE_LOAD refusal whose Retry Interval
+// invites a retry after about a second, jittered (§10.6.2).
 func requireRetryInvited(t *testing.T, err error) {
 	t.Helper()
 	rej, _ := errors.AsType[*session.RequestRejectedError](err)
@@ -65,10 +62,9 @@ func requireRetryInvited(t *testing.T, err error) {
 	}
 }
 
-// TestRelay_NamespaceRequestLimit pins §13.7.1: with
-// MaxNamespaceRequestsPerSession=1 the relay accepts the first
-// PUBLISH_NAMESPACE and rejects a second concurrent namespace request on the
-// same session with REQUEST_ERROR EXCESSIVE_LOAD.
+// TestRelay_NamespaceRequestLimit: with MaxNamespaceRequestsPerSession=1 a
+// second concurrent namespace request on the session is EXCESSIVE_LOAD
+// (§13.7.1).
 func TestRelay_NamespaceRequestLimit(t *testing.T) {
 	t.Parallel()
 

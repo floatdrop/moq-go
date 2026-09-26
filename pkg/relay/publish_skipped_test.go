@@ -10,13 +10,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
-// TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit pins §6.1 / §10.21:
-// when a SUBSCRIBE_TRACKS subscriber has no bidirectional-stream credit left,
-// the relay cannot open a PUBLISH stream for a newly-published matching track,
-// so it sends PUBLISH_SKIPPED on the SUBSCRIBE_TRACKS response stream instead.
-// The message carries only the namespace suffix beyond the subscriber's prefix
-// (here prefix "video", published "video"/"cam7" → suffix "cam7") plus the
-// track name.
+// TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit: with no bidi
+// stream credit for a forwarded PUBLISH, the relay sends PUBLISH_SKIPPED with
+// the namespace suffix and track name on the SUBSCRIBE_TRACKS stream (§6.1,
+// §10.21).
 func TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 	t.Parallel()
 	primary, teardown := connectRelay(t, relay.Config{})
@@ -74,13 +71,9 @@ func TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 	}
 }
 
-// TestPublishSkipped_NotStickyAcrossRePublish pins §6.1 (a draft-19 change):
-// a PUBLISH_SKIPPED prohibition is scoped to the single PUBLISH that could not
-// be forwarded, NOT sticky across re-PUBLISHes. Here the subscriber's bidi
-// credit stays 0, so the first PUBLISH is skipped; after the publisher FINs and
-// re-PUBLISHes the same track, the relay MUST re-attempt the forward — and
-// because credit is still exhausted, that surfaces as a SECOND PUBLISH_SKIPPED
-// (draft-18 would have suppressed it silently).
+// TestPublishSkipped_NotStickyAcrossRePublish: PUBLISH_SKIPPED covers one
+// PUBLISH only (§6.1); a re-PUBLISH of the track is attempted again, and
+// skipped again while credit is still exhausted.
 func TestPublishSkipped_NotStickyAcrossRePublish(t *testing.T) {
 	t.Parallel()
 	primary, teardown := connectRelay(t, relay.Config{})

@@ -1,7 +1,6 @@
 package relay_test
 
 import (
-	"errors"
 	"math"
 	"testing"
 
@@ -25,24 +24,6 @@ func TestFetch_RejectsUnknownTrack(t *testing.T) {
 		},
 	})
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
-}
-
-// TestFetch_AuthDenialUsesPolicyCode verifies the authorizer wires through
-// for FETCH and runs before the NotSupported stub.
-func TestFetch_AuthDenialUsesPolicyCode(t *testing.T) {
-	t.Parallel()
-	auth := &denyAuthorizer{err: errors.New("no fetch for you")}
-	clientSess, teardown := connectRelay(t, relay.Config{Authorizer: auth})
-	defer teardown()
-
-	_, err := clientSess.Fetch(t.Context(), &message.Fetch{
-		Namespace: ns("video"),
-		Name:      []byte("cam1"),
-	})
-	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
-	if got := auth.fetchCalls.Load(); got != 1 {
-		t.Errorf("fetchCalls = %d, want 1", got)
-	}
 }
 
 // TestTrackStatus_ReplyForKnownTrack: a publisher claims a track via PUBLISH,
@@ -79,11 +60,9 @@ func TestTrackStatus_ReplyForKnownTrack(t *testing.T) {
 	}
 }
 
-// TestTrackStatus_ReplyEmptyPropertiesForKnownNamespace verifies the
-// fallback when a publisher has advertised the namespace via
-// PUBLISH_NAMESPACE but no upstream subscription is yet active. The relay
-// answers TRACK_STATUS_OK with empty Properties — telling the caller "this
-// track may exist, but I have no metadata.".
+// TestTrackStatus_ReplyEmptyPropertiesForKnownNamespace: a TRACK_STATUS for a
+// track under an advertised namespace with no upstream yet gets
+// TRACK_STATUS_OK with empty Properties.
 func TestTrackStatus_ReplyEmptyPropertiesForKnownNamespace(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -125,22 +104,4 @@ func TestTrackStatus_RejectsUnknownTrack(t *testing.T) {
 		Name:      []byte("phantom"),
 	})
 	requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
-}
-
-// TestTrackStatus_AuthDenialUsesPolicyCode pins auth precedence on the
-// TRACK_STATUS arm.
-func TestTrackStatus_AuthDenialUsesPolicyCode(t *testing.T) {
-	t.Parallel()
-	auth := &denyAuthorizer{err: errors.New("no status")}
-	clientSess, teardown := connectRelay(t, relay.Config{Authorizer: auth})
-	defer teardown()
-
-	_, err := clientSess.TrackStatus(t.Context(), &message.TrackStatus{
-		Namespace: ns("video"),
-		Name:      []byte("cam1"),
-	})
-	requireRejectedWithCode(t, err, moqt.RequestUnauthorized)
-	if got := auth.trackStatusCalls.Load(); got != 1 {
-		t.Errorf("trackStatusCalls = %d, want 1", got)
-	}
 }

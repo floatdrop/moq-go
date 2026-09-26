@@ -14,12 +14,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
-// TestRequestUpdate_PriorityChangeReturnsOK pins the §10.9 control-plane
-// contract: a REQUEST_UPDATE carrying a well-formed parameter change (here
-// SUBSCRIBER_PRIORITY) on an established SUBSCRIBE stream is answered with
-// exactly one REQUEST_OK. The update rides the original bidi stream but
-// consumes a fresh Request ID from the sender's space (§10.1), which
-// Subscription.Update allocates.
+// TestRequestUpdate_PriorityChangeReturnsOK: a well-formed REQUEST_UPDATE on a
+// SUBSCRIBE gets exactly one REQUEST_OK (§10.9).
 func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 	t.Parallel()
 
@@ -58,12 +54,9 @@ func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 	}
 }
 
-// TestRequestUpdate_MalformedRejectedWithUpdateFailed pins the §10.9 failure
-// path: a REQUEST_UPDATE whose parameters are malformed but request-scoped
-// (here a LOCATION_FILTER whose AbsoluteRange overflows, §5.1.2 — kept
-// request-scoped for now, unlike GROUP_ORDER/FORWARD which close the session)
-// is answered with REQUEST_ERROR, and the relay MUST additionally terminate the
-// subscription with a PUBLISH_DONE carrying the UPDATE_FAILED (0x8) status code.
+// TestRequestUpdate_MalformedRejectedWithUpdateFailed: a request-scoped
+// malformed update (an overflowing AbsoluteRange, §5.1.2) gets REQUEST_ERROR,
+// then PUBLISH_DONE UPDATE_FAILED (§10.9.1).
 func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 	t.Parallel()
 
@@ -113,10 +106,8 @@ func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 	}
 }
 
-// TestRequestUpdate_InvalidGroupOrderClosesSession pins §10.2.8: an
-// out-of-range GROUP_ORDER in a REQUEST_UPDATE is a session-level
-// PROTOCOL_VIOLATION — the wire value is invalid, so it supersedes §10.9's
-// request-scoped update-failure path and the relay closes the whole session.
+// TestRequestUpdate_InvalidGroupOrderClosesSession: an out-of-range GROUP_ORDER
+// in a REQUEST_UPDATE closes the session (§10.2.8).
 func TestRequestUpdate_InvalidGroupOrderClosesSession(t *testing.T) {
 	t.Parallel()
 
@@ -151,11 +142,9 @@ func TestRequestUpdate_InvalidGroupOrderClosesSession(t *testing.T) {
 	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER REQUEST_UPDATE (§10.2.8)")
 }
 
-// TestRequestUpdate_ForwardPauseAndResume is the §9.2 data-plane test:
-// flipping a subscription's Forward State to 0 via REQUEST_UPDATE pauses
-// object delivery (the relay stops forwarding), and flipping it back to 1
-// resumes delivery. Objects published while paused are not delivered; objects
-// published after resume are.
+// TestRequestUpdate_ForwardPauseAndResume: FORWARD=0 pauses delivery and
+// FORWARD=1 resumes it; Objects published while paused are not delivered
+// (§9.2).
 func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 	t.Parallel()
 
@@ -276,11 +265,8 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 		t.Fatal("no object delivered within 2s of Forward State 1 (resume failed)")
 	}
 
-	// Regression: the Forward 0→1 flip above runs the §9.2 upstream
-	// propagation path. It used to wedge the relay's update-dispatch loop
-	// (an upstream REQUEST_UPDATE awaited a response the drain goroutine
-	// swallowed — and a leaf publisher never answers at all), so any later
-	// update was never processed. A third update must still get REQUEST_OK.
+	// The Forward 0→1 flip ran the §9.2 upstream propagation path, which must
+	// not wedge the update-dispatch loop: a third update still gets REQUEST_OK.
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 	if _, err := subSess.UpdateRequest(ctx, subStream,
@@ -289,13 +275,8 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 	}
 }
 
-// TestRequestUpdate_FetchValidUpdateReturnsOK pins the §10.9 FETCH arm of the
-// control-plane contract: a well-formed REQUEST_UPDATE (here a GROUP_ORDER
-// change) on an established FETCH request stream is answered with exactly one
-// REQUEST_OK. A FETCH response is a finished snapshot by the time its data
-// stream is FIN'd, so the relay has no live parameters left to mutate — but it
-// must still honour the single mandated REQUEST_OK / REQUEST_ERROR reply. The
-// update reuses the FETCH's original Request ID on the same bidi stream.
+// TestRequestUpdate_FetchValidUpdateReturnsOK: a well-formed REQUEST_UPDATE on
+// a FETCH gets exactly one REQUEST_OK (§10.9).
 func TestRequestUpdate_FetchValidUpdateReturnsOK(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -346,11 +327,8 @@ func TestRequestUpdate_FetchValidUpdateReturnsOK(t *testing.T) {
 	}
 }
 
-// TestRequestUpdate_InvalidRequestIDClosesSession pins the §10.1 receiver
-// rule on follow-ups: a REQUEST_UPDATE consumes a Request ID from the
-// sender's space, so one whose ID has the wrong parity for the sender (a
-// client must use even IDs; here it sends an odd one) is a session-fatal
-// INVALID_REQUEST_ID, not a per-request error.
+// TestRequestUpdate_InvalidRequestIDClosesSession: a REQUEST_UPDATE whose
+// Request ID has the wrong parity for its sender closes the session (§10.1).
 func TestRequestUpdate_InvalidRequestIDClosesSession(t *testing.T) {
 	t.Parallel()
 

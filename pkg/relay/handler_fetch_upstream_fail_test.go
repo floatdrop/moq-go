@@ -13,30 +13,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestFetch_UpstreamOutcomeDecidesGapOrUnknown pins the single most dangerous
-// decision in the §9.4 stitching path: whether a hole in a stitched FETCH
-// response means "these objects do not exist" or "this relay could not find
-// out".
-//
-// The two are different messages on the wire and different truths to a client.
-// A plain gap in a FIN-terminated FETCH response is an assertion of
-// non-existence (§9.1); a §11.4.4.2 End of Unknown Range marker (0x10C) says
-// the range is undetermined and may be retried. Encoding the second as the
-// first tells a subscriber that content it could have fetched does not exist,
-// permanently and silently — nothing logs, nothing errors, and the response is
-// perfectly well-formed either way.
-//
-// Every case here is the SAME topology, differing only in how the upstream
-// behaves, so what they pin is the mapping from upstream outcome to downstream
-// encoding and nothing else.
-//
-// Note for anyone editing the serve path: the `len(upstreamObjs) == 0` early
-// return in stitchedFetchObjects is NOT what makes the authoritative-gap case
-// work. Deleting it changes nothing observable, because merging an empty
-// upstream slice with the cached one yields the cached one — it is a shortcut
-// past the merge, not a decision. The decision lives in fetchUpstreamRange,
-// which returns an empty slice for a clean empty FIN and at least one marker
-// for every unknown outcome; mutating THAT is what turns these red.
+// TestFetch_UpstreamOutcomeDecidesGapOrUnknown: how the upstream answers the
+// stitch FETCH decides the encoding of the uncached sub-range (§9.4): a clean
+// empty FIN is a plain gap, asserting non-existence (§9.1); a failure is an End
+// of Unknown Range marker; a timeout an End of Timed-Out Range (§11.4.4.2).
 func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -113,20 +93,10 @@ func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 	}
 }
 
-// TestFetch_DescendingCappedUpstreamFallsBackToWholeUnknown covers the
-// order-specific fallback in fetchUpstreamRange.
-//
-// When the upstream caps its FETCH_OK EndLocation below the sub-range the
-// relay asked for (§10.13 lets it: End beyond its own Largest), the remainder
-// is undetermined. Ascending order can say so precisely by appending one
-// marker after the objects. Descending cannot: the unknown remainder precedes
-// every object in descending stream order, and a leading marker cannot in
-// general be followed by a same-group object with a lower ID, so the encoding
-// would misplace it. The only encodable truth left is "the whole sub-range is
-// unknown".
-//
-// This matters because the wrong branch here is not a crash — it is a
-// correctly-framed response whose marker claims the wrong range.
+// TestFetch_DescendingCappedUpstreamFallsBackToWholeUnknown: when the upstream
+// caps FETCH_OK below the requested sub-range (§10.13), a descending response
+// marks the whole sub-range unknown, anchored at its start, since a trailing
+// marker cannot be placed.
 func TestFetch_DescendingCappedUpstreamFallsBackToWholeUnknown(t *testing.T) {
 	t.Parallel()
 	objs := runStitch(t, stitchOpts{
@@ -177,15 +147,8 @@ func TestFetch_DescendingCappedUpstreamFallsBackToWholeUnknown(t *testing.T) {
 	}
 }
 
-// TestFetch_StitchedObjectKeepsDatagramForwardingPreference pins the §11.4.4.1
-// Datagram bit surviving the relay hop.
-//
-// The bit records the Forwarding Preference the object was PUBLISHED with, and
-// a FETCH response is supposed to report that faithfully even though the
-// response itself always travels on a stream. Dropping it on the stitching
-// path would silently rewrite history for exactly the objects that came from
-// another relay — a subscriber comparing a stitched range against a live one
-// would see the same object described two different ways.
+// TestFetch_StitchedObjectKeepsDatagramForwardingPreference: a stitched
+// upstream Object keeps its Datagram bit (§11.4.4.1).
 func TestFetch_StitchedObjectKeepsDatagramForwardingPreference(t *testing.T) {
 	t.Parallel()
 	objs := runStitch(t, stitchOpts{
@@ -282,10 +245,9 @@ func replyThen(end func(*session.OutgoingFetchStream)) func(*session.Session, *s
 	}
 }
 
-// runStitch builds the stitching topology from
-// TestFetch_StitchesEvictedRangeFromUpstream — an upstream feeding a live tail
-// the relay caches, plus a downstream FETCH spanning below the eviction floor
-// — and returns the decoded objects of the stitched response.
+// runStitch runs the stitch topology of TestFetch_StitchesEvictedRangeFromUpstream
+// (an upstream feeding a cached live tail, and a FETCH reaching below the
+// eviction floor) and returns the stitched response's elements.
 func runStitch(t *testing.T, opts stitchOpts) []*session.DecodedFetchObject {
 	t.Helper()
 	upSess, teardown := connectRelay(t, relay.Config{})
@@ -443,11 +405,8 @@ func fetchStitched(
 	return readFetchResponse(t, sess, message.GroupOrderAscending, 5*time.Second), true
 }
 
-// stitchMarker names which §11.4.4.2 outcome a stitched response encoded for
-// the sub-range the relay could not answer from cache. draft-20 split what used
-// to be a single "unknown" outcome in two: a timeout is now reported as a
-// Timed-Out gap (§10.2.5), leaving End of Unknown Range for the cases where no
-// source could vouch for the objects at all.
+// stitchMarker names the §11.4.4.2 encoding a stitched response used for the
+// sub-range it could not answer from cache.
 type stitchMarker int
 
 const (
@@ -468,6 +427,7 @@ func (m stitchMarker) String() string {
 	return "an unknown marker kind"
 }
 
+// stitchMarkerOf reports the first End of Range marker kind in objs.
 func stitchMarkerOf(objs []*session.DecodedFetchObject) stitchMarker {
 	for _, o := range objs {
 		switch {
@@ -493,20 +453,9 @@ func stitchedGroups(objs []*session.DecodedFetchObject) []uint64 {
 	return groups
 }
 
-// TestFetch_RangeFilterKeepsTimedOutMarker pins that the §5.1.4 Range Filter
-// pass does not eat §11.4.4.2 end-of-range markers.
-//
-// A marker is not an Object: §11.4.4.2 gives it no Subgroup ID, Priority or
-// Properties, so handing one to MatchesObject tests {0, ObjectID, 0, nil}
-// against the filter and any non-trivial filter rejects it. Dropping it turns
-// the span into a plain gap, and §10.13 defines a gap in a FIN-terminated
-// response as "objects that do not exist" — so a subscriber records permanent
-// non-existence for a range that merely timed out, and never retries.
-//
-// draft-20 is what made this reachable: before End of Timed-Out Range existed,
-// the only marker on this path was End of Unknown Range, which the filter pass
-// special-cased by name. The fix is to ask whether the element is a marker at
-// all rather than naming the kinds.
+// TestFetch_RangeFilterKeepsTimedOutMarker: the Range Filter pass (§5.1.4) does
+// not drop End of Range markers (§11.4.4.2), which carry nothing to match;
+// dropping one would turn "timed out" into "does not exist" (§10.13).
 func TestFetch_RangeFilterKeepsTimedOutMarker(t *testing.T) {
 	t.Parallel()
 

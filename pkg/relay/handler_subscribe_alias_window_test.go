@@ -11,21 +11,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestSubscribeUpstream_TrackEntryPrecedesAliasRouting is the SUBSCRIBE
-// counterpart of TestPublish_TrackEntryPrecedesAliasRouting.
-//
-// session.Subscribe registers the SUBSCRIBE_OK's §11.1 Track Alias inside its
-// own response handler, so the alias resolves on inbound data streams the
-// instant it returns — while AddUpstream, which would otherwise be the first
-// thing to create the track entry, is still several statements away. A
-// subgroup stream arriving in between reaches runFanout, resolves its alias,
-// finds no entry, and is reset: those Objects are lost from the cache and from
-// live fanout alike, permanently, with nothing above DEBUG to say so.
-//
-// The publisher writes its first Group immediately after SUBSCRIBE_OK, so the
-// Group that loses is the oldest — which is what made
-// TestFetch_UnknownRangeMarkerDescending fail on CI while passing everywhere
-// else: it asserts on a complete tail and the floor kept going missing.
+// TestSubscribeUpstream_TrackEntryPrecedesAliasRouting: the SUBSCRIBE
+// counterpart of TestPublish_TrackEntryPrecedesAliasRouting. The SUBSCRIBE_OK's
+// alias (§11.1) routes as soon as session.Subscribe returns, so the track entry
+// must exist by then or the first Group is lost.
 func TestSubscribeUpstream_TrackEntryPrecedesAliasRouting(t *testing.T) {
 	video := ns("video")
 	name := []byte("cam-subscribe-alias-window")
@@ -57,21 +46,9 @@ func TestSubscribeUpstream_TrackEntryPrecedesAliasRouting(t *testing.T) {
 	}, "relay never served the full tail; the oldest Group was dropped in the alias window")
 }
 
-// TestFetch_UnconfirmedTrackIsNotKnown pins the cost of creating that entry
-// before the upstream round trip that confirms the track exists.
-//
-// For the duration of the round trip an entry stands for a track nobody has
-// vouched for. handleFetch used to read bare existence as "track known", fall
-// through to the §10.13 "no Objects have been published" rule, and answer
-// INVALID_RANGE — "the range you asked for cannot be satisfied" — where §10.6
-// DOES_NOT_EXIST, "the track or namespace is not available at the publisher",
-// is the truthful answer. A client deciding whether to retry needs them apart.
-//
-// The upstream here advertises the namespace and then never answers the
-// relay's SUBSCRIBE, so the entry sits unvouched for as long as the test cares
-// to look. Every answer over that window must be DOES_NOT_EXIST — polling
-// rather than a single probe because the first FETCH may land before the entry
-// exists, which is DOES_NOT_EXIST for the uninteresting reason.
+// TestFetch_UnconfirmedTrackIsNotKnown: while the upstream has not answered the
+// relay's SUBSCRIBE, a FETCH of the track is DOES_NOT_EXIST (§10.6), not
+// INVALID_RANGE (§10.13).
 func TestFetch_UnconfirmedTrackIsNotKnown(t *testing.T) {
 	video := ns("video")
 	name := []byte("cam-never-answered")

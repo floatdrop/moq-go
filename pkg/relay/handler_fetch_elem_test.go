@@ -6,24 +6,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 )
 
-// TestUpstreamFetchElemOK covers the guard that decides whether one element of
-// an upstream relay's FETCH response may be re-serialized downstream.
-//
-// This is the sharpest edge in the stitching path. Every element it accepts is
-// re-encoded into a §11.4.4 delta stream, where Group and Object IDs are
-// expressed relative to the previous element — so accepting an element that
-// moves the wrong way does not produce a visibly broken response, it produces a
-// well-formed one carrying the WRONG absolute IDs, decoded without complaint by
-// a conforming peer. The failure is invisible on both sides of the round trip,
-// which is exactly the shape this repo's unit suite cannot otherwise catch.
-//
-// The rules, from the function's own contract and §11.4.4:
-//
-//   - every element must lie within the requested [start, endIncl];
-//   - within a group, Object IDs strictly ascend;
-//   - across groups, the Group ID moves in the response's order direction;
-//   - unknown-range markers carry absolute IDs and only re-anchor the
-//     encoding, so only the range check applies to them.
+// TestUpstreamFetchElemOK: an upstream FETCH element may be re-serialized only
+// if it lies in [start, endIncl], Object IDs ascend within a group, and Group
+// IDs move in the response's order; markers get the range check only
+// (§11.4.4). A wrong one would re-encode to well-formed but wrong IDs.
 func TestUpstreamFetchElemOK(t *testing.T) {
 	t.Parallel()
 

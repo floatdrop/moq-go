@@ -12,23 +12,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// (Earlier scaffolding tests for SUBSCRIBE / PUBLISH "rejects with
-// NotSupported" were removed once those handlers became real. See
-// session_pubsub_test.go for the success / no-upstream / aggregation
-// tests.)
-
-// (Namespace-handler success tests live in the namespace test file
-// below; the 5b "rejects with NotSupported" cases for PUBLISH_NAMESPACE,
-// SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS were removed when those handlers
-// became real in 5c.)
-
-// TestSessionHandler_AuthDenialMapsToRequestError verifies the authorizer
-// wiring: a policy that rejects SUBSCRIBE causes the relay to emit a
-// REQUEST_ERROR with the policy's chosen code, NOT the placeholder NotSupported.
-//
-// This pins the precedence: authorization runs BEFORE the not-yet-implemented
-// fall-through, so custom policies see their codes on the wire even while the
-// handler bodies are stubs.
+// TestSessionHandler_AuthDenialMapsToRequestError: an Authorizer rejecting
+// SUBSCRIBE produces REQUEST_ERROR with the policy's code.
 func TestSessionHandler_AuthDenialMapsToRequestError(t *testing.T) {
 	t.Parallel()
 	auth := &denyAuthorizer{
@@ -55,14 +40,129 @@ func TestSessionHandler_AuthDenialMapsToRequestError(t *testing.T) {
 	}
 }
 
-// TestSessionHandler_DispatchSurvivesPerRequestRejection drives three
-// independent SUBSCRIBE requests for unknown tracks on the same session.
-// The dispatch loop must reject each in turn without dying — §9.5 forbids
-// "a single bad request breaks an unrelated subscription" semantics.
-//
-// 5d returns RequestDoesNotExist for tracks with no Established upstream;
-// this test pins both the rejection code and the loop-survives-rejection
-// invariant.
+// TestRelay_AuthDenialUsesPolicyCode: each request type consults its own
+// Authorizer method once, before any track lookup, and a denial reaches the
+// requester as REQUEST_ERROR with the policy's code (UNAUTHORIZED for a plain
+// error).
+func TestRelay_AuthDenialUsesPolicyCode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		err   error
+		send  func(t *testing.T, sess *session.Session) error
+		calls func(a *denyAuthorizer) int32
+	}{
+		{
+			"SUBSCRIBE", errors.New("token expired"),
+			func(t *testing.T, sess *session.Session) error {
+				_, err := sess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
+				return err
+			},
+			func(a *denyAuthorizer) int32 { return a.subscribeCalls.Load() },
+		},
+		{
+			"FETCH", errors.New("no fetch for you"),
+			func(t *testing.T, sess *session.Session) error {
+				_, err := sess.Fetch(t.Context(), &message.Fetch{Namespace: ns("video"), Name: []byte("cam1")})
+				return err
+			},
+			func(a *denyAuthorizer) int32 { return a.fetchCalls.Load() },
+		},
+		{
+			"TRACK_STATUS", errors.New("no status"),
+			func(t *testing.T, sess *session.Session) error {
+				_, err := sess.TrackStatus(t.Context(), &message.TrackStatus{Namespace: ns("video"), Name: []byte("cam1")})
+				return err
+			},
+			func(a *denyAuthorizer) int32 { return a.trackStatusCalls.Load() },
+		},
+		{
+			"PUBLISH_NAMESPACE", relay.Deny(moqt.RequestUnauthorized, "nope"),
+			func(t *testing.T, sess *session.Session) error {
+				_, err := sess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns("video")})
+				return err
+			},
+			func(a *denyAuthorizer) int32 { return a.publishNamespaceCalls.Load() },
+		},
+		{
+			"SUBSCRIBE_NAMESPACE", relay.Deny(moqt.RequestUnauthorized, "no subscribing"),
+			func(t *testing.T, sess *session.Session) error {
+				_, err := sess.SubscribeNamespace(t.Context(),
+					&message.SubscribeNamespace{TrackNamespacePrefix: ns("video")})
+				return err
+			},
+			func(a *denyAuthorizer) int32 { return a.subscribeNamespaceCalls.Load() },
+		},
+		{
+			"SUBSCRIBE_TRACKS", relay.Deny(moqt.RequestUnauthorized, "no tracks"),
+			func(t *testing.T, sess *session.Session) error {
+				_, err := sess.SubscribeTracks(t.Context(), &message.SubscribeTracks{TrackNamespacePrefix: ns("video")})
+				return err
+			},
+			func(a *denyAuthorizer) int32 { return a.subscribeTracksCalls.Load() },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			auth := &denyAuthorizer{err: tc.err}
+			clientSess, teardown := connectRelay(t, relay.Config{Authorizer: auth})
+			defer teardown()
+
+			requireRejectedWithCode(t, tc.send(t, clientSess), moqt.RequestUnauthorized)
+			if got := tc.calls(auth); got != 1 {
+				t.Errorf("%s Authorizer calls = %d, want 1", tc.name, got)
+			}
+		})
+	}
+}
+
+// TestSessionHandler_TokenVerification: a TokenVerifier's denial of a USE_VALUE
+// AUTHORIZATION_TOKEN is REQUEST_ERROR with its code, before any track lookup
+// (§10.2.2); an accepted token lets the SUBSCRIBE reach its handler, which
+// refuses the unknown track DOES_NOT_EXIST.
+func TestSessionHandler_TokenVerification(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		token string
+		want  moqt.RequestErrorCode
+	}{
+		{"denied", "expired", moqt.RequestExpiredAuthToken},
+		{"allowed", "valid", moqt.RequestDoesNotExist},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			verifier := session.TokenVerifierFunc(
+				func(_ context.Context, _ *session.Session, tok session.ResolvedToken) error {
+					if string(tok.Value) == "expired" {
+						return session.DenyToken(moqt.RequestExpiredAuthToken, "token expired")
+					}
+					return nil
+				})
+			clientSess, teardown := connectRelay(t, relay.Config{
+				SessionOptions: []session.Option{session.WithTokenVerifier(verifier)},
+			})
+			defer teardown()
+
+			_, err := clientSess.Subscribe(t.Context(), &message.Subscribe{
+				Namespace: ns("video"),
+				Name:      []byte("cam1"),
+				Parameters: message.Parameters{
+					message.AuthorizationTokenParam(message.Token{
+						AliasType:  message.AliasTypeUseValue,
+						TokenType:  1,
+						TokenValue: []byte(tc.token),
+					}),
+				},
+			})
+			requireRejectedWithCode(t, err, tc.want)
+		})
+	}
+}
+
+// TestSessionHandler_DispatchSurvivesPerRequestRejection: three SUBSCRIBEs for
+// unknown tracks on one session are each refused DOES_NOT_EXIST, and the
+// dispatch loop survives them.
 func TestSessionHandler_DispatchSurvivesPerRequestRejection(t *testing.T) {
 	t.Parallel()
 	clientSess, teardown := connectRelay(t, relay.Config{})

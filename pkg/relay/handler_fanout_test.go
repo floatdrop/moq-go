@@ -13,11 +13,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestFanout_PublisherToSubscriberSingleObject is the minimum-viable
-// fanout test:
-// publisher opens a subgroup stream, writes one object; the relay forwards
-// it to a subscriber on a separate session with the relay-allocated outbound
-// TrackAlias.
+// TestFanout_PublisherToSubscriberSingleObject: one Object reaches a subscriber
+// on another session under the relay-allocated Track Alias.
 func TestFanout_PublisherToSubscriberSingleObject(t *testing.T) {
 	t.Parallel()
 
@@ -106,20 +103,10 @@ func TestFanout_PublisherToSubscriberSingleObject(t *testing.T) {
 	}
 }
 
-// TestFanout_StalledSubscriberDoesNotBlockFastOne pins the per-subscriber
-// isolation guarantee: a subscriber that stops reading overflows its own
-// bounded send queue (the relay drops objects for it) but does NOT stall a
-// concurrent fast subscriber, which still receives every object.
-//
-// Method: connect two subscribers; one (the "stalled" one) never reads from
-// its outbound stream after the initial Accept, so the relay's per-subscriber
-// writer inbox fills and the relay starts dropping objects for it. The other
-// reads everything. The publisher paces itself to the fast subscriber's reads
-// (see fastRead) so the fast inbox can never overflow — without this the
-// publisher's non-blocking flood would, at GOMAXPROCS=1, run to completion
-// before the fast writer goroutine is ever scheduled and the fast subscriber
-// would itself drop objects. We then assert the fast subscriber received every
-// object and that the stalled subscriber genuinely overflowed (dropped > 0).
+// TestFanout_StalledSubscriberDoesNotBlockFastOne: a subscriber that stops
+// reading overflows its own queue without stalling a fast one, which gets every
+// Object. The publisher paces itself to the fast reader so, at GOMAXPROCS=1,
+// only the stalled queue can overflow.
 func TestFanout_StalledSubscriberDoesNotBlockFastOne(t *testing.T) {
 	// Small queue so the stalled subscriber overflows; MaxDropsBeforeReset
 	// left disabled — a fully-stalled subscriber blocks inside WriteObject on
@@ -276,13 +263,9 @@ func TestFanout_StalledSubscriberDoesNotBlockFastOne(t *testing.T) {
 	}
 }
 
-// TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup is the regression
-// test for header writes under the subgroup lock: subscriber A never even
-// accepts its data stream, so the relay's SUBGROUP_HEADER write to A blocks
-// forever. That write used to run inside openWriterForSub under sg.Mu — the
-// lock every contributor takes per forwarded object — stalling the whole
-// subgroup (subscriber B starved and the inbound read loop wedged). With the
-// lazy per-writer open, only A's own writer goroutine blocks.
+// TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup: a subscriber that never
+// accepts its data stream blocks only its own writer, not the subgroup's other
+// subscribers or the inbound read loop.
 func TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -362,13 +345,9 @@ func TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup(t *testing.T) {
 	}
 }
 
-// TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart is the
-// §5.1.2 filter
-// canonical filter test: a subscriber with LocationFilter type
-// AbsoluteStart {Group: 0, Object: 2} must only see objects whose absolute
-// Location is >= {0, 2}. Earlier objects are dropped pre-enqueue and the
-// outbound stream's ObjectIDDelta is re-encoded so the subscriber decodes
-// the same absolute Object IDs the publisher emitted.
+// TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart: an AbsoluteStart
+// {0, 2} filter drops earlier Objects, and the forwarded deltas decode to the
+// publisher's Object IDs (§5.1.2).
 func TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart(t *testing.T) {
 	t.Parallel()
 
@@ -481,11 +460,8 @@ func TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart(t *testing.T) {
 	}
 }
 
-// TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange checks the
-// AbsoluteRange filter on a single subgroup: Start = {0, 1}, EndGroupDelta
-// = 0 admits objects in Group 0 with Object ID >= 1 only. The subscriber
-// must therefore see IDs 1, 2, 3 (not 0) with deltas re-encoded against
-// the previous forwarded ID.
+// TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange: an AbsoluteRange
+// {0, 1}..group 0 filter forwards Objects 1, 2, 3 with re-encoded deltas.
 func TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange(t *testing.T) {
 	t.Parallel()
 
@@ -595,12 +571,8 @@ func TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange(t *testing.T) {
 	}
 }
 
-// TestSubscribe_InstallsPriorityAndGroupOrder verifies that
-// SUBSCRIBER_PRIORITY and GROUP_ORDER parameters on a SUBSCRIBE are parsed
-// and recorded on the [relay.DownstreamSub]. The relay doesn't yet act on
-// these values at the QUIC layer (subgroup streams are §11.4.3 in-order,
-// and per-stream priority isn't exposed), but the values are plumbed
-// through so future scheduling and FETCH-response work can consult them.
+// TestSubscribe_InstallsPriorityAndGroupOrder: SUBSCRIBER_PRIORITY and
+// GROUP_ORDER on a SUBSCRIBE are recorded on the downstream subscription.
 func TestSubscribe_InstallsPriorityAndGroupOrder(t *testing.T) {
 	t.Parallel()
 
@@ -636,17 +608,9 @@ func TestSubscribe_InstallsPriorityAndGroupOrder(t *testing.T) {
 	// covered by the unit test on DownstreamSub setters.
 }
 
-// TestFanout_GapInForwardedObjectIDsOpensNewStream is the canonical
-// §11.4.3 test: when the relay observes a gap in the forwarded Object IDs
-// on a single inbound subgroup, it MUST reset the current outbound subgroup
-// stream and open a fresh one for the next object. The subscriber should
-// therefore see two outbound streams — the first containing only the
-// pre-gap object, the second containing only the post-gap object.
-//
-// The publisher synthesises the gap by emitting an ObjectIDDelta that
-// jumps from absolute Object ID 0 to absolute Object ID 2 (skipping 1).
-// §11.4.3 technically forbids the publisher from doing this; we exercise
-// the relay's defensive path that handles it anyway.
+// TestFanout_GapInForwardedObjectIDsOpensNewStream: a gap in the Object IDs of
+// one inbound subgroup resets the outbound stream and opens a new one for the
+// next Object (§11.4.3).
 func TestFanout_GapInForwardedObjectIDsOpensNewStream(t *testing.T) {
 	t.Parallel()
 
@@ -780,12 +744,8 @@ func TestFanout_GapInForwardedObjectIDsOpensNewStream(t *testing.T) {
 	}
 }
 
-// TestFanout_InboundResetCancelsDownstream is the reset-propagation
-// test: when the publisher's inbound subgroup stream is cancelled (not
-// FIN'd) the relay MUST reset the corresponding downstream subgroup stream
-// rather than FIN it. §11.4.3: "Processing a reset means that there might
-// be other objects in the Subgroup beyond the last one received. A relay
-// might immediately reset the corresponding downstream stream...".
+// TestFanout_InboundResetCancelsDownstream: a reset inbound subgroup stream
+// resets the downstream one rather than FINning it (§11.4.3).
 func TestFanout_InboundResetCancelsDownstream(t *testing.T) {
 	t.Parallel()
 
@@ -873,13 +833,9 @@ func TestFanout_InboundResetCancelsDownstream(t *testing.T) {
 	}
 }
 
-// TestFanout_UpdatesTrackEntryLargestObject pins §10.2.17: every forwarded
-// object advances the entry's LargestObject watermark. The watermark isn't
-// directly observable on the wire (TRACK_STATUS_OK doesn't yet carry
-// LARGEST_OBJECT in this stage), so the test exercises the indirect signal:
-// a later SUBSCRIBE with FilterLargestObject snapshots the entry's current
-// watermark, and a follow-up object at a Location < snapshot is filtered
-// out while one at a Location > snapshot passes.
+// TestFanout_UpdatesTrackEntryLargestObject: each forwarded Object advances the
+// track's LargestObject watermark (§10.2.17), observed through a later
+// LargestObject-filtered SUBSCRIBE.
 func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 	t.Parallel()
 

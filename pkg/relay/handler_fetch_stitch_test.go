@@ -8,20 +8,14 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestFetch_StitchesEvictedRangeFromUpstream pins the §9.4 upstream-stitching
-// path end-to-end. The relay caches a live tail (groups 5..9, so its eviction
-// floor is group 5) but a downstream FETCH asks for groups 0..9. The
-// below-floor part (0..4) is not in cache, so the relay stitches it from an
-// upstream FETCH and concatenates it with the cached tail.
+// TestFetch_StitchesEvictedRangeFromUpstream: a FETCH of groups 0..9 when the
+// cache holds 5..9 is stitched from an upstream FETCH of 0..4 (§9.4).
 //
 //	upstream U  ── PUBLISH_NAMESPACE ──▶ relay
 //	            ◀─ SUBSCRIBE (on-demand) ─ relay     (U replies OK, pushes 5..9)
 //	            ◀─ FETCH [0..4] ────────── relay     (U streams the evicted part)
 //	live sub S  ─ SUBSCRIBE ───────────▶ relay      (triggers the upstream sub)
 //	fetch F     ─ FETCH [0..9] ────────▶ relay ─▶ F (stitched: U 0..4 + cache 5..9)
-//
-// It exercises the fetch router (cross-handler response routing),
-// fetchUpstreamRange, the eviction-floor split, and the ordered merge.
 func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 	upSess, teardown := connectRelay(t, relay.Config{})
 	defer teardown()

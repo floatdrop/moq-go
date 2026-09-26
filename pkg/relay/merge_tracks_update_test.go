@@ -7,10 +7,9 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// TestMergeTracksUpdate: a type the update names replaces every stored
-// parameter of that type; other types are kept (§10.9); a zero-length Range
-// Filter removes that filter type (§5.1.4); TRACK_NAMESPACE_PREFIX and
-// AUTHORIZATION_TOKEN are not kept.
+// TestMergeTracksUpdate: an updated parameter type replaces every stored one of
+// that type (§10.9), a zero-length Range Filter removes it (§5.1.4), and
+// TRACK_NAMESPACE_PREFIX and AUTHORIZATION_TOKEN are not kept.
 func TestMergeTracksUpdate(t *testing.T) {
 	objIDs := func(start uint64) message.Parameter {
 		return message.RangeFilterParam(&message.RangeFilter{

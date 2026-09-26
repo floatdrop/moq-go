@@ -1,24 +1,7 @@
 package relay_test
 
-// Integration test suite. These tests exercise the relay end-to-end
-// over the in-process [sessiontest] transport. They complement the
-// unit-level tests scattered across the relay package and serve as
-// living documentation of the headline scenarios the relay must handle.
-//
-// Related integration-level coverage in other files:
-//
-//   - TestFanout_PublisherToSubscriberSingleObject — single-object E2E.
-//     The richer multi-object/datagram variant lives below as
-//     TestPublishSubscribeE2E.
-//   - TestFanout_StalledSubscriberDoesNotBlockFastOne — per-subscriber
-//     isolation: a stalled subscriber overflows without blocking a fast one.
-//   - TestFetch_FromCacheAscending / Descending — FETCH from cache.
-//   - TestFetch_CacheEvictionUnderLoad — cache eviction.
-//   - TestRelay_StopBroadcastsGoaway / _StopReturnsEarlyOnCleanDrain /
-//     _StopForceClosesOnTimeout + _InboundGoaway* — the GOAWAY half of
-//     the migration story; TestGracefulMigration below adds the
-//     subscriber-side migration cycle.
-//   - TestDiscovery_* — Discovery store integration.
+// End-to-end scenarios over the in-process [sessiontest] transport: the
+// headline behaviours the relay must handle.
 
 import (
 	"errors"
@@ -31,11 +14,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
-// TestPublishSubscribeE2E is the broad end-to-end happy path: a
-// publisher claims a track, a subscriber on a separate session
-// subscribes, and the relay forwards a mixed stream of subgroup
-// objects and datagrams. Both transports MUST land at the subscriber
-// with the relay-allocated outbound Track Alias.
+// TestPublishSubscribeE2E: subgroup Objects and datagrams from a publisher both
+// reach a subscriber under the relay-allocated Track Alias.
 func TestPublishSubscribeE2E(t *testing.T) {
 	t.Parallel()
 
@@ -174,11 +154,8 @@ func TestPublishSubscribeE2E(t *testing.T) {
 	}
 }
 
-// TestSubscriptionAggregation pins §9.4: two downstream subscribers
-// for the same track must result in ONE upstream subscription. The
-// upstream publisher counts the SUBSCRIBE requests it receives; the
-// second downstream subscriber arriving while the upstream is
-// Established must NOT trigger a fresh upstream SUBSCRIBE.
+// TestSubscriptionAggregation: two downstream subscribers of one track share
+// one upstream SUBSCRIBE (§9.4).
 func TestSubscriptionAggregation(t *testing.T) {
 	t.Parallel()
 
@@ -261,13 +238,9 @@ func TestSubscriptionAggregation(t *testing.T) {
 	}
 }
 
-// TestPublishNamespaceRouting exercises §6.1 / §9.5:
-//
-//   - A subscriber's SUBSCRIBE_NAMESPACE for prefix ["video"] should
-//     observe a NAMESPACE event when a publisher PUBLISH_NAMESPACEs
-//     ["video", "cam1"].
-//   - A SUBSCRIBE for that track is routed via the namespace prefix
-//     match to the publisher (the on-demand upstream subscribe path).
+// TestPublishNamespaceRouting: a SUBSCRIBE_NAMESPACE holder sees NAMESPACE for a
+// matching PUBLISH_NAMESPACE, and a SUBSCRIBE is routed to that publisher
+// (§6.1, §9.5).
 func TestPublishNamespaceRouting(t *testing.T) {
 	t.Parallel()
 
@@ -304,13 +277,8 @@ func TestPublishNamespaceRouting(t *testing.T) {
 	}
 }
 
-// TestDeliveryTimeouts pins the parameter-passthrough contract: a
-// PUBLISH carrying OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT
-// is accepted by the relay and a subscriber can complete its
-// subscription cycle. The wire-level enforcement of these timeouts is
-// owned by the session layer ([session.OutgoingSubgroupStream]'s
-// timer-driven reset), which has its own tests; the relay's concern is
-// that it doesn't reject or strip these parameters.
+// TestDeliveryTimeouts: a PUBLISH with OBJECT_DELIVERY_TIMEOUT and
+// SUBGROUP_DELIVERY_TIMEOUT is accepted and its subscription completes.
 func TestDeliveryTimeouts(t *testing.T) {
 	t.Parallel()
 
@@ -345,16 +313,8 @@ func TestDeliveryTimeouts(t *testing.T) {
 	}
 }
 
-// TestGracefulMigration exercises the GOAWAY → migrate lifecycle:
-//
-//  1. Publisher and subscriber are connected to the relay.
-//  2. Operator calls Stop on the relay.
-//  3. Both peers observe GOAWAY via session.GoawayReceived().
-//  4. Both peers cleanly close their sessions in response (the
-//     "migrate" action; in a multi-relay deployment they would
-//     reconnect elsewhere).
-//  5. Stop returns well before its grace period elapses (cooperative
-//     drain).
+// TestGracefulMigration: on Stop both peers see GOAWAY, close their sessions,
+// and Stop returns well before its grace period.
 func TestGracefulMigration(t *testing.T) {
 	t.Parallel()
 

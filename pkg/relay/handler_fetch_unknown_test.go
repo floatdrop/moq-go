@@ -12,12 +12,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// unknownGapTopology wires the stitch-test topology (upstream publisher →
-// relay ← live subscriber) with a configurable upstream FETCH answer, and
-// returns a fetch-only downstream client. The upstream pushes single-object
-// groups [liveLo, liveHi] on the relay's on-demand SUBSCRIBE, so the relay's
-// cache floor lands at liveLo and a downstream FETCH from group 0 always has
-// a below-floor portion to account for.
+// unknownGapTopology wires upstream publisher → relay ← live subscriber, with
+// onFetch answering the relay's upstream FETCH, and returns a fetch-only
+// client. The upstream pushes single-object groups liveLo..liveHi, so the cache
+// floor is liveLo and a FETCH from group 0 has a below-floor part.
 func unknownGapTopology(
 	t *testing.T,
 	ns wire.TrackNamespace,
@@ -79,14 +77,9 @@ func unknownGapTopology(
 	// a fetch that lands early gets a legitimately different answer, with the
 	// unknown-range floor sitting wherever the cache happened to reach.
 	//
-	// Wait on the RELAY's watermark rather than on this subscriber receiving
-	// everything. The cache is the precondition the callers actually depend on,
-	// and a subscriber is the wrong proxy for it: the relay may drop or reset a
-	// lagging one (§3.3.4), so under load "the subscriber saw every group" can
-	// stay false forever while the cache is perfectly well populated. An
-	// earlier version of this barrier asserted exactly that and timed out under
-	// -race. TRACK_STATUS_OK carries LARGEST_OBJECT (§10.2.17), so the relay
-	// answers the question directly.
+	// Wait on the relay's watermark (TRACK_STATUS, §10.2.17), not on the
+	// subscriber: the relay may drop a lagging subscriber (§3.3.4) while the
+	// cache is fully populated.
 	go drainAll(t.Context(), live)
 
 	fetchClient := dialAnotherClient(t, upSess)
@@ -94,11 +87,9 @@ func unknownGapTopology(
 	return fetchClient
 }
 
-// TestFetch_UnknownRangeMarkerWhenUpstreamRejects pins the §11.4.4 truthfulness
-// fix: when the below-floor portion of a FETCH cannot be stitched (the upstream
-// rejects the FETCH), the relay must not leave it as a plain gap — a gap in a
-// FIN-terminated response asserts non-existence — but cover it with an End of
-// Unknown Range marker (0x10C) preceding the cached objects.
+// TestFetch_UnknownRangeMarkerWhenUpstreamRejects: a below-floor part the
+// upstream refuses to serve is covered by an End of Unknown Range marker before
+// the cached Objects, not left as a gap (§11.4.4).
 func TestFetch_UnknownRangeMarkerWhenUpstreamRejects(t *testing.T) {
 	video := ns("video")
 	name := []byte("cam-unknown")
@@ -173,10 +164,8 @@ func TestFetch_UnknownRangeMarkerDescending(t *testing.T) {
 	}
 }
 
-// TestFetch_PreservesUpstreamUnknownMarker pins marker propagation across a
-// relay hop: the upstream's stitch response declares groups 0..2 unknown with
-// its own 0x10C marker and serves the rest; the relay must re-emit that
-// marker to the downstream fetcher instead of flattening it into a gap.
+// TestFetch_PreservesUpstreamUnknownMarker: the upstream's own End of Unknown
+// Range marker is re-emitted downstream, not flattened into a gap.
 func TestFetch_PreservesUpstreamUnknownMarker(t *testing.T) {
 	video := ns("video")
 	name := []byte("cam-propagate")
@@ -241,12 +230,9 @@ func TestFetch_PreservesUpstreamUnknownMarker(t *testing.T) {
 	}
 }
 
-// TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation pins the clean-FIN cap
-// rule: a FIN-terminated upstream response asserts its gaps only up to the
-// FETCH_OK EndLocation (§11.4.4). Here the upstream serves groups 0..2 and
-// caps EndLocation at {2,1}, so the relay knows nothing about groups 3..4 —
-// it must insert an unknown marker between the stitched head and the cached
-// tail rather than let that gap read as non-existence.
+// TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation: a FIN'd upstream
+// response asserts its gaps only up to its FETCH_OK EndLocation (§11.4.4), so
+// the groups past it are marked unknown.
 func TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation(t *testing.T) {
 	video := ns("video")
 	name := []byte("cam-capped")
@@ -298,13 +284,9 @@ func TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation(t *testing.T) {
 	}
 }
 
-// TestFetch_DiscardsOutOfRangeUpstreamElements pins the trust boundary on
-// ingested stitch responses: the relay re-serializes upstream elements —
-// marker Locations even become the downstream delta encoder's prior state —
-// so an element outside the requested sub-range (here a 0x10C marker at
-// group 7, beyond the below-floor range 0..4) must disqualify the response.
-// The relay falls back to declaring the whole sub-range unknown instead of
-// letting the rogue Location corrupt downstream Group IDs.
+// TestFetch_DiscardsOutOfRangeUpstreamElements: an upstream element outside the
+// requested sub-range disqualifies the response; the relay marks the whole
+// sub-range unknown instead.
 func TestFetch_DiscardsOutOfRangeUpstreamElements(t *testing.T) {
 	video := ns("video")
 	name := []byte("cam-rogue")

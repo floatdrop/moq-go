@@ -15,11 +15,9 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 )
 
-// TestFetch_DatagramObjectRoundTrips is the regression test for the §11.4.4.1
-// Datagram bit (0x40): an object published as an OBJECT_DATAGRAM and served
-// from the relay cache via FETCH must arrive with its payload intact and the
-// Datagram bit set — 0x40 marks the wire shape, it does NOT mean "Object
-// Status instead of payload" (FETCH objects carry no status field, §11.2.1.1).
+// TestFetch_DatagramObjectRoundTrips: an Object published as a datagram is
+// served by FETCH with its payload and the Datagram bit set (§11.4.4.1); FETCH
+// Objects carry no status (§11.2.1.1).
 func TestFetch_DatagramObjectRoundTrips(t *testing.T) {
 	t.Parallel()
 	pubSess, subSess, publisherAlias := publishAndCache(t)
@@ -92,10 +90,8 @@ func TestFetch_DatagramObjectRoundTrips(t *testing.T) {
 	}
 }
 
-// TestFetch_StatusMarkersNotServed pins §11.2.1.1 for the relay's FETCH
-// serializer: cached End-of-Group status markers are never serialized into a
-// FETCH response (the status field does not exist in FETCH objects), while a
-// zero-length Normal object (Status 0) is a real object and IS served.
+// TestFetch_StatusMarkersNotServed: cached End-of-Group status markers are not
+// served by FETCH, while a zero-length Normal Object is (§11.2.1.1).
 func TestFetch_StatusMarkersNotServed(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -153,12 +149,9 @@ func TestFetch_StatusMarkersNotServed(t *testing.T) {
 	}
 }
 
-// TestFetch_WholeGroupEndForm pins the §5.1.2 wire form "When EndObject is
-// omitted, the filter includes all objects in the End Group" end to end: a mid-group start with End={G,0} is a
-// valid range (validation used to reject it as end < start), the FETCH_OK
-// EndLocation is capped to the watermark+1 (capping used to echo {G,0}
-// uncapped), and the delivered objects run from the start to the group's
-// end.
+// TestFetch_WholeGroupEndForm: a LOCATION_FILTER without EndObject covers the
+// whole End Group (§5.1.2): a mid-group start is valid, FETCH_OK's EndLocation
+// is capped to the watermark, and Objects run to the group's end.
 func TestFetch_WholeGroupEndForm(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -179,9 +172,8 @@ func TestFetch_WholeGroupEndForm(t *testing.T) {
 	if ok == nil {
 		t.Fatal("FetchOK is nil")
 	}
-	// Largest is {0,2}; the whole-group request extends past it, so the response
-	// end is capped to Largest Object itself. draft-20 made FETCH_OK's End
-	// Location inclusive, so this is {0,2} — draft-19 encoded it as watermark+1.
+	// Largest is {0,2}; the whole-group request extends past it, so the
+	// inclusive response end is capped to Largest Object itself.
 	if ok.EndLocation.Group != 0 || ok.EndLocation.Object != 2 {
 		t.Fatalf("FETCH_OK EndLocation = {%d,%d}, want {0,2} (capped to Largest Object)",
 			ok.EndLocation.Group, ok.EndLocation.Object)
@@ -195,10 +187,8 @@ func TestFetch_WholeGroupEndForm(t *testing.T) {
 	}
 }
 
-// TestFetch_FromCacheAscending pins the 7d happy path: publisher emits
-// objects across two groups; subscriber FETCHes the full range; relay
-// returns each object in ascending (group asc, object asc) order with
-// payloads intact.
+// TestFetch_FromCacheAscending: a FETCH over two cached groups returns every
+// Object in ascending order with its payload.
 func TestFetch_FromCacheAscending(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -234,10 +224,8 @@ func TestFetch_FromCacheAscending(t *testing.T) {
 	}
 }
 
-// TestFetch_FromCacheDescending exercises the §10.2.8 / §11.4.4
-// Descending group-order path: groups arrive in reverse order; objects
-// within each group remain ascending (the spec keeps subgroup-internal
-// order ascending regardless of GroupOrder).
+// TestFetch_FromCacheDescending: with GroupOrder descending, groups arrive in
+// reverse while Objects within a group stay ascending (§10.2.8, §11.4.4).
 func TestFetch_FromCacheDescending(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -294,10 +282,8 @@ func TestFetch_RejectsStartBeyondLargest(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestInvalidRange)
 }
 
-// TestFetch_RejectsEmptyTrack pins the "no objects published yet" case
-// (§10.13): the relay knows the track but the watermark is
-// {0, 0}, so any FETCH (other than a request that ends at {0, 0})
-// has nothing to serve. REQUEST_ERROR / InvalidRange.
+// TestFetch_RejectsEmptyTrack: a FETCH of a known track with no Objects yet is
+// refused INVALID_RANGE (§10.13).
 func TestFetch_RejectsEmptyTrack(t *testing.T) {
 	t.Parallel()
 	pubSess, _, _ := publishAndCache(t)
@@ -313,12 +299,9 @@ func TestFetch_RejectsEmptyTrack(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestInvalidRange)
 }
 
-// TestSubscribe_FillCurrentGroup pins the §5.1.6 "join a Track at the current
-// Group" happy path, which draft-20 rebuilt on fill fetch streams: SUBSCRIBE
-// with a Next Object Location Filter plus FILL_PARAMETERS whose filter is
-// StartGroup=1. The relay must open a fill fetch stream carrying the current
-// group's cached objects — and key it to the SUBSCRIBE's own Request ID
-// (§5.1.3), since there is no FETCH to name it.
+// TestSubscribe_FillCurrentGroup: a Next Object SUBSCRIBE with FILL_PARAMETERS
+// StartGroup=1 gets a fill fetch stream with the current group, keyed to the
+// SUBSCRIBE's Request ID (§5.1.3, §5.1.6).
 func TestSubscribe_FillCurrentGroup(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -364,9 +347,7 @@ func TestSubscribe_FillCurrentGroup(t *testing.T) {
 	if !isFetch {
 		t.Fatalf("got %T, want *IncomingFetchStream — the fill must arrive on a fetch stream", ds)
 	}
-	// §5.1.3: "The FETCH_HEADER on the fill fetch stream carries the Request ID
-	// of the message that initiated it: the SUBSCRIBE Request ID for the initial
-	// fill." Getting this wrong strands the subscriber's demux handler.
+	// §5.1.3: the initial fill carries the SUBSCRIBE's Request ID.
 	if fs.Header.RequestID != subMsg.RequestID {
 		t.Errorf("fill FETCH_HEADER Request ID = %d, want the SUBSCRIBE's %d",
 			fs.Header.RequestID, subMsg.RequestID)
@@ -383,18 +364,9 @@ func TestSubscribe_FillCurrentGroup(t *testing.T) {
 	}
 }
 
-// TestSubscribe_FillWholeTrack pins the other §5.1.6 shape — fill everything up
-// to Largest Object, which draft-19 spelled as an Absolute Joining FETCH with
-// JoiningStart=0.
-//
-// The spelling matters, and it is easy to get wrong: §5.1.3 says the fill range
-// comes from "the Location filter inside FILL_PARAMETERS, or the subscription's
-// Location filter if it is omitted", and only "when the subscription has no
-// Location filter, or the LOCATION_FILTER inside FILL_PARAMETERS is
-// zero-length, the fill range is the entire track". So an *omitted* inner
-// filter here would inherit the subscription's Next Object filter and select an
-// empty range — no fill stream at all. The whole track needs the explicit
-// zero-length filter.
+// TestSubscribe_FillWholeTrack: a zero-length LOCATION_FILTER inside
+// FILL_PARAMETERS fills the whole track up to Largest Object (§5.1.3, §5.1.6);
+// an omitted one would inherit the subscription's filter instead.
 func TestSubscribe_FillWholeTrack(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -439,12 +411,9 @@ func TestSubscribe_FillWholeTrack(t *testing.T) {
 	}
 }
 
-// TestSubscribe_FillInheritsSubscriptionFilter pins the fallback in §5.1.3: with
-// no LOCATION_FILTER inside FILL_PARAMETERS the fill range is the subscription's
-// own filter. Paired with a Next Object subscription that range is empty, so no
-// fill stream opens — which is the correct reading of "or the subscription's
-// Location filter if it is omitted", and NOT the same as the zero-length filter
-// that means the whole track.
+// TestSubscribe_FillInheritsSubscriptionFilter: with no LOCATION_FILTER inside
+// FILL_PARAMETERS the fill range is the subscription's own (§5.1.3), which for a
+// Next Object filter is empty, so no fill stream opens.
 func TestSubscribe_FillInheritsSubscriptionFilter(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -477,16 +446,9 @@ func TestSubscribe_FillInheritsSubscriptionFilter(t *testing.T) {
 	}
 }
 
-// TestSubscribe_RequestUpdateOpensSecondFill pins the REQUEST_UPDATE half of
-// §5.1.3, which nothing else reaches: "As a result of REQUEST_UPDATE, a
-// subscription can have multiple fill fetch streams open at once, each
-// identified by its Request ID; opening a new fill fetch stream does not
-// implicitly cancel any previously opened fill fetch streams."
-//
-// The initial fill is keyed to the SUBSCRIBE's Request ID and the second to the
-// REQUEST_UPDATE's own. Keying both to the subscription would strand the
-// subscriber's demux handler for the second fill, and no other test would
-// notice.
+// TestSubscribe_RequestUpdateOpensSecondFill: FILL_PARAMETERS on a
+// REQUEST_UPDATE opens a second fill fetch stream keyed to the update's own
+// Request ID, without cancelling the first (§5.1.3).
 func TestSubscribe_RequestUpdateOpensSecondFill(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -530,14 +492,9 @@ func TestSubscribe_RequestUpdateOpensSecondFill(t *testing.T) {
 	}
 }
 
-// TestSubscribe_FillNotOpenedWhileForwardPaused pins §5.1.3.1's two negatives:
-// "FILL_PARAMETERS carried while Forward State is 0 opens no fill fetch stream.
-// Transitioning to Forward State 1 without re-sending FILL_PARAMETERS does not
-// open one either."
-//
-// Both are invisible without this test — a relay that ignored Forward State, or
-// that retained FILL_PARAMETERS as subscription state and replayed it on
-// resume, would pass every other fill test in the suite.
+// TestSubscribe_FillNotOpenedWhileForwardPaused: FILL_PARAMETERS while Forward
+// State is 0 opens no fill stream, nor does resuming without re-sending it
+// (§5.1.3.1).
 func TestSubscribe_FillNotOpenedWhileForwardPaused(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -598,11 +555,8 @@ func acceptFillStream(t *testing.T, sess *session.Session) uint64 {
 	return fs.Header.RequestID
 }
 
-// TestSubscribe_NoFillParametersOpensNoStream pins the other half of §10.2.15:
-// "a subscription with no FILL_PARAMETERS opens none". Presence of the
-// parameter is the whole request signal, so a plain SUBSCRIBE must not produce
-// a fetch stream — a subscriber that gets one would mistake filled Objects for
-// live ones.
+// TestSubscribe_NoFillParametersOpensNoStream: a SUBSCRIBE without
+// FILL_PARAMETERS opens no fetch stream (§10.2.15).
 func TestSubscribe_NoFillParametersOpensNoStream(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -629,19 +583,13 @@ func TestSubscribe_NoFillParametersOpensNoStream(t *testing.T) {
 	}
 }
 
-// TestFetch_PartialRangeCarriesPropertiesAndPriority verifies the
-// FetchObject encoding includes Properties (when present) and
-// PublisherPriority delta. We publish two objects with distinct
-// priorities, FETCH them, and confirm the decoded objects carry the
-// publisher's per-subgroup priority.
+// TestFetch_PartialRangeCarriesPriority: a FETCH of part of a group returns
+// both of its Objects.
 func TestFetch_PartialRangeCarriesPriority(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
 
-	// One subgroup, two objects — they share the subgroup's
-	// publisher priority. For this test we just verify the field
-	// round-trips at all; the inherited §12.4 default is pinned by
-	// TestDefaultPriority_Subgroup.
+	// The inherited §12.4 default is pinned by TestDefaultPriority_Subgroup.
 	publishObjects(t, pubSess, publisherAlias, 7, 2)
 	time.Sleep(50 * time.Millisecond)
 
@@ -659,10 +607,8 @@ func TestFetch_PartialRangeCarriesPriority(t *testing.T) {
 	}
 }
 
-// TestFetch_OKEndLocationCappedToWatermark pins §10.14: a FETCH whose requested
-// range extends beyond the relay's Largest Object has FETCH_OK.EndLocation
-// capped at Largest Object. draft-20 made both the request range and this field
-// inclusive, so the cap is Largest itself rather than draft-19's Largest + 1.
+// TestFetch_OKEndLocationCappedToWatermark: FETCH_OK's inclusive EndLocation is
+// capped at Largest Object when the request reaches past it (§10.14).
 func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -685,16 +631,9 @@ func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 	}
 }
 
-// TestSubscribe_FillOpensNoStreamOnEmptyTrack pins §5.1.3's "If the fill range
-// is empty, or starts after Largest Object, the publisher does not open a fill
-// fetch stream."
-//
-// The track exists — a publisher has claimed it — so SUBSCRIBE succeeds and
-// simply carries no LARGEST_OBJECT. draft-19 answered the equivalent Joining
-// FETCH with INVALID_RANGE; a fill has no REQUEST_ERROR of its own, so the
-// correct signal is the absence of a stream. This is the case the fea80fc
-// outage surfaced, where an upstream watermark was dropped rather than the
-// track being genuinely empty.
+// TestSubscribe_FillOpensNoStreamOnEmptyTrack: on a track with no Objects the
+// fill range is empty, so no fill stream opens and SUBSCRIBE_OK has no
+// LARGEST_OBJECT (§5.1.3).
 func TestSubscribe_FillOpensNoStreamOnEmptyTrack(t *testing.T) {
 	t.Parallel()
 	pubSess, _, _ := publishAndCache(t) // track published, no objects written
@@ -726,15 +665,8 @@ func TestSubscribe_FillOpensNoStreamOnEmptyTrack(t *testing.T) {
 	}
 }
 
-// TestSubscribe_FillRelativeStartClampsAtOrigin pins the clamp draft-20 chose
-// where draft-19 rejected. §5.1.2: "If a relative start group results in a
-// computed absolute group less than 0, the computed value is set to 0."
-//
-// draft-19's Relative Joining FETCH answered INVALID_RANGE when the count of
-// groups back exceeded the largest group; draft-20 clamps to the origin
-// instead, so a subscriber asking for more history than exists gets all of it
-// rather than an error. Reaching for group 5 back from group 0 must therefore
-// fill from {0,0}, not fail.
+// TestSubscribe_FillRelativeStartClampsAtOrigin: a relative fill start before
+// group 0 clamps to {0,0} rather than failing (§5.1.2).
 func TestSubscribe_FillRelativeStartClampsAtOrigin(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -780,12 +712,9 @@ func TestSubscribe_FillRelativeStartClampsAtOrigin(t *testing.T) {
 	}
 }
 
-// TestFetch_ObjectIDDeltaEncoding pins the relay's FETCH encoder to
-// §11.4.4.1 on the wire rather than through a decoder sharing its reading:
-// without a Group ID Delta "the Object ID is the prior Object's ID plus the
-// Object ID Delta" (no +1, unlike the subgroup rule), and a consecutive ID is
-// sent by omitting the field. Objects 0, 1 and 5 of one group must therefore
-// encode as: absolute 0, delta omitted, delta 4.
+// TestFetch_ObjectIDDeltaEncoding: on the wire, Objects 0, 1 and 5 of one group
+// encode as absolute 0, delta omitted, delta 4 — no +1 without a Group ID Delta
+// (§11.4.4.1).
 func TestFetch_ObjectIDDeltaEncoding(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, nil)

@@ -16,8 +16,9 @@ import (
 
 // Malformed tracks (§2.4.2): the relay ends downstream subscriptions with
 // PUBLISH_DONE MALFORMED_TRACK, resets fetch streams, and cancels its own
-// subscription upstream. Unknown Mandatory Track Properties (§2.5.1) refuse
-// the track the same way.
+// subscription upstream. An unknown Mandatory Track Property (§2.5.1) refuses
+// the track with REQUEST_ERROR UNSUPPORTED_EXTENSION, or resets a fetch stream
+// the relay already answered.
 
 // mandatoryProps carries the unknown Mandatory Track Property 0x4000. As Object
 // Properties it makes the track malformed (§2.5.1).
@@ -237,10 +238,9 @@ func TestRelay_UpstreamSubscribeOKTrackPropertiesRejected(t *testing.T) {
 	}
 }
 
-// TestRelay_UpstreamMandatoryPropertyWinsOverOtherFailure: with two
-// publishers for the namespace, one answering SUBSCRIBE_OK with an unknown
-// Mandatory Track Property and the other refusing, the downstream subscriber
-// still gets UNSUPPORTED_EXTENSION (§2.5.1), whichever publisher is tried last.
+// TestRelay_UpstreamMandatoryPropertyWinsOverOtherFailure: with one publisher
+// answering an unknown Mandatory Track Property and another refusing, the
+// subscriber gets UNSUPPORTED_EXTENSION in either order (§2.5.1).
 func TestRelay_UpstreamMandatoryPropertyWinsOverOtherFailure(t *testing.T) {
 	t.Parallel()
 	for _, mandatoryFirst := range []bool{true, false} {

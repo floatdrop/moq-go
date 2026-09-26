@@ -111,10 +111,9 @@ func (m *recordingMetrics) resetCount(cause relay.ResetCause) int {
 	return m.resets[cause]
 }
 
-// TestMetricsHooks drives a publish → subscribe → forward → fetch flow through
-// the relay with a recording [relay.Metrics] installed and asserts each hook
-// fires with the expected counts, including that the session/subscription
-// gauges balance once the relay tears down.
+// TestMetricsHooks: a publish, subscribe, forward and fetch flow fires each
+// [relay.Metrics] hook with the expected counts, and the gauges balance after
+// teardown.
 func TestMetricsHooks(t *testing.T) {
 	rec := &recordingMetrics{}
 	pubSess, teardown := connectRelay(t, relay.Config{Metrics: rec})
@@ -296,18 +295,9 @@ func drainFetch(t *testing.T, sess *session.Session) {
 	}
 }
 
-// TestLegString and TestResetCauseString pin the metric label values.
-//
-// These strings are an external contract, not a debug convenience: they become
-// label values in an operator's Prometheus/OTel backend, where renaming one
-// silently splits a time series in two and breaks every dashboard and alert
-// built on it. The doc comments promise them "stable" — this is what holds
-// them to that.
-//
-// The unknown arm carries its own weight. Both types document that a value
-// they do not recognise renders as "unknown" rather than as a number,
-// precisely so a new enum member added upstream cannot turn a bounded label
-// into unbounded label cardinality.
+// TestLegString and TestResetCauseString pin the metric label values, an
+// external contract; an unrecognised value renders "unknown" to keep label
+// cardinality bounded.
 func TestLegString(t *testing.T) {
 	t.Parallel()
 	for leg, want := range map[relay.Leg]string{
@@ -321,6 +311,7 @@ func TestLegString(t *testing.T) {
 	}
 }
 
+// TestResetCauseString: see TestLegString.
 func TestResetCauseString(t *testing.T) {
 	t.Parallel()
 	for cause, want := range map[relay.ResetCause]string{
