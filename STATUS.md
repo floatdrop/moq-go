@@ -547,8 +547,6 @@ Relay:
 - A client cannot SUBSCRIBE to a track it publishes under its own
   PUBLISH_NAMESPACE (§5.1).
 - RENDEZVOUS_TIMEOUT is ignored (§10.2.6 SHOULD hold the subscription; §9.5).
-- REQUEST_ERROR MALFORMED_TRACK, defined for FETCH, answers SUBSCRIBE, PUBLISH
-  and REQUEST_UPDATE failures (§10.6.2).
 - The relay keeps initiating requests on a session it sent GOAWAY to (§10.4
   SHOULD avoid).
 - A session that registers after `Stop` began is drained on its own grace

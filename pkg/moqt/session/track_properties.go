@@ -35,9 +35,8 @@ func (e *ErrUnsupportedMandatoryTrackProperty) Error() string {
 
 // ErrMalformedTrackProperties is wrapped by the error [ValidateTrackProperties]
 // returns when raw Track Properties do not parse: a Key-Value-Pair that
-// "cannot be parsed" makes the track malformed (§12.7, §2.4.2). Answering
-// with MALFORMED_TRACK, which §10.6 defines only for FETCH, is this package's
-// choice.
+// "cannot be parsed" makes the track malformed (§12.7, §2.4.2). A request is
+// refused with INTERNAL_ERROR (see [TrackPropertiesRejectCode]).
 var ErrMalformedTrackProperties = errors.New("moqt/session: malformed track properties")
 
 // ErrTrackPropertiesNotAllowed is returned, and nothing sent, when asked to
@@ -124,10 +123,12 @@ func (s *Session) checkTrackPropertyValues(raw []byte, context string) error {
 }
 
 // TrackPropertiesRejectCode is the REQUEST_ERROR code for a Track Properties
-// validation error: UNSUPPORTED_EXTENSION (§2.5.1) or MALFORMED_TRACK.
+// validation error on a PUBLISH or SUBSCRIBE: UNSUPPORTED_EXTENSION for an
+// unknown Mandatory Track Property (§2.5.1), else INTERNAL_ERROR.
+// MALFORMED_TRACK is defined only "In response to a FETCH" (§10.6.2).
 func TrackPropertiesRejectCode(err error) moqt.RequestErrorCode {
 	if _, ok := errors.AsType[*ErrUnsupportedMandatoryTrackProperty](err); ok {
 		return moqt.RequestUnsupportedExtension
 	}
-	return moqt.RequestMalformedTrack
+	return moqt.RequestInternalError
 }

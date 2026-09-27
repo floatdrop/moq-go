@@ -190,7 +190,8 @@ func TestTrackStatusFollowupClosesSession(t *testing.T) {
 
 // TestAcceptPublishTrackPropertiesRejected: a PUBLISH with an unknown
 // Mandatory Track Property is refused with UNSUPPORTED_EXTENSION (§2.5.1), and
-// unparseable Track Properties with MALFORMED_TRACK.
+// unparseable Track Properties with INTERNAL_ERROR (§10.6.2 defines
+// MALFORMED_TRACK only for FETCH).
 func TestAcceptPublishTrackPropertiesRejected(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -200,7 +201,7 @@ func TestAcceptPublishTrackPropertiesRejected(t *testing.T) {
 		{"unknown mandatory", message.AppendTrackProperties([]wire.KVPair{
 			{Type: message.MandatoryTrackPropertyMin, IntVal: 1},
 		}), moqt.RequestUnsupportedExtension},
-		{"malformed", []byte{0x01}, moqt.RequestMalformedTrack},
+		{"malformed", []byte{0x01}, moqt.RequestInternalError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, server := openPair(t,
