@@ -32,10 +32,11 @@ import (
 //     [RequestBroker.HandleUpdates], or declined with NOT_SUPPORTED when there
 //     is none, since acknowledging an unapplied update would misstate the
 //     request's state.
-//   - On the broker of a [Subscription], or of a [Publication] from
-//     [Session.Publish], a REQUEST_OK / REQUEST_ERROR before any Update, or a
-//     SUBSCRIBE_OK on a Subscription, is a second response to the request and
-//     closes the session (§5.1).
+//   - A REQUEST_OK / REQUEST_ERROR before this side sent any REQUEST_UPDATE
+//     answers nothing and closes the session: on a request this side sent it
+//     is a second response (§5.1, §5.2, §6.2), and on a stream this side
+//     answered only the requester sends REQUEST_UPDATE, bar a PUBLISH's
+//     subscriber (§10.9). So does a SUBSCRIBE_OK on a Subscription (§5.1).
 //   - On a [NamespaceSubscription]'s broker, a NAMESPACE_DONE for a suffix no
 //     NAMESPACE announced closes the session (§10.19).
 //   - A second GOAWAY on the stream, or one with a New Session URI received
@@ -248,7 +249,9 @@ var ErrRequestStreamClosed = errors.New("moqt/session: request stream closed")
 // NewRequestBroker builds a [RequestBroker] for an established request
 // stream. Typed request handles expose a Broker method that fills this in;
 // use this constructor for accept-side streams (a [Request] this endpoint
-// accepted).
+// accepted). On a request this side sent, read its response first: the
+// broker reads any REQUEST_OK or REQUEST_ERROR as answering a REQUEST_UPDATE,
+// and closes the session on one when none was sent.
 func (s *Session) NewRequestBroker(stream Stream) *RequestBroker {
 	return &RequestBroker{stream: stream, sess: s}
 }
@@ -513,10 +516,10 @@ func (b *RequestBroker) readFailed(ctx context.Context, err error) error {
 //
 // Responses route to Update waiters; a token cache fault closes the session
 // (§10.2.2); peer REQUEST_UPDATEs are answered as described on
-// [RequestBroker], and a second response to this side's SUBSCRIBE or PUBLISH
-// closes the session (§5.1). Every other message, including each
-// REQUEST_UPDATE and any other unsolicited response, is passed to onMsg (nil
-// means "discard"); return false from onMsg to stop serving.
+// [RequestBroker], and a REQUEST_OK or REQUEST_ERROR before this side sent a
+// REQUEST_UPDATE closes the session (§5.1, §10.9). Every other message,
+// including each REQUEST_UPDATE, is passed to onMsg (nil means "discard");
+// return false from onMsg to stop serving.
 //
 // A read error resets the read side with INTERNAL_ERROR; a malformed follow-up
 // also closes the session with PROTOCOL_VIOLATION (§10). Serve returns nil on
@@ -570,17 +573,17 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 		case *message.RequestOK, *message.RequestError:
 			// The request's own response was read before the broker
 			// attached, so every REQUEST_OK here is a REQUEST_UPDATE_OK
-			// (§10.5), even one whose Update gave up. Before any Update, on
-			// this side's SUBSCRIBE or PUBLISH, it is a second response to
-			// the request, a second PUBLISH_OK among them (§5.1).
-			if b.answered() != 0 {
-				b.mu.Lock()
-				updated := b.updated
-				b.mu.Unlock()
-				if !updated {
-					return b.sess.closeProtocolViolation(
-						fmt.Errorf("moqt/session: %s after the response, before any REQUEST_UPDATE", m.Type()))
-				}
+			// (§10.5), even one whose Update gave up. Before any Update it
+			// answers nothing: on a request this side sent it is a second
+			// response, a second PUBLISH_OK among them (§5.1, §5.2, §6.2),
+			// and on a stream this side answered the peer, as requester, was
+			// sent no REQUEST_UPDATE to answer (§10.9).
+			b.mu.Lock()
+			updated := b.updated
+			b.mu.Unlock()
+			if !updated {
+				return b.sess.closeProtocolViolation(
+					fmt.Errorf("moqt/session: %s before any REQUEST_UPDATE", m.Type()))
 			}
 			if err := b.sess.checkRequestOKTrackProperties(nil, m); err != nil {
 				return err
