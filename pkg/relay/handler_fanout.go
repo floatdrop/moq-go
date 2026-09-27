@@ -374,7 +374,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 
 	if created {
 		// Under sg.Mu so a concurrent contributor's joiner scan can't
-		// double-open. The stream is drained even with no subscribers (§9.7).
+		// double-open. The stream is drained even with no subscribers, so its
+		// Objects still reach the cache (§9.1) and any later joiner.
 		initialSubs, gen := entry.CopyDownstreamWithGen()
 		pubTimeouts := entry.DeliveryTimeouts()
 		lowest, forwarded := entry.LowestForwarded(hdr.GroupID, hdr.SubgroupID)

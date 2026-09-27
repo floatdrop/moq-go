@@ -125,8 +125,8 @@ type validator interface {
 }
 
 // ErrUnknownType is returned for a message type not implemented by this
-// package. Per §10 the receiver MUST close the session with
-// PROTOCOL_VIOLATION; callers translate accordingly.
+// package. Per §10 the receiver MUST close the session; §10 names no error
+// code for this, and callers close with PROTOCOL_VIOLATION.
 type ErrUnknownType Type
 
 func (e ErrUnknownType) Error() string {

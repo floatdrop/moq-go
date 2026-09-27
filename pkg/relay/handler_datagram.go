@@ -102,7 +102,8 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 
 	downstream := entry.CopyDownstream()
 	for _, sub := range downstream {
-		// §5.1.4: a datagram counts as subgroup 0.
+		// A datagram belongs to no Subgroup (§2.2), and §5.1.4 does not say
+		// how a SUBGROUP_FILTER treats one; the relay filters it as Subgroup 0.
 		if sub.ForwardDecision(d.GroupID, d.ObjectID, 0, d.PublisherPriority, d.Properties) != registry.Forward {
 			continue
 		}

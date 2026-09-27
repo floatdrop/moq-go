@@ -36,14 +36,18 @@ type ObjectDatagram struct {
 	ObjectPayload     []byte // Present when STATUS bit is 0
 }
 
-// IsValidDatagramType checks if a datagram type value is valid per §11.3.1
-// Figure 24: 0x00..0x0F / 0x20..0x21 / 0x24..0x25 / 0x28..0x29 / 0x2C..0x2D.
+// IsValidDatagramType checks if a datagram Type Flags value is valid per
+// §11.3.1. The only bits with a specified meaning are the five Datagram*Bit
+// flags, so the valid values are 0x00..0x0F / 0x20..0x21 / 0x24..0x25 /
+// 0x28..0x29 / 0x2C..0x2D.
 //
-// The two invalid classes MUST cause a session PROTOCOL_VIOLATION:
+// §11.3.1 lists the invalid values, which MUST close the session with a
+// PROTOCOL_VIOLATION:
 //
-//   - values outside the 0b00X0XXXX form (i.e. not 0x00..0x0F / 0x20..0x2F);
-//   - STATUS+END_OF_GROUP (0x22,0x23,0x26,0x27,0x2A,0x2B,0x2E,0x2F) — "an
-//     object status message cannot signal end of group".
+//   - bit 4 (0x10) set, or any bit set whose meaning is not specified (i.e.
+//     not 0x00..0x0F / 0x20..0x2F);
+//   - both STATUS and END_OF_GROUP set (0x22,0x23,0x26,0x27,0x2A,0x2B,0x2E,
+//     0x2F).
 //
 // Note STATUS+PROPERTIES (0x21,0x25,0x29,0x2D) IS a valid type: it only
 // becomes an error when the Object Status is not Normal (0x0) — a per-value

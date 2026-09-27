@@ -155,9 +155,10 @@ func IsSubgroupHeaderType(t uint64) bool {
 
 // IsReservedSubgroupHeaderType reports whether t looks like a SUBGROUP_HEADER
 // type byte (bit 4 set, bit 7 clear) but has the reserved SUBGROUP_ID_MODE
-// value 0b11 in bits 1-2. Per §11.4.2, receiving such a value MUST be treated
-// as a session-level PROTOCOL_VIOLATION — unlike a truly unknown stream type,
-// which may be ignorable (GREASE).
+// value 0b11 in bits 1-2. Per §11.4.2, receiving such a value MUST close the
+// session with a PROTOCOL_VIOLATION. §3.4 also requires closing the session on
+// a truly unknown stream type; this lets the caller report the reserved mode
+// distinctly from an unknown type.
 func IsReservedSubgroupHeaderType(t uint64) bool {
 	if t > 0x7F {
 		return false

@@ -136,7 +136,8 @@ func (h *sessionHandler) serveForwardedPublish(
 	if _, err := h.sess.AwaitPublishOK(ctx, stream); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "forwarded PUBLISH refused",
 			slog.String("name", string(fullName.Name)), slog.String("err", err.Error()))
-		// §3.3.3: no PUBLISH_DONE after the subscriber's REQUEST_ERROR.
+		// §5.1, §5.1.1: the subscriber's REQUEST_ERROR terminates the
+		// subscription, so no PUBLISH_DONE follows.
 		sub.EndRefused()
 		return
 	}

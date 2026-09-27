@@ -14,8 +14,8 @@ const paddingDatagramType uint64 = 0x132B3E29
 
 // ReceiveDatagram blocks until a QUIC DATAGRAM frame arrives from the peer,
 // parses it, and returns the contained ObjectDatagram. PADDING datagrams
-// (§11.3) are silently consumed and the call retries. Unknown datagram types
-// close the session with PROTOCOL_VIOLATION per §11.
+// (§11.5.2) are silently consumed and the call retries. Unknown datagram types
+// close the session (§11) with PROTOCOL_VIOLATION.
 //
 // Transport-level errors (session closed, ctx cancelled) are returned
 // unwrapped so the caller can distinguish them from parse failures.

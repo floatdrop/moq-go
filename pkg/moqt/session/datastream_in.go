@@ -242,8 +242,11 @@ type IncomingFetchStream struct {
 	// newGroup = prevGroup + delta + 1; descending → newGroup =
 	// prevGroup - delta - 1. The §11.4.4 wire format does not encode
 	// the direction; the caller knows it from the GROUP_ORDER
-	// parameter it sent in FETCH (or from the publisher default).
-	// Defaults to ascending when unset (zero value).
+	// parameter it sent in FETCH (§10.2.8: Ascending when omitted) or,
+	// for a fill fetch stream, from FILL_PARAMETERS, else the
+	// subscription's group order (§10.2.15), which defaults to the
+	// Track's publisher preference (§10.2.8). Defaults to ascending when
+	// unset (zero value).
 	GroupOrder message.GroupOrder
 
 	// Decoder state used by ReadDecoded — running absolute values
