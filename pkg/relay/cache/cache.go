@@ -333,7 +333,7 @@ func (c *ObjectCache) Len() int {
 //   - [message.GroupOrderDescending]: groups desc, objects asc within group.
 //
 // Within a group the inner order is always ascending by Object ID, matching
-// §11.4.3's subgroup-stream constraint.
+// §10.13: "Within each group, objects are sent in Object ID order".
 //
 // An empty or inverted range (end < start) returns nil.
 //

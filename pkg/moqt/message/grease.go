@@ -12,9 +12,10 @@ import (
 // GREASE values follow the pattern 0x7F * N + 0x9D for non-negative integer
 // values of N (that is, 0x9D, 0x11C, 0x19B, ..., 0x3FFFFFFFFFFFFFDE).
 //
-// Implementations SHOULD send GREASE values in extensible fields to exercise
-// recipient tolerance. Recipients MUST ignore unknown values and MUST NOT
-// close the session solely because they received one.
+// §14 reserves GREASE values in the Setup Options, Properties, error-code, and
+// Auth Token Type registries: implementations "MUST handle unknown values
+// gracefully", and endpoints "MUST NOT close the session solely because they
+// received an unknown value".
 
 // greaseBase and greaseStep define the GREASE value pattern: base + step*N.
 const (
@@ -31,7 +32,7 @@ const maxGreaseN uint64 = (0x3FFFFFFFFFFFFFFF - greaseBase) / greaseStep
 // returned value is suitable for use as a Setup Option type, Property type,
 // or error code. Each call returns a fresh random value.
 func GreaseValue() uint64 {
-	//nolint:gosec // G404: GREASE values are deliberately non-cryptographic (§1.4.3); randomness only spreads coverage.
+	//nolint:gosec // G404: GREASE values are deliberately non-cryptographic; randomness only spreads coverage.
 	n := rand.Uint64N(maxGreaseN + 1)
 	return greaseBase + greaseStep*n
 }

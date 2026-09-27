@@ -152,7 +152,8 @@ func WithTokenVerifier(v TokenVerifier) Option {
 // into the outbound SETUP message to exercise the peer's tolerance of unknown
 // values. GREASE values follow the pattern 0x7F * N + 0x9D and are always
 // larger than all currently defined SETUP option types, so appending preserves
-// the ascending-Type ordering required by §1.4.3.
+// the non-decreasing Type order that §1.4.3's Delta Type encoding requires
+// (Setup Options are Key-Value-Pairs, not §10.2 Message Parameters).
 func WithGrease() Option {
 	return func(c *config) {
 		c.setupOptions = append(c.setupOptions, message.GreaseSetupOption())

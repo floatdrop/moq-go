@@ -32,14 +32,15 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session/quicconn"
 )
 
-// MOQTQUICALPNs lists the raw-QUIC MOQT ALPNs the relay accepts. Draft-19
-// SETUP carries no version field (§3.1), so the "moqt-NN" ALPN is itself the
-// draft-version signal — the negotiated ALPN fixes the draft. We advertise
-// only "moqt-20", the draft this implementation speaks. The older
-// "moqt-18"/"-17"/"-16" and the pre-15 "moq-00" (which expected in-SETUP
-// version negotiation, removed in -19) are deliberately not offered: our -19
-// wire behavior can't complete a SETUP with a peer that selected any of them,
-// so advertising them would only let such a peer clear TLS and then fail.
+// MOQTQUICALPNs lists the raw-QUIC MOQT ALPNs the relay accepts. SETUP
+// carries no version field (§10.3); MOQT negotiates the version with ALPN
+// (§3.1), so the "moqt-NN" ALPN is itself the draft-version signal — the
+// negotiated ALPN fixes the draft. We advertise only "moqt-20", the draft this
+// implementation speaks. The older "moqt-19"/"-18"/"-17"/"-16" and "moq-00"
+// (used before -15, followed by version negotiation in SETUP — §3.1) are
+// deliberately not offered: our -20 wire behavior can't complete a SETUP with
+// a peer that selected any of them, so advertising them would only let such a
+// peer clear TLS and then fail.
 var MOQTQUICALPNs = []string{"moqt-20"}
 
 // defaultQUICConfig returns the QUIC tuning the relay listens and dials with:

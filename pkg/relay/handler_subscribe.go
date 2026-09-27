@@ -656,8 +656,11 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	if goingAway(sess) {
 		return nil, nil, errGoingAway
 	}
-	// §9.4: always Next Object (§5.1.2), so one upstream serves every
-	// downstream filter; the fanout applies those.
+	// Always Next Object (§5.1.2: StartGroup and StartObject both 0): every
+	// downstream SUBSCRIBE aggregates onto this one upstream (§9.4 MAY), and
+	// the fanout applies each downstream filter. The upstream passes only
+	// Objects after Largest Object as of when it is processed, so on its own
+	// it cannot serve a downstream range that starts earlier.
 	filter := &message.LocationFilter{Fields: 2}
 
 	params := message.Parameters{message.LocationFilterParam(filter)}
