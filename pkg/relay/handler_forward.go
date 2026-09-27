@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -13,6 +14,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
+
+// testHookBeforeForwardClaim, when set by a test, runs as forwardTrack is
+// about to claim the track, to hold a forward there while another one runs.
+var testHookBeforeForwardClaim atomic.Pointer[func(track.FullTrackName)]
 
 // forwardTrack is a SUBSCRIBE_TRACKS subscriber's [registry.SubscriberEntry.ForwardTrack]:
 // it sends the subscriber a PUBLISH for te (§6.1) with the current
@@ -35,16 +40,27 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 		}
 		// §6.1: "excluding tracks published by the subscriber". Relay policy,
 		// not §6.1: nor a track it receives on its own SUBSCRIBE. The in-flight
-		// check comes first, as the SUBSCRIBE registers its downstream before
-		// it stops being in flight.
+		// check comes before HasDownstreamOn, as the SUBSCRIBE registers its
+		// downstream before it stops being in flight; and before the claim, so
+		// the held forward's replay does not find the claim still taken.
 		key := fullName.Key()
-		if te.HasUpstreamOn(h.sess) || h.holdForward(key, sub) || te.HasDownstreamOn(h.sess) {
+		if te.HasUpstreamOn(h.sess) || h.holdForward(key, sub) {
 			return
+		}
+		if hook := testHookBeforeForwardClaim.Load(); hook != nil {
+			(*hook)(fullName)
 		}
 		// The claim covers a forward whose downstream is not registered yet,
 		// and is refused while a PUBLISH_SKIPPED holds for this upstream epoch.
 		epoch := te.UpstreamEpoch()
 		if !sub.ClaimForward(key, epoch) {
+			return
+		}
+		// Checked under the claim: a forward releases it only once its
+		// downstream is registered, so whichever forward claims second sees
+		// that downstream and sends no second PUBLISH.
+		if te.HasDownstreamOn(h.sess) {
+			sub.ReleaseForward(key)
 			return
 		}
 		var properties []byte
