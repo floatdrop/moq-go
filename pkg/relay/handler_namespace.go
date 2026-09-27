@@ -109,7 +109,7 @@ func (h *sessionHandler) subscribeMissingPublishers(
 	now := time.Now()
 	entry.RetainRefusals(pubs, now)
 	for _, pub := range pubs {
-		if pub.Session == h.sess || (!reused && pub.Seq <= seq) ||
+		if (!reused && pub.Seq <= seq) ||
 			entry.HasUpstreamOn(pub.Session) || entry.Refused(pub, now) {
 			continue
 		}
@@ -127,7 +127,9 @@ func (h *sessionHandler) subscribeMissingPublishers(
 //
 // Deviation (§9.5 does not qualify "each matching subscription"): skipped
 // while the track has no downstream, since the upstream would never be
-// released, and while pub itself receives the track, which would echo it.
+// released. A pub that itself receives the track is SUBSCRIBEd too (§5.1:
+// self-subscriptions "are identical to subscriptions initiated by other
+// endpoints").
 func (h *sessionHandler) subscribeLatePublisher(
 	ctx context.Context,
 	fullName track.FullTrackName,
@@ -135,8 +137,7 @@ func (h *sessionHandler) subscribeLatePublisher(
 ) {
 	pub := pubEntry.Session
 	e, ok := h.tracks.Get(fullName.Key())
-	if !ok || !hasEstablishedUpstream(e) || len(e.CopyDownstream()) == 0 || e.HasDownstreamOn(pub) ||
-		e.Refused(pubEntry, time.Now()) {
+	if !ok || !hasEstablishedUpstream(e) || len(e.CopyDownstream()) == 0 || e.Refused(pubEntry, time.Now()) {
 		return
 	}
 	release, claimed := h.tracks.ClaimUpstream(pub, fullName.Key())

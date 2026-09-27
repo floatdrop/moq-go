@@ -96,6 +96,9 @@ type TrackRegistry struct {
 	// claims holds the upstream SUBSCRIBEs in flight, one per (session,
 	// track); see [TrackRegistry.ClaimUpstream]. Guarded by mu.
 	claims map[upstreamClaim]struct{}
+	// fetches counts the stitch FETCHes in flight, per (session, track); see
+	// [TrackRegistry.BeginFetch]. Guarded by mu.
+	fetches map[upstreamClaim]int
 }
 
 type upstreamClaim struct {
@@ -217,6 +220,32 @@ func (r *TrackRegistry) ClaimUpstream(sess *session.Session, key track.Key) (rel
 		delete(r.claims, c)
 		r.mu.Unlock()
 	}, true
+}
+
+// BeginFetch marks a stitch FETCH for key on sess as in flight until done;
+// see [TrackRegistry.FetchPending].
+func (r *TrackRegistry) BeginFetch(sess *session.Session, key track.Key) (done func()) {
+	c := upstreamClaim{sess: sess, key: key}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.fetches == nil {
+		r.fetches = make(map[upstreamClaim]int)
+	}
+	r.fetches[c]++
+	return func() {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.fetches[c]--; r.fetches[c] == 0 {
+			delete(r.fetches, c)
+		}
+	}
+}
+
+// FetchPending reports whether a stitch FETCH for key on sess is in flight.
+func (r *TrackRegistry) FetchPending(sess *session.Session, key track.Key) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.fetches[upstreamClaim{sess: sess, key: key}] > 0
 }
 
 // ReleaseIfUnsubscribed removes the on-demand upstream up from the entry for

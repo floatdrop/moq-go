@@ -308,7 +308,9 @@ func (h *sessionHandler) stitchedFetchObjects(
 		return fetchElements(cached, unknown, nil, order), nil
 	}
 	span := registry.LocRange{Lo: unknown[0].Lo, Hi: unknown[len(unknown)-1].Hi}
+	done := h.tracks.BeginFetch(up.Session, fullName.Key())
 	ans, refusal := h.fetchUpstreamRange(ctx, up, fullName, span, order, fillTimeout)
+	done()
 	if errors.Is(refusal, session.ErrMalformedTrack) {
 		h.endMalformedTrack(ctx, entry, up.Session, refusal)
 	}
@@ -360,20 +362,27 @@ func intersect(a, b []registry.LocRange) []registry.LocRange {
 	return out
 }
 
-// pickFetchUpstream returns an Established, fetch-capable upstream on a
-// different session the relay can issue a stitch FETCH to, or nil.
+// pickFetchUpstream returns an Established, fetch-capable upstream the relay
+// can issue a stitch FETCH to, or nil.
 //
 // Only upstreams the relay reached via an on-demand SUBSCRIBE (a relay/origin,
 // marked FetchCapable in subscribeUpstream) are eligible: a directly-connected
 // leaf publisher pushes live objects and is not expected to answer FETCH, so
-// stitching to it would only stall. Skipping the requester's own session
-// avoids a self-loop (mirrors subscribeUpstream's guard).
+// stitching to it would only stall. The requester's own session is eligible
+// like any other, as FETCH follows SUBSCRIBE's matching rules (§9.5) and a
+// self-subscription is "identical" to any other (§5.1). Deviation: not while
+// a stitch FETCH for the track to it is in flight, since this request may be
+// that FETCH routed back, and a second one would loop (§6.2); a concurrent
+// FETCH looks the same. Either way the hole is marked unknown (§10.13).
 func (h *sessionHandler) pickFetchUpstream(entry *registry.TrackEntry) *registry.UpstreamSub {
 	for _, u := range entry.CopyUpstream() {
-		if u.FetchCapable && u.IsEstablished() && u.Session != nil && u.Session != h.sess &&
-			!goingAway(u.Session) {
-			return u
+		if !u.FetchCapable || !u.IsEstablished() || u.Session == nil || goingAway(u.Session) {
+			continue
 		}
+		if u.Session == h.sess && h.tracks.FetchPending(u.Session, entry.FullName.Key()) {
+			continue
+		}
+		return u
 	}
 	return nil
 }

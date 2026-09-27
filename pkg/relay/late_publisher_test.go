@@ -298,9 +298,11 @@ func TestRelay_PublishNamespaceDuringPendingSubscribe(t *testing.T) {
 	awaitAcceptedSubscribe(t, lateSubs, "video/"+name)
 }
 
-// TestRelay_LatePublishNamespaceSkipsItsOwnDownstream: a session receiving the
-// track is not asked to publish it back.
-func TestRelay_LatePublishNamespaceSkipsItsOwnDownstream(t *testing.T) {
+// TestRelay_LatePublishNamespaceSubscribesItsOwnDownstream: a session receiving
+// the track that then PUBLISH_NAMESPACEs its namespace is SUBSCRIBEd for it
+// like any other covering publisher (§9.5); a self-subscription is "identical
+// to subscriptions initiated by other endpoints" (§5.1).
+func TestRelay_LatePublishNamespaceSubscribesItsOwnDownstream(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)
 	subSess := newCam1Subscriber(t, pubSess)
@@ -311,7 +313,7 @@ func TestRelay_LatePublishNamespaceSkipsItsOwnDownstream(t *testing.T) {
 	); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
-	requireNoSubscribe(t, own)
+	awaitAcceptedSubscribe(t, own, "video/cam1")
 }
 
 // TestRelay_OverlappingPublishNamespacesSubscribeOnce: one session sends two

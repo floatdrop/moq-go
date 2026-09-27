@@ -538,8 +538,12 @@ Relay:
   goes upstream and may fail, and a leftover entry with Track Properties or a
   LARGEST_OBJECT but no established upstream answers OK where SUBSCRIBE would
   go upstream.
-- A client cannot SUBSCRIBE to a track it publishes under its own
-  PUBLISH_NAMESPACE (§5.1).
+- A client's SUBSCRIBE to a track it publishes gets DOES_NOT_EXIST while an
+  upstream SUBSCRIBE for that track to the client is still pending, and its
+  FETCH marks a hole unknown while a stitch FETCH for the track to it is in
+  flight: the relay cannot tell either from its own request routed back to it
+  by a relay peer (§6.2 has no loop protection), so it declines the second hop
+  rather than loop. Self-subscriptions are otherwise "identical" (§5.1).
 - RENDEZVOUS_TIMEOUT is ignored (§10.2.6 SHOULD hold the subscription; §9.5).
 - A SUBSCRIBE whose only candidate upstream is a draining relay reached through
   the upstream pool gets DOES_NOT_EXIST, not the GOING_AWAY a draining local
