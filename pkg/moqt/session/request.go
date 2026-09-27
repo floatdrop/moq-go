@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -716,7 +717,10 @@ func (s *Session) readResponse(ctx context.Context, stream Stream) (message.Mess
 // response. An OK is handed to onOK, which then owns the stream; REQUEST_ERROR
 // (§10.6) becomes a *RequestRejectedError; anything else is an error, and for
 // SUBSCRIBE_NAMESPACE and SUBSCRIBE_TRACKS also closes the session (§10.19,
-// §10.20). On either failure the stream is closed.
+// §10.20). On either failure the stream is closed. One GOAWAY ahead of the
+// response is checked, the response still awaited, and the GOAWAY put back as
+// the stream's first follow-up (§10.4), bar where the response must come
+// first.
 func awaitRequestResponse[OK message.Message, R any](
 	ctx context.Context,
 	s *Session,
@@ -729,6 +733,22 @@ func awaitRequestResponse[OK message.Message, R any](
 		return zero, err
 	}
 	resp, err := s.readResponse(ctx, stream)
+	// §10.4: "A GOAWAY MAY also be sent on a request stream to initiate
+	// migration of that individual request", before its response too, save
+	// where the response MUST be "the first message" (§6.1, §6.2). It is
+	// checked as any on the stream is, and left for the stream's next reader,
+	// as one after the response is; the request is still answered.
+	if g, isGoaway := resp.(*message.Goaway); isGoaway && err == nil && !responseFirst(m.Type()) {
+		var goaways RequestGoaways
+		if gerr := goaways.Received(s, g); gerr != nil {
+			return zero, gerr
+		}
+		resp, err = s.readResponse(ctx, stream)
+		if g2, again := resp.(*message.Goaway); again && err == nil {
+			return zero, goaways.Received(s, g2) // a second GOAWAY (§10.4)
+		}
+		stream = replayMessage(stream, g)
+	}
 	if err != nil {
 		_ = stream.Close()
 		return zero, fmt.Errorf("moqt/session: read %s response: %w", m.Type(), err)
@@ -761,6 +781,31 @@ func awaitRequestResponse[OK message.Message, R any](
 		return zero, s.closeProtocolViolation(err)
 	}
 	return zero, err
+}
+
+// responseFirst reports whether the response to a request of type t MUST be
+// the first message on its stream: to SUBSCRIBE_NAMESPACE and SUBSCRIBE_TRACKS
+// (§6.1), and to PUBLISH_NAMESPACE (§6.2).
+func responseFirst(t message.Type) bool {
+	return t == message.TypePublishNamespace || t == message.TypeSubscribeNamespace ||
+		t == message.TypeSubscribeTracks
+}
+
+// replayStream is a request stream whose reads begin with a message already
+// read off it. A handle's Stream is one after an early GOAWAY.
+type replayStream struct {
+	Stream
+
+	r io.Reader
+}
+
+func (s *replayStream) Read(p []byte) (int, error) { return s.r.Read(p) }
+
+// replayMessage returns stream with m put back ahead of what it has left.
+func replayMessage(stream Stream, m message.Message) Stream {
+	var buf bytes.Buffer
+	_ = message.Marshal(&buf, m) // a message just parsed re-encodes
+	return &replayStream{Stream: stream, r: io.MultiReader(&buf, stream)}
 }
 
 // UpdateRequest sends a REQUEST_UPDATE (§10.9) with a fresh Request ID (§10.1)

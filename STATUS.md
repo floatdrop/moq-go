@@ -188,7 +188,7 @@ By package, bottom-up along the dependency stack:
 | 10.3.1.5| MOQT_IMPLEMENTATION           | 0x07   | DONE   | Advisory. |
 | 10.3.1.6| MAX_FILTER_RANGES             | 0x06   | DONE   | `WithMaxFilterRanges` advertises it; relay rejects over-limit/prohibited filters with INVALID_FILTER. The relay advertises `relay.DefaultMaxFilterRanges` (16) rather than inheriting the session default of 0, which would prohibit the Range Filters it fully implements; `relay.Config.MaxFilterRanges` overrides, negative to prohibit. |
 | 10.3.1.7| MAX_REQUEST_UPDATES           | 0x08   | DONE   | `WithMaxRequestUpdates` advertises the per-stream limit; enforced on inbound follow-ups via `RequestUpdateLimiter`, closing with `TOO_MANY_REQUEST_UPDATES` on overflow. |
-| 10.4    | GOAWAY                        | 0x10   | DONE   | Same encoding on control and request streams (draft-19 dropped the Request ID field); callback. As recipient the relay initiates no new SUBSCRIBE, FETCH or PUBLISH to the peer and leaves closing the session to the sender. On a request stream (`RequestBroker.Serve` and the relay's readers after the response; `session.RequestGoaways` for callers that read one themselves) a second GOAWAY, or one with a New Session URI received by a server, closes the session with PROTOCOL_VIOLATION; a single one is handed to the reader, and neither side migrates the request. |
+| 10.4    | GOAWAY                        | 0x10   | DONE   | Same encoding on control and request streams (draft-19 dropped the Request ID field); callback. As recipient the relay initiates no new SUBSCRIBE, FETCH or PUBLISH to the peer and leaves closing the session to the sender. On a request stream (`RequestBroker.Serve` and the relay's readers after the response; `session.RequestGoaways` for callers that read one themselves) a second GOAWAY, or one with a New Session URI received by a server, closes the session with PROTOCOL_VIOLATION; a single one is handed to the reader, and neither side migrates the request. One before the response is checked the same way, the request still awaits its response, and the GOAWAY is the stream's first follow-up; bar PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE and SUBSCRIBE_TRACKS, whose response MUST come first (§6.1, §6.2). |
 | 10.5    | REQUEST_OK                    | 0x07   | DONE   | Shared OK for PUBLISH/UPDATE/TRACK_STATUS/namespace reqs. Track Properties where they must be empty close the session on receipt and are refused on send (`ErrTrackPropertiesNotAllowed`). |
 | 10.6    | REQUEST_ERROR (+ Redirect)    | 0x05   | DONE   | Redirect required only when code==REDIRECT, and exposed as `RequestRejectedError.Redirect`; `Request.Reject` sends one. A Connect URI received by a server, or a Track Name for SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE / SUBSCRIBE_TRACKS, closes the session (§10.6.1), and `Reject` refuses to send either; on a REQUEST_UPDATE's answer only the Connect URI is checked, as the reader does not know the request, and an update handler's REDIRECT is sent as INTERNAL_ERROR (§10.6.2 does not list REQUEST_UPDATE). The relay does not follow a Redirect: an upstream REDIRECT becomes INTERNAL_ERROR downstream. `Request.Reject` sends a Retry Interval; the relay invites a jittered ~1 s retry on EXCESSIVE_LOAD and passes an upstream SUBSCRIBE rejection on by meaning, Retry Interval kept. |
 | 10.7    | SUBSCRIBE                     | 0x03   | DONE   | |
@@ -518,13 +518,6 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
 A second full review against draft-ietf-moq-transport-20 (2026-09-26, at
 `dbe571e`) found the gaps below. Each item names the rule it misses. Items
 already listed as Limitations above are not repeated here.
-
-Session layer:
-
-- A GOAWAY on a request stream before its initial response (other than to
-  SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS, where §10.19/§10.20 make it a
-  PROTOCOL_VIOLATION) is an error rather than a legal message checked
-  against §10.4.
 
 Relay:
 
