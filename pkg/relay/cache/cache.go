@@ -71,6 +71,11 @@ type CachedObject struct {
 	MaxCacheDuration    time.Duration
 	HasMaxCacheDuration bool
 
+	// Stitched marks an Object read from an upstream FETCH for one response
+	// rather than stored: ReceivedAt is when it was read, and only a positive
+	// MaxCacheDuration bounds it, not the relay's TTL (see [ObjectCache.Expired]).
+	Stitched bool
+
 	// EndOfUnknownRange marks this element as a §11.4.4.2 End of Unknown
 	// Range (0x10C) FETCH marker rather than a stored object: every Location
 	// from the previous element in the response stream (exclusive) through
@@ -258,12 +263,20 @@ func (c *ObjectCache) notExpiredLocked(obj *CachedObject) bool {
 	return c.maxAge <= 0 || age <= c.maxAge
 }
 
-// Expired reports whether obj, taken from this cache, may no longer be
-// served (§12.3: "MUST NOT start forwarding"). Elements the cache did not
-// store (range markers, Objects stitched from upstream) never expire.
+// Expired reports whether obj, in a FETCH or fill response on this cache's
+// track, may no longer be served (§12.3: "MUST NOT start forwarding"): one
+// taken from this cache within its own MAX_CACHE_DURATION and the relay's TTL
+// (see notExpiredLocked). Range markers never expire. An
+// Object stitched from an upstream FETCH expires only past its own
+// MAX_CACHE_DURATION ("any individual Object received through this
+// subscription or fetch"); a present 0 sets no limit on it, since it is passed
+// through rather than served from the cache (interpretation).
 func (c *ObjectCache) Expired(obj *CachedObject) bool {
-	if obj.ReceivedAt.IsZero() {
+	switch {
+	case obj.ReceivedAt.IsZero():
 		return false
+	case obj.Stitched:
+		return obj.MaxCacheDuration > 0 && time.Since(obj.ReceivedAt) > obj.MaxCacheDuration
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
