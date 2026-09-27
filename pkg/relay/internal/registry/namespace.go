@@ -232,6 +232,9 @@ type NamespaceRegistry struct {
 
 	// seq is the Seq of the last registered publisher. Guarded by mu.
 	seq uint64
+	// arrivals are the waiters for a publisher of a namespace, by its wire
+	// key; see [NamespaceRegistry.AwaitPublisher]. Guarded by mu.
+	arrivals arrivals[string]
 
 	// remote is the namespaces Discovery reports other relays advertise, by
 	// wire key; see [NamespaceRegistry.RemoteNamespace]. Guarded by mu.
@@ -304,8 +307,19 @@ func (r *NamespaceRegistry) RegisterPublisher(
 		// [NamespaceRegistry.unpublishNamespaceFromDiscovery].
 		r.publishNamespaceToDiscovery(ns)
 	}
+	r.arrivals.notifyCoveredLocked(ns)
 	r.mu.Unlock()
 	return entry
+}
+
+// AwaitPublisher returns a channel closed once a publisher of a namespace
+// covering ns next registers, or a remote relay newly advertises one, for a
+// SUBSCRIBE held until its track has a publisher (§10.2.6), and the stop that
+// ends the wait.
+func (r *NamespaceRegistry) AwaitPublisher(ns wire.TrackNamespace) (arrived <-chan struct{}, stop func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.arrivals.waitLocked(namespaceWireKey(ns), ns, &r.mu)
 }
 
 // AnnouncePublisher makes entry a source of its namespace for

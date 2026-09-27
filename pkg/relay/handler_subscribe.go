@@ -23,8 +23,9 @@ var testHookBeforeDownstreamRegistered atomic.Pointer[func(track.FullTrackName)]
 
 // handleSubscribe implements the SUBSCRIBE flow (§9.4, §10.7): authorize,
 // serve from an Established upstream or establish one on demand (see
-// [sessionHandler.subscribeUpstream]), else reject with
-// [moqt.RequestDoesNotExist]; then register a [registry.DownstreamSub], reply
+// [sessionHandler.acquireUpstream]), else reject with
+// [moqt.RequestDoesNotExist], or with [moqt.RequestTimeout] once a
+// RENDEZVOUS_TIMEOUT hold expires (§10.2.6); then register a [registry.DownstreamSub], reply
 // SUBSCRIBE_OK, and serve the request stream until it ends.
 func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Request, msg *message.Subscribe) {
 	h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE received",
@@ -38,8 +39,8 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 
 	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 
-	// §10.2.19: a NEW_GROUP_REQUEST rides a new upstream SUBSCRIBE (rule 1),
-	// or is evaluated against an existing upstream below.
+	// §10.2.19: a NEW_GROUP_REQUEST rides a new upstream SUBSCRIBE (rule 1;
+	// see acquireUpstream), or is evaluated against an existing upstream below.
 	newGroupReqParam, hasNewGroupReq := msg.Parameters.Find(message.ParamNewGroupRequest)
 
 	// §11.1: outbound aliases are independent of the peer's inbound ones.
@@ -60,49 +61,18 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		reusedUpstream  bool
 		added           bool
 	)
-	// Publishers that register after this point are picked up below, once the
-	// downstream is on the entry.
-	pubSeq := h.names.Seq()
+	// Publishers that register after acquireUpstream looked are picked up
+	// below, once the downstream is on the entry.
+	var pubSeq uint64
 	// In flight until the downstream is registered; see
 	// [sessionHandler.beginSubscribe].
 	settled := h.beginSubscribe(fullName.Key())
 	defer settled()
+	rv := h.newRendezvous(msg.Parameters)
 	for range 2 {
-		e, ok := h.tracks.Get(fullName.Key())
-		if !ok || !hasEstablishedUpstream(e) {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE no established upstream, trying on-demand",
-				slog.Bool("entry_exists", ok))
-			var extra message.Parameters
-			if hasNewGroupReq {
-				extra = message.Parameters{message.NewGroupRequestParam(newGroupReqParam.Varint)}
-			}
-			// §9.2: Forward=1 upstream only if some downstream forwards; sub
-			// is not on the entry yet, so it is checked directly.
-			wantForward := sub.ForwardState() == 1 || anyDownstreamForwards(e)
-			_, established, err := h.subscribeUpstream(ctx, fullName, extra, wantForward)
-			if err != nil {
-				h.log.LogAttrs(ctx, slog.LevelInfo, "SUBSCRIBE rejected: upstream subscribe failed",
-					slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
-					slog.String("name", string(msg.Name)),
-					slog.Uint64("request_id", msg.RequestID),
-					slog.String("err", err.Error()))
-				rej := upstreamRejection(err)
-				rej.Reason = "relay: no upstream for track: " + err.Error()
-				_ = req.Reject(rej)
-				return
-			}
-			if !established {
-				h.log.LogAttrs(ctx, slog.LevelInfo, "SUBSCRIBE rejected: no publisher for namespace",
-					slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
-					slog.String("name", string(msg.Name)),
-					slog.Uint64("request_id", msg.RequestID))
-				_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no publisher for namespace")
-				return
-			}
-			reusedUpstream = false
-		} else {
-			reusedUpstream = true
-			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE serving from existing upstream")
+		var ok bool
+		if reusedUpstream, pubSeq, ok = h.acquireUpstream(ctx, req, msg, sub, rv); !ok {
+			return
 		}
 
 		// Before registration, so the first stream opened for it already
@@ -387,6 +357,185 @@ func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName 
 	}
 }
 
+// acquireUpstream makes sure msg's track has an Established upstream, reusing
+// one or establishing one on demand (see [sessionHandler.subscribeUpstream]),
+// and reports whether it reused one and the publisher Seq it looked at. When
+// there is none it answers req with REQUEST_ERROR and reports ok=false, after
+// holding the SUBSCRIBE for a publisher up to rv's deadline if rv is non-nil
+// (§10.2.6).
+func (h *sessionHandler) acquireUpstream(
+	ctx context.Context,
+	req *session.Request,
+	msg *message.Subscribe,
+	sub *registry.DownstreamSub,
+	rv *rendezvous,
+) (reused bool, pubSeq uint64, ok bool) {
+	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
+	for {
+		// Begun before looking, so a publisher arriving meanwhile is not
+		// missed; it also cuts short an upstream relay's hold (see
+		// subscribeUpstream) once a publisher arrives here.
+		lookCtx := ctx
+		var look *holdLook
+		if rv != nil {
+			look = h.beginHoldLook(ctx, req, fullName)
+			lookCtx = look.ctx
+		}
+		pubSeq = h.names.Seq()
+		e, found := h.tracks.Get(fullName.Key())
+		if found && hasEstablishedUpstream(e) {
+			look.end()
+			h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE serving from existing upstream")
+			return true, pubSeq, true
+		}
+		h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE no established upstream, trying on-demand",
+			slog.Bool("entry_exists", found))
+		var extra message.Parameters
+		if p, ok := msg.Parameters.Find(message.ParamNewGroupRequest); ok {
+			extra = message.Parameters{message.NewGroupRequestParam(p.Varint)}
+		}
+		// §9.2: Forward=1 upstream only if some downstream forwards; sub
+		// is not on the entry yet, so it is checked directly.
+		wantForward := sub.ForwardState() == 1 || anyDownstreamForwards(e)
+		_, established, err := h.subscribeUpstream(lookCtx, fullName, extra, wantForward, rv)
+		if established {
+			look.end()
+			return false, pubSeq, true
+		}
+		// A relay draining this session holds nothing (§10.4).
+		if look != nil && !goingAway(h.sess) && (awaitsPublisher(err) || lookCtx.Err() != nil) {
+			arrived := look.wait(rv.deadline)
+			look.end()
+			if arrived {
+				continue
+			}
+			if ctx.Err() != nil || req.Stream.Context().Err() != nil {
+				return false, 0, false // the subscriber or the session is gone
+			}
+			h.log.LogAttrs(ctx, slog.LevelInfo, "SUBSCRIBE rejected: no publisher within RENDEZVOUS_TIMEOUT",
+				slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
+				slog.String("name", string(msg.Name)),
+				slog.Uint64("request_id", msg.RequestID))
+			// §10.2.6: "If the timeout expires without a publisher, the relay
+			// SHOULD respond with REQUEST_ERROR with error code TIMEOUT."
+			_ = req.RejectError(moqt.RequestTimeout, "relay: no publisher within RENDEZVOUS_TIMEOUT")
+			return false, 0, false
+		}
+		look.end()
+		if err != nil {
+			h.log.LogAttrs(ctx, slog.LevelInfo, "SUBSCRIBE rejected: upstream subscribe failed",
+				slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
+				slog.String("name", string(msg.Name)),
+				slog.Uint64("request_id", msg.RequestID),
+				slog.String("err", err.Error()))
+			rej := upstreamRejection(err)
+			rej.Reason = "relay: no upstream for track: " + err.Error()
+			_ = req.Reject(rej)
+			return false, 0, false
+		}
+		h.log.LogAttrs(ctx, slog.LevelInfo, "SUBSCRIBE rejected: no publisher for namespace",
+			slog.String("namespace", fmt.Sprintf("%v", msg.Namespace)),
+			slog.String("name", string(msg.Name)),
+			slog.Uint64("request_id", msg.RequestID))
+		// §10.2.6: without RENDEZVOUS_TIMEOUT, or with 0, "The relay MUST
+		// immediately return REQUEST_ERROR with error code DOES_NOT_EXIST".
+		_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no publisher for namespace")
+		return false, 0, false
+	}
+}
+
+// rendezvous is a SUBSCRIBE held for a publisher (§10.2.6).
+type rendezvous struct {
+	deadline time.Time
+	// asked are the sessions tried for the track during the hold, those
+	// already serving it included; one that answered is not asked again when
+	// another publisher arrives.
+	asked map[*session.Session]bool
+}
+
+// newRendezvous returns the hold ps's RENDEZVOUS_TIMEOUT asks for, capped at
+// [Config.MaxRendezvousTimeout] ("The relay MAY use a shorter timeout than
+// requested", §10.2.6), or nil for none: absent, 0, or a cap of 0.
+func (h *sessionHandler) newRendezvous(ps message.Parameters) *rendezvous {
+	p, ok := ps.Find(message.ParamRendezvousTimeout)
+	if !ok || p.Varint == 0 || h.maxRendezvous <= 0 {
+		return nil
+	}
+	d := h.maxRendezvous
+	if p.Varint < uint64(d.Milliseconds()) { //nolint:gosec // G115: maxRendezvous is positive.
+		d = message.MillisecondTimeout(p.Varint)
+	}
+	return &rendezvous{deadline: time.Now().Add(d), asked: make(map[*session.Session]bool)}
+}
+
+// errPublisherArrived ends a [holdLook] once a publisher arrives.
+var errPublisherArrived = errors.New("relay: publisher arrived")
+
+// holdLook is one look for a publisher during a hold: ctx ends once a
+// publisher arrives for the track (errPublisherArrived), or the subscriber
+// cancels the SUBSCRIBE, or the session ends.
+type holdLook struct {
+	ctx     context.Context
+	cancel  context.CancelCauseFunc
+	stopped func()
+}
+
+func (h *sessionHandler) beginHoldLook(
+	ctx context.Context,
+	req *session.Request,
+	fullName track.FullTrackName,
+) *holdLook {
+	trackArrived, stopTrack := h.tracks.AwaitUpstream(fullName.Key())
+	nsArrived, stopNS := h.names.AwaitPublisher(fullName.Namespace)
+	lookCtx, cancel := context.WithCancelCause(ctx)
+	go func() {
+		select {
+		case <-trackArrived:
+			cancel(errPublisherArrived)
+		case <-nsArrived:
+			cancel(errPublisherArrived)
+		case <-req.Stream.Context().Done():
+			cancel(nil)
+		case <-lookCtx.Done():
+		}
+	}()
+	return &holdLook{ctx: lookCtx, cancel: cancel, stopped: func() { stopTrack(); stopNS() }}
+}
+
+// wait blocks until the look ends or deadline passes, and reports whether a
+// publisher arrived.
+func (l *holdLook) wait(deadline time.Time) bool {
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-l.ctx.Done():
+	case <-timer.C:
+	}
+	return errors.Is(context.Cause(l.ctx), errPublisherArrived)
+}
+
+// end releases the look; a nil look is none.
+func (l *holdLook) end() {
+	if l == nil {
+		return
+	}
+	l.cancel(nil)
+	l.stopped()
+}
+
+// awaitsPublisher reports whether err, from [sessionHandler.subscribeUpstream],
+// leaves the track without a current publisher: none matched (nil), or every
+// one that did answered DOES_NOT_EXIST, or TIMEOUT for an upstream relay's own
+// hold, or is draining (§10.4), since subscribeUpstream reports such an error
+// only when no other kind occurred.
+func awaitsPublisher(err error) bool {
+	if err == nil || errors.Is(err, errGoingAway) {
+		return true
+	}
+	rej, ok := errors.AsType[*session.RequestRejectedError](err)
+	return ok && (rej.Code == moqt.RequestDoesNotExist || rej.Code == moqt.RequestTimeout)
+}
+
 // subscribeUpstream subscribes fullName on every matching source (§9.5):
 // each local publisher of a covering namespace and each remote relay
 // Discovery resolves (capped by Config.UpstreamFanIn), skipping sessions
@@ -399,12 +548,22 @@ func (h *sessionHandler) subscribeUpstream(
 	fullName track.FullTrackName,
 	extra message.Parameters,
 	wantForward bool,
+	rv *rendezvous,
 ) (*registry.TrackEntry, bool, error) {
-	// Never subscribe twice on one session. The requester's own session is a
+	// Never subscribe twice on one session, nor, while rv holds the
+	// SUBSCRIBE, on one asked before. The requester's own session is a
 	// candidate like any other: "An endpoint MAY SUBSCRIBE to a Track it is
 	// publishing ... Such self-subscriptions are identical to subscriptions
 	// initiated by other endpoints" (§5.1).
 	subscribed := map[*session.Session]bool{}
+	remoteExtra := extra
+	if rv != nil {
+		subscribed = rv.asked
+		// §10.2.6: an upstream relay holds it for what is left of the budget.
+		if left := time.Until(rv.deadline); left > 0 {
+			remoteExtra = append(slices.Clip(extra), message.RendezvousTimeoutParam(left))
+		}
+	}
 	if entry, ok := h.tracks.Get(fullName.Key()); ok {
 		for _, u := range entry.CopyUpstream() {
 			subscribed[u.Session] = true
@@ -416,8 +575,8 @@ func (h *sessionHandler) subscribeUpstream(
 		anyEstab    bool
 		lastErr     error
 	)
-	establish := func(sess *session.Session, src string) {
-		if subscribed[sess] {
+	establish := func(sess *session.Session, src string, params message.Parameters) {
+		if subscribed[sess] || ctx.Err() != nil {
 			return
 		}
 		subscribed[sess] = true // even on failure: don't retry the same source here
@@ -436,11 +595,19 @@ func (h *sessionHandler) subscribeUpstream(
 		}
 		h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: issuing upstream SUBSCRIBE",
 			slog.String("source", src))
-		entry, _, err := h.subscribeUpstreamOnSession(ctx, sess, fullName, extra, wantForward)
+		entry, _, err := h.subscribeUpstreamOnSession(ctx, sess, fullName, params, wantForward)
 		if err != nil {
-			// Keep going. A Track Properties refusal outranks other errors:
-			// §2.5.1 fixes its downstream code.
-			if !isTrackPropertiesErr(lastErr) {
+			if ctx.Err() != nil {
+				// A held SUBSCRIBE's look was cut short (see
+				// acquireUpstream): sess is asked again on the next.
+				delete(subscribed, sess)
+				return
+			}
+			// Keep going. A Track Properties refusal outranks other errors
+			// (§2.5.1 fixes its downstream code), and any error outranks
+			// one that only says the track has no publisher yet, so a
+			// held SUBSCRIBE ends on it (see awaitsPublisher).
+			if isTrackPropertiesErr(err) || (!isTrackPropertiesErr(lastErr) && awaitsPublisher(lastErr)) {
 				lastErr = err
 			}
 			h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: candidate failed, continuing",
@@ -458,12 +625,12 @@ func (h *sessionHandler) subscribeUpstream(
 		slog.String("namespace", fmt.Sprintf("%v", fullName.Namespace)),
 		slog.Int("publishers_found", len(publishers)))
 	for _, pub := range publishers {
-		establish(pub.Session, "local-publisher")
+		establish(pub.Session, "local-publisher", extra)
 	}
 
 	remotes := h.upstreams.resolveUpstreams(ctx, fullName.Namespace)
 	for _, remote := range remotes {
-		establish(remote, "discovery-remote")
+		establish(remote, "discovery-remote", remoteExtra)
 	}
 
 	if anyEstab {

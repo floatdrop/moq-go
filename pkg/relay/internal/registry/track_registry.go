@@ -99,6 +99,9 @@ type TrackRegistry struct {
 	// fetches counts the stitch FETCHes in flight, per (session, track); see
 	// [TrackRegistry.BeginFetch]. Guarded by mu.
 	fetches map[upstreamClaim]int
+	// arrivals are the waiters for a track's next upstream; see
+	// [TrackRegistry.AwaitUpstream]. Guarded by mu.
+	arrivals arrivals[track.Key]
 }
 
 type upstreamClaim struct {
@@ -453,7 +456,17 @@ func (r *TrackRegistry) AddUpstream(
 	if becameNonEmpty {
 		r.publishTrackToDiscovery(entry)
 	}
+	r.arrivals.notifyLocked(fullName.Key())
 	return entry, becameNonEmpty
+}
+
+// AwaitUpstream returns a channel closed once an upstream is next added for
+// key, for a SUBSCRIBE held until its track has one (§10.2.6), and the stop
+// that ends the wait.
+func (r *TrackRegistry) AwaitUpstream(key track.Key) (arrived <-chan struct{}, stop func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.arrivals.waitLocked(key, nil, &r.mu)
 }
 
 // AddUpstreamOption tweaks an [TrackRegistry.AddUpstream] call.

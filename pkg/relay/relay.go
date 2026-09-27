@@ -177,6 +177,16 @@ type Config struct {
 	// EXCESSIVE_LOAD. Zero (the default) means unlimited.
 	MaxNamespaceRequestsPerSession int
 
+	// MaxRendezvousTimeout caps how long the relay holds a SUBSCRIBE that
+	// carries RENDEZVOUS_TIMEOUT for a track with no publisher, waiting for
+	// one to appear (§10.2.6: "The relay MAY use a shorter timeout than
+	// requested by the subscriber"). What is left of the hold is forwarded
+	// on the relay's upstream SUBSCRIBEs to other relays, so the cap bounds
+	// theirs too. Zero means: use the default of 30s. A negative value holds
+	// none: the SUBSCRIBE is answered DOES_NOT_EXIST at once, as if
+	// RENDEZVOUS_TIMEOUT were 0.
+	MaxRendezvousTimeout time.Duration
+
 	// Discovery is the cross-instance track + namespace advertisement
 	// fabric. nil means "no discovery" — the relay still works as a
 	// single-instance setup with no cross-relay routing. Single-process
@@ -235,8 +245,9 @@ type Config struct {
 // resolved Config defaults; kept as constants so tests can reference them
 // without poking at private fields.
 const (
-	defaultSendQueueSize = 64
-	defaultMaxFanoutLag  = 2 * time.Second
+	defaultSendQueueSize        = 64
+	defaultMaxFanoutLag         = 2 * time.Second
+	defaultMaxRendezvousTimeout = 30 * time.Second
 )
 
 // DefaultMaxFilterRanges is the MAX_FILTER_RANGES (§10.3.1.6) budget a relay
@@ -341,6 +352,9 @@ func New(listener Listener, cfg Config) *Relay {
 	}
 	if cfg.MaxFanoutLag <= 0 {
 		cfg.MaxFanoutLag = defaultMaxFanoutLag
+	}
+	if cfg.MaxRendezvousTimeout == 0 {
+		cfg.MaxRendezvousTimeout = defaultMaxRendezvousTimeout
 	}
 	// Prepended, so it is the SETUP budget unless the caller states one — and
 	// stated twice it is advertised twice, which is why [Config.MaxFilterRanges]
@@ -619,6 +633,7 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session, leg Leg
 		r.cfg.Discovery, r.cfg.RelayAddr,
 		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,
+		max(r.cfg.MaxRendezvousTimeout, 0),
 		r.handlers.Go,
 	)
 	if err := handler.run(ctx); err != nil {

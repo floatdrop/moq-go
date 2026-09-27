@@ -52,6 +52,8 @@ type sessionHandler struct {
 	sendQueueSize       int
 	maxDropsBeforeReset int
 	maxFanoutLag        time.Duration
+	// maxRendezvous caps RENDEZVOUS_TIMEOUT (§10.2.6); 0 holds no SUBSCRIBE.
+	maxRendezvous time.Duration
 
 	// limiter enforces the §13.1 / §13.7.1 per-session resource caps.
 	limiter sessionLimiter
@@ -96,6 +98,7 @@ func newSessionHandler(
 	maxFanoutLag time.Duration,
 	maxSubsPerSession int,
 	maxNamespaceReqsPerSession int,
+	maxRendezvous time.Duration,
 	relayGo func(func()),
 ) *sessionHandler {
 	return &sessionHandler{
@@ -113,6 +116,7 @@ func newSessionHandler(
 		sendQueueSize:       sendQueueSize,
 		maxDropsBeforeReset: maxDropsBeforeReset,
 		maxFanoutLag:        maxFanoutLag,
+		maxRendezvous:       maxRendezvous,
 		limiter:             sessionLimiter{maxSubs: maxSubsPerSession, maxNS: maxNamespaceReqsPerSession},
 		relayGo:             relayGo,
 	}
