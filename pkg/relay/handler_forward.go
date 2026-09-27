@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
+	"sync"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
@@ -15,7 +18,7 @@ import (
 // it sends the subscriber a PUBLISH for te (§6.1) with the current
 // SUBSCRIBE_TRACKS parameters (§10.20.1) and serves the resulting
 // subscription. At most one PUBLISH per track, and none for a track the
-// subscriber publishes or already receives.
+// subscriber publishes, already receives, or is SUBSCRIBing to.
 func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.SubscriberEntry, *registry.TrackEntry) {
 	return func(sub *registry.SubscriberEntry, te *registry.TrackEntry) {
 		if peerSentGoaway(h.sess) {
@@ -30,13 +33,16 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 		if !tp.RangeFilters.MatchesTrack(te.GetProperties()) {
 			return
 		}
-		// §6.1: "excluding tracks published by the subscriber".
-		if te.HasUpstreamOn(h.sess) || te.HasDownstreamOn(h.sess) {
+		// §6.1: "excluding tracks published by the subscriber". Relay policy,
+		// not §6.1: nor a track it receives on its own SUBSCRIBE. The in-flight
+		// check comes first, as the SUBSCRIBE registers its downstream before
+		// it stops being in flight.
+		key := fullName.Key()
+		if te.HasUpstreamOn(h.sess) || h.holdForward(key, sub) || te.HasDownstreamOn(h.sess) {
 			return
 		}
 		// The claim covers a forward whose downstream is not registered yet,
 		// and is refused while a PUBLISH_SKIPPED holds for this upstream epoch.
-		key := fullName.Key()
 		epoch := te.UpstreamEpoch()
 		if !sub.ClaimForward(key, epoch) {
 			return
@@ -130,4 +136,70 @@ func (h *sessionHandler) serveForwardedPublish(
 		h.propagateNewGroupUpstream(ctx, fullName, p.Varint)
 	}
 	h.readSubscribeUpdates(ctx, stream, sub, fullName, true)
+}
+
+// inflightSubscribe is a track's SUBSCRIBEs in flight on one session.
+type inflightSubscribe struct {
+	n int
+	// held are the SUBSCRIBE_TRACKS entries whose forward of the track was
+	// held back meanwhile; see [sessionHandler.holdForward].
+	held []*registry.SubscriberEntry
+}
+
+// beginSubscribe marks a SUBSCRIBE for key in flight on this session until
+// end, which may run more than once. From before it establishes an upstream
+// until its downstream is registered, the track can have an upstream and no
+// downstream here, so [sessionHandler.forwardTrack] would otherwise offer the
+// SUBSCRIBE_TRACKS holders on this session the track it is SUBSCRIBing to.
+//
+// When the last SUBSCRIBE for key ends, the forwards held back are offered
+// again: forwardTrack declines them if a SUBSCRIBE registered its downstream,
+// and sends them if none did, since the track is then received no other way
+// (§10.20).
+func (h *sessionHandler) beginSubscribe(key track.Key) (end func()) {
+	h.subscribingMu.Lock()
+	defer h.subscribingMu.Unlock()
+	if h.subscribing == nil {
+		h.subscribing = make(map[track.Key]*inflightSubscribe)
+	}
+	f := h.subscribing[key]
+	if f == nil {
+		f = &inflightSubscribe{}
+		h.subscribing[key] = f
+	}
+	f.n++
+	return sync.OnceFunc(func() {
+		h.subscribingMu.Lock()
+		f.n--
+		var held []*registry.SubscriberEntry
+		if f.n == 0 {
+			delete(h.subscribing, key)
+			held = f.held
+		}
+		h.subscribingMu.Unlock()
+		if len(held) == 0 {
+			return
+		}
+		if te, ok := h.tracks.Get(key); ok && hasEstablishedUpstream(te) {
+			for _, sub := range held {
+				sub.ForwardTrack(sub, te)
+			}
+		}
+	})
+}
+
+// holdForward reports whether a SUBSCRIBE for key is in flight on this session
+// (see [sessionHandler.beginSubscribe]), recording sub to be offered the track
+// again once none is.
+func (h *sessionHandler) holdForward(key track.Key, sub *registry.SubscriberEntry) bool {
+	h.subscribingMu.Lock()
+	defer h.subscribingMu.Unlock()
+	f := h.subscribing[key]
+	if f == nil {
+		return false
+	}
+	if !slices.Contains(f.held, sub) {
+		f.held = append(f.held, sub)
+	}
+	return true
 }

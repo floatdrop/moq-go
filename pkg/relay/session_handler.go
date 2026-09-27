@@ -63,6 +63,11 @@ type sessionHandler struct {
 	// to be registered; see [sessionHandler.resolveInboundTrack].
 	earlyStreams atomic.Int32
 
+	// subscribing holds, per track, this session's SUBSCRIBEs that have not
+	// registered their downstream yet; see [sessionHandler.beginSubscribe].
+	subscribingMu sync.Mutex
+	subscribing   map[track.Key]*inflightSubscribe
+
 	// relayGo runs fn on a RELAY-scoped goroutine (joined by Relay.Stop,
 	// not by this handler's run). Used for work whose lifetime must outlive
 	// this session — e.g. the reader of an on-demand upstream stream, which
