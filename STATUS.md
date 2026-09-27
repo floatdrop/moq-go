@@ -497,6 +497,10 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   Properties, and neither SUBSCRIBE_OK nor the FETCH_HEADER carries a Group
   Order, so it cannot tell a Descending fill from an Ascending one. A gap in the
   draft; a subscriber that asks for a fill avoids it by sending GROUP_ORDER.
+- **SUBGROUP_FILTER on datagrams (§5.1.4, §2.2)** — an interpretation. A
+  Datagram Object "does not belong to a Subgroup in any way" (§2.2), and
+  §5.1.4 does not say how a Subgroup filter treats one; the relay filters it
+  as Subgroup 0.
 - **FETCH End of Range markers in Descending order (§11.4.4.2)** — an
   interpretation. A marker covers "Locations between the last serialized
   Object, if any, and this Location"; the relay reads "between" in the order
@@ -545,10 +549,6 @@ Relay:
   yield DOES_NOT_EXIST while the reverse yields GOING_AWAY. An upstream relay
   that answers GOING_AWAY itself, before its GOAWAY reaches this relay, is
   passed on as INTERNAL_ERROR.
-
-Documentation:
-
-- About a dozen stale `§` citations (padding, grease, fetch ordering, caching).
 
 Open questions for interop: whether an End of Range marker carries an Object
 Payload Length (Figure 28 vs §11.4.4.2), and whether EXPIRES may appear in
