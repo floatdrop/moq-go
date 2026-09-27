@@ -568,6 +568,32 @@ func TestIncludeProperties_SubscribeOK(t *testing.T) {
 	}
 }
 
+// TestIncludeProperties_SurvivesUpdate: a REQUEST_UPDATE cannot carry
+// INCLUDE_PROPERTIES, so it leaves the subscription's 0 in force: "If a
+// parameter previously set on the request is not present in REQUEST_UPDATE,
+// its value remains unchanged" (§10.9). Subgroups after the update still carry
+// the priority inline.
+func TestIncludeProperties_SurvivesUpdate(t *testing.T) {
+	t.Parallel()
+	pubSess, alias := newCam1Publisher(t, priorityTrackProps())
+	subSess := dialAnotherClient(t, pubSess)
+	sub := subscribeCam1(t, subSess, noProps())
+	if _, err := sub.Update(t.Context(), message.Parameters{message.SubscriberPriorityParam(9)}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	go sendObjects(pubSess, alias, 1, 1)
+	ds, ok := tryAcceptDataStream(t, subSess, 2*time.Second)
+	if !ok {
+		t.Fatal("no subgroup forwarded")
+	}
+	sg := ds.(*session.IncomingSubgroupStream)
+	if !sg.Header.InlinePriority || sg.Header.PublisherPriority != trackDefaultPriority {
+		t.Fatalf("forwarded header after the update inline=%v priority=%d, want inline priority %d",
+			sg.Header.InlinePriority, sg.Header.PublisherPriority, trackDefaultPriority)
+	}
+}
+
 // TestIncludeProperties_Datagram: forwarded datagrams carry the priority
 // explicitly.
 func TestIncludeProperties_Datagram(t *testing.T) {

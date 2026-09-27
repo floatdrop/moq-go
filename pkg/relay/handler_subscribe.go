@@ -594,7 +594,11 @@ func installSubscribeParams(sub *registry.DownstreamSub, ps message.Parameters) 
 	if p, ok := ps.Find(message.ParamGroupOrder); ok {
 		sub.SetGroupOrder(p.Byte)
 	}
-	sub.SetIncludeProperties(includeProperties(ps))
+	// §10.9: absent from a REQUEST_UPDATE (it cannot appear there,
+	// §10.2.21), INCLUDE_PROPERTIES "remains unchanged".
+	if p, ok := ps.Find(message.ParamIncludeProperties); ok {
+		sub.SetIncludeProperties(p.Byte != 0)
+	}
 
 	// §10.2.3 / §10.2.4: each timeout separately, so an update of one does
 	// not zero ("no timeout", §8) the other.
@@ -647,8 +651,9 @@ func includeProperties(ps message.Parameters) bool {
 //
 // An unknown Mandatory Track Property is UNSUPPORTED_EXTENSION (§2.5.1);
 // unparseable Track Properties make the track malformed (§12.7, §2.4.2), and
-// MALFORMED_TRACK answers them (an interpretation: §10.6 defines it for FETCH). An upstream REQUEST_ERROR code about the track
-// or the publisher's load passes through with its Retry Interval (§10.6.2),
+// MALFORMED_TRACK answers them (an interpretation: §10.6 defines it for
+// FETCH). An upstream REQUEST_ERROR code about the track or the publisher's
+// load passes through with its Retry Interval (§10.6.2),
 // MALFORMED_TRACK included though §10.6.2 scopes it to FETCH; one about the
 // relay's own hop or its Next Object filter, or an unknown one, becomes
 // INTERNAL_ERROR. If the relay ever combines downstream filters
