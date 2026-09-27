@@ -136,7 +136,7 @@ By package, bottom-up along the dependency stack:
 
 | §   | Feature                       | Status | Notes |
 |-----|-------------------------------|--------|-------|
-| 8   | Delivery timeouts / reliability| PARTIAL| OBJECT_DELIVERY_TIMEOUT enforced on subgroup streams in `session/datastream_out.go`; SUBGROUP_DELIVERY_TIMEOUT only where the transport reports acknowledgement (`session.DeliveryTrackingSendStream`), which no bundled adapter does, so not on quic-go or WebTransport; reset w/ `StreamResetDeliveryTimeout`. Datagrams are never dropped for either timeout (§8 "MUST drop the datagrams"). See Limitations. OBJECT_DELIVERY_TIMEOUT is measured per object from its receipt time (`WriteObjectReceivedAt`), not from stream open. `WithDeliveryTimeouts` takes the publisher's and subscriber's halves separately so the §12.1/§12.2 first-object override resolves within the publisher's half before `DeliveryTimeouts.Effective` takes the smaller of the two. The relay sources both sides — the publisher's Track Properties (decoded once onto the entry) and the subscriber's SUBSCRIBE parameters (§10.2.3/§10.2.4) — and passes them to every subgroup stream it opens downstream, resetting that stream alone with DELIVERY_TIMEOUT while the subscription continues. Not enforced on the raw `Write` path (no object boundaries) or inbound — see Limitations. |
+| 8   | Delivery timeouts / reliability| PARTIAL| OBJECT_DELIVERY_TIMEOUT enforced on subgroup streams in `session/datastream_out.go`; SUBGROUP_DELIVERY_TIMEOUT only where the transport reports acknowledgement (`session.DeliveryTrackingSendStream`), which no bundled adapter does, so not on quic-go or WebTransport; reset w/ `StreamResetDeliveryTimeout`. Datagrams are never dropped for either timeout (§8 "MUST drop the datagrams"). See Limitations. OBJECT_DELIVERY_TIMEOUT is measured per object from its receipt time (`WriteObjectReceivedAt`), not from stream open. `WithDeliveryTimeouts` takes the publisher's and subscriber's halves separately so the §12.1/§12.2 first-object override resolves within the publisher's half before `DeliveryTimeouts.Effective` takes the smaller of the two. The relay sources both sides — the publisher's Track Properties (decoded once onto the entry) and the subscriber's SUBSCRIBE parameters (§10.2.3/§10.2.4) — and passes them to every subgroup stream it opens downstream (a replay stream, which starts past the Subgroup's first Object, gets that Object's override from the fanout), resetting that stream alone with DELIVERY_TIMEOUT while the subscription continues. Not enforced on the raw `Write` path (no object boundaries) or inbound — see Limitations. |
 
 ## §9 Relays
 
@@ -532,8 +532,6 @@ Relay:
 
 - A merged Subgroup FINs when one contributor ends cleanly although its Objects
   began after ones a reset contributor never delivered (§11.4.3).
-- Replay streams (joiners, gap and properties reopens) lose the first Object's
-  delivery-timeout override (§8, §12.1, §12.2).
 - FETCH_OK never sets End Of Track (§10.14).
 - A cancelled FETCH keeps writing its data stream (§5.2: "MUST reset").
 - Objects from an upstream FETCH are exempt from MAX_CACHE_DURATION, and cached
