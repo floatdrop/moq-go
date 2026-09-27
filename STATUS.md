@@ -530,10 +530,6 @@ Session layer:
 
 Relay:
 
-- Any REQUEST_UPDATE turns INCLUDE_PROPERTIES=0 back off, so the subscriber
-  resolves the wrong default Publisher Priority. §10.9: a parameter absent from
-  REQUEST_UPDATE "remains unchanged", and INCLUDE_PROPERTIES cannot appear in
-  one (§10.2.21, §12.4).
 - A merged Subgroup FINs when one contributor ends cleanly although its Objects
   began after ones a reset contributor never delivered (§11.4.3).
 - Replay streams (joiners, gap and properties reopens) lose the first Object's
