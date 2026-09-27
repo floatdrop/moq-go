@@ -179,7 +179,8 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 
 	// §5.1.3: FILL_PARAMETERS asks for a fill fetch stream; AcceptRequest
 	// has closed the session on a malformed one.
-	if err := h.maybeServeFill(ctx, sub, entry, fullName, msg.RequestID, msg.Parameters); err != nil {
+	if err := h.maybeServeFill(ctx, sub, entry, fullName, msg.RequestID, msg.Parameters,
+		snapshotLargest, snapshotHas); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
 			slog.String("err", err.Error()))
 	}
@@ -289,8 +290,12 @@ func (h *sessionHandler) handleSubscribeUpdate(
 
 	// §10.2.17: LARGEST_OBJECT in REQUEST_UPDATE_OK too.
 	reply := &message.RequestOK{}
+	var (
+		largest    message.Location
+		hasLargest bool
+	)
 	if entry, ok := h.tracks.Get(fullName.Key()); ok {
-		if largest, has := entry.GetLargest(); has {
+		if largest, hasLargest = entry.GetLargest(); hasLargest {
 			reply.Parameters = message.Parameters{message.LargestObjectParam(largest.Group, largest.Object)}
 		}
 	}
@@ -313,7 +318,8 @@ func (h *sessionHandler) handleSubscribeUpdate(
 	// §5.1.3: a further fill fetch stream, named by the REQUEST_UPDATE's own
 	// Request ID; fills already in flight continue.
 	if entry, ok := h.tracks.Get(fullName.Key()); ok {
-		if err := h.maybeServeFill(ctx, sub, entry, fullName, upd.RequestID, upd.Parameters); err != nil {
+		if err := h.maybeServeFill(ctx, sub, entry, fullName, upd.RequestID, upd.Parameters,
+			largest, hasLargest); err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
 				slog.String("err", err.Error()))
 		}

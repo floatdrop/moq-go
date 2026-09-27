@@ -537,8 +537,6 @@ Relay:
   reset predecessor never delivered go unnoticed (§11.4.3).
 - Objects age from when they were read whole rather than their beginning
   (§12.3).
-- A fill range is evaluated against a later Largest Object than SUBSCRIBE_OK or
-  REQUEST_UPDATE_OK reported (§5.1.3).
 - TRACK_STATUS is not answered as SUBSCRIBE would be in two cases (§10.15):
   with only the namespace advertised it answers an empty OK where SUBSCRIBE
   goes upstream and may fail, and a leftover entry with Track Properties or a
