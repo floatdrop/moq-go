@@ -79,7 +79,7 @@ type Config struct {
 	// refused with UNSUPPORTED_EXTENSION (§2.5.1). Empty (the default)
 	// refuses every Mandatory Track Property. Set it here rather than with
 	// session.WithKnownMandatoryTrackProperties in SessionOptions, which
-	// overrides this field (and turns the check off with a nil map).
+	// overrides this field.
 	KnownMandatoryTrackProperties []message.PropertyType
 
 	// Logger is used for relay-level events (accept loop start/stop,
@@ -345,7 +345,6 @@ func New(listener Listener, cfg Config) *Relay {
 	// Prepended, so it is the SETUP budget unless the caller states one — and
 	// stated twice it is advertised twice, which is why [Config.MaxFilterRanges]
 	// is the way to change it rather than another WithMaxFilterRanges here.
-	// Always non-nil, so every session enforces §2.5.1.
 	knownMandatory := make(map[message.PropertyType]struct{}, len(cfg.KnownMandatoryTrackProperties))
 	for _, t := range cfg.KnownMandatoryTrackProperties {
 		knownMandatory[t] = struct{}{}

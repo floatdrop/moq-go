@@ -166,13 +166,10 @@ func WithGrease() Option {
 // set, it returns *ErrUnsupportedMandatoryTrackProperty; [Request.AcceptPublish]
 // refuses such a PUBLISH with UNSUPPORTED_EXTENSION.
 //
-// If this option is never called, enforcement is disabled and all properties
-// pass through. Leave it unset only when the application checks the
-// properties itself (§2.5.1).
-//
-// End subscribers that interpret track data should call this option to opt
-// in to enforcement. Pass an empty (non-nil) map to reject all mandatory
-// properties, or populate the map with the types you support.
+// If this option is never called, or types is empty or nil, no Mandatory Track
+// Property is known and every one is refused: an endpoint that does not
+// understand one "MUST NOT process or forward that track" (§2.5.1). List the
+// types this endpoint understands to accept them.
 func WithKnownMandatoryTrackProperties(types map[message.PropertyType]struct{}) Option {
 	return func(c *config) {
 		c.knownMandatoryTrackProperties = types

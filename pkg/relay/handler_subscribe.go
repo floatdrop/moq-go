@@ -646,8 +646,8 @@ func includeProperties(ps message.Parameters) bool {
 // upstream SUBSCRIBE failed with err.
 //
 // An unknown Mandatory Track Property is UNSUPPORTED_EXTENSION (§2.5.1);
-// unparseable Track Properties are MALFORMED_TRACK (an interpretation: the
-// draft does not cover them). An upstream REQUEST_ERROR code about the track
+// unparseable Track Properties make the track malformed (§12.7, §2.4.2), and
+// MALFORMED_TRACK answers them (an interpretation: §10.6 defines it for FETCH). An upstream REQUEST_ERROR code about the track
 // or the publisher's load passes through with its Retry Interval (§10.6.2),
 // MALFORMED_TRACK included though §10.6.2 scopes it to FETCH; one about the
 // relay's own hop or its Next Object filter, or an unknown one, becomes
