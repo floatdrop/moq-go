@@ -304,7 +304,8 @@ func TestSubscribe_UpstreamAliasReusableAfterTeardown(t *testing.T) {
 }
 
 // TestSubscribe_UpstreamRejects_PropagatesRejection: an upstream REQUEST_ERROR
-// code about the track passes downstream; one about the relay's own hop becomes
+// code about the track passes downstream; one about the relay's own hop, or not
+// defined for SUBSCRIBE (MALFORMED_TRACK answers a FETCH), becomes
 // INTERNAL_ERROR (§10.6.2). The Retry Interval is kept either way.
 func TestSubscribe_UpstreamRejects_PropagatesRejection(t *testing.T) {
 	t.Parallel()
@@ -315,7 +316,7 @@ func TestSubscribe_UpstreamRejects_PropagatesRejection(t *testing.T) {
 		{moqt.RequestDoesNotExist, moqt.RequestDoesNotExist, 0},
 		{moqt.RequestExcessiveLoad, moqt.RequestExcessiveLoad, 501},
 		{moqt.RequestTimeout, moqt.RequestTimeout, 1},
-		{moqt.RequestMalformedTrack, moqt.RequestMalformedTrack, 0},
+		{moqt.RequestMalformedTrack, moqt.RequestInternalError, 0},
 		{moqt.RequestUnauthorized, moqt.RequestInternalError, 0},
 		{moqt.RequestExpiredAuthToken, moqt.RequestInternalError, 2001},
 		{moqt.RequestGoingAway, moqt.RequestInternalError, 0},

@@ -658,12 +658,12 @@ func includeProperties(ps message.Parameters) bool {
 //
 // An unknown Mandatory Track Property is UNSUPPORTED_EXTENSION (§2.5.1);
 // unparseable Track Properties make the track malformed (§12.7, §2.4.2), and
-// MALFORMED_TRACK answers them (an interpretation: §10.6 defines it for
-// FETCH). An upstream REQUEST_ERROR code about the track or the publisher's
-// load passes through with its Retry Interval (§10.6.2),
-// MALFORMED_TRACK included though §10.6.2 scopes it to FETCH; one about the
-// relay's own hop or its Next Object filter, or an unknown one, becomes
-// INTERNAL_ERROR. If the relay ever combines downstream filters
+// INTERNAL_ERROR answers them, since MALFORMED_TRACK is defined only "In
+// response to a FETCH" (§10.6.2). An upstream REQUEST_ERROR code about the
+// track or the publisher's load passes through with its Retry Interval
+// (§10.6.2); one about the relay's own hop or its Next Object filter, one not
+// defined for SUBSCRIBE (MALFORMED_TRACK among them), or an unknown one,
+// becomes INTERNAL_ERROR. If the relay ever combines downstream filters
 // upstream (§9.4), INVALID_RANGE must pass through too. Any other failure
 // reads as DOES_NOT_EXIST.
 func upstreamRejection(err error) *session.RequestRejectedError {
@@ -677,12 +677,13 @@ func upstreamRejection(err error) *session.RequestRejectedError {
 	rej := &session.RequestRejectedError{Code: moqt.RequestInternalError, RetryInterval: up.RetryInterval}
 	switch up.Code {
 	case moqt.RequestDoesNotExist, moqt.RequestTimeout, moqt.RequestExcessiveLoad,
-		moqt.RequestMalformedTrack, moqt.RequestUnsupportedExtension:
+		moqt.RequestUnsupportedExtension:
 		rej.Code = up.Code
 	case moqt.RequestInternalError, moqt.RequestUnauthorized, moqt.RequestNotSupported,
 		moqt.RequestMalformedAuthToken, moqt.RequestExpiredAuthToken, moqt.RequestGoingAway,
 		moqt.RequestInvalidRange, moqt.RequestInvalidFilter, moqt.RequestRedirect,
-		moqt.RequestUninterested, moqt.RequestPrefixOverlap, moqt.RequestNamespaceTooLarge:
+		moqt.RequestMalformedTrack, moqt.RequestUninterested, moqt.RequestPrefixOverlap,
+		moqt.RequestNamespaceTooLarge:
 		// about the relay's hop or request, or not a SUBSCRIBE answer at all
 	}
 	return rej

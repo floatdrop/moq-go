@@ -296,7 +296,7 @@ func TestRelay_MalformedObjectEndsTrackWithStreamsOpen(t *testing.T) {
 
 // TestRelay_PublishTrackPropertiesRejected: a PUBLISH with an unknown Mandatory
 // Track Property is UNSUPPORTED_EXTENSION (§2.5.1); one whose Track Properties
-// do not parse is MALFORMED_TRACK.
+// do not parse is INTERNAL_ERROR (MALFORMED_TRACK answers only a FETCH, §10.6.2).
 func TestRelay_PublishTrackPropertiesRejected(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -305,7 +305,7 @@ func TestRelay_PublishTrackPropertiesRejected(t *testing.T) {
 		want  moqt.RequestErrorCode
 	}{
 		{"unknown mandatory", mandatoryProps(), moqt.RequestUnsupportedExtension},
-		{"malformed", malformedProps, moqt.RequestMalformedTrack},
+		{"malformed", malformedProps, moqt.RequestInternalError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -351,7 +351,7 @@ func TestRelay_UpstreamSubscribeOKTrackPropertiesRejected(t *testing.T) {
 		want  moqt.RequestErrorCode
 	}{
 		{"unknown mandatory", mandatoryProps(), moqt.RequestUnsupportedExtension},
-		{"malformed", malformedProps, moqt.RequestMalformedTrack},
+		{"malformed", malformedProps, moqt.RequestInternalError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

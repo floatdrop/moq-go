@@ -38,8 +38,9 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 		slog.String("name", string(msg.Name)),
 		slog.Uint64("alias", msg.TrackAlias))
 
-	// §2.5.1: refuse an unknown Mandatory Track Property. MALFORMED_TRACK for
-	// unparseable Track Properties is this repo's choice; the draft is silent.
+	// §2.5.1: refuse an unknown Mandatory Track Property. Unparseable Track
+	// Properties are refused with INTERNAL_ERROR, since §10.6.2 defines
+	// MALFORMED_TRACK only for FETCH (see [session.TrackPropertiesRejectCode]).
 	// AcceptRequest has closed the session on a session-fatal value (§12.5,
 	// §12.6).
 	if err := h.sess.CheckTrackProperties(msg.TrackProperties, "PUBLISH"); err != nil {
