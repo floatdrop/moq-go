@@ -98,6 +98,7 @@ func (r *NamespaceRegistry) RemoteNamespace(ns wire.TrackNamespace, relayAddr st
 		}
 		rn.relays[relayAddr] = struct{}{}
 		r.addSourceLocked(ns)
+		r.arrivals.notifyCoveredLocked(ns)
 		return
 	}
 	if rn == nil {
@@ -321,6 +322,7 @@ func (r *NamespaceRegistry) ReplaceRemote(ads []discovery.NamespaceInfo) {
 			if _, have := rn.relays[addr]; !have {
 				rn.relays[addr] = struct{}{}
 				r.addSourceLocked(rn.ns)
+				r.arrivals.notifyCoveredLocked(rn.ns)
 			}
 		}
 	}

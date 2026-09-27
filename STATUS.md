@@ -164,7 +164,7 @@ By package, bottom-up along the dependency stack:
 | 10.2.3  | SUBGROUP_DELIVERY_TIMEOUT     | 0x06   | PARTIAL| Parsed and resolved; the stream reset is not enforced on the bundled transports, and datagrams are not dropped (see §8). |
 | 10.2.4  | OBJECT_DELIVERY_TIMEOUT       | 0x02   | DONE   | |
 | 10.2.5  | FILL_TIMEOUT                  | 0x0A   | DONE   | The budget for a FETCH's or fill's upstream FETCH, its response included: when it runs out, what arrived is served and the rest is an End of Timed-Out Range; 0 asks no upstream. Default 5s. |
-| 10.2.6  | RENDEZVOUS_TIMEOUT            | 0x04   | DONE   | |
+| 10.2.6  | RENDEZVOUS_TIMEOUT            | 0x04   | DONE   | The relay holds a SUBSCRIBE with no publisher, capped by `Config.MaxRendezvousTimeout` (30s), and answers TIMEOUT when the hold runs out. No publisher means none matched, or each answered DOES_NOT_EXIST or TIMEOUT, or is draining; any other refusal ends the hold with its error. A PUBLISH of the track, or a covering namespace newly published here or advertised through Discovery, wakes the hold; a publisher that already answered is not asked again. Upstream SUBSCRIBEs to other relays carry what is left of the hold, and are cut short when a publisher arrives here. |
 | 10.2.7  | SUBSCRIBER_PRIORITY           | 0x20   | DONE   | |
 | 10.2.8  | GROUP_ORDER                   | 0x22   | DONE   | A value outside {1, 2} closes the session, wherever it appears, FILL_PARAMETERS included. |
 | 10.2.9  | LOCATION_FILTER               | 0x21   | DONE   | An end Group overflowing 2^64-1 closes the session with PROTOCOL_VIOLATION (§5.1.2); a value that does not parse, with KEY_VALUE_FORMATTING_ERROR (§1.4.3). |
@@ -546,7 +546,6 @@ Relay:
   flight: the relay cannot tell either from its own request routed back to it
   by a relay peer (§6.2 has no loop protection), so it declines the second hop
   rather than loop. Self-subscriptions are otherwise "identical" (§5.1).
-- RENDEZVOUS_TIMEOUT is ignored (§10.2.6 SHOULD hold the subscription; §9.5).
 - A SUBSCRIBE whose only candidate upstream is a draining relay reached through
   the upstream pool gets DOES_NOT_EXIST, not the GOING_AWAY a draining local
   publisher yields: the pool skips such a relay before any request.
@@ -554,13 +553,19 @@ Relay:
   period and ignores `Stop`'s ctx, so a cancelled `Stop` can still wait up to
   `GoawayTimeout` for it.
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
+- Cancelling `Start`'s ctx ends each session's handler without closing the
+  session, and drops it from the set `Stop` closes; `Stop` then waits without
+  bound on the reader of an upstream SUBSCRIBE on such a session, whose stream
+  stays open. `Start`'s doc says the cancel "terminates live sessions".
+  Reproduced by two relays wired through Discovery and stopped in `t.Cleanup`
+  (after `t.Context` ends) while a cross-relay subscription is live.
 
 Documentation:
 
 - Limitations: "Duplicate Objects … are not compared" is stale; the LOC entry names
   `PropAudioLevel = 0x0A` (it is 0x0C); "Handles the application reads itself"
   says `CheckPeerParams` checks roles; "Inbound GOAWAY" omits request streams.
-- Table rows 10.2.6, 10.2.15 and 10.2.21 overstate what is done (see
+- Table rows 10.2.15 and 10.2.21 overstate what is done (see
   the items above), and the package summary still lists joining FETCH.
 - `session/namespace.go` says NAMESPACE / NAMESPACE_DONE go on a
   PUBLISH_NAMESPACE stream (§10.17, §10.18).
