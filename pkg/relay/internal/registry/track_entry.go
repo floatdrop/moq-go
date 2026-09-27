@@ -507,6 +507,16 @@ func (e *TrackEntry) RecordDuplicate(o ObjectInfo) error {
 	return nil
 }
 
+// TrackEnd reports where the Track ends, if an END_OF_TRACK Object said so.
+// §2.4.2: "The final Object in a Track is the Object with Status END_OF_TRACK
+// or the last Object sent in a FETCH whose response indicated End of Track";
+// the relay does not record the FETCH half.
+func (e *TrackEntry) TrackEnd() (message.Location, bool) {
+	e.deliveredMu.Lock()
+	defer e.deliveredMu.Unlock()
+	return e.trackEnd, e.hasTrackEnd
+}
+
 // LowestForwarded reports the lowest Object ID forwarded in Subgroup
 // (group, subgroup), if any, within the window. The writers of a Subgroup
 // forget it when its last contributor leaves; this keeps it for a later

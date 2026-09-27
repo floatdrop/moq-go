@@ -116,11 +116,17 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 	// independent of which objects we end up streaming, so reply FETCH_OK
 	// before doing any (possibly slow) upstream stitching.
 	endLocation := capFetchEndLocation(filter, largest)
+	// §10.14: End Of Track is "1 if all Objects have been published on this
+	// Track, and the End Location is the final Object in the Track". The
+	// END_OF_TRACK Object raised the watermark, so a FETCH running past it
+	// ends there.
+	trackEnd, ended := entry.TrackEnd()
 	var properties []byte
 	if includeProperties(msg.Parameters) { // §10.2.21
 		properties = entry.GetProperties()
 	}
 	if err := req.Reply(&message.FetchOK{
+		EndOfTrack:      ended && endLocation == trackEnd,
 		EndLocation:     endLocation,
 		TrackProperties: properties,
 	}); err != nil {
