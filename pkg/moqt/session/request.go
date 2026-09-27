@@ -875,9 +875,10 @@ func (r *Request) Reply(msg message.Message) error {
 }
 
 // RejectError writes a REQUEST_ERROR with Retry Interval 0 (§10.6.2), stops
-// reading and FINs the stream (§3.3.3). If the REQUEST_ERROR cannot be
-// written, the stream is reset instead so the requester is not left waiting.
-// Use [Request.Reject] to invite a retry.
+// reading with CANCELLED (§3.3.4) and FINs the stream (§3.3.3). If the
+// REQUEST_ERROR cannot be written, the stream is reset with INTERNAL_ERROR
+// instead so the requester is not left waiting. Use [Request.Reject] to invite
+// a retry.
 func (r *Request) RejectError(code moqt.RequestErrorCode, reason string) error {
 	return r.Reject(&RequestRejectedError{Code: code, Reason: reason})
 }
@@ -907,7 +908,9 @@ func (r *Request) Reject(rej *RequestRejectedError) error {
 		resetStream(r.Stream)
 		return err
 	}
-	r.Stream.CancelRead(uint64(moqt.StreamResetInternalError))
+	// §3.3.4: "SHOULD use a relevant error code". The request ended, so this
+	// side stopped reading because it was cancelled, not because it failed.
+	r.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
 	return r.Stream.Close()
 }
 
