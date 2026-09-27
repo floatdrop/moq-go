@@ -561,9 +561,6 @@ Relay:
   (§3.3.3) nor answers a REQUEST_UPDATE on it. Which code to reset it with is
   open.
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
-- A REQUEST_UPDATE's AUTHORIZATION_TOKENs go through the TokenVerifier only on
-  SUBSCRIBE_NAMESPACE and SUBSCRIBE_TRACKS; on SUBSCRIBE, FETCH and
-  PUBLISH_NAMESPACE they are resolved but not verified (§10.2.2).
 
 Documentation:
 

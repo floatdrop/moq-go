@@ -466,6 +466,18 @@ func tokenDenial(denyErr error) (moqt.RequestErrorCode, string) {
 	return moqt.RequestUnauthorized, denyErr.Error()
 }
 
+// refuseUpdateTokens is the REQUEST_ERROR refusing a REQUEST_UPDATE whose
+// AUTHORIZATION_TOKENs the TokenVerifier denies, or nil: they authorize "the
+// operation carrying the parameter" (§10.2.2) as an opener's do.
+func (h *sessionHandler) refuseUpdateTokens(ctx context.Context, toks []session.ResolvedToken) *message.RequestError {
+	err := h.sess.VerifyTokens(ctx, toks)
+	if err == nil {
+		return nil
+	}
+	code, reason := tokenDenial(err)
+	return &message.RequestError{ErrorCode: code, ErrorReason: reason}
+}
+
 // handleFollowupRequestID validates a peer REQUEST_UPDATE's Request ID —
 // §10.1: an update consumes an ID from the sender's space, and the readers
 // that parse follow-ups directly bypass AcceptRequest's checking. A
@@ -652,11 +664,11 @@ func (h *sessionHandler) serveFetchObjects(
 	// §2.4.2: a relay that detects a malformed track MUST "reset any fetch
 	// streams with Status Code MALFORMED_TRACK"; see endMalformedTrack.
 	remove := entry.AddFetch(cancel)
-	ok := h.streamFetchRange(fetchCtx, kind, nil, requestID, entry, fullName,
+	out := h.streamFetchRange(fetchCtx, kind, nil, requestID, entry, fullName,
 		start, end, order, fillTimeout, rangeFilters)
 	stop()
 	remove()
-	if !ok {
+	if out == nil {
 		// The requester's own signal, not fetchCtx's cause: a write can fail on
 		// its STOP_SENDING for the data stream before the cause is set.
 		if req.Stream.Context().Err() != nil {
@@ -668,7 +680,7 @@ func (h *sessionHandler) serveFetchObjects(
 		return
 	}
 
-	h.readFetchUpdates(ctx, req)
+	h.readFetchUpdates(ctx, req, out)
 }
 
 // streamFetchRange opens a unidirectional fetch stream, writes the stitched
@@ -677,8 +689,9 @@ func (h *sessionHandler) serveFetchObjects(
 // and in what happens afterwards — a FETCH parks in the §10.9 follow-up loop,
 // a fill is simply done.
 //
-// It reports false when the stream could not be opened, the write failed, or
-// the upstream refused the track (§2.5.1); the stream is then already reset.
+// It returns the FINed stream, or nil when the stream could not be opened, the
+// write failed, or the upstream refused the track (§2.5.1); the stream is then
+// already reset.
 func (h *sessionHandler) streamFetchRange(
 	ctx context.Context,
 	kind string,
@@ -690,12 +703,12 @@ func (h *sessionHandler) streamFetchRange(
 	order message.GroupOrder,
 	fillTimeout time.Duration,
 	rangeFilters *message.RangeFilterSet,
-) bool {
+) *session.OutgoingFetchStream {
 	out, err := openFillOrFetchStream(h.sess, sub, requestID)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "OpenFetchStream failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))
-		return false
+		return nil
 	}
 	if sub != nil {
 		// A fill stream's subscription holds its PUBLISH_DONE until the
@@ -716,7 +729,7 @@ func (h *sessionHandler) streamFetchRange(
 	objs, refusal := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
 	if ctx.Err() != nil {
 		cancelOut() // before the deferred StreamClosed (§10.12)
-		return false
+		return nil
 	}
 	if refusal != nil {
 		// §2.5.1: with FETCH_OK (or SUBSCRIBE_OK) already sent, only a
@@ -730,7 +743,7 @@ func (h *sessionHandler) streamFetchRange(
 		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH refused",
 			slog.String("kind", kind), slog.String("err", refusal.Error()))
 		out.Cancel(code)
-		return false
+		return nil
 	}
 
 	// §5.1.4: drop objects that fail the request's Range Filters. §11.4.4.2
@@ -751,12 +764,12 @@ func (h *sessionHandler) streamFetchRange(
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fetch stream write failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))
 		out.Cancel(moqt.StreamResetInternalError)
-		return false
+		return nil
 	}
 	if !unwatch() {
 		cancelOut() // ctx ended first; reset before the deferred StreamClosed
-		return false
+		return nil
 	}
 	_ = out.Close()
-	return true
+	return out
 }
