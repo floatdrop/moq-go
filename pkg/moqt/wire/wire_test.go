@@ -2,9 +2,11 @@ package wire
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"io"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -205,6 +207,31 @@ func TestTrackNamespaceTooManyFieldsRejected(t *testing.T) {
 	w.Varint(33)
 	if _, err := NewReader(w.Bytes()).TrackNamespace(); err == nil {
 		t.Fatal("expected error for >32 namespace fields")
+	}
+}
+
+// TestKVPairsKeepOrderWithinAType: KVPairs sorts by Type for the delta
+// encoding but keeps pairs of one Type in the caller's order, however many
+// there are. Which of a SETUP's AUTHORIZATION TOKEN REGISTERs fit the peer's
+// cache depends on their order (§10.3.1.3, §10.3.1.4), so it must survive.
+func TestKVPairsKeepOrderWithinAType(t *testing.T) {
+	var pairs []KVPair
+	for i := range 40 {
+		pairs = append(pairs, KVPair{Type: 4, IntVal: uint64(i)})
+		if i%3 == 0 {
+			pairs = append(pairs, KVPair{Type: 2, IntVal: uint64(100 + i)})
+		}
+	}
+	w := NewWriter(nil)
+	w.KVPairs(slices.Clone(pairs))
+	got, err := NewReader(w.Bytes()).KVPairsRemaining()
+	if err != nil {
+		t.Fatalf("KVPairsRemaining: %v", err)
+	}
+	want := slices.Clone(pairs)
+	slices.SortStableFunc(want, func(a, b KVPair) int { return cmp.Compare(a.Type, b.Type) })
+	if !slices.EqualFunc(got, want, func(a, b KVPair) bool { return a.Type == b.Type && a.IntVal == b.IntVal }) {
+		t.Fatalf("decoded %v, want %v", got, want)
 	}
 }
 

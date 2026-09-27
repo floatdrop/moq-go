@@ -205,6 +205,38 @@ func TestSetupTokensSent(t *testing.T) {
 	}
 }
 
+// TestSetupTokensHeldMatchesPeerWithManyTokens: with more SETUP tokens than
+// a small sort keeps in order, among other options, the peer still receives
+// them in the order given, so the REGISTERs the sender believes held are those
+// the peer's cache holds (§10.3.1.3, §10.3.1.4). Varied sizes make which ones
+// fit depend on that order.
+func TestSetupTokensHeldMatchesPeerWithManyTokens(t *testing.T) {
+	// Other options interleaved as a caller might pass them, so the SETUP
+	// encoder's sort by Type has to move the tokens past them.
+	others := []session.Option{
+		session.WithMaxAuthTokenCacheSize(1), session.WithAuthority("relay.example"),
+		session.WithMaxFilterRanges(4), session.WithMaxRequestUpdates(8),
+	}
+	var opts []session.Option
+	for i := range uint64(24) {
+		if i%6 == 0 {
+			opts = append(opts, others[i/6])
+		}
+		opts = append(opts, session.WithSetupToken(register(i+1, strings.Repeat("x", int(i%5)*20))))
+	}
+	client, server := openPairWithOpts(t, opts, []session.Option{session.WithMaxAuthTokenCacheSize(300)})
+
+	held := client.SetupTokenAliases()
+	for alias := range uint64(24) {
+		alias++
+		_, _, err := server.TokenCache().Resolve(alias)
+		if want := slices.Contains(held, alias); (err == nil) != want {
+			t.Errorf("server cache holds alias %d: %v, but the client believes %v (held %v)",
+				alias, err == nil, want, held)
+		}
+	}
+}
+
 // TestSetupTokensDefaultCacheIsZero: a peer that advertises no cache size has
 // the default 0, so no REGISTER is held.
 func TestSetupTokensDefaultCacheIsZero(t *testing.T) {

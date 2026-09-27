@@ -39,8 +39,11 @@ func (w *Writer) KVPair(p KVPair, prev uint64) uint64 {
 
 // KVPairs appends a list of KVPairs with delta encoding starting from prev=0.
 // Pairs are sorted by Type before encoding so callers do not need to order them.
+// The sort is stable: pairs of one Type keep the caller's order, which a
+// repeated option can depend on: which SETUP REGISTERs fit the peer's cache
+// depends on their order (§10.3.1.3, §10.3.1.4).
 func (w *Writer) KVPairs(pairs []KVPair) {
-	slices.SortFunc(pairs, func(a, b KVPair) int { return cmp.Compare(a.Type, b.Type) })
+	slices.SortStableFunc(pairs, func(a, b KVPair) int { return cmp.Compare(a.Type, b.Type) })
 	var prev uint64
 	for _, p := range pairs {
 		prev = w.KVPair(p, prev)
