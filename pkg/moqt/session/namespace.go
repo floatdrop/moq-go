@@ -10,11 +10,13 @@ import (
 
 // NamespacePublication is an established PUBLISH_NAMESPACE request (§10.16). It
 // embeds the still-open request stream (so Close / writes / message.Marshal work
-// directly on it) and carries the peer's REQUEST_OK. The caller announces tracks
-// by writing NAMESPACE / NAMESPACE_DONE follow-ups to the embedded stream.
+// directly on it) and carries the peer's REQUEST_OK. The namespace stays
+// published until the request is cancelled ([NamespacePublication.Close],
+// §6.2, §3.3.3); a FIN does not withdraw it (§3.3.2). NAMESPACE and
+// NAMESPACE_DONE answer a SUBSCRIBE_NAMESPACE instead (§10.17, §10.18).
 type NamespacePublication struct {
 	// Stream is the PUBLISH_NAMESPACE request stream, still open for
-	// NAMESPACE / NAMESPACE_DONE follow-ups. [NamespacePublication.Close]
+	// REQUEST_UPDATE follow-ups (§10.9). [NamespacePublication.Close]
 	// withdraws the publication.
 	Stream
 
@@ -85,8 +87,8 @@ func (t *TrackSubscription) Update(ctx context.Context, params message.Parameter
 // caller supplies Namespace and optional Parameters.
 //
 // On success a [NamespacePublication] is returned whose embedded stream stays
-// open (the caller may send NAMESPACE / NAMESPACE_DONE messages on it). On
-// REQUEST_ERROR the stream is closed and a *RequestRejectedError is returned.
+// open (the caller may send REQUEST_UPDATE on it, §10.9). On REQUEST_ERROR the
+// stream is closed and a *RequestRejectedError is returned.
 func (s *Session) PublishNamespace(
 	ctx context.Context,
 	m *message.PublishNamespace,
@@ -140,12 +142,19 @@ func (s *Session) SubscribeTracks(ctx context.Context, m *message.SubscribeTrack
 // IncomingNamespacePublication is an accepted inbound PUBLISH_NAMESPACE (§10.16)
 // — the receiving side of [Session.PublishNamespace]'s [NamespacePublication],
 // returned by [Request.AcceptPublishNamespace]. REQUEST_OK has been sent; the
-// announcer's follow-ups arrive on the embedded stream; read it with
-// [RequestBroker.Serve], which enforces the session-level rules (§10,
-// §10.2.1). Close it to end the publication.
+// announcer's follow-ups (REQUEST_UPDATE, GOAWAY) arrive on the embedded
+// stream. Read it with a [Session.NewRequestBroker]'s [RequestBroker.Serve],
+// which closes the session on a malformed message (§10) or a GOAWAY violation
+// (§10.4). Before Serve, call [RequestBroker.PeerMessages](true, false), since
+// PUBLISH_STATE_NOTIFY applies only to subscriptions (§10.10), and
+// [RequestBroker.UpdateScope](message.ScopeUpdatePublishNamespace), so an
+// update's parameters are checked (§10.2.1) before it is answered; without
+// [RequestBroker.HandleUpdates] each REQUEST_UPDATE is declined with
+// NOT_SUPPORTED. Cancel the request (CancelRead and CancelWrite, §3.3.3) to
+// revoke acceptance (§6.2); Close only FINs this side (§3.3.2).
 type IncomingNamespacePublication struct {
 	// Stream is the PUBLISH_NAMESPACE request stream, still open to receive
-	// NAMESPACE / NAMESPACE_DONE notifications. Close it to end the publication.
+	// the announcer's follow-ups.
 	Stream
 }
 
@@ -200,8 +209,8 @@ func acceptNamespaceRequest[M message.Message, T any](r *Request, op string, wra
 
 // AcceptPublishNamespace accepts an inbound PUBLISH_NAMESPACE (§10.16), replies
 // REQUEST_OK, and returns an [IncomingNamespacePublication] for receiving the
-// announcer's NAMESPACE / NAMESPACE_DONE follow-ups — the accept-side
-// counterpart of [Session.PublishNamespace]. r.First MUST be a
+// announcer's follow-ups — the accept-side counterpart of
+// [Session.PublishNamespace]. r.First MUST be a
 // *message.PublishNamespace.
 func (r *Request) AcceptPublishNamespace() (*IncomingNamespacePublication, error) {
 	return acceptNamespaceRequest[*message.PublishNamespace](r, "AcceptPublishNamespace",
