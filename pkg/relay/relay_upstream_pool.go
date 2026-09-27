@@ -127,7 +127,9 @@ func newUpstreamPool(cfg upstreamPoolConfig) *upstreamPool {
 // lease TTL falls through transparently to the next-ranked one.
 //
 // Returns nil when Discovery knows no usable remote (none advertised, only this
-// relay itself, or every candidate failed to dial). Discovery-lookup and
+// relay itself, or every candidate failed to dial). draining reports whether a
+// candidate was skipped for having sent GOAWAY (§10.4), which the caller
+// answers as it would a draining publisher. Discovery-lookup and
 // per-peer dial failures are logged and treated as "skip that candidate" —
 // consistent with the best-effort advertise side: the local registry / a clean
 // SUBSCRIBE rejection is the fallback, never a torn-down session.
@@ -137,9 +139,12 @@ func newUpstreamPool(cfg upstreamPoolConfig) *upstreamPool {
 // to itself. Duplicate RelayAddrs collapse to one session (the pool keys by
 // address). Multi-hop cycle detection (A→B→C→A) is out of scope — see the
 // package limitations.
-func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamespace) []*session.Session {
+func (p *upstreamPool) resolveUpstreams(
+	ctx context.Context,
+	ns wire.TrackNamespace,
+) (out []*session.Session, draining bool) {
 	if p == nil || p.discovery == nil {
-		return nil
+		return nil, false
 	}
 	infos, err := p.discovery.FindNamespace(ctx, ns)
 	if err != nil {
@@ -151,7 +156,7 @@ func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamesp
 		p.log.LogAttrs(ctx, slog.LevelWarn, "upstream pool: FindNamespace failed",
 			slog.String("namespace", fmt.Sprintf("%v", ns)),
 			slog.String("err", err.Error()))
-		return nil
+		return nil, false
 	}
 	p.log.LogAttrs(ctx, slog.LevelInfo, "upstream pool: FindNamespace resolved",
 		slog.String("namespace", fmt.Sprintf("%v", ns)),
@@ -161,10 +166,7 @@ func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamesp
 	// takes the same top-fanIn upstreams everywhere.
 	rankByAffinity(ns, infos)
 
-	var (
-		out  []*session.Session
-		seen = make(map[string]bool, len(infos))
-	)
+	seen := make(map[string]bool, len(infos))
 	for _, info := range infos {
 		if info.RelayAddr == "" || info.RelayAddr == p.relayAddr || seen[info.RelayAddr] {
 			continue // self / unaddressable / already dialled this address
@@ -181,6 +183,7 @@ func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamesp
 		if goingAway(sess) {
 			// §10.4: a draining relay takes no new requests, so it must not
 			// hold a fan-in slot.
+			draining = true
 			continue
 		}
 		out = append(out, sess)
@@ -188,7 +191,7 @@ func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamesp
 			break // opt-in bound reached; deeper candidates are the fallback pool
 		}
 	}
-	return out
+	return out, draining
 }
 
 // rankByAffinity sorts infos in place by descending rendezvous (HRW) weight for
