@@ -39,6 +39,11 @@ type fwdObject struct {
 	// Objects the subscriber's filters rejected between (see
 	// [subgroupWriter.admit]).
 	follows bool
+
+	// pubTimeouts is [subgroupWriterSet.pubTimeouts] when this Object was
+	// published: nil until the Subgroup's first Object was forwarded. Never
+	// written through.
+	pubTimeouts *message.DeliveryTimeouts
 }
 
 // inboundPos is an Object's place on its inbound subgroup stream: the stream,
@@ -83,6 +88,18 @@ type subgroupWriterSet struct {
 	// contributor reset.
 	sawClean  bool
 	resetCode moqt.StreamResetCode
+
+	// pubTimeouts points at firstTimeouts once the Subgroup's first Object
+	// was forwarded: the publisher's §8 delivery timeouts for the Subgroup,
+	// "the Object Property when present on the first object of the subgroup,
+	// and the Track Property otherwise" (§12.1, §12.2). A replay stream (a
+	// joiner's, or one reopened after a gap) starts past that Object, so its
+	// session cannot find the override itself (see
+	// [session.OutgoingSubgroupStream.WriteObjectReceivedAt]). Set once, and
+	// handed to writers on every later [fwdObject]. While nil, as when the
+	// relay never saw the first Object, writers keep the Track's.
+	pubTimeouts   *message.DeliveryTimeouts
+	firstTimeouts message.DeliveryTimeouts
 }
 
 // claimFirst records that the Object at objectID is forwarded and reports
@@ -482,24 +499,47 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			h.openWriterForSub(ctx, set.hdr, sub, set.writers, entry.DeliveryTimeouts(), ref)
 		}
 
-		first := set.claimFirst(objectID, isTrueFirst)
-
-		// §5.1.2 filters run before enqueue, so a miss takes no queue slot.
-		for _, w := range set.writers {
-			if w == nil {
-				continue
-			}
-			if take, follows := w.admit(pos, hdr, objectID, obj.Properties); take {
-				w.publish(fwdObject{
-					obj:         obj,
-					absID:       objectID,
-					first:       first,
-					maxCacheAge: liveMaxAge,
-					follows:     follows,
-				})
-			}
-		}
+		set.forward(entry, pos, hdr, objectID, obj, isTrueFirst, liveMaxAge)
 		sg.Mu.Unlock()
+	}
+}
+
+// forward hands obj, the Object at objectID of the Subgroup hdr names, read at
+// pos, to every writer whose subscriber takes it. claimed reports that its
+// contributor claims it starts the Subgroup (see [subgroupWriterSet.claimFirst]);
+// maxCacheAge is [fwdObject.maxCacheAge]. Callers hold sg.Mu.
+func (s *subgroupWriterSet) forward(
+	entry *registry.TrackEntry,
+	pos inboundPos,
+	hdr message.SubgroupHeader,
+	objectID uint64,
+	obj *message.SubgroupObject,
+	claimed bool,
+	maxCacheAge time.Duration,
+) {
+	first := s.claimFirst(objectID, claimed)
+	// §8: the first Object's Properties settle the publisher's timeouts for
+	// the Subgroup.
+	if first && s.pubTimeouts == nil {
+		s.firstTimeouts = entry.DeliveryTimeouts().ApplyObjectProperties(obj.Properties)
+		s.pubTimeouts = &s.firstTimeouts
+	}
+
+	// §5.1.2 filters run before enqueue, so a miss takes no queue slot.
+	for _, w := range s.writers {
+		if w == nil {
+			continue
+		}
+		if take, follows := w.admit(pos, hdr, objectID, obj.Properties); take {
+			w.publish(fwdObject{
+				obj:         obj,
+				absID:       objectID,
+				first:       first,
+				maxCacheAge: maxCacheAge,
+				follows:     follows,
+				pubTimeouts: s.pubTimeouts,
+			})
+		}
 	}
 }
 
@@ -633,7 +673,8 @@ type subgroupWriter struct {
 	maxDropsBeforeReset int
 	maxLag              time.Duration
 	// pubTimeouts and subTimeouts are the §8 delivery-timeout halves, resolved
-	// per outbound stream; zero disables a dimension.
+	// per outbound stream; zero disables a dimension. run replaces
+	// pubTimeouts with [fwdObject.pubTimeouts] once that is set.
 	pubTimeouts message.DeliveryTimeouts
 	subTimeouts message.DeliveryTimeouts
 
@@ -915,6 +956,11 @@ func (w *subgroupWriter) run() {
 
 		if writeFailed {
 			continue
+		}
+
+		// §8: the Subgroup's timeouts, for the streams reopen opens below.
+		if fwd.pubTimeouts != nil {
+			w.pubTimeouts = *fwd.pubTimeouts
 		}
 
 		cause, stale := w.reopenCause(fwd, prevID, hasWritten, dropped)

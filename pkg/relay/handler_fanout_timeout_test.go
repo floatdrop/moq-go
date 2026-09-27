@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
@@ -209,4 +210,131 @@ func TestFanout_NoDeliveryTimeoutLeavesStalledSubscriberAlone(t *testing.T) {
 		t.Fatalf("stalled subscriber got %d of %d objects with no timeout "+
 			"configured; nothing should have cut the stream short", got, objects)
 	}
+}
+
+// TestFanout_ReplayStreamKeepsFirstObjectDeliveryTimeout: an
+// OBJECT_DELIVERY_TIMEOUT on a Subgroup's first Object overrides the Track
+// for the whole Subgroup (§8: "the publisher's value is the Object Property
+// when present on the first object of the subgroup"; §12.2), including on a
+// replay stream that starts past that Object: a subscriber that joined after
+// it, or a stream reopened after a gap (§11.4.3).
+func TestFanout_ReplayStreamKeepsFirstObjectDeliveryTimeout(t *testing.T) {
+	const timeout = 100 * time.Millisecond
+	props := message.AppendTrackProperties([]wire.KVPair{{
+		Type: message.PropertyObjectDeliveryTimeout, IntVal: uint64(timeout / time.Millisecond),
+	}})
+	// Enough Objects behind the stall that the timeout, if applied, cuts the
+	// stream short.
+	const objects = 6
+
+	t.Run("joiner", func(t *testing.T) {
+		pubSess, teardown := connectRelay(t, relay.Config{})
+		defer teardown()
+		pub := publishVideoTrack(t, pubSess, "cam1", 1) // no Track-level timeout
+
+		// early proves the relay forwarded Object 0 before late subscribes.
+		early := dialAnotherClient(t, pubSess)
+		subscribeCam1(t, early)
+		events := make(chan objEvent, 2*objects)
+		go readSubgroups(t.Context(), early, events)
+
+		sg, err := pub.OpenSubgroup(message.SubgroupHeader{
+			SubgroupIDMode: message.SubgroupIDExplicit, Properties: true,
+		})
+		if err != nil {
+			t.Fatalf("OpenSubgroup: %v", err)
+		}
+		if err := sg.WriteObjectAt(0, &message.SubgroupObject{Properties: props, Payload: []byte("0")}); err != nil {
+			t.Fatalf("WriteObjectAt 0: %v", err)
+		}
+		if id := awaitObject(t, events); id != 0 {
+			t.Fatalf("early subscriber got Object %d, want 0", id)
+		}
+
+		late := dialAnotherClient(t, pubSess)
+		subscribeCam1(t, late)
+		go func() {
+			for id := uint64(1); id <= objects; id++ {
+				if sg.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte("x")}) != nil {
+					return
+				}
+			}
+			_ = sg.Close()
+		}()
+
+		in := acceptSubgroup(t, late)
+		if !in.Header.ReplayingSubgroup {
+			t.Fatal("late subscriber's stream claims FIRST_OBJECT; want a replay stream")
+		}
+		time.Sleep(3 * timeout)
+		if got := countUntilEnd(in, 2*time.Second); got >= objects {
+			t.Fatalf("stalled joiner received all %d objects; its replay stream "+
+				"lost the first Object's OBJECT_DELIVERY_TIMEOUT", got)
+		}
+	})
+
+	t.Run("gap reopen", func(t *testing.T) {
+		pubSess, teardown := connectRelay(t, relay.Config{})
+		defer teardown()
+		pub := publishVideoTrack(t, pubSess, "cam1", 1) // no Track-level timeout
+		subSess := dialAnotherClient(t, pubSess)
+		subscribeCam1(t, subSess)
+
+		hdr := message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit, Properties: true}
+		first, err := pub.OpenSubgroup(hdr)
+		if err != nil {
+			t.Fatalf("OpenSubgroup: %v", err)
+		}
+		if err := first.WriteObjectAt(0, &message.SubgroupObject{Properties: props, Payload: []byte("0")}); err != nil {
+			t.Fatalf("WriteObjectAt 0: %v", err)
+		}
+		in := acceptSubgroup(t, subSess)
+		if _, err := in.ReadObject(); err != nil {
+			t.Fatalf("Object 0: %v", err)
+		}
+
+		// A second stream of the same Subgroup resumes at Object 2: Object 1
+		// is not known to be skipped, so the relay resets the subscriber's
+		// stream and reopens a replay one (§11.4.3).
+		hdr.ReplayingSubgroup = true
+		replay, err := pub.OpenSubgroup(hdr)
+		if err != nil {
+			t.Fatalf("OpenSubgroup (replay): %v", err)
+		}
+		go func() {
+			// A FIN would end the Subgroup at Object 0 (§2.4.2), so the first
+			// stream resets, leaving the replay stream's FIN to end it.
+			defer first.Cancel(moqt.StreamResetCancelled)
+			for id := uint64(2); id < 2+objects; id++ {
+				if replay.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte("x")}) != nil {
+					return
+				}
+			}
+			_ = replay.Close()
+		}()
+
+		if got := countUntilEnd(in, 2*time.Second); got != 0 {
+			t.Fatalf("first stream carried %d more Objects, want it reset at the gap", got)
+		}
+		reopened := acceptSubgroup(t, subSess)
+		time.Sleep(3 * timeout)
+		if got := countUntilEnd(reopened, 2*time.Second); got >= objects {
+			t.Fatalf("stalled subscriber received all %d objects after the gap; "+
+				"the reopened stream lost the first Object's OBJECT_DELIVERY_TIMEOUT", got)
+		}
+	})
+}
+
+// acceptSubgroup returns sess's next data stream, which must be a subgroup.
+func acceptSubgroup(t *testing.T, sess *session.Session) *session.IncomingSubgroupStream {
+	t.Helper()
+	ds, err := sess.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	sg, ok := ds.(*session.IncomingSubgroupStream)
+	if !ok {
+		t.Fatalf("AcceptDataStream returned %T, want *session.IncomingSubgroupStream", ds)
+	}
+	return sg
 }
