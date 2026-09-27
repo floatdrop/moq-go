@@ -629,6 +629,40 @@ func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 	if ok.EndLocation != want {
 		t.Fatalf("FETCH_OK.EndLocation = %+v, want %+v", ok.EndLocation, want)
 	}
+	// §10.14: reaching Largest Object is not reaching the Track's end.
+	if ok.EndOfTrack {
+		t.Error("FETCH_OK End Of Track = true on a Track no END_OF_TRACK ended")
+	}
+}
+
+// TestFetch_OKEndOfTrack: once an END_OF_TRACK Object ended the track, a FETCH
+// whose End Location is that Object says End Of Track; one ending earlier does
+// not (§10.14).
+func TestFetch_OKEndOfTrack(t *testing.T) {
+	t.Parallel()
+	pubSess, _, publisherAlias := publishAndCache(t)
+	sendStreams(t, pubSess, publisherAlias, []testStream{
+		{objects: []uint64{0, 1, 2}, status: message.ObjectStatusEndOfTrack},
+	})
+	fetchSess := dialAnotherClient(t, pubSess)
+	waitRelayLargest(t, fetchSess, ns("video"), []byte("cam1"), 0, 2)
+
+	for _, tc := range []struct {
+		name string
+		end  message.Location
+		want bool
+	}{
+		{"whole track", message.Location{Group: 999, Object: math.MaxUint64}, true},
+		{"up to the END_OF_TRACK Object", message.Location{Group: 0, Object: 2}, true},
+		{"ending before it", message.Location{Group: 0, Object: 1}, false},
+	} {
+		ok, _ := fetchAndDrain(t, fetchSess, ns("video"), []byte("cam1"),
+			message.Location{}, tc.end, message.GroupOrderAscending)
+		if ok.EndOfTrack != tc.want {
+			t.Errorf("%s: FETCH_OK End Of Track = %t, want %t (End Location %+v)",
+				tc.name, ok.EndOfTrack, tc.want, ok.EndLocation)
+		}
+	}
 }
 
 // TestSubscribe_FillOpensNoStreamOnEmptyTrack: on a track with no Objects the

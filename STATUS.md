@@ -198,7 +198,7 @@ By package, bottom-up along the dependency stack:
 | 10.11   | PUBLISH                       | 0x1D   | DONE   | |
 | 10.12   | PUBLISH_DONE                  | 0x0B   | DONE   | Sent once every stream of the subscription has closed and no datagram send is in progress, with the exact Stream Count; written on its own goroutine, so subscribers do not wait on each other. When a track's last upstream ends, its PUBLISH_DONE code reaches subscribers if it is about the track (TRACK_ENDED, MALFORMED_TRACK); codes about the relay's own upstream subscription become INTERNAL_ERROR. Session `Publication.Done` resets the subgroups still open with CANCELLED, refuses later opens and writes (`ErrPublicationEnded`), and counts every subgroup opened, however the opens race it. |
 | 10.13   | FETCH                         | 0x16   | DONE   | Standalone, the only kind in draft-20. From the cache, a Location is non-existent only on a signal: a Prior Group or Object ID Gap, a Group's or the Track's end, or an upstream's FETCH. Other uncached Locations are FETCHed from a fetch-capable upstream in one span, within FILL_TIMEOUT, or else marked End of Unknown (or Timed-Out) Range. |
-| 10.14   | FETCH_OK                      | 0x18   | DONE   | An End Location before the FETCH's Start closes the session. A Start relative to the Largest Object is compared through End ≤ Largest; an End of {0,0} is let through, as it cannot be told apart from "no content yet". |
+| 10.14   | FETCH_OK                      | 0x18   | DONE   | The relay sets End Of Track when the End Location is the Object an END_OF_TRACK status made the Track's final one; it does not learn a Track's end from an upstream FETCH_OK's End Of Track. An End Location before the FETCH's Start closes the session. A Start relative to the Largest Object is compared through End ≤ Largest; an End of {0,0} is let through, as it cannot be told apart from "no content yet". |
 | 10.15   | TRACK_STATUS                  | 0x0D   | DONE   | Reply via REQUEST_OK, then FIN; any follow-up from the requester closes the session. |
 | 10.16   | PUBLISH_NAMESPACE             | 0x06   | DONE   | |
 | 10.17   | NAMESPACE                     | 0x08   | DONE   | Per namespace, counted over local and remote sources. |
@@ -534,7 +534,6 @@ Relay:
   every earlier contributor left: the writer set, and with it the run of
   forwarded Object IDs, is dropped with its last contributor, so Objects a
   reset predecessor never delivered go unnoticed (§11.4.3).
-- FETCH_OK never sets End Of Track (§10.14).
 - A cancelled FETCH keeps writing its data stream (§5.2: "MUST reset").
 - Objects from an upstream FETCH are exempt from MAX_CACHE_DURATION, and cached
   Objects age from when they were read whole rather than their beginning (§12.3).
