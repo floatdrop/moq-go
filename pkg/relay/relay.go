@@ -688,6 +688,7 @@ func (r *Relay) Stop(ctx context.Context) error {
 		//    everything immediately. A relay-to-relay deployment may
 		//    want to include a New Session URI here — extend
 		//    SessionOptions or Config when that arrives.
+		goawaySent := make(map[*session.Session]bool, len(sessions))
 		if r.cfg.GoawayTimeout > 0 {
 			for _, sess := range sessions {
 				if err := sess.SendGoaway(r.cfg.GoawayTimeout, ""); err != nil {
@@ -695,7 +696,9 @@ func (r *Relay) Stop(ctx context.Context) error {
 					// or is closed is fine to skip.
 					r.log.LogAttrs(ctx, slog.LevelDebug, "relay GOAWAY send skipped",
 						slog.String("err", err.Error()))
+					continue
 				}
+				goawaySent[sess] = true
 			}
 		}
 
@@ -709,9 +712,11 @@ func (r *Relay) Stop(ctx context.Context) error {
 			close(drained)
 		}()
 
+		timedOut := false
 		select {
 		case <-drained:
 		case <-time.After(r.cfg.GoawayTimeout):
+			timedOut = true
 			r.log.LogAttrs(ctx, slog.LevelWarn, "relay GOAWAY drain timed out, force-closing sessions")
 		case <-ctx.Done():
 			r.log.LogAttrs(ctx, slog.LevelWarn, "relay Stop ctx cancelled, force-closing sessions")
@@ -726,13 +731,14 @@ func (r *Relay) Stop(ctx context.Context) error {
 			r.upstreams.close()
 		}
 
-		// 7. Force-close anything still standing. We use
-		//    SessionGoawayTimeout (§10.4 / IANA §15.11.1): the
-		//    relay sent GOAWAY and the peer didn't drain within
-		//    GoawayTimeout. Closing an already-closed session is a
-		//    no-op via Session's internal closeOnce.
+		// 7. Force-close anything still standing, with GOAWAY_TIMEOUT
+		//    only where it is true: "the peer took too long to close the
+		//    session in response to a GOAWAY" (§3.5). A session sent no
+		//    GOAWAY, or cut short by ctx, is closed with NO_ERROR. Closing
+		//    an already-closed session is a no-op via Session's internal
+		//    closeOnce.
 		for _, sess := range sessions {
-			_ = sess.Close(moqt.SessionGoawayTimeout, "relay shutdown")
+			_ = sess.Close(shutdownCloseCode(goawaySent[sess] && timedOut), "relay shutdown")
 		}
 
 		// 8. Wait for all handler goroutines to exit. This is
@@ -775,17 +781,29 @@ func (r *Relay) addSession(s *session.Session, leg Leg) {
 // drain for one session: GOAWAY, wait for the peer to drain or the grace period
 // to elapse, then force-close. Spawned by addSession only during shutdown.
 func (r *Relay) drainStraggler(s *session.Session) {
+	goawayExpired := false
 	if r.cfg.GoawayTimeout > 0 {
-		_ = s.SendGoaway(r.cfg.GoawayTimeout, "")
+		sent := s.SendGoaway(r.cfg.GoawayTimeout, "") == nil
 		timer := time.NewTimer(r.cfg.GoawayTimeout)
 		defer timer.Stop()
 		select {
 		case <-timer.C:
+			goawayExpired = sent
 		case <-s.Done():
 			return // peer drained within the grace period
 		}
 	}
-	_ = s.Close(moqt.SessionGoawayTimeout, "relay shutdown")
+	_ = s.Close(shutdownCloseCode(goawayExpired), "relay shutdown")
+}
+
+// shutdownCloseCode is the code a shutdown force-closes a session with:
+// GOAWAY_TIMEOUT when the relay sent it a GOAWAY and the grace period ran out
+// (§3.5), NO_ERROR otherwise.
+func shutdownCloseCode(goawayExpired bool) moqt.SessionErrorCode {
+	if goawayExpired {
+		return moqt.SessionGoawayTimeout
+	}
+	return moqt.SessionNoError
 }
 
 func (r *Relay) removeSession(s *session.Session, leg Leg) {

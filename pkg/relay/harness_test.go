@@ -39,6 +39,10 @@ type pipeListener struct {
 	// which reaches the relay's "write failed" branches. See [faultConn].
 	faultFor func(conn int) sessiontest.FaultFunc
 
+	// wrap, when non-nil, wraps each server-side conn, e.g. to observe the
+	// code the relay closes it with.
+	wrap func(session.Conn) session.Conn
+
 	dialled atomic.Int64
 }
 
@@ -77,6 +81,9 @@ func (l *pipeListener) DialWithLimits(clientBidi, serverBidi int) (session.Conn,
 		if fault := l.faultFor(int(l.dialled.Add(1))); fault != nil {
 			serverConn = sessiontest.Faulty(serverConn, fault)
 		}
+	}
+	if l.wrap != nil {
+		serverConn = l.wrap(serverConn)
 	}
 	select {
 	case l.conns <- serverConn:
