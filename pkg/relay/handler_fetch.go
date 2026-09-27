@@ -460,8 +460,17 @@ func (h *sessionHandler) fetchUpstreamRange(
 	// for.
 	fs.GroupOrder = order
 	// §10.2.5: the budget covers the response too; when it runs out, what
-	// has arrived is kept and the rest reported Timed-Out.
-	defer context.AfterFunc(fctx, func() { fs.Cancel(moqt.StreamResetCancelled) })()
+	// has arrived is kept and the rest reported Timed-Out. When the track is
+	// found malformed, up is cancelled with MALFORMED_TRACK if it sent the
+	// Object (§2.4.2; see endMalformedTrack), and the caller resets the
+	// downstream stream.
+	defer context.AfterFunc(fctx, func() {
+		code := moqt.StreamResetCancelled
+		if mt, ok := errors.AsType[*malformedTrackCause](context.Cause(fctx)); ok && mt.src == up.Session {
+			code = moqt.StreamResetMalformedTrack
+		}
+		fs.Cancel(code)
+	})()
 	// §12.3: this FETCH's MAX_CACHE_DURATION bounds each Object it delivers
 	// (see [cache.ObjectCache.Expired]). Deviation: the age runs from when the
 	// relay read the Object whole, not from "the beginning of the Object".

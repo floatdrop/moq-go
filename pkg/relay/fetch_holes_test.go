@@ -463,12 +463,14 @@ func TestFetch_CancelResetsStreams(t *testing.T) {
 		select {
 		case r := <-resets:
 			if r.code != moqt.StreamResetCancelled {
-				t.Fatalf("the relay reset a stream (uni %t) with %v, want CANCELLED", r.uni, r.code)
+				t.Fatalf("the relay reset a stream (%v) with %v, want CANCELLED", r.stream, r.code)
 			}
-			if r.uni {
+			switch r.stream {
+			case fetchStreamReset:
 				uni = true
-			} else {
+			case requestStreamReset:
 				bidi = true
+			case fetchStreamStop:
 			}
 		case <-deadline:
 			t.Fatalf("within 500ms of the cancel: data stream reset %t, request stream reset %t; want both",

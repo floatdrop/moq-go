@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
+	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
 	"github.com/floatdrop/moq-go/pkg/relay"
@@ -40,8 +41,8 @@ type pipeListener struct {
 	faultFor func(conn int) sessiontest.FaultFunc
 
 	// resetsFor, when non-nil, is consulted like faultFor; a non-nil channel
-	// receives each reset the relay sends on that conn, which [sessiontest]
-	// otherwise drops the code of. See [resetsOn].
+	// receives the resets the relay sends on that conn (see [streamReset]),
+	// whose codes [sessiontest] otherwise drops. See [resetsOn].
 	resetsFor func(conn int) chan<- streamReset
 
 	// wrap, when non-nil, wraps each server-side conn, e.g. to observe the
@@ -51,13 +52,23 @@ type pipeListener struct {
 	dialled atomic.Int64
 }
 
-// streamReset is a reset the relay sent: its §3.3.4 code, and whether it was on
-// a unidirectional stream the relay opened or on a request stream the peer
-// opened.
+// streamReset is a reset the relay sent on a stream, with its §3.3.4 code.
 type streamReset struct {
-	uni  bool
-	code moqt.StreamResetCode
+	stream resetStream
+	code   moqt.StreamResetCode
 }
+
+// resetStream is the stream a [streamReset] was on.
+type resetStream int
+
+const (
+	// fetchStreamReset: a RESET_STREAM on a fetch stream the relay opened.
+	fetchStreamReset resetStream = iota
+	// requestStreamReset: a RESET_STREAM on a request stream the peer opened.
+	requestStreamReset
+	// fetchStreamStop: a STOP_SENDING on a fetch stream the peer opened.
+	fetchStreamStop
+)
 
 // resetsOn builds a [pipeListener.resetsFor] recording the resets on the nth
 // dialled conn only, counting from 1 like [faultConn].
@@ -71,7 +82,8 @@ func resetsOn(n int, ch chan<- streamReset) func(int) chan<- streamReset {
 }
 
 // resetRecordingConn reports the resets on the streams of the conn it wraps:
-// those the relay opens (data streams) and accepts (request streams).
+// the fetch streams the relay opens, and the request and fetch streams the
+// peer opens.
 type resetRecordingConn struct {
 	session.Conn
 
@@ -83,7 +95,9 @@ func (c resetRecordingConn) OpenUniStream() (session.SendStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	return resetRecordingUni{s, c.resets}, nil
+	w := &resetRecordingSend{SendStream: s, resets: c.resets}
+	w.typ.Store(-1)
+	return w, nil
 }
 
 func (c resetRecordingConn) AcceptStream(ctx context.Context) (session.Stream, error) {
@@ -94,14 +108,48 @@ func (c resetRecordingConn) AcceptStream(ctx context.Context) (session.Stream, e
 	return resetRecordingBidi{s, c.resets}, nil
 }
 
-type resetRecordingUni struct {
+func (c resetRecordingConn) AcceptUniStream(ctx context.Context) (session.ReceiveStream, error) {
+	s, err := c.Conn.AcceptUniStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	r := &resetRecordingRecv{ReceiveStream: s, resets: c.resets}
+	r.typ.Store(-1)
+	return r, nil
+}
+
+// streamType is a unidirectional stream's first byte, which is its one-byte
+// stream type (§3.4), or -1 before any.
+type streamType struct{ atomic.Int64 }
+
+func (t *streamType) see(p []byte) {
+	if len(p) > 0 {
+		t.CompareAndSwap(-1, int64(p[0]))
+	}
+}
+
+func (t *streamType) isFetch() bool {
+	typ := t.Load()
+	return typ >= 0 && message.IsFetchHeaderType(uint64(typ))
+}
+
+// resetRecordingSend reports a RESET_STREAM on a fetch stream.
+type resetRecordingSend struct {
 	session.SendStream
 
 	resets chan<- streamReset
+	typ    streamType
 }
 
-func (s resetRecordingUni) CancelWrite(code uint64) {
-	record(s.resets, streamReset{uni: true, code: moqt.StreamResetCode(code)})
+func (s *resetRecordingSend) Write(p []byte) (int, error) {
+	s.typ.see(p)
+	return s.SendStream.Write(p)
+}
+
+func (s *resetRecordingSend) CancelWrite(code uint64) {
+	if s.typ.isFetch() {
+		record(s.resets, streamReset{fetchStreamReset, moqt.StreamResetCode(code)})
+	}
 	s.SendStream.CancelWrite(code)
 }
 
@@ -112,8 +160,29 @@ type resetRecordingBidi struct {
 }
 
 func (s resetRecordingBidi) CancelWrite(code uint64) {
-	record(s.resets, streamReset{code: moqt.StreamResetCode(code)})
+	record(s.resets, streamReset{requestStreamReset, moqt.StreamResetCode(code)})
 	s.Stream.CancelWrite(code)
+}
+
+// resetRecordingRecv reports a STOP_SENDING on a fetch stream.
+type resetRecordingRecv struct {
+	session.ReceiveStream
+
+	resets chan<- streamReset
+	typ    streamType
+}
+
+func (s *resetRecordingRecv) Read(p []byte) (int, error) {
+	n, err := s.ReceiveStream.Read(p)
+	s.typ.see(p[:n])
+	return n, err
+}
+
+func (s *resetRecordingRecv) CancelRead(code uint64) {
+	if s.typ.isFetch() {
+		record(s.resets, streamReset{fetchStreamStop, moqt.StreamResetCode(code)})
+	}
+	s.ReceiveStream.CancelRead(code)
 }
 
 // record sends r without blocking the relay; a test reads the resets it

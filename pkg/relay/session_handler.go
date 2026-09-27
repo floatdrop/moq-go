@@ -531,10 +531,14 @@ func (h *sessionHandler) handleFollowupTokens(
 var errRequestCancelled = errors.New("relay: request cancelled")
 
 // ctxResetCode is the §3.3.4 code for a stream reset because ctx ended:
-// CANCELLED for a cancelled request, SESSION_CLOSED otherwise.
+// CANCELLED for a cancelled request, MALFORMED_TRACK for a fetch stream of a
+// malformed track (§2.4.2), SESSION_CLOSED otherwise.
 func ctxResetCode(ctx context.Context) moqt.StreamResetCode {
-	if errors.Is(context.Cause(ctx), errRequestCancelled) {
+	switch cause := context.Cause(ctx); {
+	case errors.Is(cause, errRequestCancelled):
 		return moqt.StreamResetCancelled
+	case errors.Is(cause, session.ErrMalformedTrack):
+		return moqt.StreamResetMalformedTrack
 	}
 	return moqt.StreamResetSessionClosed
 }
@@ -645,9 +649,13 @@ func (h *sessionHandler) serveFetchObjects(
 	fetchCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	stop := context.AfterFunc(req.Stream.Context(), func() { cancel(errRequestCancelled) })
+	// §2.4.2: a relay that detects a malformed track MUST "reset any fetch
+	// streams with Status Code MALFORMED_TRACK"; see endMalformedTrack.
+	remove := entry.AddFetch(cancel)
 	ok := h.streamFetchRange(fetchCtx, kind, nil, requestID, entry, fullName,
 		start, end, order, fillTimeout, rangeFilters)
 	stop()
+	remove()
 	if !ok {
 		// The requester's own signal, not fetchCtx's cause: a write can fail on
 		// its STOP_SENDING for the data stream before the cause is set.
@@ -696,7 +704,9 @@ func (h *sessionHandler) streamFetchRange(
 	}
 	// ctx ending resets the stream rather than completing it: CANCELLED when
 	// its cause is errRequestCancelled (a fill's cancelled subscription,
-	// §5.1.3.1, or a cancelled FETCH, §5.2), else SESSION_CLOSED (§3.3.4).
+	// §5.1.3.1, or a cancelled FETCH, §5.2), MALFORMED_TRACK for a malformed
+	// track (§2.4.2; callers register ctx's cancel with
+	// [registry.TrackEntry.AddFetch]), else SESSION_CLOSED (§3.3.4).
 	cancelOut := func() { out.Cancel(ctxResetCode(ctx)) }
 	unwatch := context.AfterFunc(ctx, cancelOut)
 	defer unwatch()

@@ -104,6 +104,8 @@ func (h *sessionHandler) maybeServeFill(
 		fillCtx, cancel := context.WithCancelCause(ctx)
 		defer cancel(nil)
 		defer context.AfterFunc(sub.Cancelled(), func() { cancel(errRequestCancelled) })()
+		// §2.4.2: a malformed track resets its fill fetch streams too.
+		defer entry.AddFetch(cancel)()
 		h.serveFill(fillCtx, sub, requestID, entry, fullName, start, end, order, fillTimeout, rangeFilters)
 	})
 	return nil
