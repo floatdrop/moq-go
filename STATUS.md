@@ -107,7 +107,7 @@ By package, bottom-up along the dependency stack:
 
 | §       | Feature                          | Status | Notes |
 |---------|----------------------------------|--------|-------|
-| 5.1     | Subscriptions                    | DONE   | Subscribe/Publish/OK/Error state machine in `subscribe.go` and `publish.go`. A second response to this side's SUBSCRIBE or PUBLISH closes the session with PROTOCOL_VIOLATION: on a `Subscription`'s or `Session.Publish` `Publication`'s broker, a SUBSCRIBE_OK, or a REQUEST_OK / REQUEST_ERROR before any Update (after one it may answer an Update that gave up); in the relay, a REQUEST_OK / REQUEST_ERROR on a forwarded PUBLISH. |
+| 5.1     | Subscriptions                    | DONE   | Subscribe/Publish/OK/Error state machine in `subscribe.go` and `publish.go`. A second response to this side's SUBSCRIBE or PUBLISH closes the session with PROTOCOL_VIOLATION: a SUBSCRIBE_OK on a `Subscription`'s broker, and a REQUEST_OK / REQUEST_ERROR on any broker before this side sent an Update (after one it may answer an Update that gave up); see §10.9. |
 | 5.1.1   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. The relay resets a cancelled subscription's open subgroup and fill streams. |
 | 5.1.2   | Location filters                 | DONE   | Every start/end form (unfiltered, Next Object, relative and absolute start, absolute range) + `Matches`. |
 | 5.1.3   | Fill semantics                   | PARTIAL | Fill fetch streams from FILL_PARAMETERS on SUBSCRIBE / REQUEST_UPDATE (`handler_fill.go`), and on SUBSCRIBE_TRACKS, one per forwarded PUBLISH's subscription, keyed to the PUBLISH's Request ID (§10.1). A fill inherits the subscription's Range Filters; the ones inside FILL_PARAMETERS override per type. A cancelled subscription's open fills are reset (§5.1.3.1). Not done: scheduling fills against their subscription (§7.2, see Limitations). |
@@ -193,7 +193,7 @@ By package, bottom-up along the dependency stack:
 | 10.6    | REQUEST_ERROR (+ Redirect)    | 0x05   | DONE   | Redirect required only when code==REDIRECT, and exposed as `RequestRejectedError.Redirect`; `Request.Reject` sends one. A Connect URI received by a server, or a Track Name for SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE / SUBSCRIBE_TRACKS, closes the session (§10.6.1), and `Reject` refuses to send either; on a REQUEST_UPDATE's answer only the Connect URI is checked, as the reader does not know the request, and an update handler's REDIRECT is sent as INTERNAL_ERROR (§10.6.2 does not list REQUEST_UPDATE). The relay does not follow a Redirect: an upstream REDIRECT becomes INTERNAL_ERROR downstream. `Request.Reject` sends a Retry Interval; the relay invites a jittered ~1 s retry on EXCESSIVE_LOAD and passes an upstream SUBSCRIBE rejection on by meaning, Retry Interval kept. |
 | 10.7    | SUBSCRIBE                     | 0x03   | DONE   | |
 | 10.8    | SUBSCRIBE_OK                  | 0x04   | DONE   | Registers inbound track alias. |
-| 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | A REQUEST_UPDATE opening a request stream closes the session with PROTOCOL_VIOLATION (`ErrUnexpectedRequestUpdate`). |
+| 10.9    | REQUEST_UPDATE                | 0x02   | DONE   | A REQUEST_UPDATE opening a request stream closes the session with PROTOCOL_VIOLATION (`ErrUnexpectedRequestUpdate`). A REQUEST_OK / REQUEST_ERROR on a request stream where this side sent no REQUEST_UPDATE answers nothing and closes the session too, read by a `RequestBroker` or by the relay: a deliberate choice, as the draft names no rule for it on a stream this side answered. |
 | 10.10   | PUBLISH_STATE_NOTIFY          | 0x22   | DONE   | Only the publisher may send it; enforced by brokers and the relay. |
 | 10.11   | PUBLISH                       | 0x1D   | DONE   | |
 | 10.12   | PUBLISH_DONE                  | 0x0B   | DONE   | Sent once every stream of the subscription has closed and no datagram send is in progress, with the exact Stream Count; written on its own goroutine, so subscribers do not wait on each other. When a track's last upstream ends, its PUBLISH_DONE code reaches subscribers if it is about the track (TRACK_ENDED, MALFORMED_TRACK); codes about the relay's own upstream subscription become INTERNAL_ERROR. Session `Publication.Done` resets the subgroups still open with CANCELLED, refuses later opens and writes (`ErrPublicationEnded`), and counts every subgroup opened, however the opens race it. |
@@ -521,11 +521,6 @@ already listed as Limitations above are not repeated here.
 
 Session layer:
 
-- On a request stream the relay answered, a REQUEST_OK or REQUEST_ERROR from
-  the requester is ignored rather than closing the session, so a Connect URI in
-  one is not checked (§10.6.1). The draft defines no such message; only on a
-  forwarded PUBLISH, where it is a second response, does the relay close the
-  session (§5.1).
 - A GOAWAY on a request stream before its initial response (other than to
   SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS, where §10.19/§10.20 make it a
   PROTOCOL_VIOLATION) is an error rather than a legal message checked

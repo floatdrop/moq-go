@@ -572,7 +572,8 @@ func ctxResetCode(ctx context.Context) moqt.StreamResetCode {
 // StreamResetSessionClosed to unblock the parse). A follow-up that cannot be
 // read — any non-EOF error — resets the read side with
 // StreamResetInternalError so the peer learns reads stopped; a malformed one
-// also closes the session (§10).
+// also closes the session (§10), as does a REQUEST_OK or REQUEST_ERROR, since
+// the relay sends no REQUEST_UPDATE on the streams it reads this way (§10.9).
 //
 // It reports fin when the requester ended its side with a FIN, which is not a
 // cancellation (§3.3.2); see [awaitRequestEnd].
@@ -607,6 +608,16 @@ func readRequestStream(
 			// §10.4: a second GOAWAY, or one with a URI from a client,
 			// closed the session.
 			if g, ok := m.(*message.Goaway); ok && goaways.Received(sess, g) != nil {
+				done <- false
+				return
+			}
+			// §10.9: the relay sends no REQUEST_UPDATE on these streams, so
+			// a REQUEST_OK or REQUEST_ERROR answers nothing: on a forwarded
+			// PUBLISH it is a second response (§5.1).
+			switch m.(type) {
+			case *message.RequestOK, *message.RequestError:
+				_ = sess.Close(moqt.SessionProtocolViolation,
+					fmt.Sprintf("%s with no REQUEST_UPDATE to answer", m.Type()))
 				done <- false
 				return
 			}
