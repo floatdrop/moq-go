@@ -49,7 +49,10 @@ func stopCloseCode(t *testing.T, goaway, stopWithin time.Duration) moqt.SessionE
 	// A round trip: the relay registers a session before serving its
 	// requests, so Stop's snapshot now holds it rather than leaving it a
 	// straggler drained on its own schedule.
-	if _, err := sess.TrackStatus(t.Context(), &message.TrackStatus{Namespace: ns("none"), Name: []byte("x")}); err == nil {
+	if _, err := sess.TrackStatus(
+		t.Context(),
+		&message.TrackStatus{Namespace: ns("none"), Name: []byte("x")},
+	); err == nil {
 		t.Fatal("TRACK_STATUS for an unknown track succeeded")
 	}
 
