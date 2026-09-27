@@ -553,12 +553,6 @@ Relay:
   period and ignores `Stop`'s ctx, so a cancelled `Stop` can still wait up to
   `GoawayTimeout` for it.
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
-- Cancelling `Start`'s ctx ends each session's handler without closing the
-  session, and drops it from the set `Stop` closes; `Stop` then waits without
-  bound on the reader of an upstream SUBSCRIBE on such a session, whose stream
-  stays open. `Start`'s doc says the cancel "terminates live sessions".
-  Reproduced by two relays wired through Discovery and stopped in `t.Cleanup`
-  (after `t.Context` ends) while a cross-relay subscription is live.
 
 Documentation:
 

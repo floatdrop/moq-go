@@ -595,7 +595,19 @@ func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
 		return
 	}
 
+	// Start documents cancelling its ctx as terminating live sessions, and a
+	// handler ending does not close its session: left open, a relay-scoped
+	// reader on one of its request streams, and with it Stop, would wait on
+	// it. NO_ERROR (§3.5): no GOAWAY was sent, so none ran out.
+	closeSess := func() { _ = sess.Close(moqt.SessionNoError, "relay: stopped") }
+	stop := context.AfterFunc(ctx, closeSess)
 	r.serveSession(ctx, sess, LegLocal)
+	// The handler can end on ctx before AfterFunc has run closeSess, and stop
+	// then keeps it from running at all.
+	stop()
+	if ctx.Err() != nil {
+		closeSess()
+	}
 }
 
 // serveSession runs the per-session lifecycle for a Session that has already
