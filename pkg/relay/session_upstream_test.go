@@ -347,3 +347,44 @@ func TestSubscribe_UpstreamRejects_PropagatesRejection(t *testing.T) {
 		})
 	}
 }
+
+// TestSubscribe_NoPublisherYetRanking: when every candidate only says the
+// track has no publisher yet, the refusal is the most actionable of their
+// answers whatever the order they answer in: GOING_AWAY (retry soon), then
+// TIMEOUT, then DOES_NOT_EXIST.
+func TestSubscribe_NoPublisherYetRanking(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		a, b, want moqt.RequestErrorCode
+	}{
+		{moqt.RequestDoesNotExist, moqt.RequestGoingAway, moqt.RequestGoingAway},
+		{moqt.RequestDoesNotExist, moqt.RequestTimeout, moqt.RequestTimeout},
+		{moqt.RequestTimeout, moqt.RequestGoingAway, moqt.RequestGoingAway},
+	} {
+		for _, order := range [][2]moqt.RequestErrorCode{{tc.a, tc.b}, {tc.b, tc.a}} {
+			t.Run(fmt.Sprintf("%#x then %#x", uint64(order[0]), uint64(order[1])), func(t *testing.T) {
+				t.Parallel()
+				subSess, teardown := connectRelay(t, relay.Config{})
+				t.Cleanup(teardown)
+				for _, code := range order {
+					pub := dialAnotherClient(t, subSess)
+					publishNS(t, pub, "video")
+					go func() {
+						for {
+							req, err := pub.AcceptRequest(t.Context())
+							if err != nil {
+								return
+							}
+							_ = req.RejectError(code, "no cam1")
+						}
+					}()
+				}
+				_, err := subSess.Subscribe(
+					t.Context(),
+					&message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")},
+				)
+				requireRejectedWithCode(t, err, tc.want)
+			})
+		}
+	}
+}

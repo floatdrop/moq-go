@@ -525,6 +525,37 @@ func awaitsPublisher(err error) bool {
 		rej.Code == moqt.RequestGoingAway)
 }
 
+// candidateErrRank orders subscribeUpstream's candidate errors, the highest
+// kept whatever order the candidates answer in: a Track Properties refusal
+// (§2.5.1 fixes its downstream code), then any other refusal, which ends a
+// RENDEZVOUS_TIMEOUT hold (see awaitsPublisher), then the answers saying the
+// track has no publisher yet, the most actionable first: GOING_AWAY, which
+// says to retry (§10.6.2), then TIMEOUT, then DOES_NOT_EXIST. GOING_AWAY is
+// taken to outrank §10.2.6's DOES_NOT_EXIST for "no publisher is available":
+// the publisher is known, only draining.
+func candidateErrRank(err error) int {
+	if err == nil {
+		return 0
+	}
+	if isTrackPropertiesErr(err) {
+		return 5
+	}
+	if !awaitsPublisher(err) {
+		return 4
+	}
+	if errors.Is(err, errGoingAway) {
+		return 3
+	}
+	rej, _ := errors.AsType[*session.RequestRejectedError](err)
+	if rej.Code == moqt.RequestGoingAway {
+		return 3
+	}
+	if rej.Code == moqt.RequestTimeout {
+		return 2
+	}
+	return 1 // DOES_NOT_EXIST
+}
+
 // subscribeUpstream subscribes fullName on every matching source (§9.5):
 // each local publisher of a covering namespace and each remote relay
 // Discovery resolves (capped by Config.UpstreamFanIn), skipping sessions
@@ -592,11 +623,9 @@ func (h *sessionHandler) subscribeUpstream(
 				delete(subscribed, sess)
 				return
 			}
-			// Keep going. A Track Properties refusal outranks other errors
-			// (§2.5.1 fixes its downstream code), and any error outranks
-			// one that only says the track has no publisher yet, so a
-			// held SUBSCRIBE ends on it (see awaitsPublisher).
-			if isTrackPropertiesErr(err) || (!isTrackPropertiesErr(lastErr) && awaitsPublisher(lastErr)) {
+			// Keep going, with the highest-ranked error (see
+			// candidateErrRank).
+			if candidateErrRank(err) > candidateErrRank(lastErr) {
 				lastErr = err
 			}
 			h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: candidate failed, continuing",
@@ -619,10 +648,8 @@ func (h *sessionHandler) subscribeUpstream(
 
 	remotes, draining := h.upstreams.resolveUpstreams(ctx, fullName.Namespace)
 	// A draining relay was sent no request (§10.4); it answers as a draining
-	// publisher would, ranked with the other candidates' errors. Taken to
-	// outrank §10.2.6's DOES_NOT_EXIST for "no publisher is available": the
-	// publisher is known, and GOING_AWAY (§10.6.2) says to retry.
-	if draining && !isTrackPropertiesErr(lastErr) && awaitsPublisher(lastErr) {
+	// publisher would, ranked with the other candidates' errors.
+	if draining && candidateErrRank(errGoingAway) > candidateErrRank(lastErr) {
 		lastErr = errGoingAway
 	}
 	for _, remote := range remotes {
