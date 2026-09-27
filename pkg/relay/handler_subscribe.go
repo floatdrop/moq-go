@@ -400,8 +400,11 @@ func (h *sessionHandler) subscribeUpstream(
 	extra message.Parameters,
 	wantForward bool,
 ) (*registry.TrackEntry, bool, error) {
-	// Never subscribe twice on one session, nor on our own (a self-loop).
-	subscribed := map[*session.Session]bool{h.sess: true}
+	// Never subscribe twice on one session. The requester's own session is a
+	// candidate like any other: "An endpoint MAY SUBSCRIBE to a Track it is
+	// publishing ... Such self-subscriptions are identical to subscriptions
+	// initiated by other endpoints" (§5.1).
+	subscribed := map[*session.Session]bool{}
 	if entry, ok := h.tracks.Get(fullName.Key()); ok {
 		for _, u := range entry.CopyUpstream() {
 			subscribed[u.Session] = true
@@ -420,8 +423,16 @@ func (h *sessionHandler) subscribeUpstream(
 		subscribed[sess] = true // even on failure: don't retry the same source here
 		// Hold the claim when free, so a late-publisher SUBSCRIBE skips. Never
 		// wait on another holder: its SUBSCRIBE may fail for its own reasons.
-		if release, claimed := h.tracks.ClaimUpstream(sess, fullName.Key()); claimed {
+		release, claimed := h.tracks.ClaimUpstream(sess, fullName.Key())
+		if claimed {
 			defer release()
+		} else if sess == h.sess {
+			// Deviation (§5.1 "identical"): while a SUBSCRIBE for the track
+			// to the requester is pending, this request may be that SUBSCRIBE
+			// routed back to the relay, and a second one to it would loop
+			// (§6.2). A genuine concurrent self-subscription looks the same
+			// and is declined too.
+			return
 		}
 		h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: issuing upstream SUBSCRIBE",
 			slog.String("source", src))
