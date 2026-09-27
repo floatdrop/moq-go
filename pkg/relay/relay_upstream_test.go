@@ -146,7 +146,7 @@ func TestResolveUpstreamsSkipsGoingAwayRelay(t *testing.T) {
 	})
 	defer p.close()
 
-	first := p.resolveUpstreams(ctx, ns)
+	first, _ := p.resolveUpstreams(ctx, ns)
 	if len(first) != 1 {
 		t.Fatalf("resolveUpstreams = %d sessions, want 1 (fan-in 1)", len(first))
 	}
@@ -170,7 +170,10 @@ func TestResolveUpstreamsSkipsGoingAwayRelay(t *testing.T) {
 		t.Fatal("the pooled session never saw the GOAWAY")
 	}
 
-	second := p.resolveUpstreams(ctx, ns)
+	second, draining := p.resolveUpstreams(ctx, ns)
+	if !draining {
+		t.Error("resolveUpstreams did not report the draining relay it skipped")
+	}
 	if len(second) != 1 || second[0] == first[0] {
 		t.Fatalf("resolveUpstreams after GOAWAY returned the draining %s again; want the next-ranked relay", top)
 	}

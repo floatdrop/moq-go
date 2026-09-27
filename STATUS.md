@@ -546,10 +546,13 @@ Relay:
   flight: the relay cannot tell either from its own request routed back to it
   by a relay peer (§6.2 has no loop protection), so it declines the second hop
   rather than loop. Self-subscriptions are otherwise "identical" (§5.1).
-- A SUBSCRIBE whose only candidate upstream is a draining relay reached through
-  the upstream pool gets DOES_NOT_EXIST, not the GOING_AWAY a draining local
-  publisher yields: the pool skips such a relay before any request.
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
+- Among SUBSCRIBE candidates that only say the track has no publisher yet
+  (DOES_NOT_EXIST, TIMEOUT, draining), the last to answer sets the refusal
+  code, so a draining local publisher and a remote relay's DOES_NOT_EXIST
+  yield DOES_NOT_EXIST while the reverse yields GOING_AWAY. An upstream relay
+  that answers GOING_AWAY itself, before its GOAWAY reaches this relay, is
+  passed on as INTERNAL_ERROR.
 
 Documentation:
 

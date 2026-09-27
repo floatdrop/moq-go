@@ -628,7 +628,14 @@ func (h *sessionHandler) subscribeUpstream(
 		establish(pub.Session, "local-publisher", extra)
 	}
 
-	remotes := h.upstreams.resolveUpstreams(ctx, fullName.Namespace)
+	remotes, draining := h.upstreams.resolveUpstreams(ctx, fullName.Namespace)
+	// A draining relay was sent no request (§10.4); it answers as a draining
+	// publisher would, ranked with the other candidates' errors. Taken to
+	// outrank §10.2.6's DOES_NOT_EXIST for "no publisher is available": the
+	// publisher is known, and GOING_AWAY (§10.6.2) says to retry.
+	if draining && !isTrackPropertiesErr(lastErr) && awaitsPublisher(lastErr) {
+		lastErr = errGoingAway
+	}
 	for _, remote := range remotes {
 		establish(remote, "discovery-remote", remoteExtra)
 	}
