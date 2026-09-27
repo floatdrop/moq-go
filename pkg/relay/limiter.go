@@ -11,7 +11,8 @@ import "sync"
 //
 // The counts track in-flight request handlers: acquire is called at dispatch
 // before a handler is spawned, release when it returns (a handler runs for its
-// request's whole lifetime). An over-limit request is rejected with
+// request's whole lifetime); a TRACK_STATUS holds a subscription slot only
+// while it is forwarded upstream. An over-limit request is rejected with
 // REQUEST_ERROR EXCESSIVE_LOAD before any shared state is mutated.
 type sessionLimiter struct {
 	mu      sync.Mutex
