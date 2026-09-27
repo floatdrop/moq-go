@@ -100,3 +100,31 @@ func testDrainingUpstreamRelay(t *testing.T, localRefuser bool) {
 		return ok && rej.Code == moqt.RequestGoingAway
 	}, "a SUBSCRIBE whose only upstream relay is draining was never refused with GOING_AWAY")
 }
+
+// TestRendezvous_UpstreamGoingAwayKeepsHold: a publisher answering the relay's
+// SUBSCRIBE with GOING_AWAY, as an upstream relay draining does before its
+// GOAWAY arrives, leaves the track without a publisher yet, so a
+// RENDEZVOUS_TIMEOUT hold goes on (§10.2.6). Passing the code on is covered by
+// TestSubscribe_UpstreamRejects_PropagatesRejection.
+func TestRendezvous_UpstreamGoingAwayKeepsHold(t *testing.T) {
+	t.Parallel()
+	subSess, teardown := connectRelay(t, relay.Config{})
+	t.Cleanup(teardown)
+	draining := dialAnotherClient(t, subSess)
+	publishNS(t, draining, "video")
+	go func() {
+		for {
+			req, err := draining.AcceptRequest(t.Context())
+			if err != nil {
+				return
+			}
+			_ = req.RejectError(moqt.RequestGoingAway, "draining")
+		}
+	}()
+	done := subscribeRendezvous(t.Context(), subSess, 5*time.Second)
+	requireHeld(t, done)
+	publishVideoTrack(t, dialAnotherClient(t, subSess), "cam1", 7)
+	if err := awaitAnswer(t, done); err != nil {
+		t.Fatalf("held SUBSCRIBE: %v", err)
+	}
+}
