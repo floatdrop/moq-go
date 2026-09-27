@@ -276,16 +276,27 @@ func TestFanout_MultiPublisher_SurvivorFINsOnlyWhatItCovers(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		// a is what A writes on a stream that starts the Subgroup; b is what B
-		// writes on a replay stream. Then A resets and B FINs.
-		a, b []uint64
-		fin  bool
+		// writes on a replay stream. A resets, then B FINs. aLeavesFirst: A
+		// resets before B opens, so the relay has dropped the Subgroup's
+		// writers in between.
+		a, b         []uint64
+		aLeavesFirst bool
+		fin          bool
 	}{
-		{"replay continues the run", []uint64{0, 1}, []uint64{2, 3}, true},
-		{"replay starts past undelivered Objects", []uint64{0, 1}, []uint64{4}, false},
+		{"replay continues the run", []uint64{0, 1}, []uint64{2, 3}, false, true},
+		{"replay starts past undelivered Objects", []uint64{0, 1}, []uint64{4}, false, false},
 		// Decided: without consecutive IDs the relay cannot tell whether an
 		// Object between was skipped (a Group split across Subgroups), so it
 		// resets.
-		{"Object IDs not consecutive", []uint64{0, 2}, []uint64{3}, false},
+		{"Object IDs not consecutive", []uint64{0, 2}, []uint64{3}, false, false},
+		{"replay after A left starts past undelivered Objects", []uint64{0, 1}, []uint64{4}, true, false},
+		// Decided: once A's streams are gone the relay knows only the lowest
+		// Object forwarded, not which ones followed it, so even a replay
+		// that continues the run resets.
+		{"replay after A left continues the run", []uint64{0, 1}, []uint64{2, 3}, true, false},
+		// A replay covering from that lowest Object still FINs; its copies
+		// of 0 and 1 are redundant (§9.3), so only 2 and 3 are forwarded.
+		{"replay after A left covers from the lowest Object", []uint64{0, 1}, []uint64{0, 1, 2, 3}, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -325,10 +336,16 @@ func TestFanout_MultiPublisher_SurvivorFINsOnlyWhatItCovers(t *testing.T) {
 				t.Fatalf("A OpenSubgroup: %v", err)
 			}
 			for _, id := range tc.a {
-				if err := a.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte("a")}); err != nil {
+				if err := a.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte{byte(id)}}); err != nil {
 					t.Fatalf("A WriteObjectAt %d: %v", id, err)
 				}
 				await(id)
+			}
+			if tc.aLeavesFirst {
+				a.Cancel(moqt.StreamResetCancelled)
+				if end := awaitStreamEnd(t, events); errors.Is(end.err, io.EOF) {
+					t.Fatal("A's reset reached the subscriber as a FIN")
+				}
 			}
 			hdr.ReplayingSubgroup = true
 			b, err := bPub.OpenSubgroup(hdr)
@@ -336,13 +353,18 @@ func TestFanout_MultiPublisher_SurvivorFINsOnlyWhatItCovers(t *testing.T) {
 				t.Fatalf("B OpenSubgroup: %v", err)
 			}
 			for _, id := range tc.b {
-				if err := b.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte("b")}); err != nil {
+				// The same Object as A's, if A sent it: §9.1 forbids another Payload.
+				if err := b.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte{byte(id)}}); err != nil {
 					t.Fatalf("B WriteObjectAt %d: %v", id, err)
 				}
-				await(id)
+				if !slices.Contains(tc.a, id) { // a redundant copy is not forwarded
+					await(id)
+				}
 			}
 
-			a.Cancel(moqt.StreamResetCancelled)
+			if !tc.aLeavesFirst {
+				a.Cancel(moqt.StreamResetCancelled)
+			}
 			if err := b.Close(); err != nil {
 				t.Fatalf("B Close: %v", err)
 			}
