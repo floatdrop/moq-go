@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -13,6 +14,11 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
+
+// testHookBeforeDownstreamRegistered, when set by a test, runs once a
+// SUBSCRIBE has an upstream for its track and before its downstream is
+// registered, to hold that window open.
+var testHookBeforeDownstreamRegistered atomic.Pointer[func(track.FullTrackName)]
 
 // handleSubscribe implements the SUBSCRIBE flow (§9.4, §10.7): authorize,
 // serve from an Established upstream or establish one on demand (see
@@ -56,6 +62,10 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	// Publishers that register after this point are picked up below, once the
 	// downstream is on the entry.
 	pubSeq := h.names.Seq()
+	// In flight until the downstream is registered; see
+	// [sessionHandler.beginSubscribe].
+	settled := h.beginSubscribe(fullName.Key())
+	defer settled()
 	for range 2 {
 		e, ok := h.tracks.Get(fullName.Key())
 		if !ok || !hasEstablishedUpstream(e) {
@@ -99,6 +109,9 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 		if cur, ok := h.tracks.Get(fullName.Key()); ok {
 			resolveGroupOrder(sub, cur)
 		}
+		if hook := testHookBeforeDownstreamRegistered.Load(); hook != nil {
+			(*hook)(fullName)
+		}
 		// Register and snapshot Largest atomically, so no object falls between
 		// live delivery and the fill fetch stream.
 		entry, snapshotLargest, snapshotHas, added = h.tracks.AddDownstreamSnapshotLargest(fullName, sub)
@@ -106,6 +119,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 			break
 		}
 	}
+	settled()
 	if !added {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "SUBSCRIBE rejected: upstream vanished during registration")
 		_ = req.RejectError(moqt.RequestDoesNotExist, "relay: upstream vanished")
@@ -115,7 +129,9 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	// §9.5: "Relays MUST send SUBSCRIBE messages to all matching publishers".
 	h.subscribeMissingPublishers(ctx, entry, reusedUpstream, pubSeq)
 	// §10.20: a newly upstreamed track is offered to SUBSCRIBE_TRACKS holders;
-	// after registration, so this subscriber is not offered its own track.
+	// after registration, so this subscriber is not offered its own track. The
+	// forwards racing registration from other paths are stopped by
+	// beginSubscribe.
 	if !reusedUpstream {
 		h.forwardToTrackSubscribers(entry)
 	}

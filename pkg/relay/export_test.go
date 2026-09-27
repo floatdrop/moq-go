@@ -20,3 +20,13 @@ func SetTestHookEarlyStreamWaiting(hook func(alias uint64)) (restore func()) {
 	testHookEarlyStreamWaiting.Store(&hook)
 	return func() { testHookEarlyStreamWaiting.Store(prev) }
 }
+
+// SetTestHookBeforeDownstreamRegistered installs hook, to be called once a
+// SUBSCRIBE has an upstream for its track and before its downstream is
+// registered, and returns a function restoring the previous value. See
+// [testHookBeforeDownstreamRegistered].
+func SetTestHookBeforeDownstreamRegistered(hook func(track.FullTrackName)) (restore func()) {
+	prev := testHookBeforeDownstreamRegistered.Load()
+	testHookBeforeDownstreamRegistered.Store(&hook)
+	return func() { testHookBeforeDownstreamRegistered.Store(prev) }
+}
