@@ -2,6 +2,8 @@ package registry_test
 
 import (
 	"bytes"
+	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -59,8 +61,15 @@ type recordingStream struct {
 
 	mu        sync.Mutex
 	buf       []byte
+	readCodes []uint64 // each CancelRead's code
 	closeOnce sync.Once
 	closed    chan struct{}
+}
+
+func (s *recordingStream) CancelRead(code uint64) {
+	s.mu.Lock()
+	s.readCodes = append(s.readCodes, code)
+	s.mu.Unlock()
 }
 
 // newRecordingStream returns an open recordingStream.
@@ -155,6 +164,57 @@ func TestDownstreamSub_TerminateBeforeOKAnswersWithRequestError(t *testing.T) {
 	}
 	if re.ErrorCode != moqt.RequestDoesNotExist {
 		t.Errorf("REQUEST_ERROR code = 0x%X, want DOES_NOT_EXIST", uint64(re.ErrorCode))
+	}
+	// §3.3.4: the request ended by REQUEST_ERROR is cancelled, not failed.
+	stream.mu.Lock()
+	codes := stream.readCodes
+	stream.mu.Unlock()
+	if want := []uint64{uint64(moqt.StreamResetCancelled)}; !slices.Equal(codes, want) {
+		t.Errorf("STOP_SENDING codes = %v, want %v (CANCELLED)", codes, want)
+	}
+}
+
+// failingWriteStream is a recordingStream whose writes fail, recording each
+// CancelWrite's code too.
+type failingWriteStream struct {
+	*recordingStream
+
+	writeCodes []uint64
+}
+
+func (s *failingWriteStream) Write([]byte) (int, error) { return 0, errors.New("transport gone") }
+
+func (s *failingWriteStream) CancelWrite(code uint64) {
+	s.mu.Lock()
+	s.writeCodes = append(s.writeCodes, code)
+	s.mu.Unlock()
+}
+
+// TestDownstreamSub_TerminateBeforeOKWriteFailureResets: when the REQUEST_ERROR
+// cannot be written, the stream is reset with INTERNAL_ERROR, a genuine
+// failure (§3.3.4), as [session.Request.RejectError] does, not cancelled.
+func TestDownstreamSub_TerminateBeforeOKWriteFailureResets(t *testing.T) {
+	t.Parallel()
+	stream := &failingWriteStream{recordingStream: newRecordingStream()}
+	sub := registry.NewDownstreamSub(1, nil, stream, 7)
+	sub.TerminateWithPublishDone(moqt.PublishDoneTrackEnded, "upstream gone")
+
+	want := []uint64{uint64(moqt.StreamResetInternalError)}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		stream.mu.Lock()
+		reads, writes := slices.Clone(stream.readCodes), slices.Clone(stream.writeCodes)
+		stream.mu.Unlock()
+		if len(reads) > 0 && len(writes) > 0 {
+			if !slices.Equal(reads, want) || !slices.Equal(writes, want) {
+				t.Fatalf("STOP_SENDING %v, RESET_STREAM %v, want both %v (INTERNAL_ERROR)", reads, writes, want)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("STOP_SENDING %v, RESET_STREAM %v, want both %v (INTERNAL_ERROR)", reads, writes, want)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

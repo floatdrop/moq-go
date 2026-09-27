@@ -533,8 +533,6 @@ Session layer:
 - `Publication`'s REQUEST_UPDATE_OK carries LARGEST_OBJECT only for Objects it
   wrote itself, not the one its SUBSCRIBE_OK or PUBLISH reported (§10.2.17,
   §10.9.1).
-- A rejected request sends STOP_SENDING with INTERNAL_ERROR (§3.3.4 SHOULD use a
-  relevant code).
 - Mandatory Track Property enforcement is off unless configured (§2.5.1).
 - SETUP options are sorted unstably, so with more than 12 the Token order on the
   wire can differ from the order `heldSetupAliases` replays (§10.3.1.4).
