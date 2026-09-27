@@ -199,3 +199,49 @@ func TestSubscribeTracks_OwnSubscribeFails_HeldForwardSent(t *testing.T) {
 		t.Fatalf("forwarded %q, want %q", got, name)
 	}
 }
+
+// TestSubscribeTracks_ConcurrentForwardsSendOnePublish: of two forwards of a
+// track to one SUBSCRIBE_TRACKS holder, the one that loses the race to the
+// other's registered downstream sends nothing; the holder gets one PUBLISH
+// for the track (relay policy, see forwardTrack). Not parallel: it installs
+// the process-wide hook.
+func TestSubscribeTracks_ConcurrentForwardsSendOnePublish(t *testing.T) {
+	const name = "concurrent-forwards"
+	held, gate := make(chan struct{}), make(chan struct{})
+	var holdOnce sync.Once
+	restore := relay.SetTestHookBeforeForwardClaim(func(n track.FullTrackName) {
+		if string(n.Name) != name {
+			return
+		}
+		first := false
+		holdOnce.Do(func() { first = true })
+		if first {
+			close(held)
+			<-gate
+		}
+	})
+	t.Cleanup(restore)
+	release := sync.OnceFunc(func() { close(gate) })
+
+	pubSess, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	defer release() // before the teardown, which joins the held handler
+	publishVideoTrack(t, pubSess, name, 7)
+	subSess := dialAnotherClient(t, pubSess)
+	reqs := forwardedPublishes(t, subSess)
+
+	// The existing-tracks forward holds before its claim...
+	subscribeTracks(t, subSess, ns("video"))
+	select {
+	case <-held:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the existing-tracks forward never reached its claim")
+	}
+	// ...while a second publisher's forward claims, registers its downstream
+	// (before the relay reads PUBLISH_OK) and releases the claim.
+	publishVideoTrack(t, dialAnotherClient(t, pubSess), name, 9)
+	acceptForwarded(t, awaitForwarded(t, reqs))
+
+	release()
+	requireNoForward(t, reqs, "the held forward of a track already forwarded")
+}

@@ -39,3 +39,12 @@ func SetTestHookBeforeFill(hook func(track.FullTrackName)) (restore func()) {
 	testHookBeforeFill.Store(&hook)
 	return func() { testHookBeforeFill.Store(prev) }
 }
+
+// SetTestHookBeforeForwardClaim installs hook, to be called as a forward of a
+// track to a SUBSCRIBE_TRACKS holder is about to claim it, and returns a
+// function restoring the previous value. See [testHookBeforeForwardClaim].
+func SetTestHookBeforeForwardClaim(hook func(track.FullTrackName)) (restore func()) {
+	prev := testHookBeforeForwardClaim.Load()
+	testHookBeforeForwardClaim.Store(&hook)
+	return func() { testHookBeforeForwardClaim.Store(prev) }
+}
