@@ -31,9 +31,19 @@ type Publication struct {
 
 	alias uint64
 
-	// subgroupCount counts subgroup streams opened via OpenSubgroup, used as
-	// the §10.12 Stream Count when Done sends PUBLISH_DONE.
-	subgroupCount atomic.Uint64
+	// The subgroups opened via OpenSubgroup, for Done (§10.12). subMu
+	// orders each OpenSubgroup against Done, which waits for the opens in
+	// flight (opening) and cancels their header writes (endCtx), so every
+	// subgroup opened is counted in subgroupCount, and the ones still open
+	// (open) are reset before PUBLISH_DONE. A subgroup's onEnd closes over
+	// the pointer registered here, which its copies (WithDeliveryTimeouts)
+	// share.
+	subMu         sync.Mutex
+	subgroupCount uint64
+	open          map[*OutgoingSubgroupStream]struct{}
+	opening       sync.WaitGroup
+	endCtx        context.Context
+	endCancel     context.CancelFunc
 
 	// paused is the inverse of the §5.1 Forward State.
 	paused atomic.Bool
@@ -44,8 +54,8 @@ type Publication struct {
 	largest    message.Location
 	hasLargest bool
 
-	// ended is latched by the first Done, so PUBLISH_DONE is sent once and no
-	// subgroup opens after it.
+	// ended is latched by the first Done, under subMu, so PUBLISH_DONE is
+	// sent once and no subgroup opens or writes after it.
 	ended atomic.Bool
 
 	brokerInit sync.Once
@@ -57,9 +67,10 @@ type Publication struct {
 // resumes.
 var ErrForwardPaused = errors.New("moqt/session: Forward State is 0; not sending objects")
 
-// ErrPublicationEnded is returned by [Publication.OpenSubgroup] once the
-// publication has sent PUBLISH_DONE — by [Publication.Done], or automatically
-// after a declined REQUEST_UPDATE (§10.9.1).
+// ErrPublicationEnded is returned by [Publication.OpenSubgroup], and by the
+// WriteObject methods of a subgroup it opened, once the publication has ended
+// — by [Publication.Done], or automatically after a declined REQUEST_UPDATE
+// (§10.9.1).
 var ErrPublicationEnded = errors.New("moqt/session: publication ended (PUBLISH_DONE sent)")
 
 // newPublication builds a Publication whose initial Forward State is the
@@ -70,7 +81,9 @@ func newPublication(s *Session, stream Stream, requestID, alias uint64, establis
 	p := &Publication{
 		Stream: stream, s: s, requestID: requestID, alias: alias,
 		peerUpdate: true, updateScope: message.ScopeUpdateFromSubscriber,
+		open: make(map[*OutgoingSubgroupStream]struct{}),
 	}
+	p.endCtx, p.endCancel = context.WithCancel(context.Background())
 	if f, ok := establishing.Find(message.ParamForward); ok {
 		p.paused.Store(f.Byte == 0)
 	}
@@ -161,41 +174,92 @@ func (p *Publication) TrackAlias() uint64 { return p.alias }
 // publication's track, filling in the Track Alias automatically — h.TrackAlias
 // is ignored and overwritten. It is otherwise identical to
 // [Session.OpenSubgroup]: the caller MUST Close the returned stream to FIN it
-// once all objects are written, or Cancel to reset.
+// once all objects are written, or Cancel to reset. After [Publication.Done]
+// it opens nothing, and the WriteObject methods of a subgroup it opened fail,
+// both with [ErrPublicationEnded].
 func (p *Publication) OpenSubgroup(h message.SubgroupHeader) (*OutgoingSubgroupStream, error) {
+	p.subMu.Lock()
 	if p.ended.Load() {
+		p.subMu.Unlock()
 		return nil, ErrPublicationEnded
 	}
 	if p.paused.Load() {
+		p.subMu.Unlock()
 		return nil, ErrForwardPaused
 	}
+	p.opening.Add(1)
+	p.subMu.Unlock()
+	defer p.opening.Done()
+
 	h.TrackAlias = p.alias
-	sg, err := p.s.OpenSubgroup(h)
+	// Once its header is written the peer can attribute the stream, so it
+	// counts, even if Done reset it just after; its writes then fail.
+	sg, _, err := p.s.openSubgroup(p.endCtx, h, true)
 	if err != nil {
+		if p.endCtx.Err() != nil {
+			return nil, ErrPublicationEnded // Done reset the header write
+		}
 		return nil, err
 	}
-	p.subgroupCount.Add(1)
 	sg.onObject = p.noteObject
 	sg.paused = p.paused.Load
+	sg.ended = p.ended.Load
+	sg.onEnd = func() { p.forget(sg) }
+	p.subMu.Lock()
+	p.subgroupCount++
+	p.open[sg] = struct{}{}
+	p.subMu.Unlock()
 	return sg, nil
 }
 
-// Done ends the publication (§10.12): it writes a PUBLISH_DONE with the given
-// status code and reason, then FINs the request stream. The §10.12 Stream Count
-// is set to the number of subgroup streams opened via [Publication.OpenSubgroup]
-// so a subscriber knows how many data streams to expect; this is exact only when
-// every subgroup was opened through this handle (subgroups opened via
-// [Session.OpenSubgroup] directly are not counted — send PUBLISH_DONE yourself
-// via message.Marshal if you need a different count).
+// forget drops a subgroup that was FINished or reset from the ones Done
+// resets.
+func (p *Publication) forget(sg *OutgoingSubgroupStream) {
+	p.subMu.Lock()
+	delete(p.open, sg)
+	p.subMu.Unlock()
+}
+
+// Done ends the publication (§10.12): "A sender MUST NOT send PUBLISH_DONE
+// until it has closed all streams it will ever open", so Done stops new
+// subgroups, resets the ones still open with CANCELLED, then writes a
+// PUBLISH_DONE with the given status code and reason and FINs the request
+// stream. It does not wait for subgroups to drain: finish them with Close
+// first to deliver their objects. A subgroup's WriteObject after Done fails
+// with [ErrPublicationEnded].
+//
+// The Stream Count is the number of subgroup streams opened via
+// [Publication.OpenSubgroup], exact however those opens race Done. Subgroups
+// opened via [Session.OpenSubgroup] directly are not counted — send
+// PUBLISH_DONE yourself via message.Marshal if you need a different count.
 //
 // Only the first call sends; later ones return nil.
 func (p *Publication) Done(code moqt.PublishDoneCode, reason string) error {
-	if !p.ended.CompareAndSwap(false, true) {
+	p.subMu.Lock()
+	if p.ended.Load() {
+		p.subMu.Unlock()
 		return nil
+	}
+	p.ended.Store(true)
+	p.subMu.Unlock()
+	// Opens in flight finish promptly: their header writes are cancelled.
+	p.endCancel()
+	p.opening.Wait()
+
+	p.subMu.Lock()
+	open, count := p.open, p.subgroupCount
+	p.open = nil
+	p.subMu.Unlock()
+	// §11.4.3: ending the subscription early resets the subgroups it cut
+	// short, keeping what was written, header first, reliable so the
+	// subscriber can attribute each reset stream when handling PUBLISH_DONE.
+	for sg := range open {
+		sg.MarkReliable()
+		sg.dst.CancelWrite(uint64(moqt.StreamResetCancelled))
 	}
 	if err := p.writeThenClose(&message.PublishDone{
 		StatusCode:  code,
-		StreamCount: p.subgroupCount.Load(),
+		StreamCount: count,
 		ErrorReason: reason,
 	}); err != nil {
 		return fmt.Errorf("moqt/session: write PUBLISH_DONE: %w", err)

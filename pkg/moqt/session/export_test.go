@@ -37,3 +37,11 @@ func OpenRequestForTest(s *Session, first message.Message) (Stream, error) {
 func WithSetupOptionForTest(kv wire.KVPair) Option {
 	return func(c *config) { c.setupOptions = append(c.setupOptions, kv) }
 }
+
+// OpenSubgroupsForTest reports how many subgroups p tracks as open, which Done
+// would reset.
+func (p *Publication) OpenSubgroupsForTest() int {
+	p.subMu.Lock()
+	defer p.subMu.Unlock()
+	return len(p.open)
+}

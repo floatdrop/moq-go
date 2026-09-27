@@ -86,9 +86,13 @@ type OutgoingSubgroupStream struct {
 	encHavePrev   bool
 
 	// Set by [Publication.OpenSubgroup]: onObject is told each written
-	// object's Location, and paused reports a Forward State of 0 (§11.4.3).
+	// object's Location, paused reports a Forward State of 0 (§11.4.3), ended
+	// reports that the publication ended (Done), and onEnd is told when the
+	// stream is FINished or reset.
 	onObject func(group, object uint64)
 	paused   func() bool
+	ended    func() bool
+	onEnd    func()
 }
 
 // WithDeliveryTimeouts returns a shallow copy of s configured with the §8
@@ -168,9 +172,13 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	}
 	s.sawFirstObject = true
 
+	// §10.12: Done reset the stream before PUBLISH_DONE.
+	if s.ended != nil && s.ended() {
+		return ErrPublicationEnded
+	}
 	// §5.1: no Objects while the Forward State is 0; §11.4.3: reset.
 	if s.paused != nil && s.paused() {
-		s.dst.CancelWrite(uint64(moqt.StreamResetCancelled))
+		s.Cancel(moqt.StreamResetCancelled)
 		return ErrForwardPaused
 	}
 	if err := s.checkObjectTimeout(receivedAt); err != nil {
@@ -247,7 +255,7 @@ func (s *OutgoingSubgroupStream) checkObjectTimeout(receivedAt time.Time) error 
 	}
 	elapsed := time.Since(receivedAt)
 	if elapsed > s.objectTimeout {
-		s.dst.CancelWrite(uint64(moqt.StreamResetDeliveryTimeout))
+		s.Cancel(moqt.StreamResetDeliveryTimeout)
 		return fmt.Errorf("%w (elapsed %s, limit %s)",
 			ErrDeliveryTimeout, elapsed, s.objectTimeout)
 	}
@@ -262,6 +270,9 @@ func (s *OutgoingSubgroupStream) checkObjectTimeout(receivedAt time.Time) error 
 // stream if the peer has not acknowledged all data within the timeout (§8).
 func (s *OutgoingSubgroupStream) Close() error {
 	err := s.dst.Close()
+	if s.onEnd != nil {
+		s.onEnd()
+	}
 	tracked, ok := s.dst.(DeliveryTrackingSendStream)
 	if s.subgroupTimeout > 0 && ok {
 		finished := tracked.Finished()
@@ -285,6 +296,9 @@ func (s *OutgoingSubgroupStream) Close() error {
 // Cancel resets the stream with the given application code (§3.3.4).
 func (s *OutgoingSubgroupStream) Cancel(code moqt.StreamResetCode) {
 	s.dst.CancelWrite(uint64(code))
+	if s.onEnd != nil {
+		s.onEnd()
+	}
 }
 
 // SetSendPriority forwards the composite §7.2 scheduling key to the underlying
@@ -367,25 +381,45 @@ func (s *Session) OpenSubgroupContext(
 	ctx context.Context,
 	h message.SubgroupHeader,
 ) (*OutgoingSubgroupStream, error) {
-	dst, err := s.conn.OpenUniStream()
+	sg, reset, err := s.openSubgroup(ctx, h, false)
 	if err != nil {
 		return nil, err
 	}
+	if reset {
+		// ctx was cancelled just after the header write went through, and
+		// the stream is reset.
+		return nil, fmt.Errorf("moqt/session: write SUBGROUP_HEADER: %w", ctx.Err())
+	}
+	return sg, nil
+}
+
+// openSubgroup opens a subgroup stream and writes its header, which
+// cancelling ctx interrupts by resetting the stream, first marking what was
+// written reliable when markReliable is set (§11.4.3). It returns the stream
+// whenever the whole header was written, since the peer can then attribute
+// the stream to its track, with reset reporting that ctx reset it just after.
+func (s *Session) openSubgroup(
+	ctx context.Context,
+	h message.SubgroupHeader,
+	markReliable bool,
+) (sg *OutgoingSubgroupStream, reset bool, err error) {
+	dst, err := s.conn.OpenUniStream()
+	if err != nil {
+		return nil, false, err
+	}
 	stop := context.AfterFunc(ctx, func() {
+		if r, ok := dst.(ReliableResetStream); ok && markReliable {
+			r.SetReliableBoundary()
+		}
 		dst.CancelWrite(uint64(moqt.StreamResetCancelled))
 	})
 	if err := message.WriteSubgroupHeader(dst, h); err != nil {
 		stop()
 		dst.CancelWrite(uint64(moqt.StreamResetInternalError))
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("moqt/session: write SUBGROUP_HEADER: %w", ctx.Err())
+			return nil, false, fmt.Errorf("moqt/session: write SUBGROUP_HEADER: %w", ctx.Err())
 		}
-		return nil, fmt.Errorf("moqt/session: write SUBGROUP_HEADER: %w", err)
+		return nil, false, fmt.Errorf("moqt/session: write SUBGROUP_HEADER: %w", err)
 	}
-	if !stop() {
-		// The AfterFunc already ran: ctx was cancelled while (or just
-		// after) the header write went through — the stream is reset.
-		return nil, fmt.Errorf("moqt/session: write SUBGROUP_HEADER: %w", ctx.Err())
-	}
-	return &OutgoingSubgroupStream{header: h, dst: dst}, nil
+	return &OutgoingSubgroupStream{header: h, dst: dst}, !stop(), nil
 }
