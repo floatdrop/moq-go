@@ -264,6 +264,96 @@ func TestFanout_MultiPublisher_FailoverContinuesFromSurvivor(t *testing.T) {
 	}
 }
 
+// TestFanout_MultiPublisher_SurvivorFINsOnlyWhatItCovers: a merged Subgroup
+// FINs only when every Object in it was delivered (§11.4.3: "If a sender
+// closes the stream before delivering all such objects to the QUIC stream, it
+// MUST reset the stream"). A survivor's replay stream that FINs vouches only
+// for the Objects from its own first one on, so the relay FINs when the
+// Objects before those were forwarded, and resets when a peer that reset never
+// delivered some of them.
+func TestFanout_MultiPublisher_SurvivorFINsOnlyWhatItCovers(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		// a is what A writes on a stream that starts the Subgroup; b is what B
+		// writes on a replay stream. Then A resets and B FINs.
+		a, b []uint64
+		fin  bool
+	}{
+		{"replay continues the run", []uint64{0, 1}, []uint64{2, 3}, true},
+		{"replay starts past undelivered Objects", []uint64{0, 1}, []uint64{4}, false},
+		// Decided: without consecutive IDs the relay cannot tell whether an
+		// Object between was skipped (a Group split across Subgroups), so it
+		// resets.
+		{"Object IDs not consecutive", []uint64{0, 2}, []uint64{3}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			pubA, teardown := connectRelay(t, relay.Config{})
+			defer teardown()
+			pubB := dialAnotherClient(t, pubA)
+			subSess := dialAnotherClient(t, pubA)
+			aPub := publishVideoTrack(t, pubA, "cam1", 1)
+			bPub := publishVideoTrack(t, pubB, "cam1", 2)
+			subscribeCam1(t, subSess)
+
+			events := make(chan objEvent, 32)
+			go readSubgroups(t.Context(), subSess, events)
+			// await reads the next Object, skipping the end of a stream the
+			// relay reset to reopen after a gap (§11.4.3).
+			await := func(want uint64) {
+				t.Helper()
+				for {
+					select {
+					case ev := <-events:
+						if ev.err != nil {
+							continue
+						}
+						if ev.absID != want {
+							t.Fatalf("received Object %d, want %d", ev.absID, want)
+						}
+						return
+					case <-time.After(2 * time.Second):
+						t.Fatalf("Object %d not forwarded", want)
+					}
+				}
+			}
+
+			hdr := message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit}
+			a, err := aPub.OpenSubgroup(hdr)
+			if err != nil {
+				t.Fatalf("A OpenSubgroup: %v", err)
+			}
+			for _, id := range tc.a {
+				if err := a.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte("a")}); err != nil {
+					t.Fatalf("A WriteObjectAt %d: %v", id, err)
+				}
+				await(id)
+			}
+			hdr.ReplayingSubgroup = true
+			b, err := bPub.OpenSubgroup(hdr)
+			if err != nil {
+				t.Fatalf("B OpenSubgroup: %v", err)
+			}
+			for _, id := range tc.b {
+				if err := b.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte("b")}); err != nil {
+					t.Fatalf("B WriteObjectAt %d: %v", id, err)
+				}
+				await(id)
+			}
+
+			a.Cancel(moqt.StreamResetCancelled)
+			if err := b.Close(); err != nil {
+				t.Fatalf("B Close: %v", err)
+			}
+			end := awaitStreamEnd(t, events)
+			if fin := errors.Is(end.err, io.EOF); fin != tc.fin {
+				t.Fatalf("subscriber's last stream ended with %v; want FIN %v", end.err, tc.fin)
+			}
+		})
+	}
+}
+
 // TestFanout_MultiPublisher_MergesDisjointObjects: two publishers contributing
 // different Objects of one track deliver each exactly once.
 func TestFanout_MultiPublisher_MergesDisjointObjects(t *testing.T) {
