@@ -129,7 +129,7 @@ func (h *sessionHandler) rejectTrackStatus(ctx context.Context, req *session.Req
 // every candidate SUBSCRIBE would try (see [sessionHandler.subscribeUpstream]):
 // each local publisher of a covering namespace and each relay Discovery
 // resolves. It returns their TRACK_STATUS_OKs in that order and, when there
-// are none, the highest-ranked refusal ([candidateErrRank]), nil when there
+// are none, the refusal SUBSCRIBE would give ([preferCandidateErr]), nil when there
 // was no candidate.
 //
 // trackStatusUpstreamTimeout bounds the whole forwarding, resolving the
@@ -155,9 +155,7 @@ func (h *sessionHandler) trackStatusUpstream(
 	key := fullName.Key()
 	var lastErr error
 	fail := func(err error) {
-		if candidateErrRank(err) > candidateErrRank(lastErr) {
-			lastErr = err
-		}
+		lastErr = preferCandidateErr(lastErr, err)
 	}
 	var candidates []*session.Session
 	seen := map[*session.Session]bool{}

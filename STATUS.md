@@ -164,7 +164,7 @@ By package, bottom-up along the dependency stack:
 | 10.2.3  | SUBGROUP_DELIVERY_TIMEOUT     | 0x06   | PARTIAL| Parsed and resolved; the stream reset is not enforced on the bundled transports, and datagrams are not dropped (see §8). |
 | 10.2.4  | OBJECT_DELIVERY_TIMEOUT       | 0x02   | DONE   | |
 | 10.2.5  | FILL_TIMEOUT                  | 0x0A   | DONE   | The budget for a FETCH's or fill's upstream FETCH, its response included: when it runs out, what arrived is served and the rest is an End of Timed-Out Range; 0 asks no upstream. Default 5s. |
-| 10.2.6  | RENDEZVOUS_TIMEOUT            | 0x04   | DONE   | The relay holds a SUBSCRIBE with no publisher, capped by `Config.MaxRendezvousTimeout` (30s), and answers TIMEOUT when the hold runs out. No publisher means none matched, or each answered DOES_NOT_EXIST or TIMEOUT, or is draining; any other refusal ends the hold with its error. A PUBLISH of the track, or a covering namespace newly published here or advertised through Discovery, wakes the hold; a publisher that already answered is not asked again. Upstream SUBSCRIBEs to other relays carry what is left of the hold, and are cut short when a publisher arrives here. |
+| 10.2.6  | RENDEZVOUS_TIMEOUT            | 0x04   | DONE   | The relay holds a SUBSCRIBE with no publisher, capped by `Config.MaxRendezvousTimeout` (30s), and answers TIMEOUT when the hold runs out. No publisher means none matched, or each answered DOES_NOT_EXIST, TIMEOUT or GOING_AWAY, failed at the transport, or is draining; any other refusal ends the hold with its error. The refusal a subscriber gets does not depend on the order candidates answer in: the highest ranked, and of equal rank the soonest retry. A PUBLISH of the track, or a covering namespace newly published here or advertised through Discovery, wakes the hold; a publisher that already answered is not asked again. Upstream SUBSCRIBEs to other relays carry what is left of the hold, and are cut short when a publisher arrives here. |
 | 10.2.7  | SUBSCRIBER_PRIORITY           | 0x20   | DONE   | |
 | 10.2.8  | GROUP_ORDER                   | 0x22   | DONE   | A value outside {1, 2} closes the session, wherever it appears, FILL_PARAMETERS included. |
 | 10.2.9  | LOCATION_FILTER               | 0x21   | DONE   | An end Group overflowing 2^64-1 closes the session with PROTOCOL_VIOLATION (§5.1.2); a value that does not parse, with KEY_VALUE_FORMATTING_ERROR (§1.4.3). |
@@ -540,6 +540,11 @@ Relay:
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
 - Concurrent TRACK_STATUS requests for one track with no Established
   subscription are each forwarded upstream, not coalesced.
+- A SUBSCRIBE the relay cannot open to a candidate for want of bidi-stream
+  credit is answered DOES_NOT_EXIST with no Retry Interval ("SHOULD NOT be
+  retried"), and outranks another candidate's GOING_AWAY or TIMEOUT, though
+  the publisher is there; EXCESSIVE_LOAD with a retry would fit better
+  (§10.6.2).
 
 Open questions for interop: whether an End of Range marker carries an Object
 Payload Length (Figure 28 vs §11.4.4.2), and whether EXPIRES may appear in
