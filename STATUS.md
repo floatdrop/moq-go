@@ -551,7 +551,10 @@ Relay:
 - REQUEST_ERROR MALFORMED_TRACK, defined for FETCH, answers SUBSCRIBE, PUBLISH
   and REQUEST_UPDATE failures (§10.6.2).
 - The relay keeps initiating requests on a session it sent GOAWAY to (§10.4
-  SHOULD avoid), and closes with GOAWAY_TIMEOUT when it sent none (§3.5).
+  SHOULD avoid).
+- A session that registers after `Stop` began is drained on its own grace
+  period and ignores `Stop`'s ctx, so a cancelled `Stop` can still wait up to
+  `GoawayTimeout` for it.
 - A PUBLISH can follow PUBLISH_SKIPPED for the same upstream PUBLISH after a
   prefix update moves away and back (§6.1).
 - Upstream FETCHes to a publisher whose track is found malformed are not
