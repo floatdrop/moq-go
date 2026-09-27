@@ -543,10 +543,6 @@ Relay:
   by a relay peer (§6.2 has no loop protection), so it declines the second hop
   rather than loop. Self-subscriptions are otherwise "identical" (§5.1).
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
-- Among SUBSCRIBE candidates that only say the track has no publisher yet
-  (DOES_NOT_EXIST, TIMEOUT, draining), the last to answer sets the refusal
-  code, so a draining local publisher and a remote relay's DOES_NOT_EXIST
-  yield DOES_NOT_EXIST while the reverse yields GOING_AWAY.
 
 Open questions for interop: whether an End of Range marker carries an Object
 Payload Length (Figure 28 vs §11.4.4.2), and whether EXPIRES may appear in
