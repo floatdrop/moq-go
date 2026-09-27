@@ -514,10 +514,11 @@ func (l *holdLook) end() {
 // awaitsPublisher reports whether err, from [sessionHandler.subscribeUpstream],
 // leaves the track without a current publisher: none matched (nil), or every
 // one that did answered DOES_NOT_EXIST, TIMEOUT for an upstream relay's own
-// hold, or GOING_AWAY for its own drain, or is draining (§10.4).
-// subscribeUpstream reports such an error only when no other kind occurred.
+// hold, or GOING_AWAY for its own drain, failed at the transport without an
+// answer (see [transportFailure]), or is draining (§10.4). subscribeUpstream
+// reports such an error only when no other kind occurred.
 func awaitsPublisher(err error) bool {
-	if err == nil || errors.Is(err, errGoingAway) {
+	if err == nil || errors.Is(err, errGoingAway) || transportFailure(err) {
 		return true
 	}
 	rej, ok := errors.AsType[*session.RequestRejectedError](err)
@@ -525,17 +526,80 @@ func awaitsPublisher(err error) bool {
 		rej.Code == moqt.RequestGoingAway)
 }
 
-// candidateErrRank orders subscribeUpstream's candidate errors, the highest
-// kept whatever order the candidates answer in: a Track Properties refusal
-// (§2.5.1 fixes its downstream code), then any other refusal, which ends a
-// RENDEZVOUS_TIMEOUT hold (see awaitsPublisher), then the answers saying the
-// track has no publisher yet, the most actionable first: GOING_AWAY, which
-// says to retry (§10.6.2), then TIMEOUT, then DOES_NOT_EXIST. GOING_AWAY is
-// taken to outrank §10.2.6's DOES_NOT_EXIST for "no publisher is available":
-// the publisher is known, only draining.
+// transportFailure reports whether err is a candidate's request failing at
+// the transport without any answer about the track: a stream reset, a FIN,
+// or the session ending. Not a request the relay could not open for want of
+// stream credit (session.ErrNoStreamCredit), which says the publisher is
+// there, only busy.
+func transportFailure(err error) bool {
+	if errors.Is(err, errGoingAway) || isTrackPropertiesErr(err) || errors.Is(err, session.ErrNoStreamCredit) {
+		return false
+	}
+	_, rejected := errors.AsType[*session.RequestRejectedError](err)
+	return !rejected
+}
+
+// preferCandidateErr returns whichever of err and last, two candidates'
+// errors, the subscriber is answered with (see [upstreamRejection]), so the
+// answer does not depend on the order candidates answer in: the higher
+// ranked ([candidateErrRank]), and of equal rank the one allowing the soonest
+// retry, "SHOULD NOT be retried" (Retry Interval 0, §10.6.2) only when both
+// say so.
+func preferCandidateErr(last, err error) error {
+	if r, l := candidateErrRank(err), candidateErrRank(last); r != l {
+		if r > l {
+			return err
+		}
+		return last
+	}
+	if a, b := candidateRetry(err), candidateRetry(last); a != b {
+		if a != 0 && (b == 0 || a < b) {
+			return err
+		}
+		return last
+	}
+	// Of equal rank and retry, the answers differ only among "any other
+	// refusal" (rank 4): prefer a specific code to INTERNAL_ERROR, then the
+	// lower code.
+	a, b := upstreamRejection(err).Code, upstreamRejection(last).Code
+	if a != b && (b == moqt.RequestInternalError || (a != moqt.RequestInternalError && a < b)) {
+		return err
+	}
+	return last
+}
+
+// candidateRetry is the Retry Interval err is answered with: for a
+// GOING_AWAY without one, the most the relay's own jittered one can be (see
+// [upstreamRejection]), else the upstream's.
+func candidateRetry(err error) uint64 {
+	if errors.Is(err, errGoingAway) {
+		return goingAwayRetry
+	}
+	rej, ok := errors.AsType[*session.RequestRejectedError](err)
+	if !ok {
+		return 0
+	}
+	if rej.Code == moqt.RequestGoingAway && rej.RetryInterval == 0 {
+		return goingAwayRetry
+	}
+	return rej.RetryInterval
+}
+
+// candidateErrRank orders candidates' errors for [preferCandidateErr]: an
+// unknown Mandatory Track Property (§2.5.1: UNSUPPORTED_EXTENSION, a MUST),
+// then Track Properties that do not parse, then any other refusal, which ends
+// a RENDEZVOUS_TIMEOUT hold (see awaitsPublisher), then the answers saying
+// the track has no publisher yet, the most actionable first: GOING_AWAY,
+// which says to retry (§10.6.2), then TIMEOUT, then DOES_NOT_EXIST and a
+// request that failed at the transport. GOING_AWAY is taken to outrank
+// §10.2.6's DOES_NOT_EXIST for "no publisher is available": the publisher is
+// known, only draining.
 func candidateErrRank(err error) int {
 	if err == nil {
 		return 0
+	}
+	if _, ok := errors.AsType[*session.ErrUnsupportedMandatoryTrackProperty](err); ok {
+		return 6
 	}
 	if isTrackPropertiesErr(err) {
 		return 5
@@ -547,13 +611,13 @@ func candidateErrRank(err error) int {
 		return 3
 	}
 	rej, _ := errors.AsType[*session.RequestRejectedError](err)
-	if rej.Code == moqt.RequestGoingAway {
+	if rej != nil && rej.Code == moqt.RequestGoingAway {
 		return 3
 	}
-	if rej.Code == moqt.RequestTimeout {
+	if rej != nil && rej.Code == moqt.RequestTimeout {
 		return 2
 	}
-	return 1 // DOES_NOT_EXIST
+	return 1 // DOES_NOT_EXIST, or no REQUEST_ERROR at all
 }
 
 // subscribeUpstream subscribes fullName on every matching source (§9.5):
@@ -594,6 +658,7 @@ func (h *sessionHandler) subscribeUpstream(
 		resultEntry *registry.TrackEntry
 		anyEstab    bool
 		lastErr     error
+		retry       []*session.Session
 	)
 	establish := func(sess *session.Session, src string, params message.Parameters) {
 		if subscribed[sess] || ctx.Err() != nil {
@@ -623,11 +688,15 @@ func (h *sessionHandler) subscribeUpstream(
 				delete(subscribed, sess)
 				return
 			}
-			// Keep going, with the highest-ranked error (see
-			// candidateErrRank).
-			if candidateErrRank(err) > candidateErrRank(lastErr) {
-				lastErr = err
+			// A request that failed at the transport said nothing about
+			// the track: sess is asked again on a held SUBSCRIBE's next
+			// look, though not twice in this one.
+			if transportFailure(err) {
+				retry = append(retry, sess)
 			}
+			// Keep going, with the error the subscriber is to get (see
+			// preferCandidateErr).
+			lastErr = preferCandidateErr(lastErr, err)
 			h.log.LogAttrs(ctx, slog.LevelDebug, "subscribeUpstream: candidate failed, continuing",
 				slog.String("source", src), slog.String("err", err.Error()))
 			return
@@ -649,13 +718,16 @@ func (h *sessionHandler) subscribeUpstream(
 	remotes, draining := h.upstreams.resolveUpstreams(ctx, fullName.Namespace)
 	// A draining relay was sent no request (§10.4); it answers as a draining
 	// publisher would, ranked with the other candidates' errors.
-	if draining && candidateErrRank(errGoingAway) > candidateErrRank(lastErr) {
-		lastErr = errGoingAway
+	if draining {
+		lastErr = preferCandidateErr(lastErr, errGoingAway)
 	}
 	for _, remote := range remotes {
 		establish(remote, "discovery-remote", remoteExtra)
 	}
 
+	for _, sess := range retry {
+		delete(subscribed, sess)
+	}
 	if anyEstab {
 		return resultEntry, true, nil
 	}
@@ -904,7 +976,7 @@ func upstreamRejection(err error) *session.RequestRejectedError {
 		// elsewhere.
 		return &session.RequestRejectedError{
 			Code:          moqt.RequestGoingAway,
-			RetryInterval: retryIntervalAfter(time.Second),
+			RetryInterval: retryIntervalAfter(goingAwayRetryAfter),
 		}
 	}
 	up, ok := errors.AsType[*session.RequestRejectedError](err)
@@ -918,6 +990,12 @@ func upstreamRejection(err error) *session.RequestRejectedError {
 	case moqt.RequestDoesNotExist, moqt.RequestTimeout, moqt.RequestExcessiveLoad,
 		moqt.RequestUnsupportedExtension, moqt.RequestGoingAway:
 		rej.Code = up.Code
+		// Relay policy: a GOING_AWAY saying not to retry (Retry Interval
+		// 0, §10.6.2) is taken to speak for the upstream's own draining
+		// hop, and the track may be reached another way.
+		if up.Code == moqt.RequestGoingAway && up.RetryInterval == 0 {
+			rej.RetryInterval = retryIntervalAfter(goingAwayRetryAfter)
+		}
 	case moqt.RequestInternalError, moqt.RequestUnauthorized, moqt.RequestNotSupported,
 		moqt.RequestMalformedAuthToken, moqt.RequestExpiredAuthToken,
 		moqt.RequestInvalidRange, moqt.RequestInvalidFilter, moqt.RequestRedirect,
@@ -927,6 +1005,14 @@ func upstreamRejection(err error) *session.RequestRejectedError {
 	}
 	return rej
 }
+
+// goingAwayRetryAfter is how long the relay tells a subscriber to wait before
+// retrying past a draining upstream; goingAwayRetry is the largest Retry
+// Interval its jitter can make of it (see [retryIntervalAfter]).
+const (
+	goingAwayRetryAfter = time.Second
+	goingAwayRetry      = uint64(goingAwayRetryAfter/time.Millisecond) * 3 / 2
+)
 
 // isTrackPropertiesErr reports whether err is a Track Properties validation
 // failure from [session.Session.Subscribe] or [session.Session.Fetch]: an

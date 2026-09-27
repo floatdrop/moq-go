@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -386,5 +387,226 @@ func TestSubscribe_NoPublisherYetRanking(t *testing.T) {
 				requireRejectedWithCode(t, err, tc.want)
 			})
 		}
+	}
+}
+
+// refusingPublishers adds, on subSess's relay, one PUBLISH_NAMESPACE video
+// publisher per answer, in order; each answers every SUBSCRIBE with it.
+func refusingPublishers(t *testing.T, subSess *session.Session, answers ...func(*session.Request)) {
+	t.Helper()
+	for _, answer := range answers {
+		pub := dialAnotherClient(t, subSess)
+		publishNS(t, pub, "video")
+		go func() {
+			for {
+				req, err := pub.AcceptRequest(t.Context())
+				if err != nil {
+					return
+				}
+				answer(req)
+			}
+		}()
+	}
+}
+
+func refuse(code moqt.RequestErrorCode, retry uint64) func(*session.Request) {
+	return func(r *session.Request) {
+		_ = r.Reject(&session.RequestRejectedError{Code: code, RetryInterval: retry, Reason: "no"})
+	}
+}
+
+// reset cancels the request at the transport (§3.3.3): no REQUEST_ERROR.
+func reset(r *session.Request) {
+	r.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
+	r.Stream.CancelWrite(uint64(moqt.StreamResetCancelled))
+}
+
+func subscribeCam1Rejected(t *testing.T, subSess *session.Session) *session.RequestRejectedError {
+	t.Helper()
+	_, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
+	rej, ok := errors.AsType[*session.RequestRejectedError](err)
+	if !ok {
+		t.Fatalf("Subscribe = %v, want a REQUEST_ERROR", err)
+	}
+	return rej
+}
+
+// TestSubscribe_UpstreamGoingAwayWithoutRetry: an upstream GOING_AWAY that says
+// not to retry (Retry Interval 0, §10.6.2) speaks for the upstream's own
+// draining hop, so the subscriber is told to retry after the relay's own
+// interval, as when the relay sees the drain itself.
+func TestSubscribe_UpstreamGoingAwayWithoutRetry(t *testing.T) {
+	t.Parallel()
+	subSess, teardown := connectRelay(t, relay.Config{})
+	t.Cleanup(teardown)
+	refusingPublishers(t, subSess, refuse(moqt.RequestGoingAway, 0))
+	rej := subscribeCam1Rejected(t, subSess)
+	if rej.Code != moqt.RequestGoingAway || rej.RetryInterval < 1001 || rej.RetryInterval > 1501 {
+		t.Fatalf("got %#x with Retry Interval %d, want GOING_AWAY retrying after about 1s",
+			uint64(rej.Code), rej.RetryInterval)
+	}
+}
+
+// TestSubscribe_TiedRefusalsSoonestRetry: of refusals with the same code, the
+// subscriber gets the one allowing the soonest retry, whatever the order;
+// "SHOULD NOT be retried" (0, §10.6.2) only when every one says so.
+func TestSubscribe_TiedRefusalsSoonestRetry(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		code       moqt.RequestErrorCode
+		a, b, want uint64
+	}{
+		{moqt.RequestDoesNotExist, 0, 501, 501},
+		{moqt.RequestDoesNotExist, 0, 0, 0},
+		{moqt.RequestTimeout, 3001, 1001, 1001},
+	} {
+		for _, order := range [][2]uint64{{tc.a, tc.b}, {tc.b, tc.a}} {
+			t.Run(fmt.Sprintf("%#x %d then %d", uint64(tc.code), order[0], order[1]), func(t *testing.T) {
+				t.Parallel()
+				subSess, teardown := connectRelay(t, relay.Config{})
+				t.Cleanup(teardown)
+				refusingPublishers(t, subSess, refuse(tc.code, order[0]), refuse(tc.code, order[1]))
+				if rej := subscribeCam1Rejected(t, subSess); rej.Code != tc.code || rej.RetryInterval != tc.want {
+					t.Fatalf("got %#x with Retry Interval %d, want %#x with %d",
+						uint64(rej.Code), rej.RetryInterval, uint64(tc.code), tc.want)
+				}
+			})
+		}
+	}
+}
+
+// TestSubscribe_TransportFailureIsNoPublisherYet: a candidate whose request
+// fails at the transport, with no REQUEST_ERROR, says nothing about the
+// track, so it ranks as DOES_NOT_EXIST (the code it is answered with): it
+// does not mask another candidate's GOING_AWAY, and a RENDEZVOUS_TIMEOUT hold
+// goes on (§10.2.6).
+func TestSubscribe_TransportFailureIsNoPublisherYet(t *testing.T) {
+	t.Parallel()
+	for _, order := range []string{"reset first", "reset last"} {
+		t.Run(order, func(t *testing.T) {
+			t.Parallel()
+			subSess, teardown := connectRelay(t, relay.Config{})
+			t.Cleanup(teardown)
+			answers := []func(*session.Request){reset, refuse(moqt.RequestGoingAway, 2001)}
+			if order == "reset last" {
+				answers[0], answers[1] = answers[1], answers[0]
+			}
+			refusingPublishers(t, subSess, answers...)
+			if rej := subscribeCam1Rejected(t, subSess); rej.Code != moqt.RequestGoingAway {
+				t.Fatalf("got %#x, want the other candidate's GOING_AWAY", uint64(rej.Code))
+			}
+		})
+	}
+	t.Run("hold", func(t *testing.T) {
+		t.Parallel()
+		subSess, teardown := connectRelay(t, relay.Config{})
+		t.Cleanup(teardown)
+		refusingPublishers(t, subSess, reset)
+		done := subscribeRendezvous(t.Context(), subSess, 5*time.Second)
+		requireHeld(t, done)
+		publishVideoTrack(t, dialAnotherClient(t, subSess), "cam1", 7)
+		if err := awaitAnswer(t, done); err != nil {
+			t.Fatalf("held SUBSCRIBE: %v", err)
+		}
+	})
+}
+
+// TestSubscribe_UnsupportedMandatoryPropertyOutranksMalformed: of two
+// candidates whose SUBSCRIBE_OKs carry bad Track Properties, an unknown
+// Mandatory Track Property (§2.5.1: UNSUPPORTED_EXTENSION, a MUST) wins over
+// Properties that do not parse, whatever the order.
+func TestSubscribe_UnsupportedMandatoryPropertyOutranksMalformed(t *testing.T) {
+	t.Parallel()
+	accept := func(props []byte) func(*session.Request) {
+		return func(r *session.Request) {
+			_, _ = r.AcceptSubscribe(&message.SubscribeOK{TrackAlias: 5, TrackProperties: props})
+		}
+	}
+	for _, order := range []string{"mandatory first", "mandatory last"} {
+		t.Run(order, func(t *testing.T) {
+			t.Parallel()
+			subSess, teardown := connectRelay(t, relay.Config{})
+			t.Cleanup(teardown)
+			answers := []func(*session.Request){accept(mandatoryProps()), accept(malformedProps)}
+			if order == "mandatory last" {
+				answers[0], answers[1] = answers[1], answers[0]
+			}
+			refusingPublishers(t, subSess, answers...)
+			if rej := subscribeCam1Rejected(t, subSess); rej.Code != moqt.RequestUnsupportedExtension {
+				t.Fatalf("got %#x, want UNSUPPORTED_EXTENSION", uint64(rej.Code))
+			}
+		})
+	}
+}
+
+// TestRendezvous_NoStreamCreditEndsHold: a SUBSCRIBE the relay cannot even
+// open to a live publisher, for want of bidi-stream credit, is not a sign the
+// track has no publisher, so a RENDEZVOUS_TIMEOUT hold does not wait out its
+// budget on it: the subscriber is answered at once, as without a hold.
+func TestRendezvous_NoStreamCreditEndsHold(t *testing.T) {
+	t.Parallel()
+	subSess, teardown := connectRelay(t, relay.Config{})
+	t.Cleanup(teardown)
+	pub := dialAnotherClientWithLimits(t, subSess, -1, 0) // the relay may open no stream to it
+	publishNS(t, pub, "video")
+	done := subscribeRendezvous(t.Context(), subSess, 5*time.Second)
+	select {
+	case err := <-done:
+		requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
+	case <-time.After(time.Second):
+		t.Fatal("SUBSCRIBE held against a live publisher the relay had no stream credit for")
+	}
+}
+
+// TestSubscribe_OtherRefusalTieIsOrderFree: two refusals of the "any other"
+// kind with the same Retry Interval, one answered as INTERNAL_ERROR (an
+// UNAUTHORIZED about the relay's hop) and one passed on (EXCESSIVE_LOAD),
+// give the subscriber the specific code whatever the order.
+func TestSubscribe_OtherRefusalTieIsOrderFree(t *testing.T) {
+	t.Parallel()
+	for _, order := range []string{"specific first", "specific last"} {
+		t.Run(order, func(t *testing.T) {
+			t.Parallel()
+			subSess, teardown := connectRelay(t, relay.Config{})
+			t.Cleanup(teardown)
+			answers := []func(*session.Request){
+				refuse(moqt.RequestExcessiveLoad, 0),
+				refuse(moqt.RequestUnauthorized, 0),
+			}
+			if order == "specific last" {
+				answers[0], answers[1] = answers[1], answers[0]
+			}
+			refusingPublishers(t, subSess, answers...)
+			if rej := subscribeCam1Rejected(t, subSess); rej.Code != moqt.RequestExcessiveLoad {
+				t.Fatalf("got %#x, want EXCESSIVE_LOAD", uint64(rej.Code))
+			}
+		})
+	}
+}
+
+// TestRendezvous_TransportFailureAskedAgain: a publisher whose SUBSCRIBE failed
+// at the transport is asked again on the hold's next look, and serves the
+// subscriber if it has the track by then.
+func TestRendezvous_TransportFailureAskedAgain(t *testing.T) {
+	t.Parallel()
+	subSess, teardown := connectRelay(t, relay.Config{})
+	t.Cleanup(teardown)
+	var asked atomic.Int32
+	refusingPublishers(t, subSess, func(r *session.Request) {
+		if asked.Add(1) == 1 {
+			reset(r)
+			return
+		}
+		_, _ = r.AcceptSubscribe(&message.SubscribeOK{TrackAlias: 9})
+	})
+	done := subscribeRendezvous(t.Context(), subSess, 5*time.Second)
+	requireHeld(t, done)
+	// Another publisher of the namespace arrives, waking the hold.
+	refusingPublishers(t, subSess, refuse(moqt.RequestDoesNotExist, 0))
+	if err := awaitAnswer(t, done); err != nil {
+		t.Fatalf("held SUBSCRIBE: %v", err)
+	}
+	if n := asked.Load(); n != 2 {
+		t.Fatalf("the reset publisher was asked %d times, want 2", n)
 	}
 }
