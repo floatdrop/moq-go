@@ -310,13 +310,13 @@ type Relay struct {
 
 	// sessions tracks every Session that has completed SETUP and not yet
 	// been torn down. Stop iterates it under sessionsMu to broadcast GOAWAY
-	// and to wait for drain. shuttingDown is set (under sessionsMu, by
+	// and to wait for drain. stopCtx, Stop's ctx, is set (under sessionsMu, by
 	// beginShutdown) when Stop snapshots the set; addSession reads it under the
 	// same lock to decide whether a newly-registered session is a straggler
-	// Stop's snapshot missed.
-	sessionsMu   sync.Mutex
-	sessions     map[*session.Session]struct{}
-	shuttingDown bool
+	// Stop's snapshot missed, and bounds that straggler's drain by it.
+	sessionsMu sync.Mutex
+	sessions   map[*session.Session]struct{}
+	stopCtx    context.Context
 
 	// stopOnce guards Stop so the second caller short-circuits. stopCh is
 	// closed by Stop to signal the accept loop to exit and to release any
@@ -707,8 +707,8 @@ func (r *Relay) Stop(ctx context.Context) error {
 		//    doing potentially-blocking session work. The atomicity partitions
 		//    sessions cleanly: every session is either in this snapshot (its
 		//    drain is owned by steps 4–7 below) or registered later (it observes
-		//    shuttingDown in addSession and owns its own drain) — never both.
-		sessions := r.beginShutdown()
+		//    stopCtx in addSession and owns its own drain) — never both.
+		sessions := r.beginShutdown(ctx)
 
 		// 4. Send GOAWAY to each session if a grace period is set. A
 		//    zero timeout means "don't bother with GOAWAY"; close
@@ -785,20 +785,20 @@ func (r *Relay) Stop(ctx context.Context) error {
 func (r *Relay) addSession(s *session.Session, leg Leg) {
 	r.sessionsMu.Lock()
 	r.sessions[s] = struct{}{}
-	shuttingDown := r.shuttingDown
+	stopCtx := r.stopCtx
 	r.sessionsMu.Unlock()
 	r.cfg.Metrics.SessionOpened(leg)
 
 	// Straggler cover: if shutdown was already in progress when we registered,
-	// Stop's snapshot — taken under sessionsMu together with the shuttingDown
-	// flag (see beginShutdown) — does NOT include this session, so Stop will
-	// neither GOAWAY nor close it. Own that lifecycle here. When shutdown began
-	// after we registered, shuttingDown is false and Stop's snapshot covers us;
+	// Stop's snapshot — taken under sessionsMu together with stopCtx (see
+	// beginShutdown) — does NOT include this session, so Stop will neither
+	// GOAWAY nor close it. Own that lifecycle here. When shutdown began after
+	// we registered, stopCtx is nil and Stop's snapshot covers us;
 	// exactly one owner either way. The drain runs under r.handlers so Stop's
 	// handlers.Wait joins it (safe: this runs inside serveSession, itself a
 	// tracked handler, so the WaitGroup counter is already non-zero).
-	if shuttingDown {
-		r.handlers.Go(func() { r.drainStraggler(s) })
+	if stopCtx != nil {
+		r.handlers.Go(func() { r.drainStraggler(stopCtx, s) })
 	}
 }
 
@@ -806,8 +806,9 @@ func (r *Relay) addSession(s *session.Session, leg Leg) {
 // session that registered after Stop snapshotted the live-session set, so
 // Stop's bulk drain (Stop steps 4–7) does not cover it. It mirrors that bulk
 // drain for one session: GOAWAY, wait for the peer to drain or the grace period
-// to elapse, then force-close. Spawned by addSession only during shutdown.
-func (r *Relay) drainStraggler(s *session.Session) {
+// to elapse, or Stop's ctx to end, then force-close. Spawned by addSession only
+// during shutdown.
+func (r *Relay) drainStraggler(stopCtx context.Context, s *session.Session) {
 	goawayExpired := false
 	if r.cfg.GoawayTimeout > 0 {
 		sent := s.SendGoaway(r.cfg.GoawayTimeout, "") == nil
@@ -818,6 +819,9 @@ func (r *Relay) drainStraggler(s *session.Session) {
 			goawayExpired = sent
 		case <-s.Done():
 			return // peer drained within the grace period
+		case <-stopCtx.Done():
+			// Cut short, as Stop's bulk drain is: the grace period did not
+			// run out, so NO_ERROR (§3.5).
 		}
 	}
 	_ = s.Close(shutdownCloseCode(goawayExpired), "relay shutdown")
@@ -844,11 +848,12 @@ func (r *Relay) removeSession(s *session.Session, leg Leg) {
 // currently-registered sessions, atomically under sessionsMu. The atomicity is
 // what lets addSession partition sessions into exactly two non-overlapping
 // groups: those in the returned snapshot (drained by Stop) and those registered
-// afterward (which see shuttingDown and drain themselves via drainStraggler).
-func (r *Relay) beginShutdown() []*session.Session {
+// afterward (which see stopCtx and drain themselves via drainStraggler, bounded
+// by ctx, Stop's).
+func (r *Relay) beginShutdown(ctx context.Context) []*session.Session {
 	r.sessionsMu.Lock()
 	defer r.sessionsMu.Unlock()
-	r.shuttingDown = true
+	r.stopCtx = ctx
 	out := make([]*session.Session, 0, len(r.sessions))
 	for s := range r.sessions {
 		out = append(out, s)

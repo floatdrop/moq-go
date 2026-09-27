@@ -549,9 +549,6 @@ Relay:
 - A SUBSCRIBE whose only candidate upstream is a draining relay reached through
   the upstream pool gets DOES_NOT_EXIST, not the GOING_AWAY a draining local
   publisher yields: the pool skips such a relay before any request.
-- A session that registers after `Stop` began is drained on its own grace
-  period and ignores `Stop`'s ctx, so a cancelled `Stop` can still wait up to
-  `GoawayTimeout` for it.
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
 
 Documentation:

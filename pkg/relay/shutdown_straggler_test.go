@@ -41,16 +41,21 @@ func (c *stragglerCodeConn) CloseWithError(code uint64, reason string) error {
 // snapshot still goes through GOAWAY, grace and force-close, via
 // addSession's drainStraggler. It closes with GOAWAY_TIMEOUT only when it was
 // sent a GOAWAY and the grace period ran out (§3.5), and NO_ERROR when no
-// GOAWAY is configured.
+// GOAWAY is configured or Stop's ctx ends the drain first, as the bulk drain
+// does.
 func TestRelay_addSessionDrainsStraggler(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		grace time.Duration
-		want  moqt.SessionErrorCode
+		// stopAfter, when set, ends Stop's ctx that long into the drain.
+		stopAfter time.Duration
+		want      moqt.SessionErrorCode
 	}{
-		{"grace period ran out", 150 * time.Millisecond, moqt.SessionGoawayTimeout},
-		{"no GOAWAY configured", 0, moqt.SessionNoError},
+		{"grace period ran out", 150 * time.Millisecond, 0, moqt.SessionGoawayTimeout},
+		{"no GOAWAY configured", 0, 0, moqt.SessionNoError},
+		// Stop's ctx bounds a straggler's drain as it does the bulk drain.
+		{"Stop's ctx ended", time.Hour, 100 * time.Millisecond, moqt.SessionNoError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -76,14 +81,19 @@ func TestRelay_addSessionDrainsStraggler(t *testing.T) {
 			clientSess, serverSess := cl.s, sv.s
 			defer func() { _ = clientSess.Close(0, "") }()
 
-			// Simulate Stop having already begun: beginShutdown marks
-			// shuttingDown and snapshots the (still empty) session set. The
-			// straggler registers next.
-			if snap := r.beginShutdown(); len(snap) != 0 {
+			// Simulate Stop having already begun: beginShutdown records Stop's
+			// ctx and snapshots the (still empty) session set. The straggler
+			// registers next.
+			stopCtx, cancelStop := context.WithCancel(t.Context())
+			defer cancelStop()
+			if tc.stopAfter > 0 {
+				time.AfterFunc(tc.stopAfter, cancelStop)
+			}
+			if snap := r.beginShutdown(stopCtx); len(snap) != 0 {
 				t.Fatalf("beginShutdown snapshot = %d sessions, want 0", len(snap))
 			}
 
-			// addSession must observe shuttingDown and take ownership of the
+			// addSession must observe Stop's ctx and take ownership of the
 			// drain.
 			r.addSession(serverSess, LegLocal)
 
@@ -97,11 +107,11 @@ func TestRelay_addSessionDrainsStraggler(t *testing.T) {
 			}
 
 			// ...and, because this client ignores the GOAWAY, force-close at
-			// the grace boundary so the session terminates.
+			// the grace boundary, or once Stop's ctx ends.
 			select {
 			case <-serverSess.Done():
 			case <-time.After(2 * time.Second):
-				t.Fatal("straggler session was not closed after the grace period")
+				t.Fatal("straggler session was not force-closed")
 			}
 			select {
 			case code := <-codes:
