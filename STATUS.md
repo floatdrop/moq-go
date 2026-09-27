@@ -34,10 +34,10 @@ By package, bottom-up along the dependency stack:
   streaming `Decoder` over one control-frame interface.
 - **`message`** — typed control, request-stream, and data-stream messages with
   parameter negotiation: SETUP, GOAWAY, SUBSCRIBE, PUBLISH (+DONE/SKIPPED),
-  FETCH (standalone + relative/absolute joining), TRACK_STATUS, REQUEST_UPDATE,
-  the namespace messages, §11 object framing (subgroup/fetch/datagram),
-  location filters, GREASE, and a parse-time `Validate` hook that rejects
-  structurally-malformed messages.
+  FETCH (draft-20 replaced Joining FETCH with fill fetch streams),
+  TRACK_STATUS, REQUEST_UPDATE, the namespace messages, §11 object framing
+  (subgroup/fetch/datagram), location filters, GREASE, and a parse-time
+  `Validate` hook that rejects structurally-malformed messages.
 - **`session`** — the SETUP handshake with version negotiation, control
   multiplexing and request-ID allocation, §3.5 Track-Alias management with
   collision detection, the request openers (`Publish`/`Subscribe`/`Fetch`/…) and
@@ -173,13 +173,13 @@ By package, bottom-up along the dependency stack:
 | 10.2.12 | PRIORITY_FILTER               | 0x27   | DONE   | Enforced per object (subgroup priority); >255 rejected INVALID_FILTER. |
 | 10.2.13 | OBJECT_PROPERTY_FILTER        | 0x28   | DONE   | Enforced per object against Object Properties; even property type. |
 | 10.2.14 | TRACK_PROPERTY_FILTER         | 0x29   | DONE   | Gates PUBLISH forwarding on SUBSCRIBE_TRACKS against Track Properties; even property type. |
-| 10.2.15 | FILL_PARAMETERS               | 0x23   | PARTIAL| Inner Table 6 scope and duplicates checked; omitted Range Filters are not inherited from the subscription (see §5.1.3). |
+| 10.2.15 | FILL_PARAMETERS               | 0x23   | DONE   | Inner Table 6 scope and duplicates checked; the fill inherits the subscription's Range Filters, those inside overriding per type (§5.1.3). SUBSCRIBER_PRIORITY inside it has no effect: fill streams carry no priority input (§7.2). |
 | 10.2.16 | EXPIRES                       | 0x08   | DONE   | |
 | 10.2.17 | LARGEST_OBJECT                | 0x09   | DONE   | Monotonic constraint applied. |
 | 10.2.18 | FORWARD                       | 0x10   | DONE   | A value above 1 closes the session, in every message that may carry it. |
 | 10.2.19 | NEW_GROUP_REQUEST             | 0x32   | DONE   | |
 | 10.2.20 | TRACK_NAMESPACE_PREFIX        | 0x34   | DONE   | Applied on REQUEST_UPDATE; SUBSCRIBE_NAMESPACE reconciles its announced set. |
-| 10.2.21 | INCLUDE_PROPERTIES            | 0x35   | DONE   | A value other than 0 or 1 closes the session. With 0 the relay sends empty Track Properties in SUBSCRIBE_OK, FETCH_OK, TRACK_STATUS_OK and forwarded PUBLISH, and writes the priority inline on that subscription's subgroups and datagrams, since the subscriber cannot inherit DEFAULT_PUBLISHER_PRIORITY. |
+| 10.2.21 | INCLUDE_PROPERTIES            | 0x35   | DONE   | A value other than 0 or 1 closes the session. With 0 the relay sends empty Track Properties in SUBSCRIBE_OK, FETCH_OK, TRACK_STATUS_OK and forwarded PUBLISH, and writes the priority inline on that subscription's subgroups and datagrams, since the subscriber cannot inherit DEFAULT_PUBLISHER_PRIORITY. Nor can the subscriber learn a fill's Group Order when its SUBSCRIBE omitted GROUP_ORDER, a draft gap (see Limitations). |
 | 10.3    | SETUP                         | 0x2F00 | DONE   | Bidirectional handshake; options as KV pairs. |
 | 10.3.1.1| AUTHORITY option              | 0x05   | PARTIAL| Sent (`WithAuthority`); refused from a server or over WebTransport (INVALID_AUTHORITY) and when not RFC 3986 syntax (MALFORMED_AUTHORITY, `uri.CheckAuthority`). Whether the server serves it is not checked — see Limitations. |
 | 10.3.1.2| PATH option                   | 0x01   | PARTIAL| Sent (`WithPath`); refused from a server or over WebTransport (INVALID_PATH) and when not RFC 3986 syntax (MALFORMED_PATH, `uri.CheckPathAndQuery`). Whether the server serves it is not checked — see Limitations. |
@@ -354,8 +354,9 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   adapters absorb the knob and quic-go round-robins instead. A REQUEST_UPDATE
   that changes priority mid-stream applies only to subsequently opened subgroups.
 - **LOC encryption / SecureObjects and Private Properties** — intentionally out
-  of scope pending a chosen SecureObjects revision. Some property IDs are
-  draft-tentative (e.g. `PropAudioLevel = 0x0A`, pending IANA assignment).
+  of scope pending a chosen SecureObjects revision. The property IDs are
+  those draft-ietf-moq-loc-04 requests from IANA (§6.1), e.g. `PropAudioLevel =
+  0x0C`, and may change until assigned.
 - **MSF** — no timeline GZIP compression, content protection (§4.3), token
   authorization, or logs/analytics. No built-in ABR helper: every catalog field
   a selector needs is surfaced (AltGroup, Width/Height, Bitrate, RenderGroup,
@@ -396,9 +397,13 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
 - **Handles the application reads itself** — REQUEST_UPDATE /
   PUBLISH_STATE_NOTIFY roles (§10.9, §10.10) and Message Parameter scope
   (§10.2.1) are enforced by brokers from typed handles' `Broker()`, by the
-  session's own reads, and by the relay. Handles the application reads itself
-  (the namespace handles, `FetchResponder`, or any stream read with
-  `message.Parse`) are checked only if it calls `Session.CheckPeerParams`.
+  session's own reads, and by the relay. On handles with no broker of their
+  own (`NamespacePublication`, `IncomingNamespacePublication`,
+  `IncomingNamespaceSubscription`, `IncomingTrackSubscription`,
+  `FetchResponder`) or any stream read with `message.Parse`, the application
+  checks both: roles itself, parameter scope with `Session.CheckPeerParams`. A
+  bare `Session.NewRequestBroker` checks them only as configured
+  (`PeerMessages`, `UpdateScope`).
   Likewise for §10 framing: such a reader must close the session itself on an
   error wrapping `message.ErrMalformedMessage`, or read through
   `Session.NewRequestBroker(stream).Serve`, which does.
@@ -424,7 +429,10 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   subscriber SHOULD individually unsubscribe from each existing
   subscription"), nor migrates to the New Session URI, nor closes the session
   once no subscriptions remain (§3.6 RECOMMENDED). It waits for the sender to
-  close.
+  close. A GOAWAY on a request stream is checked (§10.4) and otherwise
+  ignored: the relay neither re-issues that request (at the New Session URI,
+  or on this session when none is given) nor closes the old stream, which the
+  recipient SHOULD do.
 - **Malformed tracks (§2.4.2, §9.1, §12.8, §12.9)** — the session reports
   Object Properties that make a track malformed (`session.ErrMalformedTrack`),
   and the relay then ends the track: PUBLISH_DONE MALFORMED_TRACK to every
@@ -508,10 +516,6 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   Group Order differs, and the fill-delivered one first within a Group. The
   relay writes each stream as it is fed; ordering across them is a scheduler
   the relay does not have.
-- **Duplicate Objects from redundant upstreams are not compared (§9.1)** —
-  the first copy of each {Group, Object} is forwarded and later ones are
-  dropped unread. Comparing them would detect a malformed track (§2.4.2
-  condition 6), at a cost on every Object.
 
 ### Draft-20 compliance review backlog
 
@@ -544,13 +548,6 @@ Relay:
 
 Documentation:
 
-- Limitations: "Duplicate Objects … are not compared" is stale; the LOC entry names
-  `PropAudioLevel = 0x0A` (it is 0x0C); "Handles the application reads itself"
-  says `CheckPeerParams` checks roles; "Inbound GOAWAY" omits request streams.
-- Table rows 10.2.15 and 10.2.21 overstate what is done (see
-  the items above), and the package summary still lists joining FETCH.
-- `session/namespace.go` says NAMESPACE / NAMESPACE_DONE go on a
-  PUBLISH_NAMESPACE stream (§10.17, §10.18).
 - About a dozen stale `§` citations (padding, grease, fetch ordering, caching).
 
 Open questions for interop: whether an End of Range marker carries an Object
