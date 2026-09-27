@@ -534,8 +534,6 @@ Session layer:
   wrote itself, not the one its SUBSCRIBE_OK or PUBLISH reported (§10.2.17,
   §10.9.1).
 - Mandatory Track Property enforcement is off unless configured (§2.5.1).
-- SETUP options are sorted unstably, so with more than 12 the Token order on the
-  wire can differ from the order `heldSetupAliases` replays (§10.3.1.4).
 
 Relay:
 
