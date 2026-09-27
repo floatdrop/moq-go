@@ -17,9 +17,10 @@ import (
 // [message.TrackStatusOK]) carrying the same Track Properties block SUBSCRIBE_OK
 // would, plus §10.2.17 LARGEST_OBJECT when objects have been forwarded.
 //
-// It answers from the track registry when metadata exists, falls back to an
-// empty TRACK_STATUS_OK when only the namespace is advertised locally, and
-// otherwise rejects with [moqt.RequestDoesNotExist].
+// It answers from the track registry when the track has an established
+// upstream or metadata, falls back to an empty TRACK_STATUS_OK when only the
+// namespace is advertised locally, and otherwise rejects with
+// [moqt.RequestDoesNotExist].
 func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Request, msg *message.TrackStatus) {
 	if err := h.auth.AuthorizeTrackStatus(ctx, h.sess, msg); err != nil {
 		h.rejectAuth(ctx, req, "TrackStatus", err)
@@ -28,8 +29,10 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 
 	fullName := track.FullTrackName{Namespace: msg.Namespace, Name: msg.Name}
 	entry, known := h.tracks.Get(fullName.Key())
-	// Answer TRACK_STATUS_OK for any entry with metadata to surface: Properties
-	// or a §10.2.17 LargestObject watermark. Either field alone is useful.
+	// Answer TRACK_STATUS_OK for an entry with an established upstream, which
+	// SUBSCRIBE would accept (§10.15: "treats it identically as if it had
+	// received a SUBSCRIBE"), or with metadata to surface: Properties or a
+	// §10.2.17 LargestObject watermark.
 	var (
 		largest    message.Location
 		hasLargest bool
@@ -38,7 +41,7 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 		largest, hasLargest = entry.GetLargest()
 	}
 	hasProperties := known && len(entry.GetProperties()) > 0
-	if known && (hasProperties || hasLargest) {
+	if known && (hasProperties || hasLargest || hasEstablishedUpstream(entry)) {
 		reply := &message.TrackStatusOK{}
 		// §10.2.21: INCLUDE_PROPERTIES=0 empties the Track Properties only.
 		if hasProperties && includeProperties(msg.Parameters) {

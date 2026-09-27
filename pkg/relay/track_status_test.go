@@ -74,6 +74,29 @@ func TestTrackStatus_OmitsLargestObjectBeforeAnyObjects(t *testing.T) {
 	}
 }
 
+// TestTrackStatus_AnswersPublishedTrackWithNothingYet: a PUBLISHed track
+// with no Track Properties and no Objects is one SUBSCRIBE accepts, and the
+// relay "treats [TRACK_STATUS] identically as if it had received a SUBSCRIBE"
+// (§10.15), so it answers TRACK_STATUS_OK rather than DOES_NOT_EXIST.
+func TestTrackStatus_AnswersPublishedTrackWithNothingYet(t *testing.T) {
+	t.Parallel()
+	pubSess, _ := newCam1Publisher(t, nil)
+
+	querySess := dialAnotherClient(t, pubSess)
+	subscribeCam1(t, querySess) // SUBSCRIBE accepts the track
+	tsStream, err := querySess.TrackStatus(
+		t.Context(),
+		&message.TrackStatus{Namespace: ns("video"), Name: []byte("cam1")},
+	)
+	if err != nil {
+		t.Fatalf("TrackStatus: %v", err)
+	}
+	defer tsStream.Close()
+	if _, found := tsStream.OK.Parameters.Find(message.ParamLargestObject); found {
+		t.Error("TRACK_STATUS_OK carried LARGEST_OBJECT before any Object")
+	}
+}
+
 // TestRelay_TrackStatusRequestUpdateClosesSession: a REQUEST_UPDATE on a
 // TRACK_STATUS stream closes the session (§10.15, §10.9).
 func TestRelay_TrackStatusRequestUpdateClosesSession(t *testing.T) {
