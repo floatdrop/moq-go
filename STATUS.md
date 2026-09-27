@@ -527,9 +527,6 @@ Session layer:
   SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS, where §10.19/§10.20 make it a
   PROTOCOL_VIOLATION) is an error rather than a legal message checked
   against §10.4.
-- `Publication`'s REQUEST_UPDATE_OK carries LARGEST_OBJECT only for Objects it
-  wrote itself, not the one its SUBSCRIBE_OK or PUBLISH reported (§10.2.17,
-  §10.9.1).
 
 Relay:
 

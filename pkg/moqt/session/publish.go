@@ -48,8 +48,9 @@ type Publication struct {
 	// paused is the inverse of the §5.1 Forward State.
 	paused atomic.Bool
 
-	// largest is the largest Location written through OpenSubgroup streams,
-	// reported as LARGEST_OBJECT in REQUEST_UPDATE_OK (§10.9.1).
+	// largest is the largest Location this side announced in SUBSCRIBE_OK
+	// or PUBLISH, or wrote through OpenSubgroup streams since, reported as
+	// LARGEST_OBJECT in REQUEST_UPDATE_OK (§10.9.1, §10.2.17).
 	largestMu  sync.Mutex
 	largest    message.Location
 	hasLargest bool
@@ -74,8 +75,15 @@ var ErrForwardPaused = errors.New("moqt/session: Forward State is 0; not sending
 var ErrPublicationEnded = errors.New("moqt/session: publication ended (PUBLISH_DONE sent)")
 
 // newPublication builds a Publication whose initial Forward State is the
-// establishing message's FORWARD (§5.1), or 1 when omitted (§10.2.18).
-func newPublication(s *Session, stream Stream, requestID, alias uint64, establishing message.Parameters) *Publication {
+// establishing message's FORWARD (§5.1), or 1 when omitted (§10.2.18), and
+// whose Largest Object starts at the LARGEST_OBJECT this side announced in
+// its SUBSCRIBE_OK or PUBLISH (§10.2.17), if any.
+func newPublication(
+	s *Session,
+	stream Stream,
+	requestID, alias uint64,
+	establishing, announced message.Parameters,
+) *Publication {
 	// The subscriber may send REQUEST_UPDATE (§10.9) but not
 	// PUBLISH_STATE_NOTIFY (§10.10).
 	p := &Publication{
@@ -86,6 +94,9 @@ func newPublication(s *Session, stream Stream, requestID, alias uint64, establis
 	p.endCtx, p.endCancel = context.WithCancel(context.Background())
 	if f, ok := establishing.Find(message.ParamForward); ok {
 		p.paused.Store(f.Byte == 0)
+	}
+	if lo, ok := announced.Find(message.ParamLargestObject); ok {
+		p.largest, p.hasLargest = message.Location{Group: lo.Group, Object: lo.Object}, true
 	}
 	return p
 }
@@ -111,9 +122,10 @@ func (p *Publication) Broker() *RequestBroker {
 // Serve callback still sees the update). Any other parameter declines the
 // whole update with NOT_SUPPORTED.
 //
-// The REQUEST_UPDATE_OK carries LARGEST_OBJECT (§10.9.1) once objects have
-// been written through [Publication.OpenSubgroup] streams; other objects are
-// not seen.
+// The REQUEST_UPDATE_OK carries LARGEST_OBJECT (§10.9.1, §10.2.17): the
+// larger of the one this side's SUBSCRIBE_OK or PUBLISH reported and the
+// largest Object written through [Publication.OpenSubgroup] streams; other
+// objects are not seen.
 func (p *Publication) ApplyUpdate(upd *message.RequestUpdate) (*message.RequestOK, error) {
 	forward, setForward := false, false
 	for _, prm := range upd.Parameters {
@@ -314,7 +326,7 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 		func(stream Stream, _ *message.RequestOK) (*Publication, error) {
 			// The PUBLISH sets the initial Forward State (§5.1); PUBLISH_OK
 			// carries no subscription parameters.
-			p := newPublication(s, stream, m.RequestID, m.TrackAlias, m.Parameters)
+			p := newPublication(s, stream, m.RequestID, m.TrackAlias, m.Parameters, m.Parameters)
 			p.answered = message.TypePublish
 			return p, nil
 		})
