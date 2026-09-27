@@ -513,15 +513,16 @@ func (l *holdLook) end() {
 
 // awaitsPublisher reports whether err, from [sessionHandler.subscribeUpstream],
 // leaves the track without a current publisher: none matched (nil), or every
-// one that did answered DOES_NOT_EXIST, or TIMEOUT for an upstream relay's own
-// hold, or is draining (§10.4), since subscribeUpstream reports such an error
-// only when no other kind occurred.
+// one that did answered DOES_NOT_EXIST, TIMEOUT for an upstream relay's own
+// hold, or GOING_AWAY for its own drain, or is draining (§10.4).
+// subscribeUpstream reports such an error only when no other kind occurred.
 func awaitsPublisher(err error) bool {
 	if err == nil || errors.Is(err, errGoingAway) {
 		return true
 	}
 	rej, ok := errors.AsType[*session.RequestRejectedError](err)
-	return ok && (rej.Code == moqt.RequestDoesNotExist || rej.Code == moqt.RequestTimeout)
+	return ok && (rej.Code == moqt.RequestDoesNotExist || rej.Code == moqt.RequestTimeout ||
+		rej.Code == moqt.RequestGoingAway)
 }
 
 // subscribeUpstream subscribes fullName on every matching source (§9.5):
@@ -885,11 +886,13 @@ func upstreamRejection(err error) *session.RequestRejectedError {
 	}
 	rej := &session.RequestRejectedError{Code: moqt.RequestInternalError, RetryInterval: up.RetryInterval}
 	switch up.Code {
+	// GOING_AWAY: an upstream relay draining before its GOAWAY reached this
+	// one, which answers a draining publisher the same way.
 	case moqt.RequestDoesNotExist, moqt.RequestTimeout, moqt.RequestExcessiveLoad,
-		moqt.RequestUnsupportedExtension:
+		moqt.RequestUnsupportedExtension, moqt.RequestGoingAway:
 		rej.Code = up.Code
 	case moqt.RequestInternalError, moqt.RequestUnauthorized, moqt.RequestNotSupported,
-		moqt.RequestMalformedAuthToken, moqt.RequestExpiredAuthToken, moqt.RequestGoingAway,
+		moqt.RequestMalformedAuthToken, moqt.RequestExpiredAuthToken,
 		moqt.RequestInvalidRange, moqt.RequestInvalidFilter, moqt.RequestRedirect,
 		moqt.RequestMalformedTrack, moqt.RequestUninterested, moqt.RequestPrefixOverlap,
 		moqt.RequestNamespaceTooLarge:
