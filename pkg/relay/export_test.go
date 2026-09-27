@@ -30,3 +30,12 @@ func SetTestHookBeforeDownstreamRegistered(hook func(track.FullTrackName)) (rest
 	testHookBeforeDownstreamRegistered.Store(&hook)
 	return func() { testHookBeforeDownstreamRegistered.Store(prev) }
 }
+
+// SetTestHookBeforeFill installs hook, to be called as a fill is about to be
+// evaluated, and returns a function restoring the previous value. See
+// [testHookBeforeFill].
+func SetTestHookBeforeFill(hook func(track.FullTrackName)) (restore func()) {
+	prev := testHookBeforeFill.Load()
+	testHookBeforeFill.Store(&hook)
+	return func() { testHookBeforeFill.Store(prev) }
+}

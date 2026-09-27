@@ -127,7 +127,9 @@ func (h *sessionHandler) serveForwardedPublish(
 	// §10.20.1: each forwarded subscription gets its own fill fetch stream,
 	// named by the PUBLISH's Request ID (§10.1; §5.1.3 names only SUBSCRIBE
 	// and REQUEST_UPDATE).
-	if err := h.maybeServeFill(ctx, sub, te, fullName, fwd.RequestID, params); err != nil {
+	// The registration snapshot, which the live filter is anchored on; see
+	// maybeServeFill.
+	if err := h.maybeServeFill(ctx, sub, te, fullName, fwd.RequestID, params, largest, has); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
 			slog.String("err", err.Error()))
 	}

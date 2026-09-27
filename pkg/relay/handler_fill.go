@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
@@ -14,11 +15,21 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
+// testHookBeforeFill, when set by a test, runs as a fill is about to be
+// evaluated, after the response that reported its Largest Object.
+var testHookBeforeFill atomic.Pointer[func(track.FullTrackName)]
+
 // maybeServeFill opens and serves a fill fetch stream for a subscription when
 // the SUBSCRIBE or REQUEST_UPDATE carried FILL_PARAMETERS (§5.1.3).
 //
 // requestID is the Request ID of the message that asked for the fill; the
 // FETCH_HEADER carries it, so one subscription can have several fills open.
+// largest is the Largest Object the subscriber was told and the live filter
+// is anchored on (the one SUBSCRIBE_OK or REQUEST_UPDATE_OK reported), and
+// hasLargest whether there was one: the fill ends there (§5.1.3), so an Object
+// arriving since goes out live only. For a forwarded PUBLISH that is the
+// registration snapshot, not the PUBLISH's own LARGEST_OBJECT, which can be
+// older: ending there would leave the Objects between neither live nor filled.
 //
 // A failure resets the fill stream, leaves the subscription unaffected, and
 // is returned for the log. AcceptRequest has closed the session on a malformed
@@ -30,10 +41,15 @@ func (h *sessionHandler) maybeServeFill(
 	fullName track.FullTrackName,
 	requestID uint64,
 	ps message.Parameters,
+	largest message.Location,
+	hasLargest bool,
 ) error {
 	inner, requested, _ := message.FillParametersFromParam(ps)
 	if !requested {
 		return nil
+	}
+	if hook := testHookBeforeFill.Load(); hook != nil {
+		(*hook)(fullName)
 	}
 
 	// §5.1.3.1: from here a failure MUST open the fill stream and reset it.
@@ -49,9 +65,8 @@ func (h *sessionHandler) maybeServeFill(
 	}
 
 	// The fill range is evaluated with Fetch rules (§5.1.2), so it never
-	// extends past Largest Object. With nothing published there is nothing to
-	// fill.
-	largest, hasLargest := entry.GetLargest()
+	// extends past the Largest Object reported. With nothing published then
+	// there is nothing to fill.
 	if !hasLargest {
 		return nil
 	}
