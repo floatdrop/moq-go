@@ -231,7 +231,7 @@ By package, bottom-up along the dependency stack:
 |-------|--------------------------------|------|--------|-------|
 | 12.1  | SUBGROUP_DELIVERY_TIMEOUT      | 0x06 | PARTIAL| Track + Object Property; the first object of a subgroup overrides the Track-level value (§8 resolution in `message.DeliveryTimeouts`, enforced in `OutgoingSubgroupStream` where the transport reports acknowledgement — none of the bundled ones do, see §8). |
 | 12.2  | OBJECT_DELIVERY_TIMEOUT        | 0x02 | DONE   | Track + Object Property; first-object override, as §12.1. |
-| 12.3  | MAX_CACHE_DURATION             | 0x04 | DONE   | Per Object: each carries the value of the upstream it arrived through (captured with the Track Alias in `session.InboundTrack`), and is not forwarded live or served from the cache past it; a present 0 is never served from the cache. In FETCH and fill an expired Object is an End of Unknown Range, whether it expired before the snapshot or while the stream was written. |
+| 12.3  | MAX_CACHE_DURATION             | 0x04 | PARTIAL| Per Object: each carries the value of the upstream it arrived through (captured with the Track Alias in `session.InboundTrack`), and is not forwarded live or served from the cache past it; a present 0 is never served from the cache. An Object stitched from an upstream FETCH carries that FETCH_OK's value, and a present 0 sets no limit on it. Objects age from when the relay read them whole, not from their beginning. In FETCH and fill an expired Object is an End of Unknown Range, whether it expired before the snapshot or while the stream was written. |
 | 12.4  | DEFAULT_PUBLISHER_PRIORITY     | 0x0E | DONE   | |
 | 12.5  | DEFAULT_PUBLISHER_GROUP_ORDER  | 0x22 | DONE   | A value outside {1, 2} closes the session, also inside Immutable Properties; an omitted one is Ascending. |
 | 12.6  | DYNAMIC_GROUPS                 | 0x30 | DONE   | A value above 1 closes the session, also inside Immutable Properties. |
@@ -534,8 +534,8 @@ Relay:
   every earlier contributor left: the writer set, and with it the run of
   forwarded Object IDs, is dropped with its last contributor, so Objects a
   reset predecessor never delivered go unnoticed (§11.4.3).
-- Objects from an upstream FETCH are exempt from MAX_CACHE_DURATION, and cached
-  Objects age from when they were read whole rather than their beginning (§12.3).
+- Objects age from when they were read whole rather than their beginning
+  (§12.3).
 - A fill range is evaluated against a later Largest Object than SUBSCRIBE_OK or
   REQUEST_UPDATE_OK reported (§5.1.3).
 - TRACK_STATUS is not answered as SUBSCRIBE would be in two cases (§10.15):
@@ -567,7 +567,7 @@ Documentation:
 - Limitations: "Duplicate Objects … are not compared" is stale; the LOC entry names
   `PropAudioLevel = 0x0A` (it is 0x0C); "Handles the application reads itself"
   says `CheckPeerParams` checks roles; "Inbound GOAWAY" omits request streams.
-- Table rows 10.2.6, 10.2.15, 10.2.21 and 12.3 overstate what is done (see
+- Table rows 10.2.6, 10.2.15 and 10.2.21 overstate what is done (see
   the items above), and the package summary still lists joining FETCH.
 - `session/namespace.go` says NAMESPACE / NAMESPACE_DONE go on a
   PUBLISH_NAMESPACE stream (§10.17, §10.18).

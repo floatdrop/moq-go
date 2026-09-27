@@ -16,7 +16,8 @@ import (
 
 // The relay's per-track cache as seen by FETCH: size-based eviction, and
 // MAX_CACHE_DURATION (§12.3), after which the relay must not start forwarding
-// an Object, from the cache or from a live subscriber's queue.
+// an Object, from the cache, from a live subscriber's queue, or from an upstream
+// FETCH it passes through.
 
 // TestFetch_CacheEvictionUnderLoad: past MaxCacheSize the cache evicts the
 // oldest Objects, so a FETCH of the early range returns fewer Objects than it
@@ -332,5 +333,83 @@ func TestRelay_MaxCacheDurationExpiresDuringFetch(t *testing.T) {
 			"served Objects in groups %v after they expired; at most the first write may have started in time",
 			served,
 		)
+	}
+}
+
+// TestRelay_MaxCacheDurationBoundsStitchedObject: an Object received through
+// an upstream FETCH is bound by that FETCH's MAX_CACHE_DURATION (§12.3: "any
+// individual Object received through this subscription or fetch"). One the
+// upstream sent, then held its stream open past the duration, is not
+// forwarded but marked unknown. A present 0, which the cache reads as "never
+// serve from the cache", sets no limit on an Object passed through.
+func TestRelay_MaxCacheDurationBoundsStitchedObject(t *testing.T) {
+	t.Parallel()
+	const hold = 150 * time.Millisecond
+	for _, tc := range []struct {
+		name   string
+		millis uint64
+		want   fetchElem
+	}{
+		{"expired", 50, unknownAt(0, 1)},
+		{"zero", 0, obj(0, 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			upSess, teardown := connectRelay(t, relay.Config{})
+			t.Cleanup(teardown)
+			if _, err := upSess.PublishNamespace(
+				t.Context(),
+				&message.PublishNamespace{Namespace: ns("video")},
+			); err != nil {
+				t.Fatalf("PublishNamespace: %v", err)
+			}
+			go func() {
+				for {
+					req, err := upSess.AcceptRequest(t.Context())
+					if err != nil {
+						return
+					}
+					switch m := req.First.(type) {
+					case *message.Subscribe:
+						if req.Reply(&message.SubscribeOK{TrackAlias: 42}) != nil {
+							return
+						}
+						// The live stream misses Object 1.
+						publishCam1Group(t, upSess, 42, true, cam1Object{0, 0, nil}, cam1Object{0, 2, nil})
+					case *message.Fetch:
+						if req.Reply(&message.FetchOK{
+							EndLocation: fetchOKEnd(m),
+							TrackProperties: message.AppendTrackProperties(
+								trackProp(message.PropertyMaxCacheDuration, tc.millis)),
+						}) != nil {
+							return
+						}
+						out, err := upSess.OpenFetchStream(message.FetchHeader{RequestID: m.RequestID})
+						if err != nil {
+							return
+						}
+						_ = out.WriteObject(&message.FetchObject{
+							SerializationFlags: message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta |
+								message.FetchFlagPriority | uint64(message.FetchSubgroupIDExplicit),
+							GroupIDDelta: 0, ObjectIDDelta: 1, ObjectPayload: []byte("x"),
+						})
+						time.Sleep(hold)
+						_ = out.Close()
+					}
+				}
+			}()
+			live := dialAnotherClient(t, upSess)
+			subscribeCam1(t, live)
+			go drainAll(t.Context(), live)
+			fc := dialAnotherClient(t, upSess)
+			waitRelayLargest(t, fc, ns("video"), []byte("cam1"), 0, 2)
+
+			got := fetchCam1Range(t, fc, message.Location{}, message.Location{Group: 0, Object: 2},
+				message.GroupOrderAscending)
+			want := []fetchElem{obj(0, 0), tc.want, obj(0, 2)}
+			if !slices.Equal(got, want) {
+				t.Fatalf("FETCH elements %v, want %v", got, want)
+			}
+		})
 	}
 }

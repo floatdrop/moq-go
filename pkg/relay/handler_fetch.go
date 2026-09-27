@@ -462,6 +462,10 @@ func (h *sessionHandler) fetchUpstreamRange(
 	// §10.2.5: the budget covers the response too; when it runs out, what
 	// has arrived is kept and the rest reported Timed-Out.
 	defer context.AfterFunc(fctx, func() { fs.Cancel(moqt.StreamResetCancelled) })()
+	// §12.3: this FETCH's MAX_CACHE_DURATION bounds each Object it delivers
+	// (see [cache.ObjectCache.Expired]). Deviation: the age runs from when the
+	// relay read the Object whole, not from "the beginning of the Object".
+	maxAge, hasMaxAge := message.TrackMaxCacheDuration(fr.OK.TrackProperties)
 
 	var prev *message.Location
 	for {
@@ -515,13 +519,17 @@ func (h *sessionHandler) fetchUpstreamRange(
 				pref = cache.ForwardingDatagram
 			}
 			ans.objs = append(ans.objs, &cache.CachedObject{
-				GroupID:           obj.GroupID,
-				ObjectID:          obj.ObjectID,
-				SubgroupID:        obj.SubgroupID,
-				PublisherPriority: obj.PublisherPriority,
-				ForwardingPref:    pref,
-				Properties:        obj.Properties,
-				Payload:           obj.Payload,
+				GroupID:             obj.GroupID,
+				ObjectID:            obj.ObjectID,
+				SubgroupID:          obj.SubgroupID,
+				PublisherPriority:   obj.PublisherPriority,
+				ForwardingPref:      pref,
+				Properties:          obj.Properties,
+				Payload:             obj.Payload,
+				ReceivedAt:          time.Now(),
+				MaxCacheDuration:    maxAge,
+				HasMaxCacheDuration: hasMaxAge,
+				Stitched:            true,
 			})
 		}
 		prev = &loc
