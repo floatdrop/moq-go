@@ -591,3 +591,192 @@ func TestRelay_EndSignalsAgree(t *testing.T) {
 		t.Fatal("Group 2 not forwarded: the track ended")
 	}
 }
+
+// malformedPriorityStreams makes the track on alias malformed: two streams of
+// Subgroup 0 of Group 1 with different Publisher Priorities (§2.4.2 item 1).
+func malformedPriorityStreams(t *testing.T, pubSess *session.Session, alias uint64) {
+	t.Helper()
+	sendStreams(t, pubSess, alias, []testStream{
+		{group: 1, priority: 1, objects: []uint64{0}, open: true},
+		{group: 1, priority: 2, objects: []uint64{1}, open: true},
+	})
+}
+
+// awaitMalformedReset waits up to 1s for a reset of kind on the conn resets
+// records, and requires MALFORMED_TRACK.
+func awaitMalformedReset(t *testing.T, resets <-chan streamReset, kind resetStream, what string) {
+	t.Helper()
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case r := <-resets:
+			if r.stream != kind {
+				continue
+			}
+			if r.code != moqt.StreamResetMalformedTrack {
+				t.Fatalf("the relay cancelled the %s with %v, want MALFORMED_TRACK", what, r.code)
+			}
+			return
+		case <-deadline:
+			t.Fatalf("the relay did not cancel the %s of a malformed track", what)
+		}
+	}
+}
+
+// TestRelay_MalformedTrackCancelsUpstreamFetch: a malformed live Object from
+// the publisher an upstream FETCH is waiting on cancels that FETCH (§2.4.2:
+// "MUST cancel any corresponding subscription or fetches for that Track from
+// that publisher"), its data stream with MALFORMED_TRACK, and resets the
+// downstream fetch stream it was filling with MALFORMED_TRACK, not after
+// FILL_TIMEOUT.
+func TestRelay_MalformedTrackCancelsUpstreamFetch(t *testing.T) {
+	t.Parallel()
+	l := newPipeListener()
+	upResets := make(chan streamReset, 16)
+	resets := make(chan streamReset, 16)
+	l.resetsFor = func(conn int) chan<- streamReset {
+		switch conn {
+		case 1: // the upstream
+			return upResets
+		case 3: // the fetcher; the live subscriber is 2
+			return resets
+		}
+		return nil
+	}
+	upSess, teardown := connectRelayOn(t, relay.Config{}, l)
+	t.Cleanup(teardown)
+	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns("video")}); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	fetched := make(chan *session.Request, 1)
+	go func() {
+		for {
+			req, err := upSess.AcceptRequest(t.Context())
+			if err != nil {
+				return
+			}
+			switch m := req.First.(type) {
+			case *message.Subscribe:
+				if req.Reply(&message.SubscribeOK{TrackAlias: 42}) != nil {
+					return
+				}
+				// The live stream misses Object 1.
+				publishCam1Group(t, upSess, 42, true, cam1Object{0, 0, nil}, cam1Object{0, 2, nil})
+			case *message.Fetch:
+				if req.Reply(&message.FetchOK{EndLocation: fetchOKEnd(m)}) != nil {
+					return
+				}
+				out, err := upSess.OpenFetchStream(message.FetchHeader{RequestID: m.RequestID})
+				if err != nil {
+					return
+				}
+				// Nothing more: the stream stays open.
+				t.Cleanup(func() { out.Cancel(moqt.StreamResetCancelled) })
+				fetched <- req
+			}
+		}
+	}()
+	live := dialAnotherClient(t, upSess)
+	subscribeCam1(t, live)
+	go drainAll(t.Context(), live)
+	fc := dialAnotherClient(t, upSess)
+	waitRelayLargest(t, fc, ns("video"), []byte("cam1"), 0, 2)
+
+	fr, err := fc.Fetch(t.Context(), &message.Fetch{
+		Namespace: ns("video"), Name: []byte("cam1"),
+		Parameters: message.Parameters{
+			fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: 2}),
+			message.FillTimeoutParam(10 * time.Second),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	defer fr.Close()
+	if _, err := fc.AcceptDataStream(t.Context()); err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	var upFetch *session.Request
+	select {
+	case upFetch = <-fetched:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the relay did not FETCH the hole from the upstream")
+	}
+
+	malformedPriorityStreams(t, upSess, 42)
+	select {
+	case <-upFetch.Stream.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("the relay kept its FETCH to the publisher of a malformed track")
+	}
+	awaitMalformedReset(t, upResets, fetchStreamStop, "upstream FETCH's data stream")
+	awaitMalformedReset(t, resets, fetchStreamReset, "downstream fetch stream")
+}
+
+// TestRelay_MalformedTrackResetsCachedFetch: a FETCH served from the cache is
+// reset with MALFORMED_TRACK when the track is found malformed while its
+// stream is written (§2.4.2: "reset any fetch streams with Status Code
+// MALFORMED_TRACK").
+func TestRelay_MalformedTrackResetsCachedFetch(t *testing.T) {
+	t.Parallel()
+	l := newPipeListener()
+	resets := make(chan streamReset, 16)
+	l.resetsFor = resetsOn(3, resets) // the publisher is 1, the live subscriber 2
+	pubSess, teardown := connectRelayOn(t, relay.Config{}, l)
+	t.Cleanup(teardown)
+	publishVideoTrack(t, pubSess, "cam1", 7)
+	live := dialAnotherClient(t, pubSess)
+	subscribeCam1(t, live)
+	go drainAll(t.Context(), live)
+	publishObjects(t, pubSess, 7, 0, 3)
+	fc := dialAnotherClient(t, pubSess)
+	waitRelayLargest(t, fc, ns("video"), []byte("cam1"), 0, 2)
+
+	fr, err := fc.Fetch(t.Context(), &message.Fetch{
+		Namespace: ns("video"), Name: []byte("cam1"),
+		Parameters: message.Parameters{fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: 2})},
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	defer fr.Close()
+	// Unread, the stream holds the relay's first Object write.
+	if _, err := fc.AcceptDataStream(t.Context()); err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+
+	malformedPriorityStreams(t, pubSess, 7)
+	awaitMalformedReset(t, resets, fetchStreamReset, "fetch stream")
+}
+
+// TestRelay_MalformedTrackResetsFillStream: a fill fetch stream (§5.1.3) is a
+// fetch stream too, reset with MALFORMED_TRACK when the track is found
+// malformed while it is written (§2.4.2).
+func TestRelay_MalformedTrackResetsFillStream(t *testing.T) {
+	t.Parallel()
+	l := newPipeListener()
+	resets := make(chan streamReset, 16)
+	l.resetsFor = resetsOn(3, resets) // the publisher is 1, the live subscriber 2
+	pubSess, teardown := connectRelayOn(t, relay.Config{}, l)
+	t.Cleanup(teardown)
+	publishVideoTrack(t, pubSess, "cam1", 7)
+	live := dialAnotherClient(t, pubSess)
+	subscribeCam1(t, live)
+	go drainAll(t.Context(), live)
+	publishObjects(t, pubSess, 7, 0, 3)
+	subSess := dialAnotherClient(t, pubSess)
+	waitRelayLargest(t, subSess, ns("video"), []byte("cam1"), 0, 2)
+
+	subscribeCam1(t, subSess, message.FillParametersParam(message.Parameters{message.UnfilteredFilter()}))
+	// Unread, the fill stream holds the relay's first Object write.
+	ds, err := subSess.AcceptDataStream(t.Context())
+	if err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	if _, ok := ds.(*session.IncomingFetchStream); !ok {
+		t.Fatalf("AcceptDataStream = %T, want the fill fetch stream", ds)
+	}
+
+	malformedPriorityStreams(t, pubSess, 7)
+	awaitMalformedReset(t, resets, fetchStreamReset, "fill fetch stream")
+}

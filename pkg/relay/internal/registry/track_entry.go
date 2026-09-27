@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"context"
 	"fmt"
 	"maps"
 	"math"
@@ -93,6 +94,10 @@ type TrackEntry struct {
 	// late-publisher SUBSCRIBE for this track, each with the time it may be
 	// asked again (zero: never); see [TrackEntry.NoteRefusal]. Guarded by mu.
 	refusals map[*PublisherEntry]time.Time
+
+	// fetches cancel the fetch streams the relay serves on this track, fill
+	// fetch streams included; see [TrackEntry.AddFetch]. Guarded by mu.
+	fetches map[*fetchCancel]struct{}
 
 	// downstreamGen counts appends to Downstream. The per-object fanout
 	// (UpdateLargestAndDetectNew) snapshots it alongside its initial
@@ -958,6 +963,38 @@ func (e *TrackEntry) GetProperties() []byte {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.Properties
+}
+
+// fetchCancel is one [TrackEntry.AddFetch] registration.
+type fetchCancel struct{ cancel context.CancelCauseFunc }
+
+// AddFetch registers cancel as how to end a fetch stream the relay serves on
+// this track until remove is called; see [TrackEntry.CancelFetches].
+func (e *TrackEntry) AddFetch(cancel context.CancelCauseFunc) (remove func()) {
+	f := &fetchCancel{cancel}
+	e.mu.Lock()
+	if e.fetches == nil {
+		e.fetches = make(map[*fetchCancel]struct{})
+	}
+	e.fetches[f] = struct{}{}
+	e.mu.Unlock()
+	return func() {
+		e.mu.Lock()
+		delete(e.fetches, f)
+		e.mu.Unlock()
+	}
+}
+
+// CancelFetches cancels every fetch stream registered with
+// [TrackEntry.AddFetch] with cause: §2.4.2, a relay that detects a malformed
+// track MUST "reset any fetch streams".
+func (e *TrackEntry) CancelFetches(cause error) {
+	e.mu.RLock()
+	fs := slices.Collect(maps.Keys(e.fetches))
+	e.mu.RUnlock()
+	for _, f := range fs {
+		f.cancel(cause)
+	}
 }
 
 // CopyUpstream returns a snapshot of the current upstream slice. Callers

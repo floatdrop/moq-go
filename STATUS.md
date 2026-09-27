@@ -427,8 +427,11 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
 - **Malformed tracks (§2.4.2, §9.1, §12.8, §12.9)** — the session reports
   Object Properties that make a track malformed (`session.ErrMalformedTrack`),
   and the relay then ends the track: PUBLISH_DONE MALFORMED_TRACK to every
-  downstream subscriber, its subscription to that publisher cancelled, the
-  Objects triggering it not cached (removed, if earlier ones were). The relay
+  downstream subscriber, every downstream fetch stream (fill fetch streams
+  included) reset with MALFORMED_TRACK, its subscription and FETCHes to that
+  publisher cancelled (an upstream FETCH to another publisher ends with its
+  downstream stream, with CANCELLED), the Objects triggering it not cached
+  (removed, if earlier ones were). The relay
   also detects, on live subgroup and datagram Objects of any upstream, against
   the last 32 Groups (`registry.TrackEntry.ClaimDelivered`, `SubgroupEnded`,
   `RecordDuplicate`): §2.4.2's list — a Subgroup's Publisher Priority
@@ -455,9 +458,7 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   a relay's, past the window, and a duplicate once the first copy left the
   cache (evicted or expired) or before a concurrent contributor cached it. An
   Object another upstream had claimed but not yet cached when a later end put
-  it past that end stays cached. A downstream FETCH already being served from
-  the cache when the track is found malformed is not reset: the relay does not
-  track fetch streams per track. One interpretation: an Object with two
+  it past that end stays cached. One interpretation: an Object with two
   Immutable Properties is treated as malformed, although §12.7 states "MUST
   NOT contain more than one instance" outside its list of malformed
   conditions.
@@ -555,8 +556,10 @@ Relay:
   `GoawayTimeout` for it.
 - A PUBLISH can follow PUBLISH_SKIPPED for the same upstream PUBLISH after a
   prefix update moves away and back (§6.1).
-- Upstream FETCHes to a publisher whose track is found malformed are not
-  cancelled (§2.4.2).
+- A FETCH whose data stream is reset with MALFORMED_TRACK (§2.4.2, §2.5.1)
+  leaves its request stream open and unread: the relay neither resets it
+  (§3.3.3) nor answers a REQUEST_UPDATE on it. Which code to reset it with is
+  open.
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
 - A REQUEST_UPDATE's AUTHORIZATION_TOKENs go through the TokenVerifier only on
   SUBSCRIBE_NAMESPACE and SUBSCRIBE_TRACKS; on SUBSCRIBE, FETCH and
