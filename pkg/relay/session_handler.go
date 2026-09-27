@@ -651,7 +651,9 @@ func awaitRequestEnd(ctx context.Context, stream session.Stream) {
 //
 // A cancel before the FIN (the requester's STOP_SENDING, §3.3.3) resets both
 // streams with CANCELLED. §5.2: the publisher "MUST reset the bidi request
-// stream and unidirectional data stream associated with the FETCH".
+// stream and unidirectional data stream associated with the FETCH". A data
+// stream reset because the track must not be forwarded (§2.4.2, §2.5.1) ends
+// the request too: the relay cancels it with the same code (§3.3.3).
 func (h *sessionHandler) serveFetchObjects(
 	ctx context.Context,
 	req *session.Request,
@@ -670,19 +672,23 @@ func (h *sessionHandler) serveFetchObjects(
 	// §2.4.2: a relay that detects a malformed track MUST "reset any fetch
 	// streams with Status Code MALFORMED_TRACK"; see endMalformedTrack.
 	remove := entry.AddFetch(cancel)
-	out := h.streamFetchRange(fetchCtx, kind, nil, requestID, entry, fullName,
+	out, refused, code := h.streamFetchRange(fetchCtx, kind, nil, requestID, entry, fullName,
 		start, end, order, fillTimeout, rangeFilters)
 	stop()
 	remove()
 	if out == nil {
 		// The requester's own signal, not fetchCtx's cause: a write can fail on
 		// its STOP_SENDING for the data stream before the cause is set.
-		if req.Stream.Context().Err() != nil {
-			// §3.3.3: "RESET_STREAM for a direction they are sending and
-			// STOP_SENDING for a direction they are receiving".
-			req.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
-			req.Stream.CancelWrite(uint64(moqt.StreamResetCancelled))
+		switch {
+		case req.Stream.Context().Err() != nil:
+			code = moqt.StreamResetCancelled
+		case !refused:
+			return
 		}
+		// §3.3.3: "RESET_STREAM for a direction they are sending and
+		// STOP_SENDING for a direction they are receiving".
+		req.Stream.CancelRead(uint64(code))
+		req.Stream.CancelWrite(uint64(code))
 		return
 	}
 
@@ -696,8 +702,10 @@ func (h *sessionHandler) serveFetchObjects(
 // a fill is simply done.
 //
 // It returns the FINed stream, or nil when the stream could not be opened, the
-// write failed, or the upstream refused the track (§2.5.1); the stream is then
-// already reset.
+// write failed, or the track must not be forwarded; the stream is then already
+// reset. refused reports the last case, a malformed track (§2.4.2) or an
+// upstream refusal (§2.5.1), and, when refused, code the data stream was reset
+// with.
 func (h *sessionHandler) streamFetchRange(
 	ctx context.Context,
 	kind string,
@@ -709,12 +717,12 @@ func (h *sessionHandler) streamFetchRange(
 	order message.GroupOrder,
 	fillTimeout time.Duration,
 	rangeFilters *message.RangeFilterSet,
-) *session.OutgoingFetchStream {
+) (_ *session.OutgoingFetchStream, refused bool, code moqt.StreamResetCode) {
 	out, err := openFillOrFetchStream(h.sess, sub, requestID)
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "OpenFetchStream failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))
-		return nil
+		return nil, false, 0
 	}
 	if sub != nil {
 		// A fill stream's subscription holds its PUBLISH_DONE until the
@@ -729,27 +737,33 @@ func (h *sessionHandler) streamFetchRange(
 	cancelOut := func() { out.Cancel(ctxResetCode(ctx)) }
 	unwatch := context.AfterFunc(ctx, cancelOut)
 	defer unwatch()
+	// ctxEnded resets the stream for ctx, before the deferred StreamClosed
+	// (§10.12), and reports it.
+	ctxEnded := func() (*session.OutgoingFetchStream, bool, moqt.StreamResetCode) {
+		cancelOut()
+		c := ctxResetCode(ctx)
+		return nil, c == moqt.StreamResetMalformedTrack, c
+	}
 
 	// Gather cached objects, asking an upstream about what the cache cannot
 	// vouch for (§10.13).
 	objs, refusal := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
 	if ctx.Err() != nil {
-		cancelOut() // before the deferred StreamClosed (§10.12)
-		return nil
+		return ctxEnded()
 	}
 	if refusal != nil {
 		// §2.5.1: with FETCH_OK (or SUBSCRIBE_OK) already sent, only a
 		// reset is left (an interpretation: no Object was forwarded yet).
-		// Unparseable Track Properties (§3.3.4) and a malformed upstream
+		// Unparseable Track Properties (§12.7, §2.4.2) and a malformed upstream
 		// Object (§2.4.2) reset with MALFORMED_TRACK.
-		code := moqt.StreamResetInternalError
+		code = moqt.StreamResetInternalError
 		if errors.Is(refusal, session.ErrMalformedTrackProperties) || errors.Is(refusal, session.ErrMalformedTrack) {
 			code = moqt.StreamResetMalformedTrack
 		}
 		h.log.LogAttrs(ctx, slog.LevelDebug, "upstream FETCH refused",
 			slog.String("kind", kind), slog.String("err", refusal.Error()))
 		out.Cancel(code)
-		return nil
+		return nil, true, code
 	}
 
 	// §5.1.4: drop objects that fail the request's Range Filters. §11.4.4.2
@@ -769,13 +783,15 @@ func (h *sessionHandler) streamFetchRange(
 	if err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fetch stream write failed",
 			slog.String("kind", kind), slog.String("err", err.Error()))
+		if ctx.Err() != nil {
+			return ctxEnded() // ctx's reset failed the write; keep its code
+		}
 		out.Cancel(moqt.StreamResetInternalError)
-		return nil
+		return nil, false, 0
 	}
 	if !unwatch() {
-		cancelOut() // ctx ended first; reset before the deferred StreamClosed
-		return nil
+		return ctxEnded() // ctx ended first
 	}
 	_ = out.Close()
-	return out
+	return out, false, 0
 }

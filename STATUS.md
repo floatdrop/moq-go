@@ -415,9 +415,10 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   forgotten and the rebuilt stream may FIN.
 - **A refused upstream FETCH_OK ends only that fetch (§2.5.1)** — the relay
   answers FETCH_OK before stitching, so it resets the downstream fetch or fill
-  stream and never takes the REQUEST_ERROR UNSUPPORTED_EXTENSION branch. The
-  track's live subscription and cache-only FETCHes carry on, where §2.5.1's
-  lead says the relay "MUST NOT process or forward that track".
+  stream (a FETCH's request stream too, with the same code: §3.3.3, the
+  maintainer's choice) and never takes the REQUEST_ERROR UNSUPPORTED_EXTENSION
+  branch. The track's live subscription and cache-only FETCHes carry on, where
+  §2.5.1's lead says the relay "MUST NOT process or forward that track".
 - **Inbound GOAWAY, as the subscriber (§10.4, §9.4.1, §3.6)** — the relay
   stops initiating requests to that peer but neither unsubscribes ("A
   subscriber SHOULD individually unsubscribe from each existing
@@ -427,12 +428,13 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
 - **Malformed tracks (§2.4.2, §9.1, §12.8, §12.9)** — the session reports
   Object Properties that make a track malformed (`session.ErrMalformedTrack`),
   and the relay then ends the track: PUBLISH_DONE MALFORMED_TRACK to every
-  downstream subscriber, every downstream fetch stream (fill fetch streams
-  included) reset with MALFORMED_TRACK, its subscription and FETCHes to that
-  publisher cancelled (an upstream FETCH to another publisher ends with its
-  downstream stream, with CANCELLED), the Objects triggering it not cached
-  (removed, if earlier ones were). The relay
-  also detects, on live subgroup and datagram Objects of any upstream, against
+  downstream subscriber; every downstream fetch stream (fill fetch streams
+  included), and a FETCH's request stream, reset with MALFORMED_TRACK (§3.3.3,
+  the maintainer's choice); its subscription and FETCHes to that publisher
+  cancelled (an upstream FETCH to another publisher ends with its downstream
+  stream, with CANCELLED); the Objects triggering it not cached (removed, if
+  earlier ones were). The relay also detects, on live subgroup and datagram
+  Objects of any upstream, against
   the last 32 Groups (`registry.TrackEntry.ClaimDelivered`, `SubgroupEnded`,
   `RecordDuplicate`): §2.4.2's list — a Subgroup's Publisher Priority
   changing; an Object past a Subgroup's, Group's or Track's end, or two
@@ -551,10 +553,6 @@ Relay:
 - A session that registers after `Stop` began is drained on its own grace
   period and ignores `Stop`'s ctx, so a cancelled `Stop` can still wait up to
   `GoawayTimeout` for it.
-- A FETCH whose data stream is reset with MALFORMED_TRACK (§2.4.2, §2.5.1)
-  leaves its request stream open and unread: the relay neither resets it
-  (§3.3.3) nor answers a REQUEST_UPDATE on it. Which code to reset it with is
-  open.
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
 
 Documentation:

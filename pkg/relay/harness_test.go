@@ -70,6 +70,18 @@ const (
 	fetchStreamStop
 )
 
+func (k resetStream) String() string {
+	switch k {
+	case fetchStreamReset:
+		return "fetch stream reset"
+	case requestStreamReset:
+		return "request stream reset"
+	case fetchStreamStop:
+		return "fetch stream STOP_SENDING"
+	}
+	return fmt.Sprintf("resetStream(%d)", int(k))
+}
+
 // resetsOn builds a [pipeListener.resetsFor] recording the resets on the nth
 // dialled conn only, counting from 1 like [faultConn].
 func resetsOn(n int, ch chan<- streamReset) func(int) chan<- streamReset {
