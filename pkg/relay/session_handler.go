@@ -626,6 +626,10 @@ func awaitRequestEnd(ctx context.Context, stream session.Stream) {
 // serveFetchObjects is the response tail of the FETCH handler: stream the
 // stitched range, FIN, and park in the §10.9 follow-up loop until the
 // requester resets or FINs the request stream. kind tags log lines.
+//
+// A cancel before the FIN (the requester's STOP_SENDING, §3.3.3) resets both
+// streams with CANCELLED. §5.2: the publisher "MUST reset the bidi request
+// stream and unidirectional data stream associated with the FETCH".
 func (h *sessionHandler) serveFetchObjects(
 	ctx context.Context,
 	req *session.Request,
@@ -638,9 +642,21 @@ func (h *sessionHandler) serveFetchObjects(
 	fillTimeout time.Duration,
 	rangeFilters *message.RangeFilterSet,
 ) {
-	ok := h.streamFetchRange(ctx, kind, nil, requestID, entry, fullName,
+	fetchCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	stop := context.AfterFunc(req.Stream.Context(), func() { cancel(errRequestCancelled) })
+	ok := h.streamFetchRange(fetchCtx, kind, nil, requestID, entry, fullName,
 		start, end, order, fillTimeout, rangeFilters)
+	stop()
 	if !ok {
+		// The requester's own signal, not fetchCtx's cause: a write can fail on
+		// its STOP_SENDING for the data stream before the cause is set.
+		if req.Stream.Context().Err() != nil {
+			// §3.3.3: "RESET_STREAM for a direction they are sending and
+			// STOP_SENDING for a direction they are receiving".
+			req.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
+			req.Stream.CancelWrite(uint64(moqt.StreamResetCancelled))
+		}
 		return
 	}
 
@@ -680,7 +696,7 @@ func (h *sessionHandler) streamFetchRange(
 	}
 	// ctx ending resets the stream rather than completing it: CANCELLED when
 	// its cause is errRequestCancelled (a fill's cancelled subscription,
-	// §5.1.3.1), else SESSION_CLOSED (§3.3.4).
+	// §5.1.3.1, or a cancelled FETCH, §5.2), else SESSION_CLOSED (§3.3.4).
 	cancelOut := func() { out.Cancel(ctxResetCode(ctx)) }
 	unwatch := context.AfterFunc(ctx, cancelOut)
 	defer unwatch()
