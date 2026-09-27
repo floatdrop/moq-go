@@ -78,6 +78,15 @@ func (s *Session) SendGoaway(timeout time.Duration, newURI string) error {
 	return s.sendControl(msg)
 }
 
+// GoawaySent reports whether [Session.SendGoaway] was called: the session is
+// draining, and §10.4 says its sender "SHOULD avoid initiating requests unless
+// required by migration".
+func (s *Session) GoawaySent() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.goawaySent
+}
+
 // handleGoaway records a received GOAWAY and notifies any waiter on
 // GoawayReceived. §10.4: a second GOAWAY on the same control stream MUST
 // terminate the session with PROTOCOL_VIOLATION.

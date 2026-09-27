@@ -21,8 +21,8 @@ import (
 // subscriber publishes, already receives, or is SUBSCRIBing to.
 func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.SubscriberEntry, *registry.TrackEntry) {
 	return func(sub *registry.SubscriberEntry, te *registry.TrackEntry) {
-		if peerSentGoaway(h.sess) {
-			return // §10.4: no new PUBLISH to a peer that sent GOAWAY
+		if goingAway(h.sess) {
+			return // §10.4: no new PUBLISH on a session with a GOAWAY
 		}
 		fullName := te.FullName
 		if !fullName.Namespace.HasPrefix(sub.Prefix()) {

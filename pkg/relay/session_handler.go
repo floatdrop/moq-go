@@ -146,7 +146,7 @@ func saveLargestLocation(entry *registry.TrackEntry, ps message.Parameters) {
 
 // logInboundGoaway records the peer's GOAWAY (§10.4). The relay does not close
 // the session: enforcing the Timeout is the sender's job. It only stops
-// initiating requests to the peer (see [peerSentGoaway]).
+// initiating requests to the peer (see [goingAway]).
 //
 // Deviation: the relay neither migrates its subscriptions to NewSessionURI nor
 // closes the session once none remain (§9.4.1, §3.6); downstream clients
@@ -160,10 +160,12 @@ func (h *sessionHandler) logInboundGoaway(ctx context.Context) {
 		slog.String("new_session_uri", string(g.NewSessionURI)))
 }
 
-// peerSentGoaway reports whether sess's peer has sent GOAWAY. §10.4: an
-// endpoint "SHOULD NOT initiate new requests to the peer"; every relay-initiated
-// SUBSCRIBE, FETCH and PUBLISH checks this first.
-func peerSentGoaway(sess *session.Session) bool { return sess.PeerGoaway() != nil }
+// goingAway reports whether sess has a GOAWAY in either direction, so the
+// relay initiates no new request on it (§10.4): having received one, an
+// endpoint "SHOULD NOT initiate new requests to the peer"; having sent one,
+// it "SHOULD avoid initiating requests unless required by migration". Every
+// relay-initiated SUBSCRIBE, FETCH and PUBLISH checks this first.
+func goingAway(sess *session.Session) bool { return sess.PeerGoaway() != nil || sess.GoawaySent() }
 
 // subIDCounter allocates process-globally unique subscription IDs. It MUST
 // be global, not per-handler: a TrackEntry aggregates subscriptions from
@@ -417,11 +419,10 @@ func (h *sessionHandler) rejectAuth(ctx context.Context, req *session.Request, k
 // guess, since the relay cannot predict when a per-session cap frees up.
 const excessiveLoadRetry = time.Second
 
-// excessiveLoadRetryInterval is the Retry Interval for an EXCESSIVE_LOAD
-// rejection (§10.6.2): excessiveLoadRetry plus up to 50% jitter, encoded as
-// milliseconds plus one.
-func excessiveLoadRetryInterval() uint64 {
-	const ms = uint64(excessiveLoadRetry / time.Millisecond)
+// retryIntervalAfter is a Retry Interval (§10.6.2) inviting a retry after d
+// plus up to 50% jitter, encoded as milliseconds plus one.
+func retryIntervalAfter(d time.Duration) uint64 {
+	ms := uint64(d / time.Millisecond) //nolint:gosec // G115: callers pass a positive constant duration.
 	return ms + rand.Uint64N(ms/2) + 1 //nolint:gosec // G404: retry jitter, not a secret.
 }
 
@@ -435,7 +436,7 @@ func (h *sessionHandler) rejectExcessiveLoad(ctx context.Context, req *session.R
 	if err := req.Reject(&session.RequestRejectedError{
 		Code:          moqt.RequestExcessiveLoad,
 		Reason:        "relay: " + what + " limit reached",
-		RetryInterval: excessiveLoadRetryInterval(),
+		RetryInterval: retryIntervalAfter(excessiveLoadRetry),
 	}); err != nil &&
 		!errors.Is(err, context.Canceled) {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "relay EXCESSIVE_LOAD reject write failed",

@@ -547,8 +547,9 @@ Relay:
 - A client cannot SUBSCRIBE to a track it publishes under its own
   PUBLISH_NAMESPACE (§5.1).
 - RENDEZVOUS_TIMEOUT is ignored (§10.2.6 SHOULD hold the subscription; §9.5).
-- The relay keeps initiating requests on a session it sent GOAWAY to (§10.4
-  SHOULD avoid).
+- A SUBSCRIBE whose only candidate upstream is a draining relay reached through
+  the upstream pool gets DOES_NOT_EXIST, not the GOING_AWAY a draining local
+  publisher yields: the pool skips such a relay before any request.
 - A session that registers after `Stop` began is drained on its own grace
   period and ignores `Stop`'s ctx, so a cancelled `Stop` can still wait up to
   `GoawayTimeout` for it.
