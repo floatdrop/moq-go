@@ -122,3 +122,48 @@ func TestPublishSkipped_NotStickyAcrossRePublish(t *testing.T) {
 		t.Fatalf("re-PUBLISH: got %T, want a second *message.PublishSkipped (skip is not sticky)", got2)
 	}
 }
+
+// TestPublishSkipped_StickyAcrossPrefixMoveAndBack: the relay "MUST NOT send a
+// PUBLISH for a Track for a given SUBSCRIBE_TRACKS after PUBLISH_SKIPPED has
+// been sent, scoped to a single PUBLISH" (§6.1). A TRACK_NAMESPACE_PREFIX
+// update that moves the subscription away and back is not a new PUBLISH, so
+// the skipped track is neither offered nor skipped again.
+func TestPublishSkipped_StickyAcrossPrefixMoveAndBack(t *testing.T) {
+	t.Parallel()
+	primary, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+
+	// No relay-side bidi credit: every forward becomes a PUBLISH_SKIPPED.
+	subSess := dialAnotherClientWithLimits(t, primary, -1 /*client*/, 0 /*server*/)
+	reqs := forwardedPublishes(t, subSess)
+	subStream, err := subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
+		TrackNamespacePrefix: ns("video"),
+	})
+	if err != nil {
+		t.Fatalf("SubscribeTracks: %v", err)
+	}
+	defer subStream.Close()
+
+	pubStream, err := dialAnotherClient(t, primary).Publish(t.Context(), &message.Publish{
+		Namespace:  ns("video", "cam7"),
+		Name:       []byte("rtp"),
+		TrackAlias: 99,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	defer pubStream.Close()
+	got := relaytest.ReadNextMessage(t, subStream, time.After(2*time.Second))
+	if _, ok := got.(*message.PublishSkipped); !ok {
+		t.Fatalf("got %T, want *message.PublishSkipped", got)
+	}
+
+	for _, prefix := range []string{"audio", "video"} {
+		if _, err := subSess.UpdateRequest(t.Context(), subStream.Stream,
+			message.Parameters{message.TrackNamespacePrefixParam(ns(prefix))}); err != nil {
+			t.Fatalf("REQUEST_UPDATE prefix %s: %v", prefix, err)
+		}
+	}
+	requireQuiet(t, streamMessages(t, subStream), "the prefix moved back to the skipped track")
+	requireNoForward(t, reqs, "the prefix moved back to the skipped track")
+}

@@ -412,6 +412,7 @@ func (r *TrackRegistry) AddUpstream(
 	defer entry.mu.Unlock()
 	becameNonEmpty = len(entry.Upstream) == 0
 	entry.Upstream = append(entry.Upstream, sub)
+	entry.upstreamEpoch = upstreamEpochs.Add(1)
 	if conf.setProperties && len(entry.Properties) == 0 {
 		// Set Properties INSIDE the entry lock so the Discovery
 		// publish below sees them. Skip if Properties were already

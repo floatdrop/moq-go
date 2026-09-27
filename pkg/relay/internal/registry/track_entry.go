@@ -7,6 +7,7 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -86,6 +87,10 @@ type TrackEntry struct {
 	// Upstream is the set of publisher subscriptions feeding this track.
 	// See the type-level comment above for why this is a slice.
 	Upstream []*UpstreamSub
+
+	// upstreamEpoch identifies the latest upstream added; see
+	// [TrackEntry.UpstreamEpoch]. Guarded by mu.
+	upstreamEpoch uint64
 
 	// Downstream is the set of subscriber subscriptions to fan out to.
 	Downstream []*DownstreamSub
@@ -1014,6 +1019,19 @@ func (e *TrackEntry) HasUpstreamOn(sess *session.Session) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return slices.ContainsFunc(e.Upstream, func(u *UpstreamSub) bool { return u.Session == sess })
+}
+
+// upstreamEpochs numbers upstream additions process-wide, so epochs only grow
+// and never repeat on an entry created again for the same track.
+var upstreamEpochs atomic.Uint64
+
+// UpstreamEpoch identifies the latest upstream PUBLISH or SUBSCRIBE added to
+// the track (see [TrackRegistry.AddUpstream]); it is never 0 once one was.
+// A PUBLISH_SKIPPED holds until it grows (see [SubscriberEntry.ClaimForward]).
+func (e *TrackEntry) UpstreamEpoch() uint64 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.upstreamEpoch
 }
 
 // NoteRefusal records that pub refused a late-publisher SUBSCRIBE for this

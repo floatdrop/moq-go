@@ -100,6 +100,10 @@ type SubscriberEntry struct {
 	fwdMu      sync.Mutex
 	forwarding map[track.Key]struct{}
 	fwdClosed  bool // the entry is unregistered: no more forwards
+	// skipped holds, for each track sent a PUBLISH_SKIPPED, the
+	// [TrackEntry.UpstreamEpoch] it was sent at; see
+	// [SubscriberEntry.NoteSkipped].
+	skipped map[track.Key]uint64
 
 	// announced counts the sources of each announced namespace, by wire key
 	// (see namespace_state.go). Guarded by the owning registry's mu.
@@ -122,11 +126,17 @@ type SubscriberEntry struct {
 
 // ClaimForward reserves key while a forwarded PUBLISH for it is being opened
 // and registered, and reports whether it was free. It reports false once the
-// entry is unregistered (§6.1: "MUST NOT send any further PUBLISH messages").
-func (e *SubscriberEntry) ClaimForward(key track.Key) bool {
+// entry is unregistered (§6.1: "MUST NOT send any further PUBLISH messages"),
+// and while the track was skipped at epoch, the [TrackEntry.UpstreamEpoch]
+// the caller read, or a later one (see [SubscriberEntry.NoteSkipped]): a
+// forward decided on an older view of the track is covered by the skip.
+func (e *SubscriberEntry) ClaimForward(key track.Key, epoch uint64) bool {
 	e.fwdMu.Lock()
 	defer e.fwdMu.Unlock()
 	if _, busy := e.forwarding[key]; busy || e.fwdClosed {
+		return false
+	}
+	if at, ok := e.skipped[key]; ok && at >= epoch {
 		return false
 	}
 	if e.forwarding == nil {
@@ -134,6 +144,20 @@ func (e *SubscriberEntry) ClaimForward(key track.Key) bool {
 	}
 	e.forwarding[key] = struct{}{}
 	return true
+}
+
+// NoteSkipped records that a PUBLISH_SKIPPED was sent for key at upstream
+// epoch: the relay "MUST NOT send a PUBLISH for a Track for a given
+// SUBSCRIBE_TRACKS after PUBLISH_SKIPPED has been sent, scoped to a single
+// PUBLISH" (§6.1), so the track is not offered again until a new upstream
+// PUBLISH or SUBSCRIBE changes the epoch. Call it holding the key's claim.
+func (e *SubscriberEntry) NoteSkipped(key track.Key, epoch uint64) {
+	e.fwdMu.Lock()
+	defer e.fwdMu.Unlock()
+	if e.skipped == nil {
+		e.skipped = make(map[track.Key]uint64)
+	}
+	e.skipped[key] = epoch
 }
 
 // ReleaseForward frees a key [SubscriberEntry.ClaimForward] reserved.

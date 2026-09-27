@@ -34,9 +34,11 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 		if te.HasUpstreamOn(h.sess) || te.HasDownstreamOn(h.sess) {
 			return
 		}
-		// The claim covers a forward whose downstream is not registered yet.
+		// The claim covers a forward whose downstream is not registered yet,
+		// and is refused while a PUBLISH_SKIPPED holds for this upstream epoch.
 		key := fullName.Key()
-		if !sub.ClaimForward(key) {
+		epoch := te.UpstreamEpoch()
+		if !sub.ClaimForward(key, epoch) {
 			return
 		}
 		var properties []byte
@@ -54,12 +56,12 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 		// §6.1: without bidi-stream credit, send PUBLISH_SKIPPED instead.
 		stream, err := h.sess.OpenPublish(fwd)
 		if err != nil {
-			sub.ReleaseForward(key)
 			if errors.Is(err, session.ErrNoStreamCredit) {
-				h.emitPublishSkipped(ctx, sub, fullName)
-				return
+				h.emitPublishSkipped(ctx, sub, fullName, epoch)
+			} else {
+				h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH forward failed", slog.String("err", err.Error()))
 			}
-			h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH forward failed", slog.String("err", err.Error()))
+			sub.ReleaseForward(key)
 			return
 		}
 		h.relayGo(func() {
