@@ -61,37 +61,6 @@ func TestTrackStatus_ReplyForKnownTrack(t *testing.T) {
 	}
 }
 
-// TestTrackStatus_ReplyEmptyPropertiesForKnownNamespace: a TRACK_STATUS for a
-// track under an advertised namespace with no upstream yet gets
-// TRACK_STATUS_OK with empty Properties.
-func TestTrackStatus_ReplyEmptyPropertiesForKnownNamespace(t *testing.T) {
-	t.Parallel()
-	pubSess, teardown := connectRelay(t, relay.Config{})
-	defer teardown()
-
-	pnsStream, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{
-		Namespace: ns("video"),
-	})
-	if err != nil {
-		t.Fatalf("PublishNamespace: %v", err)
-	}
-	defer pnsStream.Close()
-
-	querySess := dialAnotherClient(t, pubSess)
-	tsStream, err := querySess.TrackStatus(t.Context(), &message.TrackStatus{
-		Namespace: ns("video"),
-		Name:      []byte("cam-anything"),
-	})
-	if err != nil {
-		t.Fatalf("TrackStatus: %v", err)
-	}
-	defer tsStream.Close()
-
-	if len(tsStream.OK.TrackProperties) != 0 {
-		t.Fatalf("TrackProperties = %q, want empty", tsStream.OK.TrackProperties)
-	}
-}
-
 // TestTrackStatus_RejectsUnknownTrack pins the no-publisher-no-namespace
 // case: TRACK_STATUS for a name no one has claimed returns
 // RequestDoesNotExist.

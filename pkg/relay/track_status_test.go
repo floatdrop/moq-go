@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
+	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -108,6 +109,8 @@ func TestRelay_TrackStatusRequestUpdateClosesSession(t *testing.T) {
 	if _, err := pubSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: video}); err != nil {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
+	// The relay forwards the TRACK_STATUS to the namespace's publisher.
+	answerTrackStatus(t, pubSess, func(r *session.Request) { _ = r.AcceptTrackStatus(nil) })
 
 	peer, conn := dialRaw(t, l)
 	stream, err := conn.OpenStream()

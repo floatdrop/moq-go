@@ -308,7 +308,7 @@ func (h *sessionHandler) stitchedFetchObjects(
 		return fetchElements(cached, unknown, nil, order), nil
 	}
 	span := registry.LocRange{Lo: unknown[0].Lo, Hi: unknown[len(unknown)-1].Hi}
-	done := h.tracks.BeginFetch(up.Session, fullName.Key())
+	done := h.tracks.BeginRequest(message.TypeFetch, up.Session, fullName.Key())
 	ans, refusal := h.fetchUpstreamRange(ctx, up, fullName, span, order, fillTimeout)
 	done()
 	if errors.Is(refusal, session.ErrMalformedTrack) {
@@ -379,7 +379,7 @@ func (h *sessionHandler) pickFetchUpstream(entry *registry.TrackEntry) *registry
 		if !u.FetchCapable || !u.IsEstablished() || u.Session == nil || goingAway(u.Session) {
 			continue
 		}
-		if u.Session == h.sess && h.tracks.FetchPending(u.Session, entry.FullName.Key()) {
+		if u.Session == h.sess && h.tracks.RequestPending(message.TypeFetch, u.Session, entry.FullName.Key()) {
 			continue
 		}
 		return u

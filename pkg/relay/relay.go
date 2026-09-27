@@ -165,7 +165,8 @@ type Config struct {
 
 	// MaxSubscriptionsPerSession bounds the number of concurrently-active
 	// SUBSCRIBE requests a single session may hold (§13.1, subscription
-	// amplification). Excess SUBSCRIBEs are rejected with REQUEST_ERROR
+	// amplification), counting a TRACK_STATUS while the relay forwards it
+	// upstream. Excess requests are rejected with REQUEST_ERROR
 	// EXCESSIVE_LOAD before any state is mutated. Zero (the default) means
 	// unlimited — limits are a deployment policy the operator opts into.
 	MaxSubscriptionsPerSession int

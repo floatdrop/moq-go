@@ -1,6 +1,10 @@
 package relay
 
-import "github.com/floatdrop/moq-go/pkg/moqt/track"
+import (
+	"time"
+
+	"github.com/floatdrop/moq-go/pkg/moqt/track"
+)
 
 // SetTestHookAfterAliasRegistered installs hook, to be called at the moment a Track Alias
 // becomes routable on the SUBSCRIBE and PUBLISH paths, and returns a function restoring the previous value. See
@@ -47,4 +51,11 @@ func SetTestHookBeforeForwardClaim(hook func(track.FullTrackName)) (restore func
 	prev := testHookBeforeForwardClaim.Load()
 	testHookBeforeForwardClaim.Store(&hook)
 	return func() { testHookBeforeForwardClaim.Store(prev) }
+}
+
+// SetTrackStatusTimeout bounds a forwarded TRACK_STATUS's upstream round trip
+// at d, and returns the restore.
+func SetTrackStatusTimeout(d time.Duration) (restore func()) {
+	prev := trackStatusTimeout.Swap(int64(d))
+	return func() { trackStatusTimeout.Store(prev) }
 }
