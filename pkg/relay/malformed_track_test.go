@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -419,37 +421,52 @@ func TestRelay_UpstreamMandatoryPropertyWinsOverOtherFailure(t *testing.T) {
 // FETCH_OK with an unknown Mandatory Track Property (§2.5.1), or Track
 // Properties that do not parse, resets the downstream fetch stream the relay
 // already answered; no Object reaches the subscriber, not even cached ones.
+// The request stream is reset with the data stream's code (§3.3.3):
+// INTERNAL_ERROR, or MALFORMED_TRACK for Properties that do not parse, which
+// make the track malformed (§12.7, §2.4.2).
 func TestRelay_UpstreamFetchOKUnknownMandatoryPropertyResetsStream(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		props []byte
+		code  moqt.StreamResetCode
 	}{
-		{"unknown Mandatory Track Property", mandatoryProps()},
-		{"Track Properties that do not parse", malformedProps},
+		{"unknown Mandatory Track Property", mandatoryProps(), moqt.StreamResetInternalError},
+		{"Track Properties that do not parse", malformedProps, moqt.StreamResetMalformedTrack},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			refusedFetchResetsStream(t, tc.props, nil)
+			refusedFetchResetsStream(t, tc.props, nil, tc.code, fetchStreamReset, requestStreamReset)
 		})
 	}
 }
 
 // TestRelay_UpstreamFetchMalformedObjectResetsStream: an upstream FETCH
-// response Object that makes the track malformed resets the downstream fetch
-// stream (§2.4.2).
+// response Object with a Mandatory Track Property as an Object Property makes
+// the track malformed (§2.5.1, §2.4.2): the downstream FETCH's data stream and
+// request stream are reset with MALFORMED_TRACK (§3.3.3).
 func TestRelay_UpstreamFetchMalformedObjectResetsStream(t *testing.T) {
 	t.Parallel()
-	refusedFetchResetsStream(t, nil, mandatoryProps())
+	refusedFetchResetsStream(t, nil, mandatoryProps(),
+		moqt.StreamResetMalformedTrack, fetchStreamReset, requestStreamReset)
 }
 
 // refusedFetchResetsStream requires a stitched FETCH to be reset when the
 // upstream answers it with FETCH_OK carrying upstreamProps and, if objProps is
-// non-nil, one Object carrying objProps. The upstream misbehaves only once
-// armed, so the FETCHes waiting for the live tail to be cached succeed.
-func refusedFetchResetsStream(t *testing.T, upstreamProps, objProps []byte) {
+// non-nil, one Object carrying objProps: the streams of kinds, each with code.
+// The upstream misbehaves only once armed, so the FETCHes waiting for the live
+// tail to be cached succeed.
+func refusedFetchResetsStream(
+	t *testing.T,
+	upstreamProps, objProps []byte,
+	code moqt.StreamResetCode,
+	kinds ...resetStream,
+) {
 	var armed atomic.Bool
-	pubSess, teardown := connectRelay(t, relay.Config{})
+	l := newPipeListener()
+	resets := make(chan streamReset, 64)
+	l.resetsFor = resetsOn(3, resets) // the upstream is 1, the live subscriber 2
+	pubSess, teardown := connectRelayOn(t, relay.Config{}, l)
 	defer teardown()
 	video := ns("video")
 	name := []byte("cam1")
@@ -481,9 +498,13 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps, objProps []byte) {
 				}
 				tailWritten()
 			case *message.Fetch:
+				var props []byte
+				if armed.Load() {
+					props = upstreamProps
+				}
 				_ = req.Reply(&message.FetchOK{
 					EndLocation:     message.Location{Group: stitchLiveLo - 1},
-					TrackProperties: upstreamProps,
+					TrackProperties: props,
 				})
 				if objProps == nil || !armed.Load() {
 					continue
@@ -547,6 +568,7 @@ func refusedFetchResetsStream(t *testing.T, upstreamProps, objProps []byte) {
 	case errors.Is(err, io.EOF):
 		t.Fatal("the FETCH stream completed; want it reset over what the upstream sent")
 	}
+	awaitResets(t, resets, code, kinds...)
 }
 
 // TestRelay_EndSignalsAgree: an END_OF_GROUP status at 2 and a FIN after Object
@@ -602,23 +624,28 @@ func malformedPriorityStreams(t *testing.T, pubSess *session.Session, alias uint
 	})
 }
 
-// awaitMalformedReset waits up to 1s for a reset of kind on the conn resets
-// records, and requires MALFORMED_TRACK.
-func awaitMalformedReset(t *testing.T, resets <-chan streamReset, kind resetStream, what string) {
+// awaitResets waits up to 1s for a reset of each of kinds on the conn resets
+// records, and requires each to carry code. A kind's first reset counts; the
+// others are ignored.
+func awaitResets(t *testing.T, resets <-chan streamReset, code moqt.StreamResetCode, kinds ...resetStream) {
 	t.Helper()
+	pending := map[resetStream]bool{}
+	for _, k := range kinds {
+		pending[k] = true
+	}
 	deadline := time.After(time.Second)
-	for {
+	for len(pending) > 0 {
 		select {
 		case r := <-resets:
-			if r.stream != kind {
+			if !pending[r.stream] {
 				continue
 			}
-			if r.code != moqt.StreamResetMalformedTrack {
-				t.Fatalf("the relay cancelled the %s with %v, want MALFORMED_TRACK", what, r.code)
+			if r.code != code {
+				t.Fatalf("%v with %#x, want %#x", r.stream, uint64(r.code), uint64(code))
 			}
-			return
+			delete(pending, r.stream)
 		case <-deadline:
-			t.Fatalf("the relay did not cancel the %s of a malformed track", what)
+			t.Fatalf("within 1s, no %v with %#x", slices.Collect(maps.Keys(pending)), uint64(code))
 		}
 	}
 }
@@ -709,8 +736,8 @@ func TestRelay_MalformedTrackCancelsUpstreamFetch(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("the relay kept its FETCH to the publisher of a malformed track")
 	}
-	awaitMalformedReset(t, upResets, fetchStreamStop, "upstream FETCH's data stream")
-	awaitMalformedReset(t, resets, fetchStreamReset, "downstream fetch stream")
+	awaitResets(t, upResets, moqt.StreamResetMalformedTrack, fetchStreamStop)
+	awaitResets(t, resets, moqt.StreamResetMalformedTrack, fetchStreamReset, requestStreamReset)
 }
 
 // TestRelay_MalformedTrackResetsCachedFetch: a FETCH served from the cache is
@@ -746,7 +773,7 @@ func TestRelay_MalformedTrackResetsCachedFetch(t *testing.T) {
 	}
 
 	malformedPriorityStreams(t, pubSess, 7)
-	awaitMalformedReset(t, resets, fetchStreamReset, "fetch stream")
+	awaitResets(t, resets, moqt.StreamResetMalformedTrack, fetchStreamReset, requestStreamReset)
 }
 
 // TestRelay_MalformedTrackResetsFillStream: a fill fetch stream (§5.1.3) is a
@@ -778,5 +805,5 @@ func TestRelay_MalformedTrackResetsFillStream(t *testing.T) {
 	}
 
 	malformedPriorityStreams(t, pubSess, 7)
-	awaitMalformedReset(t, resets, fetchStreamReset, "fill fetch stream")
+	awaitResets(t, resets, moqt.StreamResetMalformedTrack, fetchStreamReset)
 }
