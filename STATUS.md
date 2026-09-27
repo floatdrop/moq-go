@@ -115,7 +115,7 @@ By package, bottom-up along the dependency stack:
 | 5.1.5   | Combining filters                | DONE    | `ForwardDecision` ANDs Forward + Location + Range filters per object (§5.1.5); Range filters combine SetIDs via AND/OR. |
 | 5.1.6   | Joining an ongoing track         | DONE   | A Location Filter plus FILL_PARAMETERS, served as a fill fetch stream (draft-20 removed the Joining FETCH). |
 | 5.1.6.1 | Dynamically starting new groups  | DONE   | Relay forwards a downstream `NEW_GROUP_REQUEST` upstream per §10.2.19: included in the on-demand upstream SUBSCRIBE (no established upstream) or sent as an upstream REQUEST_UPDATE, gated on `DYNAMIC_GROUPS` support, Largest-Group, and outstanding-request bookkeeping. |
-| 5.2     | Fetch state management           | DONE   | FETCH lifecycle. |
+| 5.2     | Fetch state management           | DONE   | FETCH lifecycle. The relay resets the request and data streams with CANCELLED on a STOP_SENDING before its data stream FINs. |
 
 ## §6 Namespace discovery
 
@@ -534,7 +534,6 @@ Relay:
   every earlier contributor left: the writer set, and with it the run of
   forwarded Object IDs, is dropped with its last contributor, so Objects a
   reset predecessor never delivered go unnoticed (§11.4.3).
-- A cancelled FETCH keeps writing its data stream (§5.2: "MUST reset").
 - Objects from an upstream FETCH are exempt from MAX_CACHE_DURATION, and cached
   Objects age from when they were read whole rather than their beginning (§12.3).
 - A fill range is evaluated against a later Largest Object than SUBSCRIBE_OK or

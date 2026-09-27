@@ -394,3 +394,85 @@ func TestFetch_FillTimeoutBoundsUpstreamRead(t *testing.T) {
 		t.Fatalf("FETCH elements %v, want %v", got, want)
 	}
 }
+
+// TestFetch_CancelResetsStreams: a requester that cancels a FETCH while the
+// relay still waits on the upstream for a hole has the data stream and the
+// request stream reset with CANCELLED (§5.2: "It MUST reset the bidi request
+// stream and unidirectional data stream associated with the FETCH"), not
+// served once FILL_TIMEOUT runs out.
+func TestFetch_CancelResetsStreams(t *testing.T) {
+	t.Parallel()
+	l := newPipeListener()
+	resets := make(chan streamReset, 16)
+	l.resetsFor = resetsOn(3, resets) // the upstream is 1, the live subscriber 2
+	upSess, teardown := connectRelayOn(t, relay.Config{}, l)
+	t.Cleanup(teardown)
+	if _, err := upSess.PublishNamespace(t.Context(), &message.PublishNamespace{Namespace: ns("video")}); err != nil {
+		t.Fatalf("PublishNamespace: %v", err)
+	}
+	go func() {
+		for {
+			req, err := upSess.AcceptRequest(t.Context())
+			if err != nil {
+				return
+			}
+			switch m := req.First.(type) {
+			case *message.Subscribe:
+				if req.Reply(&message.SubscribeOK{TrackAlias: 42}) != nil {
+					return
+				}
+				// The live stream misses Object 1.
+				publishCam1Group(t, upSess, 42, true, cam1Object{0, 0, nil}, cam1Object{0, 2, nil})
+			case *message.Fetch:
+				if req.Reply(&message.FetchOK{EndLocation: fetchOKEnd(m)}) != nil {
+					return
+				}
+				out, err := upSess.OpenFetchStream(message.FetchHeader{RequestID: m.RequestID})
+				if err != nil {
+					return
+				}
+				// Nothing more: the stream stays open.
+				t.Cleanup(func() { out.Cancel(moqt.StreamResetCancelled) })
+			}
+		}
+	}()
+	live := dialAnotherClient(t, upSess)
+	subscribeCam1(t, live)
+	go drainAll(t.Context(), live)
+	fc := dialAnotherClient(t, upSess)
+	waitRelayLargest(t, fc, ns("video"), []byte("cam1"), 0, 2)
+
+	fr, err := fc.Fetch(t.Context(), &message.Fetch{
+		Namespace: ns("video"), Name: []byte("cam1"),
+		Parameters: message.Parameters{
+			fetchRangeFilter(message.Location{}, message.Location{Group: 0, Object: 2}),
+			message.FillTimeoutParam(5 * time.Second),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if _, err := fc.AcceptDataStream(t.Context()); err != nil {
+		t.Fatalf("AcceptDataStream: %v", err)
+	}
+	_ = fr.Close()
+
+	var uni, bidi bool
+	deadline := time.After(500 * time.Millisecond)
+	for !uni || !bidi {
+		select {
+		case r := <-resets:
+			if r.code != moqt.StreamResetCancelled {
+				t.Fatalf("the relay reset a stream (uni %t) with %v, want CANCELLED", r.uni, r.code)
+			}
+			if r.uni {
+				uni = true
+			} else {
+				bidi = true
+			}
+		case <-deadline:
+			t.Fatalf("within 500ms of the cancel: data stream reset %t, request stream reset %t; want both",
+				uni, bidi)
+		}
+	}
+}

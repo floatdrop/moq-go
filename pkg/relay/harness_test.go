@@ -39,11 +39,90 @@ type pipeListener struct {
 	// which reaches the relay's "write failed" branches. See [faultConn].
 	faultFor func(conn int) sessiontest.FaultFunc
 
+	// resetsFor, when non-nil, is consulted like faultFor; a non-nil channel
+	// receives each reset the relay sends on that conn, which [sessiontest]
+	// otherwise drops the code of. See [resetsOn].
+	resetsFor func(conn int) chan<- streamReset
+
 	// wrap, when non-nil, wraps each server-side conn, e.g. to observe the
 	// code the relay closes it with.
 	wrap func(session.Conn) session.Conn
 
 	dialled atomic.Int64
+}
+
+// streamReset is a reset the relay sent: its §3.3.4 code, and whether it was on
+// a unidirectional stream the relay opened or on a request stream the peer
+// opened.
+type streamReset struct {
+	uni  bool
+	code moqt.StreamResetCode
+}
+
+// resetsOn builds a [pipeListener.resetsFor] recording the resets on the nth
+// dialled conn only, counting from 1 like [faultConn].
+func resetsOn(n int, ch chan<- streamReset) func(int) chan<- streamReset {
+	return func(conn int) chan<- streamReset {
+		if conn == n {
+			return ch
+		}
+		return nil
+	}
+}
+
+// resetRecordingConn reports the resets on the streams of the conn it wraps:
+// those the relay opens (data streams) and accepts (request streams).
+type resetRecordingConn struct {
+	session.Conn
+
+	resets chan<- streamReset
+}
+
+func (c resetRecordingConn) OpenUniStream() (session.SendStream, error) {
+	s, err := c.Conn.OpenUniStream()
+	if err != nil {
+		return nil, err
+	}
+	return resetRecordingUni{s, c.resets}, nil
+}
+
+func (c resetRecordingConn) AcceptStream(ctx context.Context) (session.Stream, error) {
+	s, err := c.Conn.AcceptStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return resetRecordingBidi{s, c.resets}, nil
+}
+
+type resetRecordingUni struct {
+	session.SendStream
+
+	resets chan<- streamReset
+}
+
+func (s resetRecordingUni) CancelWrite(code uint64) {
+	record(s.resets, streamReset{uni: true, code: moqt.StreamResetCode(code)})
+	s.SendStream.CancelWrite(code)
+}
+
+type resetRecordingBidi struct {
+	session.Stream
+
+	resets chan<- streamReset
+}
+
+func (s resetRecordingBidi) CancelWrite(code uint64) {
+	record(s.resets, streamReset{code: moqt.StreamResetCode(code)})
+	s.Stream.CancelWrite(code)
+}
+
+// record sends r without blocking the relay; a test reads the resets it
+// expects well within the channel's buffer.
+func record(ch chan<- streamReset, r streamReset) {
+	select {
+	case ch <- r:
+	default:
+	}
 }
 
 // faultConn builds a [pipeListener.faultFor] that faults only the nth dialled
@@ -77,9 +156,15 @@ func (l *pipeListener) Dial() (session.Conn, error) {
 // to a SUBSCRIBE_TRACKS subscriber, the PUBLISH_SKIPPED (§10.21) trigger.
 func (l *pipeListener) DialWithLimits(clientBidi, serverBidi int) (session.Conn, error) {
 	clientConn, serverConn := sessiontest.NewConnPairWithLimits(clientBidi, serverBidi)
+	n := int(l.dialled.Add(1))
 	if l.faultFor != nil {
-		if fault := l.faultFor(int(l.dialled.Add(1))); fault != nil {
+		if fault := l.faultFor(n); fault != nil {
 			serverConn = sessiontest.Faulty(serverConn, fault)
+		}
+	}
+	if l.resetsFor != nil {
+		if ch := l.resetsFor(n); ch != nil {
+			serverConn = resetRecordingConn{serverConn, ch}
 		}
 	}
 	if l.wrap != nil {
