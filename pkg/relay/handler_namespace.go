@@ -54,11 +54,31 @@ func (h *sessionHandler) handlePublishNamespace(
 	defer cancel()
 	h.spawn(func() { h.subscribeExistingTracks(nsCtx, entry) })
 
-	// This goroutine is the only writer on the stream after REQUEST_OK, so
-	// the acks write directly.
-	h.serveNamespaceFollowups(ctx, req, func(m message.Message) error {
-		return message.Marshal(req.Stream, m)
-	}, nil)
+	h.serveNamespaceFollowups(ctx, req, h.publishNamespaceUpdate(req))
+}
+
+// publishNamespaceUpdate answers a REQUEST_UPDATE on a PUBLISH_NAMESPACE with
+// REQUEST_OK. One whose tokens the TokenVerifier denies fails, and the relay
+// closes the stream: "When a REQUEST_UPDATE fails for a ... PUBLISH_NAMESPACE,
+// the responder MUST close the bidi stream" (§10.9.1). This goroutine is the
+// only writer on the stream after REQUEST_OK, so the replies write directly.
+func (h *sessionHandler) publishNamespaceUpdate(
+	req *session.Request,
+) func(context.Context, *message.RequestUpdate, []session.ResolvedToken) bool {
+	return func(ctx context.Context, _ *message.RequestUpdate, toks []session.ResolvedToken) bool {
+		if rej := h.refuseUpdateTokens(ctx, toks); rej != nil {
+			_ = req.RejectError(rej.ErrorCode, rej.ErrorReason)
+			return false
+		}
+		if err := req.Reply(&message.RequestOK{}); err != nil {
+			h.log.LogAttrs(ctx, slog.LevelDebug, "namespace REQUEST_UPDATE_OK write failed",
+				slog.String("err", err.Error()))
+			// Reset the read side so the peer learns reads stopped.
+			req.Stream.CancelRead(uint64(moqt.StreamResetInternalError))
+			return false
+		}
+		return true
+	}
 }
 
 // subscribeExistingTracks SUBSCRIBEs pub for every existing track its
@@ -201,7 +221,7 @@ func (h *sessionHandler) handleSubscribeNamespace(
 	h.spawn(entry.RunWriter)
 
 	// Replies share the entry's queue, keeping their order with NAMESPACE.
-	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.namespaceUpdate(entry, &prefix, msg))
+	h.serveNamespaceFollowups(ctx, req, h.namespaceUpdate(entry, &prefix, msg))
 }
 
 // handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.20):
@@ -265,7 +285,7 @@ func (h *sessionHandler) handleSubscribeTracks(
 	}
 	// Replies share the entry's queue with PUBLISH_SKIPPED, so each
 	// PUBLISH_SKIPPED suffix matches the prefix the subscriber last saw.
-	h.serveNamespaceFollowups(ctx, req, enqueueReply(entry), h.tracksUpdate(entry, &prefix, msg))
+	h.serveNamespaceFollowups(ctx, req, h.tracksUpdate(entry, &prefix, msg))
 }
 
 // subscribeTracksForwarding resolves a SUBSCRIBE_TRACKS's FORWARD (§10.2.18,
@@ -284,13 +304,11 @@ func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder 
 
 // serveNamespaceFollowups holds a namespace request stream open and answers
 // each REQUEST_UPDATE (§10.9), validating its Request ID (§10.1) and resolving
-// its tokens. The subscriptions pass update, which authorizes and applies it
-// and replies; with update nil (PUBLISH_NAMESPACE) write sends a plain
-// REQUEST_OK. Other follow-ups are ignored.
+// its tokens; update authorizes and applies it, and replies. Other follow-ups
+// are ignored.
 func (h *sessionHandler) serveNamespaceFollowups(
 	ctx context.Context,
 	req *session.Request,
-	write func(message.Message) error,
 	update func(context.Context, *message.RequestUpdate, []session.ResolvedToken) bool,
 ) {
 	stream := req.Stream
@@ -321,18 +339,7 @@ func (h *sessionHandler) serveNamespaceFollowups(
 			return false
 		}
 		// false from update ends the request.
-		if update != nil {
-			if !update(ctx, upd, toks) {
-				return false
-			}
-			updates.Responded()
-			return true
-		}
-		if err := write(&message.RequestOK{}); err != nil {
-			h.log.LogAttrs(ctx, slog.LevelDebug, "namespace REQUEST_UPDATE_OK write failed",
-				slog.String("err", err.Error()))
-			// Reset the read side so the peer learns reads stopped.
-			stream.CancelRead(uint64(moqt.StreamResetInternalError))
+		if !update(ctx, upd, toks) {
 			return false
 		}
 		updates.Responded()
@@ -342,15 +349,6 @@ func (h *sessionHandler) serveNamespaceFollowups(
 		// §3.3.2: a FIN is not a cancellation (§6.1, §6.2); keep the state
 		// until the peer resets or sends STOP_SENDING.
 		awaitRequestEnd(ctx, stream)
-	}
-}
-
-// enqueueReply writes a namespace subscription's REQUEST_UPDATE replies
-// through its queue, behind the NAMESPACE / NAMESPACE_DONE already queued.
-func enqueueReply(e *registry.SubscriberEntry) func(message.Message) error {
-	return func(m message.Message) error {
-		e.Enqueue(m)
-		return nil
 	}
 }
 
@@ -485,9 +483,8 @@ func (h *sessionHandler) refuseUpdate(
 	prefixChanged bool,
 	authorize func() error,
 ) *message.RequestError {
-	if err := h.sess.VerifyTokens(ctx, toks); err != nil {
-		code, reason := tokenDenial(err)
-		return &message.RequestError{ErrorCode: code, ErrorReason: reason}
+	if rej := h.refuseUpdateTokens(ctx, toks); rej != nil {
+		return rej
 	}
 	if !prefixChanged {
 		return nil

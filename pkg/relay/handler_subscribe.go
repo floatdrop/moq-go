@@ -227,10 +227,11 @@ func (h *sessionHandler) readSubscribeUpdates(
 			}
 			// §10.2.2: an update may REGISTER/DELETE token aliases;
 			// a cache fault there is session-fatal.
-			if _, ok := h.handleFollowupTokens(ctx, upd); !ok {
+			toks, ok := h.handleFollowupTokens(ctx, upd)
+			if !ok {
 				return false
 			}
-			h.handleSubscribeUpdate(ctx, sub, fullName, upd)
+			h.handleSubscribeUpdate(ctx, sub, fullName, upd, toks)
 			updates.Responded()
 		}
 		return true
@@ -241,25 +242,31 @@ func (h *sessionHandler) readSubscribeUpdates(
 }
 
 // handleSubscribeUpdate applies a REQUEST_UPDATE (§10.9) to a downstream
-// subscription: present parameters override, omitted ones are kept. A
-// malformed update gets REQUEST_ERROR and PUBLISH_DONE / UPDATE_FAILED.
+// subscription: present parameters override, omitted ones are kept. An update
+// whose tokens (toks) the TokenVerifier denies, or that is malformed, gets
+// REQUEST_ERROR and PUBLISH_DONE / UPDATE_FAILED.
 func (h *sessionHandler) handleSubscribeUpdate(
 	ctx context.Context,
 	sub *registry.DownstreamSub,
 	fullName track.FullTrackName,
 	upd *message.RequestUpdate,
+	toks []session.ResolvedToken,
 ) {
+	// §10.9.1: REQUEST_ERROR, then PUBLISH_DONE / UPDATE_FAILED. Writes go
+	// through the sub's lock.
+	fail := func(rej *message.RequestError) {
+		h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE refused",
+			slog.String("err", rej.ErrorReason))
+		_ = sub.WriteMessage(rej)
+		sub.TerminateWithPublishDone(moqt.PublishDoneUpdateFailed, rej.ErrorReason)
+	}
+	if rej := h.refuseUpdateTokens(ctx, toks); rej != nil {
+		fail(rej)
+		return
+	}
 	prevForward := sub.ForwardState()
 	if err := installSubscribeParams(sub, upd.Parameters); err != nil {
-		h.log.LogAttrs(ctx, slog.LevelDebug, "REQUEST_UPDATE range filter rejected",
-			slog.String("err", err.Error()))
-		// §10.9.1: REQUEST_ERROR, then PUBLISH_DONE / UPDATE_FAILED. Writes go
-		// through the sub's lock.
-		_ = sub.WriteMessage(&message.RequestError{
-			ErrorCode:   moqt.RequestInvalidFilter,
-			ErrorReason: err.Error(),
-		})
-		sub.TerminateWithPublishDone(moqt.PublishDoneUpdateFailed, err.Error())
+		fail(&message.RequestError{ErrorCode: moqt.RequestInvalidFilter, ErrorReason: err.Error()})
 		return
 	}
 

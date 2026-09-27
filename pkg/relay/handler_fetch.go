@@ -172,38 +172,40 @@ func (h *sessionHandler) fetchRangeFilters(
 	return rf, true
 }
 
-// readFetchUpdates is the follow-up dispatch loop for an established FETCH:
-// REQUEST_UPDATE (§10.9) routes to [sessionHandler.handleFetchUpdate]; any
-// other follow-up is ignored. On the requester's FIN the relay FINs back
-// (§3.3.2).
-func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Request) {
+// readFetchUpdates is the follow-up dispatch loop for an established FETCH
+// whose data stream is out: REQUEST_UPDATE (§10.9) routes to
+// [sessionHandler.handleFetchUpdate]; any other follow-up is ignored. On the
+// requester's FIN the relay FINs back (§3.3.2).
+func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Request, out *session.OutgoingFetchStream) {
 	updates := h.sess.NewRequestUpdateLimiter()
 	fin := readRequestStream(ctx, h.sess, req.Stream, func(m message.Message) bool {
 		if h.isPeerStateNotify(m) {
 			return false
 		}
-		if upd, ok := m.(*message.RequestUpdate); ok {
-			// §10.2.1: out-of-scope parameters are session-fatal.
-			if h.sess.CheckPeerParams(message.ScopeUpdateFetch, upd) != nil {
-				return false
-			}
-			// §10.1: the update consumes a Request ID; a parity or
-			// duplicate violation is session-fatal.
-			if !h.handleFollowupRequestID(ctx, upd) {
-				return false
-			}
-			// §10.3.1.7: enforce the per-stream MAX_REQUEST_UPDATES limit.
-			if !h.handleRequestUpdateLimit(ctx, updates) {
-				return false
-			}
-			// §10.2.2: an update may REGISTER/DELETE token aliases;
-			// a cache fault there is session-fatal.
-			if _, ok := h.handleFollowupTokens(ctx, upd); !ok {
-				return false
-			}
-			h.handleFetchUpdate(ctx, req)
-			updates.Responded()
+		upd, ok := m.(*message.RequestUpdate)
+		if !ok {
+			return true
 		}
+		// §10.2.1: out-of-scope parameters are session-fatal.
+		if h.sess.CheckPeerParams(message.ScopeUpdateFetch, upd) != nil {
+			return false
+		}
+		// §10.1: the update consumes a Request ID; a parity or duplicate
+		// violation is session-fatal.
+		if !h.handleFollowupRequestID(ctx, upd) {
+			return false
+		}
+		// §10.3.1.7: enforce the per-stream MAX_REQUEST_UPDATES limit.
+		if !h.handleRequestUpdateLimit(ctx, updates) {
+			return false
+		}
+		// §10.2.2: an update may REGISTER/DELETE token aliases; a cache
+		// fault there is session-fatal.
+		toks, ok := h.handleFollowupTokens(ctx, upd)
+		if !ok || !h.handleFetchUpdate(ctx, req, out, toks) {
+			return false
+		}
+		updates.Responded()
 		return true
 	})
 	if fin {
@@ -213,12 +215,31 @@ func (h *sessionHandler) readFetchUpdates(ctx context.Context, req *session.Requ
 
 // handleFetchUpdate answers a REQUEST_UPDATE (§10.9) to an in-flight FETCH
 // with REQUEST_OK: the in-scope parameters have nothing to change on a
-// finished snapshot.
-func (h *sessionHandler) handleFetchUpdate(ctx context.Context, req *session.Request) {
+// finished snapshot. An update whose tokens (toks) the TokenVerifier denies
+// fails, and false is returned: the FETCH is over.
+func (h *sessionHandler) handleFetchUpdate(
+	ctx context.Context,
+	req *session.Request,
+	out *session.OutgoingFetchStream,
+	toks []session.ResolvedToken,
+) bool {
+	if rej := h.refuseUpdateTokens(ctx, toks); rej != nil {
+		_ = req.RejectError(rej.ErrorCode, rej.ErrorReason)
+		// §10.9.1: "When a REQUEST_UPDATE fails for a FETCH, the publisher
+		// MUST reset the FETCH data stream." It was FINed already, so this
+		// only aborts delivery of what the requester has not acknowledged.
+		code := moqt.StreamResetCancelled
+		if rej.ErrorCode == moqt.RequestExpiredAuthToken {
+			code = moqt.StreamResetExpiredAuthToken // §3.3.4
+		}
+		out.Cancel(code)
+		return false
+	}
 	if err := req.Reply(&message.RequestOK{}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "FETCH REQUEST_UPDATE_OK write failed",
 			slog.String("err", err.Error()))
 	}
+	return true
 }
 
 // fetchGroupOrder is a FETCH's GROUP_ORDER (§10.2.8): Ascending when omitted.
