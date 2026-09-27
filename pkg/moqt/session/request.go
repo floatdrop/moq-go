@@ -934,7 +934,7 @@ func (r *Request) AcceptSubscribe(ok *message.SubscribeOK) (*Publication, error)
 	if err := message.Marshal(r.Stream, ok); err != nil {
 		return nil, fmt.Errorf("moqt/session: write SUBSCRIBE_OK: %w", err)
 	}
-	return newPublication(r.s, r.Stream, sub.RequestID, ok.TrackAlias, sub.Parameters), nil
+	return newPublication(r.s, r.Stream, sub.RequestID, ok.TrackAlias, sub.Parameters, ok.Parameters), nil
 }
 
 // AcceptPublish accepts an inbound PUBLISH (§10.11): it registers the Track
