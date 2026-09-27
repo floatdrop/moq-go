@@ -101,8 +101,9 @@ func (e *readErrRecorder) Read(p []byte) (int, error) {
 func (s *Session) TrackStatus(ctx context.Context, m *message.TrackStatus) (*TrackStatusRequest, error) {
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.RequestOK) (*TrackStatusRequest, error) {
-			// §2.5.1: reject tracks with unknown mandatory track properties.
-			// TRACK_STATUS_OK carries the same Track Properties as SUBSCRIBE_OK.
+			// Assumption: §2.5.1 lists only PUBLISH, SUBSCRIBE_OK and FETCH_OK,
+			// but TRACK_STATUS_OK carries the Track Properties "it would have
+			// set in a SUBSCRIBE_OK" (§10.15), so the SUBSCRIBE_OK rule applies.
 			if err := s.validateTrackProperties(ok.TrackProperties, "TRACK_STATUS_OK"); err != nil {
 				_ = stream.Close()
 				return nil, err

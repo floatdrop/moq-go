@@ -34,9 +34,10 @@ func (e *ErrUnsupportedMandatoryTrackProperty) Error() string {
 }
 
 // ErrMalformedTrackProperties is wrapped by the error [ValidateTrackProperties]
-// returns when raw Track Properties do not parse (§2.5). Assumption: the draft
-// does not cover this, and rejecting with MALFORMED_TRACK (§10.6 defines it
-// only for FETCH) is this package's choice.
+// returns when raw Track Properties do not parse: a Key-Value-Pair that
+// "cannot be parsed" makes the track malformed (§12.7, §2.4.2). Answering
+// with MALFORMED_TRACK, which §10.6 defines only for FETCH, is this package's
+// choice.
 var ErrMalformedTrackProperties = errors.New("moqt/session: malformed track properties")
 
 // ErrTrackPropertiesNotAllowed is returned, and nothing sent, when asked to
@@ -48,9 +49,9 @@ var ErrTrackPropertiesNotAllowed = errors.New("moqt/session: track properties no
 //
 // knownMandatory is the set of Mandatory Track Property types this endpoint
 // supports. Every mandatory property found in raw that is not in this set
-// causes *ErrUnsupportedMandatoryTrackProperty to be returned. An empty
-// (non-nil) map means "I support no mandatory extensions" — any mandatory
-// property will be rejected.
+// causes *ErrUnsupportedMandatoryTrackProperty to be returned. An empty or nil
+// map means "I support no mandatory extensions" — any mandatory property will
+// be rejected.
 //
 // Returns the parsed pairs on success. context is used in the error message
 // to identify the source message (e.g. "SUBSCRIBE_OK").
@@ -83,7 +84,7 @@ func ValidateTrackProperties(
 // *ErrUnsupportedMandatoryTrackProperty or an error wrapping
 // [ErrMalformedTrackProperties]; see [TrackPropertiesRejectCode]. It is for
 // callers that bypass [Request.AcceptPublish] and the outbound openers, which
-// already check. Without that option only the values are checked.
+// already check. Without that option no Mandatory Track Property is known.
 func (s *Session) CheckTrackProperties(raw []byte, context string) error {
 	return s.validateTrackProperties(raw, context)
 }
@@ -92,15 +93,12 @@ func (s *Session) CheckTrackProperties(raw []byte, context string) error {
 // the draft makes session-fatal (see [message.CheckTrackPropertyValues])
 // closes the session with PROTOCOL_VIOLATION. Then, against the session's
 // configured set of known mandatory track property types, an unknown one is
-// refused (§2.5.1); if WithKnownMandatoryTrackProperties was never called (the
-// map is nil), that check is skipped, for endpoints that pass Track
-// Properties through.
+// refused (§2.5.1). Without WithKnownMandatoryTrackProperties none is known,
+// so every Mandatory Track Property is refused: an endpoint that does not
+// understand one "MUST NOT process or forward that track".
 func (s *Session) validateTrackProperties(raw []byte, context string) error {
 	if err := s.checkTrackPropertyValues(raw, context); err != nil {
 		return err
-	}
-	if s.knownMandatoryTrackProperties == nil {
-		return nil // not configured — skip enforcement
 	}
 	_, err := ValidateTrackProperties(raw, s.knownMandatoryTrackProperties, context)
 	return err

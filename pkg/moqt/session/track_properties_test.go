@@ -141,10 +141,10 @@ func TestErrUnsupportedMandatoryTrackPropertyError(t *testing.T) {
 
 // TestSubscribeMandatoryTrackPropertyRejected verifies that Subscribe()
 // returns *ErrUnsupportedMandatoryTrackProperty when the server sends
-// SUBSCRIBE_OK with an unknown mandatory track property and the client has
-// opted in to enforcement via WithKnownMandatoryTrackProperties.
+// SUBSCRIBE_OK with an unknown mandatory track property and the client knows
+// none, here through an explicitly empty WithKnownMandatoryTrackProperties.
 func TestSubscribeMandatoryTrackPropertyRejected(t *testing.T) {
-	// Client opts in with empty known set → all mandatory are unknown → reject.
+	// An empty known set → all mandatory are unknown → reject.
 	cli, srv := openPairWithOpts(t,
 		[]session.Option{session.WithKnownMandatoryTrackProperties(map[message.PropertyType]struct{}{})},
 		nil,
@@ -579,168 +579,65 @@ func TestInboundPublishMandatoryTrackPropertyValidation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Default (no option): enforcement disabled — mandatory properties pass through
+// Default (no option): no Mandatory Track Property is known, so each is refused
 // ---------------------------------------------------------------------------
 
-// TestSubscribeDefaultNoEnforcement verifies that when
-// WithKnownMandatoryTrackProperties is NOT called, mandatory track properties
-// in SUBSCRIBE_OK are silently accepted. This is the correct default for
-// relays and forwarding endpoints.
-func TestSubscribeDefaultNoEnforcement(t *testing.T) {
-	// No WithKnownMandatoryTrackProperties → enforcement disabled.
-	cli, srv := openPairWithOpts(t, nil, nil)
-	ctx := t.Context()
-
-	var (
-		wg        sync.WaitGroup
-		serverErr error
-		clientErr error
-		gotOK     *message.SubscribeOK
-	)
-
-	wg.Go(func() {
-		r, err := srv.AcceptRequest(ctx)
-		if err != nil {
-			serverErr = err
-			return
-		}
-		serverErr = r.Reply(&message.SubscribeOK{
-			TrackAlias:      7,
-			TrackProperties: mandatoryTrackProps(0x5000, 42),
+// TestDefaultRefusesUnknownMandatoryTrackProperty: without
+// WithKnownMandatoryTrackProperties no Mandatory Track Property is understood,
+// so one in SUBSCRIBE_OK, FETCH_OK or TRACK_STATUS_OK fails the request with
+// *ErrUnsupportedMandatoryTrackProperty (§2.5.1: "MUST NOT process or forward
+// that track"), and one in PUBLISH is refused with UNSUPPORTED_EXTENSION.
+func TestDefaultRefusesUnknownMandatoryTrackProperty(t *testing.T) {
+	props := mandatoryTrackProps(0x5000, 42)
+	ns := wire.TrackNamespace{[]byte("ns")}
+	for _, tc := range []struct {
+		name  string
+		reply message.Message
+		open  func(t *testing.T, cli *session.Session) error
+	}{
+		{"SUBSCRIBE_OK", &message.SubscribeOK{TrackAlias: 7, TrackProperties: props},
+			func(t *testing.T, cli *session.Session) error {
+				_, err := cli.Subscribe(t.Context(), &message.Subscribe{Namespace: ns, Name: []byte("t")})
+				return err
+			}},
+		{"FETCH_OK", &message.FetchOK{EndLocation: message.Location{Group: 1}, TrackProperties: props},
+			func(t *testing.T, cli *session.Session) error {
+				_, err := cli.Fetch(t.Context(), &message.Fetch{Namespace: ns, Name: []byte("t")})
+				return err
+			}},
+		{"TRACK_STATUS_OK", &message.RequestOK{TrackProperties: props},
+			func(t *testing.T, cli *session.Session) error {
+				_, err := cli.TrackStatus(t.Context(), &message.TrackStatus{Namespace: ns, Name: []byte("t")})
+				return err
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli, srv := openPairWithOpts(t, nil, nil)
+			go func() {
+				if r, err := srv.AcceptRequest(t.Context()); err == nil {
+					_ = r.Reply(tc.reply)
+				}
+			}()
+			err := tc.open(t, cli)
+			u, ok := errors.AsType[*session.ErrUnsupportedMandatoryTrackProperty](err)
+			if !ok || u.PropertyType != 0x5000 {
+				t.Fatalf("error = %v, want *ErrUnsupportedMandatoryTrackProperty for 0x5000", err)
+			}
 		})
-	})
-
-	wg.Go(func() {
-		stream, err := cli.Subscribe(ctx, &message.Subscribe{
-			Namespace: wire.TrackNamespace{[]byte("ns")},
-			Name:      []byte("track"),
-		})
-		if err != nil {
-			clientErr = err
-			return
+	}
+	t.Run("PUBLISH", func(t *testing.T) {
+		cli, srv := openPairWithOpts(t, nil, nil)
+		go func() {
+			if r, err := srv.AcceptRequest(t.Context()); err == nil {
+				_, _ = r.AcceptPublish()
+			}
+		}()
+		_, err := cli.Publish(t.Context(), &message.Publish{Namespace: ns, Name: []byte("t"), TrackProperties: props})
+		rej, ok := errors.AsType[*session.RequestRejectedError](err)
+		if !ok || rej.Code != moqt.RequestUnsupportedExtension {
+			t.Fatalf("Publish = %v, want REQUEST_ERROR UNSUPPORTED_EXTENSION", err)
 		}
-		defer stream.Close()
-		gotOK = stream.OK
 	})
-
-	wg.Wait()
-
-	if serverErr != nil {
-		t.Fatalf("server: %v", serverErr)
-	}
-	if clientErr != nil {
-		t.Fatalf("client Subscribe: %v", clientErr)
-	}
-	if gotOK == nil {
-		t.Fatal("gotOK is nil")
-	}
-	if gotOK.TrackAlias != 7 {
-		t.Errorf("TrackAlias = %d, want 7", gotOK.TrackAlias)
-	}
-}
-
-// TestFetchDefaultNoEnforcement verifies that when
-// WithKnownMandatoryTrackProperties is NOT called, mandatory track properties
-// in FETCH_OK are silently accepted.
-func TestFetchDefaultNoEnforcement(t *testing.T) {
-	cli, srv := openPairWithOpts(t, nil, nil)
-	ctx := t.Context()
-
-	var (
-		wg        sync.WaitGroup
-		serverErr error
-		clientErr error
-		gotOK     *message.FetchOK
-	)
-
-	wg.Go(func() {
-		r, err := srv.AcceptRequest(ctx)
-		if err != nil {
-			serverErr = err
-			return
-		}
-		serverErr = r.Reply(&message.FetchOK{
-			EndOfTrack:      true,
-			EndLocation:     message.Location{Group: 1, Object: 5},
-			TrackProperties: mandatoryTrackProps(0x6000, 99),
-		})
-	})
-
-	wg.Go(func() {
-		stream, err := cli.Fetch(ctx, &message.Fetch{
-			Namespace: wire.TrackNamespace{[]byte("ns")},
-			Name:      []byte("track"),
-		})
-		if err != nil {
-			clientErr = err
-			return
-		}
-		defer stream.Close()
-		gotOK = stream.OK
-	})
-
-	wg.Wait()
-
-	if serverErr != nil {
-		t.Fatalf("server: %v", serverErr)
-	}
-	if clientErr != nil {
-		t.Fatalf("client Fetch: %v", clientErr)
-	}
-	if gotOK == nil {
-		t.Fatal("gotOK is nil")
-	}
-}
-
-// TestTrackStatusDefaultNoEnforcement verifies that when
-// WithKnownMandatoryTrackProperties is NOT called, mandatory track properties
-// in TRACK_STATUS_OK are silently accepted.
-func TestTrackStatusDefaultNoEnforcement(t *testing.T) {
-	cli, srv := openPairWithOpts(t, nil, nil)
-	ctx := t.Context()
-
-	var (
-		wg        sync.WaitGroup
-		serverErr error
-		clientErr error
-		gotOK     *message.TrackStatusOK
-	)
-
-	wg.Go(func() {
-		r, err := srv.AcceptRequest(ctx)
-		if err != nil {
-			serverErr = err
-			return
-		}
-		serverErr = r.Reply(&message.RequestOK{
-			TrackProperties: mandatoryTrackProps(0x7000, 1),
-		})
-	})
-
-	wg.Go(func() {
-		ts, err := cli.TrackStatus(ctx, &message.TrackStatus{
-			Namespace: wire.TrackNamespace{[]byte("ns")},
-			Name:      []byte("track"),
-		})
-		if err != nil {
-			clientErr = err
-			return
-		}
-		defer ts.Close()
-		gotOK = ts.OK
-	})
-
-	wg.Wait()
-
-	if serverErr != nil {
-		t.Fatalf("server: %v", serverErr)
-	}
-	if clientErr != nil {
-		t.Fatalf("client TrackStatus: %v", clientErr)
-	}
-	if gotOK == nil {
-		t.Fatal("gotOK is nil")
-	}
 }
 
 // ---------------------------------------------------------------------------
