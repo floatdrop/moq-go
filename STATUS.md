@@ -204,8 +204,8 @@ By package, bottom-up along the dependency stack:
 | 10.17   | NAMESPACE                     | 0x08   | DONE   | Per namespace, counted over local and remote sources. |
 | 10.18   | NAMESPACE_DONE                | 0x0E   | DONE   | Never before its NAMESPACE. |
 | 10.19   | SUBSCRIBE_NAMESPACE           | 0x50   | DONE   | A first response other than REQUEST_OK / REQUEST_ERROR, a GOAWAY included, closes the session with PROTOCOL_VIOLATION. `NamespaceSubscription.Broker` closes it on a NAMESPACE_DONE for a suffix no NAMESPACE announced, and on a PUBLISH_STATE_NOTIFY or REQUEST_UPDATE from the publisher (§10.9, §10.10); `NamespaceSubscription.Update` updates the subscription through the broker. The NAMESPACE_DONE check resolves suffixes against the prefix in force, switching at the REQUEST_OK that accepts a TRACK_NAMESPACE_PREFIX update (§10.9.2); once any Update on the subscription gives up, responses no longer pair reliably, so the prefix is unknown and the check stops. A caller reading the stream with `message.Parse` gets none of these checks. |
-| 10.20   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | A first response other than REQUEST_OK / REQUEST_ERROR, a GOAWAY included, closes the session with PROTOCOL_VIOLATION. §10.20.1: its SUBSCRIBE parameters become each forwarded PUBLISH's subscription; an out-of-range value closes the session (§10.2.8/§10.2.18). A REQUEST_UPDATE merges into them for later PUBLISHes (§10.2.18: "Existing subscriptions are unaffected"), and existing tracks that newly match by prefix or Range Filter are forwarded then. |
-| 10.21   | PUBLISH_SKIPPED               | 0x0F   | DONE   | Prohibition scoped to a single PUBLISH (§6.1) — not sticky across re-PUBLISHes. `TrackSubscription.ReadPublishSkipped` and its broker close the session on a PUBLISH_STATE_NOTIFY or REQUEST_UPDATE from the publisher (§10.9, §10.10); `ReadPublishSkipped` skips a single GOAWAY (§10.4). |
+| 10.20   | SUBSCRIBE_TRACKS              | 0x51   | DONE   | A first response other than REQUEST_OK / REQUEST_ERROR, a GOAWAY included, closes the session with PROTOCOL_VIOLATION. §10.20.1: its SUBSCRIBE parameters become each forwarded PUBLISH's subscription; an out-of-range value closes the session (§10.2.8/§10.2.18). A REQUEST_UPDATE merges into them for later PUBLISHes (§10.2.18: "Existing subscriptions are unaffected"), and existing tracks that newly match by prefix or Range Filter are forwarded then, unless skipped (§6.1). |
+| 10.21   | PUBLISH_SKIPPED               | 0x0F   | DONE   | Prohibition scoped to a single PUBLISH (§6.1): the relay offers the track again only once a new upstream PUBLISH or SUBSCRIBE is added, not after a prefix update moves away and back. `TrackSubscription.ReadPublishSkipped` and its broker close the session on a PUBLISH_STATE_NOTIFY or REQUEST_UPDATE from the publisher (§10.9, §10.10); `ReadPublishSkipped` skips a single GOAWAY (§10.4). |
 
 ## §11 Data streams and datagrams
 
@@ -552,8 +552,6 @@ Relay:
 - A session that registers after `Stop` began is drained on its own grace
   period and ignores `Stop`'s ctx, so a cancelled `Stop` can still wait up to
   `GoawayTimeout` for it.
-- A PUBLISH can follow PUBLISH_SKIPPED for the same upstream PUBLISH after a
-  prefix update moves away and back (§6.1).
 - A FETCH whose data stream is reset with MALFORMED_TRACK (§2.4.2, §2.5.1)
   leaves its request stream open and unread: the relay neither resets it
   (§3.3.3) nor answers a REQUEST_UPDATE on it. Which code to reset it with is

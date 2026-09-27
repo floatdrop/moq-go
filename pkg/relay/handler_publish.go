@@ -178,15 +178,20 @@ func publishParamsForSubscriber(tp *registry.TracksParams, entry *registry.Track
 
 // emitPublishSkipped queues a PUBLISH_SKIPPED (§10.21) for fullName on sub's
 // SUBSCRIBE_TRACKS stream, the §6.1 response to an exhausted bidi-stream
-// limit. The skip is scoped to this one PUBLISH, so nothing is recorded.
+// limit, and records it at the track's upstream epoch: the skip is "scoped to
+// a single PUBLISH", so only a new upstream offers the track again, not a
+// prefix update that moves away and back (see
+// [registry.SubscriberEntry.NoteSkipped]).
 func (h *sessionHandler) emitPublishSkipped(
 	ctx context.Context,
 	sub *registry.SubscriberEntry,
 	fullName track.FullTrackName,
+	epoch uint64,
 ) {
 	if !h.names.PublishSkipped(sub, fullName.Namespace, fullName.Name) {
 		return // a TRACK_NAMESPACE_PREFIX update moved the subscription away
 	}
+	sub.NoteSkipped(fullName.Key(), epoch)
 	h.log.LogAttrs(ctx, slog.LevelDebug, "PUBLISH_SKIPPED queued",
 		slog.String("name", string(fullName.Name)))
 }
