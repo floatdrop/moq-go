@@ -83,9 +83,12 @@ type subgroupWriterSet struct {
 	runLo, runHi     uint64
 	hasRun, unbroken bool
 
-	// sawClean records that some contributor ended cleanly, so the merged
-	// stream FINs even if a peer reset; resetCode is used only when every
-	// contributor reset.
+	// cleanFrom is the lowest Object ID from which a contributor that ended
+	// cleanly delivered every Object, if sawClean: 0 for one whose stream
+	// starts the Subgroup (§11.4.2 FIRST_OBJECT), else its first Object's
+	// (see [subgroupWriterSet.outcome]). resetCode is a reset contributor's
+	// code, used when none ended cleanly.
+	cleanFrom uint64
 	sawClean  bool
 	resetCode moqt.StreamResetCode
 
@@ -121,6 +124,46 @@ func (s *subgroupWriterSet) claimFirst(objectID uint64, claimed bool) bool {
 		s.runLo, s.runHi, s.unbroken = min(s.runLo, objectID), max(s.runHi, objectID), false
 	}
 	return claimed && lowest
+}
+
+// leave records how one contributor ended: reset with code, or cleanly after
+// delivering every Object from coverFrom on. covers is false for a replay
+// stream that ended before its first Object, which vouches for none. Callers
+// hold sg.Mu.
+func (s *subgroupWriterSet) leave(reset bool, code moqt.StreamResetCode, covers bool, coverFrom uint64) {
+	switch {
+	case reset:
+		s.resetCode = code
+	case covers && (!s.sawClean || coverFrom < s.cleanFrom):
+		s.cleanFrom, s.sawClean = coverFrom, true
+	}
+}
+
+// outcome reports whether the merged streams end with a reset, and with which
+// code, once every contributor has left. §11.4.3: "If a sender closes the
+// stream before delivering all such objects to the QUIC stream, it MUST reset
+// the stream." A clean contributor delivered every Object from cleanFrom on,
+// so they FIN only if every Object forwarded below cleanFrom was followed by
+// the next one up to it: an unbroken run reaching cleanFrom - 1. Otherwise a
+// reset contributor may have held Objects between that nobody forwarded, and
+// they reset with CANCELLED.
+//
+// Interpretation: Objects below the lowest one this set forwarded count as
+// before the Start Location, as for a joiner (see subgroupWriter.incomplete),
+// so a lone replay upstream's FIN still FINs. The run is kept per set, which
+// is dropped when its last contributor leaves, so a contributor arriving
+// after that is judged against its own set alone. The run is broken, and the
+// streams reset, whenever Object IDs are forwarded out of order or are not
+// consecutive (the Group split across Subgroups): the relay cannot tell a
+// skipped ID from one that does not exist. Callers hold sg.Mu.
+func (s *subgroupWriterSet) outcome() (reset bool, code moqt.StreamResetCode) {
+	switch {
+	case !s.sawClean:
+		return true, s.resetCode
+	case s.cleanFrom <= s.runLo, s.unbroken && s.runHi >= s.cleanFrom-1:
+		return false, 0
+	}
+	return true, moqt.StreamResetCancelled
 }
 
 // admitAgedOut reports whether an Object at objectID of the Subgroup hdr
@@ -344,23 +387,21 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	var (
 		inboundReset     bool
 		inboundResetCode = moqt.StreamResetCancelled
+		// See [subgroupWriterSet.leave].
+		covers    = !hdr.ReplayingSubgroup
+		coverFrom uint64
 	)
 	defer func() {
 		// Record the outcome before releasing, so the last contributor decides
 		// FIN vs reset over all of them.
 		sg.Mu.Lock()
-		if inboundReset {
-			set.resetCode = inboundResetCode
-		} else {
-			set.sawClean = true
-		}
+		set.leave(inboundReset, inboundResetCode, covers, coverFrom)
 		last := entry.ReleaseSubgroup(sgKey)
 		if !last {
 			sg.Mu.Unlock()
 			return // other upstreams still feed this Subgroup — leave writers up.
 		}
-		reset := !set.sawClean
-		code := set.resetCode
+		reset, code := set.outcome()
 		ws := make([]*subgroupWriter, 0, len(set.writers))
 		for _, w := range set.writers {
 			if w == nil {
@@ -423,6 +464,9 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		firstObj = false
 		pos.seq++
 		objectID := stream.ObjectID() // resolved by ReadObject (§11.4.2)
+		if !covers {
+			coverFrom, covers = objectID, true
+		}
 
 		// Whether or not this copy wins the dedup claim below; the next
 		// iteration acts on it, so it can be set now.
