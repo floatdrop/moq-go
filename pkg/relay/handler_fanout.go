@@ -74,7 +74,9 @@ type subgroupWriterSet struct {
 	// for a higher ID is wrong, whether or not a given subscriber got the
 	// lower one. A new set starts from the ledger's
 	// ([registry.TrackEntry.LowestForwarded]), so it holds across contributors
-	// within the ledger's window.
+	// within the ledger's window; for the same reason
+	// [subgroupWriterSet.outcome] measures a clean contributor's coverage
+	// from it.
 	lowest    uint64
 	forwarded bool
 	// runLo and runHi are the lowest and highest Object IDs forwarded
@@ -144,23 +146,30 @@ func (s *subgroupWriterSet) leave(reset bool, code moqt.StreamResetCode, covers 
 // stream before delivering all such objects to the QUIC stream, it MUST reset
 // the stream." A clean contributor delivered every Object from cleanFrom on,
 // so they FIN only if every Object forwarded below cleanFrom was followed by
-// the next one up to it: an unbroken run reaching cleanFrom - 1. Otherwise a
-// reset contributor may have held Objects between that nobody forwarded, and
-// they reset with CANCELLED.
+// the next one up to it: an unbroken run from the lowest one forwarded
+// (subgroupWriterSet.lowest) reaching cleanFrom - 1. Otherwise a reset
+// contributor may have held Objects between that nobody forwarded, and they
+// reset with CANCELLED.
 //
-// Interpretation: Objects below the lowest one this set forwarded count as
-// before the Start Location, as for a joiner (see subgroupWriter.incomplete),
-// so a lone replay upstream's FIN still FINs. The run is kept per set, which
-// is dropped when its last contributor leaves, so a contributor arriving
-// after that is judged against its own set alone. The run is broken, and the
-// streams reset, whenever Object IDs are forwarded out of order or are not
-// consecutive (the Group split across Subgroups): the relay cannot tell a
-// skipped ID from one that does not exist. Callers hold sg.Mu.
+// Deviation: lowest also counts what the ledger saw forwarded through an
+// earlier set of the Subgroup, released when its last contributor left, whose
+// run is forgotten; so a contributor arriving after that resets unless it
+// covers from lowest, even if it did continue the earlier run, where §11.4.3
+// says a sender that "has delivered all objects in a Subgroup ... MUST close
+// the stream with a FIN".
+//
+// Interpretation: Objects below the lowest one forwarded count as before the
+// Start Location, as for a joiner (see subgroupWriter.incomplete), so a lone
+// replay upstream's FIN still FINs. The run is broken, and the streams reset,
+// whenever Object IDs are forwarded out of order or are not consecutive (the
+// Group split across Subgroups): the relay cannot tell a skipped ID from one
+// that does not exist. Callers hold sg.Mu.
 func (s *subgroupWriterSet) outcome() (reset bool, code moqt.StreamResetCode) {
 	switch {
 	case !s.sawClean:
 		return true, s.resetCode
-	case s.cleanFrom <= s.runLo, s.unbroken && s.runHi >= s.cleanFrom-1:
+	case s.cleanFrom <= s.lowest,
+		s.unbroken && s.runLo == s.lowest && s.runHi >= s.cleanFrom-1:
 		return false, 0
 	}
 	return true, moqt.StreamResetCancelled
