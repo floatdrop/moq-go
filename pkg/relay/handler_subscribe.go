@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync/atomic"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
@@ -473,8 +474,8 @@ func (h *sessionHandler) subscribeUpstreamOnSession(
 	extra message.Parameters,
 	wantForward bool,
 ) (*registry.TrackEntry, *registry.UpstreamSub, error) {
-	if peerSentGoaway(sess) {
-		return nil, nil, errPeerGoingAway
+	if goingAway(sess) {
+		return nil, nil, errGoingAway
 	}
 	// §9.4: always Next Object (§5.1.2), so one upstream serves every
 	// downstream filter; the fanout applies those.
@@ -658,9 +659,9 @@ func (h *sessionHandler) refuseSubscriptionParams(ctx context.Context, req *sess
 	_ = req.RejectError(moqt.RequestInvalidFilter, err.Error())
 }
 
-// errPeerGoingAway reports a request the relay did not send because the peer
-// sent GOAWAY (§10.4; see [peerSentGoaway]).
-var errPeerGoingAway = errors.New("relay: peer sent GOAWAY; no new requests to it (§10.4)")
+// errGoingAway reports a request the relay did not send because of a GOAWAY on
+// the session, in either direction (§10.4; see [goingAway]).
+var errGoingAway = errors.New("relay: GOAWAY on the session; no new requests on it (§10.4)")
 
 // includeProperties reports whether INCLUDE_PROPERTIES (§10.2.21) asks for
 // Track Properties: yes unless it is 0.
@@ -685,6 +686,16 @@ func includeProperties(ps message.Parameters) bool {
 func upstreamRejection(err error) *session.RequestRejectedError {
 	if isTrackPropertiesErr(err) {
 		return &session.RequestRejectedError{Code: session.TrackPropertiesRejectCode(err)}
+	}
+	if errors.Is(err, errGoingAway) {
+		// GOING_AWAY: "The endpoint has received a GOAWAY and MAY reject new
+		// requests" (§10.6.2); on the relay's own drain, it "has sent or
+		// received a GOAWAY" (§3.3.4). The publisher may return, here or
+		// elsewhere.
+		return &session.RequestRejectedError{
+			Code:          moqt.RequestGoingAway,
+			RetryInterval: retryIntervalAfter(time.Second),
+		}
 	}
 	up, ok := errors.AsType[*session.RequestRejectedError](err)
 	if !ok {

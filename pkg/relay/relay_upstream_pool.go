@@ -178,7 +178,7 @@ func (p *upstreamPool) resolveUpstreams(ctx context.Context, ns wire.TrackNamesp
 			p.metrics.UpstreamDialFailed(info.RelayAddr)
 			continue // fall through to the next-ranked relay
 		}
-		if peerSentGoaway(sess) {
+		if goingAway(sess) {
 			// §10.4: a draining relay takes no new requests, so it must not
 			// hold a fan-in slot.
 			continue

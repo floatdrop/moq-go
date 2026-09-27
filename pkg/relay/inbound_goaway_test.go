@@ -45,7 +45,7 @@ func TestRelay_InboundGoawayLeavesSessionOpen(t *testing.T) {
 
 // TestRelay_NoUpstreamSubscribeToGoingAwayPublisher: a publisher that sent
 // GOAWAY gets no new SUBSCRIBE from the relay, so a subscriber to its
-// namespace finds nothing to subscribe to.
+// namespace is refused with GOING_AWAY.
 func TestRelay_NoUpstreamSubscribeToGoingAwayPublisher(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -77,9 +77,9 @@ func TestRelay_NoUpstreamSubscribeToGoingAwayPublisher(t *testing.T) {
 		t.Fatalf("the relay sent %s to a publisher that had sent GOAWAY", r.First.Type())
 	default:
 	}
-	if err == nil {
-		t.Fatal("Subscribe succeeded with the only publisher going away")
-	}
+	// GOING_AWAY: "The endpoint has received a GOAWAY and MAY reject new
+	// requests" (§10.6.2).
+	requireRejectedWithCode(t, err, moqt.RequestGoingAway)
 }
 
 // TestRelay_NoForwardedPublishToGoingAwayHolder: a SUBSCRIBE_TRACKS holder that

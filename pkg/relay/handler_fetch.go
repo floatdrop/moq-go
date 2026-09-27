@@ -371,7 +371,7 @@ func intersect(a, b []registry.LocRange) []registry.LocRange {
 func (h *sessionHandler) pickFetchUpstream(entry *registry.TrackEntry) *registry.UpstreamSub {
 	for _, u := range entry.CopyUpstream() {
 		if u.FetchCapable && u.IsEstablished() && u.Session != nil && u.Session != h.sess &&
-			!peerSentGoaway(u.Session) {
+			!goingAway(u.Session) {
 			return u
 		}
 	}
