@@ -669,7 +669,6 @@ func (r *Relay) Stop(ctx context.Context) error {
 	r.stopOnce.Do(func() {
 		r.log.LogAttrs(ctx, slog.LevelInfo, "relay stopping")
 		close(r.stopCh)
-		r.statusRounds.end() // rounds are cut short; handlers.Wait joins them
 
 		// 1. Withdraw from Discovery first, before anything else: a peer that
 		//    resolves this relay via FindTrack / FindNamespace after step 2 has
@@ -764,6 +763,9 @@ func (r *Relay) Stop(ctx context.Context) error {
 		if r.upstreams != nil {
 			r.upstreams.close()
 		}
+		// Forwarded TRACK_STATUS rounds are upstream work too: cut short
+		// here, joined by handlers.Wait below.
+		r.statusRounds.end()
 
 		// 7. Force-close anything still standing, with GOAWAY_TIMEOUT
 		//    only where it is true: "the peer took too long to close the

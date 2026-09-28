@@ -511,3 +511,36 @@ func TestTrackStatus_ForwardingCountsAgainstSubscriptionCap(t *testing.T) {
 	_, err := trackStatusCam1(t, client)
 	requireRejectedWithCode(t, err, moqt.RequestExcessiveLoad)
 }
+
+// TestTrackStatus_StopKeepsRoundThroughGrace: Stop drops upstream work only
+// after the downstream GOAWAY's grace period (§3.6), so a forwarded round in
+// flight when Stop begins still delivers a publisher's answer given within it.
+func TestTrackStatus_StopKeepsRoundThroughGrace(t *testing.T) {
+	t.Parallel()
+	tr := startTestRelay(t.Context(), relay.Config{GoawayTimeout: time.Second})
+	pub := dialClient(t, tr)
+	asked := make(chan struct{}, 1)
+	answerTrackStatus(t, pub, func(r *session.Request) {
+		asked <- struct{}{}
+		go func() {
+			time.Sleep(200 * time.Millisecond)
+			_ = r.AcceptTrackStatus(&message.TrackStatusOK{TrackProperties: opaqueProps("late")})
+		}()
+	})
+	publishNS(t, pub, "video")
+	answer := trackStatusAsync(t.Context(), t, dialClient(t, tr))
+	select {
+	case <-asked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the relay never forwarded the TRACK_STATUS")
+	}
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = tr.r.Stop(context.Background())
+	}()
+	if got := <-answer; got.err != nil {
+		t.Fatalf("TrackStatus during Stop's grace period: %v", got.err)
+	}
+	<-stopped
+}
