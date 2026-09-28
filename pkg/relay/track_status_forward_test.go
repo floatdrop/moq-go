@@ -12,6 +12,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/track"
+	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 	"github.com/floatdrop/moq-go/pkg/relay"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
@@ -337,17 +339,21 @@ func TestTrackStatus_CancelReleasesRequester(t *testing.T) {
 	}, "the cancelled TRACK_STATUS still held the session's only subscription slot")
 }
 
-// TestTrackStatus_ConcurrentRequestsShareOneRound: TRACK_STATUS requests for
-// one track that arrive while a forwarded round is in flight wait for it
-// rather than each going upstream, and each is answered with its own
-// INCLUDE_PROPERTIES (§10.2.21).
-func TestTrackStatus_ConcurrentRequestsShareOneRound(t *testing.T) {
-	t.Parallel()
+// sharedRound sets up a relay whose only candidate for video/cam1 holds its
+// answer until release is closed, and returns two requesters on it and the
+// number of times the candidate was asked. joined reports each request that
+// joins or starts the forwarded round (not parallel-safe: a package hook).
+func sharedRound(
+	t *testing.T,
+) (first, second *session.Session, release chan struct{}, asked *atomic.Int32, joined <-chan struct{}) {
+	t.Helper()
+	j := make(chan struct{}, 8)
+	t.Cleanup(relay.SetTestHookTrackStatusJoined(func(track.FullTrackName) { j <- struct{}{} }))
 	first, teardown := connectRelay(t, relay.Config{})
 	t.Cleanup(teardown)
-	second := dialAnotherClient(t, first)
-	release := make(chan struct{})
-	var asked atomic.Int32
+	second = dialAnotherClient(t, first)
+	release = make(chan struct{})
+	asked = &atomic.Int32{}
 	namespacePeer(t, first, func(r *session.Request) {
 		asked.Add(1)
 		go func() {
@@ -355,36 +361,135 @@ func TestTrackStatus_ConcurrentRequestsShareOneRound(t *testing.T) {
 			_ = r.AcceptTrackStatus(&message.TrackStatusOK{TrackProperties: opaqueProps("shared")})
 		}()
 	})
-	type answer struct {
-		ok  *message.TrackStatusOK
-		err error
+	return first, second, release, asked, j
+}
+
+func awaitJoin(t *testing.T, joined <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-joined:
+	case <-time.After(2 * time.Second):
+		t.Fatal("a TRACK_STATUS never joined the forwarded round")
 	}
-	withProps, withoutProps := make(chan answer, 1), make(chan answer, 1)
+}
+
+type trackStatusAnswer struct {
+	ok  *message.TrackStatusOK
+	err error
+}
+
+func trackStatusAsync(
+	ctx context.Context,
+	t *testing.T,
+	sess *session.Session,
+	params ...message.Parameter,
+) <-chan trackStatusAnswer {
+	t.Helper()
+	out := make(chan trackStatusAnswer, 1)
 	go func() {
-		ok, err := trackStatusCam1(t, first)
-		withProps <- answer{ok, err}
+		ts, err := sess.TrackStatus(
+			ctx,
+			&message.TrackStatus{Namespace: ns("video"), Name: []byte("cam1"), Parameters: params},
+		)
+		if err != nil {
+			out <- trackStatusAnswer{err: err}
+			return
+		}
+		_ = ts.Close()
+		out <- trackStatusAnswer{ok: ts.OK}
 	}()
-	waitFor(t, 2*time.Second, func() bool { return asked.Load() == 1 }, "the first TRACK_STATUS was never forwarded")
-	go func() {
-		ok, err := trackStatusCam1(t, second, message.IncludePropertiesParam(false))
-		withoutProps <- answer{ok, err}
-	}()
-	time.Sleep(100 * time.Millisecond) // the second reaches the relay while the round is in flight
+	return out
+}
+
+// TestTrackStatus_ConcurrentRequestsShareOneRound: TRACK_STATUS requests for
+// one track that arrive while a forwarded round is in flight wait for it
+// rather than each going upstream, and each is answered with its own
+// INCLUDE_PROPERTIES (§10.2.21).
+func TestTrackStatus_ConcurrentRequestsShareOneRound(t *testing.T) {
+	first, second, release, asked, joined := sharedRound(t)
+	a := trackStatusAsync(t.Context(), t, first)
+	awaitJoin(t, joined)
+	b := trackStatusAsync(t.Context(), t, second, message.IncludePropertiesParam(false))
+	awaitJoin(t, joined)
 	close(release)
 
-	a, b := <-withProps, <-withoutProps
-	if a.err != nil || b.err != nil {
-		t.Fatalf("TrackStatus: %v, %v", a.err, b.err)
+	withProps, withoutProps := <-a, <-b
+	if withProps.err != nil || withoutProps.err != nil {
+		t.Fatalf("TrackStatus: %v, %v", withProps.err, withoutProps.err)
 	}
 	if n := asked.Load(); n != 1 {
 		t.Fatalf("the publisher was asked %d times, want 1", n)
 	}
-	if !bytes.Equal(a.ok.TrackProperties, opaqueProps("shared")) || len(b.ok.TrackProperties) != 0 {
-		t.Fatalf(
-			"TrackProperties = %x and %x, want the publisher's and empty",
-			a.ok.TrackProperties,
-			b.ok.TrackProperties,
-		)
+	if !bytes.Equal(withProps.ok.TrackProperties, opaqueProps("shared")) || len(withoutProps.ok.TrackProperties) != 0 {
+		t.Fatalf("TrackProperties = %x and %x, want the publisher's and empty",
+			withProps.ok.TrackProperties, withoutProps.ok.TrackProperties)
+	}
+}
+
+// TestTrackStatus_LeaderCancelKeepsSharedRound: the requester whose request
+// started a round cancelling it (§3.3.3) does not end the round for another
+// requester sharing it.
+func TestTrackStatus_LeaderCancelKeepsSharedRound(t *testing.T) {
+	first, second, release, _, joined := sharedRound(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	leader := trackStatusAsync(ctx, t, first)
+	awaitJoin(t, joined)
+	follower := trackStatusAsync(t.Context(), t, second)
+	awaitJoin(t, joined)
+	cancel()
+	<-leader
+	close(release)
+	if got := <-follower; got.err != nil {
+		t.Fatalf("the follower's TrackStatus failed after the leader cancelled: %v", got.err)
+	}
+}
+
+// blockingDiscovery is a Discovery store whose FindNamespace blocks until its
+// ctx ends, recording that it returned.
+type blockingDiscovery struct {
+	discovery.DiscoveryStore
+
+	entered  chan struct{}
+	returned atomic.Bool
+}
+
+func (b *blockingDiscovery) FindNamespace(
+	ctx context.Context,
+	_ wire.TrackNamespace,
+) ([]discovery.NamespaceInfo, error) {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	b.returned.Store(true)
+	return nil, ctx.Err()
+}
+
+// TestTrackStatus_StopEndsRound: a forwarded round is relay work, so Stop cuts
+// it short and joins it, rather than returning while it still reaches into
+// Discovery.
+func TestTrackStatus_StopEndsRound(t *testing.T) {
+	t.Parallel()
+	mem := discovery.NewMemoryStore()
+	defer mem.Close()
+	store := &blockingDiscovery{DiscoveryStore: mem, entered: make(chan struct{}, 1)}
+	tr := startTestRelay(t.Context(), relay.Config{
+		Discovery: store, RelayAddr: "relay-A", Dialer: dialerTo(nil),
+	})
+	go func() { _, _ = trackStatusCam1(t, dialClient(t, tr)) }()
+	select {
+	case <-store.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the round never resolved Discovery candidates")
+	}
+	start := time.Now()
+	tr.stop(t)
+	if !store.returned.Load() {
+		t.Fatal("Stop returned while the forwarded round was still in Discovery")
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Stop took %v: it waited the round out instead of cutting it short", d)
 	}
 }
 

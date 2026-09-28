@@ -577,7 +577,7 @@ func candidateRetry(err error) uint64 {
 		return goingAwayRetry
 	}
 	if errors.Is(err, session.ErrNoStreamCredit) {
-		return uint64(excessiveLoadRetry/time.Millisecond) * 3 / 2
+		return excessiveLoadRetryMax
 	}
 	rej, ok := errors.AsType[*session.RequestRejectedError](err)
 	if !ok {
@@ -1026,6 +1026,10 @@ const (
 	goingAwayRetryAfter = time.Second
 	goingAwayRetry      = uint64(goingAwayRetryAfter/time.Millisecond) * 3 / 2
 )
+
+// excessiveLoadRetryMax is the largest Retry Interval the jitter can make of
+// excessiveLoadRetry.
+const excessiveLoadRetryMax = uint64(excessiveLoadRetry/time.Millisecond) * 3 / 2
 
 // isTrackPropertiesErr reports whether err is a Track Properties validation
 // failure from [session.Session.Subscribe] or [session.Session.Fetch]: an

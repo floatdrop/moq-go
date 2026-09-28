@@ -59,3 +59,10 @@ func SetTrackStatusTimeout(d time.Duration) (restore func()) {
 	prev := trackStatusTimeout.Swap(int64(d))
 	return func() { trackStatusTimeout.Store(prev) }
 }
+
+// SetTestHookTrackStatusJoined installs hook as testHookTrackStatusJoined and
+// returns the restore.
+func SetTestHookTrackStatusJoined(hook func(track.FullTrackName)) (restore func()) {
+	prev := testHookTrackStatusJoined.Swap(&hook)
+	return func() { testHookTrackStatusJoined.Store(prev) }
+}

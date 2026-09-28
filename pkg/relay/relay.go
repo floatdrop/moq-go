@@ -14,8 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
@@ -303,7 +301,7 @@ type Relay struct {
 
 	// statusRounds shares forwarded TRACK_STATUS rounds across every
 	// session handler; see [sessionHandler.forwardTrackStatus].
-	statusRounds singleflight.Group
+	statusRounds *trackStatusRounds
 
 	// upstreams dials and pools relay-to-relay sessions for Discovery-driven
 	// cross-relay upstream SUBSCRIBE. nil when Config.Dialer is unset (the
@@ -400,14 +398,15 @@ func New(listener Listener, cfg Config) *Relay {
 	}
 
 	r := &Relay{
-		listener: listener,
-		cfg:      cfg,
-		log:      log.With("component", "relay"),
-		tracks:   registry.NewTrackRegistry(trackOpts...),
-		names:    registry.NewNamespaceRegistry(nameOpts...),
-		fetch:    registry.NewFetchRouter(),
-		sessions: make(map[*session.Session]struct{}),
-		stopCh:   make(chan struct{}),
+		listener:     listener,
+		cfg:          cfg,
+		log:          log.With("component", "relay"),
+		tracks:       registry.NewTrackRegistry(trackOpts...),
+		names:        registry.NewNamespaceRegistry(nameOpts...),
+		fetch:        registry.NewFetchRouter(),
+		statusRounds: newTrackStatusRounds(),
+		sessions:     make(map[*session.Session]struct{}),
+		stopCh:       make(chan struct{}),
 	}
 
 	// When a Dialer is configured, the relay can follow Discovery
@@ -648,7 +647,7 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session, leg Leg
 
 	handler := newSessionHandler(
 		sess, r.log, r.tracks, r.names,
-		r.cfg.Authorizer, r.cfg.Metrics, leg, r.fetch, &r.statusRounds, r.upstreams,
+		r.cfg.Authorizer, r.cfg.Metrics, leg, r.fetch, r.statusRounds, r.upstreams,
 		r.cfg.Discovery, r.cfg.RelayAddr,
 		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,
@@ -670,6 +669,7 @@ func (r *Relay) Stop(ctx context.Context) error {
 	r.stopOnce.Do(func() {
 		r.log.LogAttrs(ctx, slog.LevelInfo, "relay stopping")
 		close(r.stopCh)
+		r.statusRounds.end() // rounds are cut short; handlers.Wait joins them
 
 		// 1. Withdraw from Discovery first, before anything else: a peer that
 		//    resolves this relay via FindTrack / FindNamespace after step 2 has
