@@ -12,8 +12,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/sync/singleflight"
-
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
@@ -45,7 +43,7 @@ type sessionHandler struct {
 	fetch   *registry.FetchRouter
 	// statusRounds shares forwarded TRACK_STATUS rounds across the relay's
 	// sessions; see [sessionHandler.forwardTrackStatus].
-	statusRounds *singleflight.Group
+	statusRounds *trackStatusRounds
 	// leg records whether this session was dialled by the relay
 	// (LegUpstream) or by the peer (LegLocal). Every [Metrics] call this
 	// handler makes carries it, so an operator can separate what the
@@ -95,7 +93,7 @@ func newSessionHandler(
 	metrics Metrics,
 	leg Leg,
 	fetch *registry.FetchRouter,
-	statusRounds *singleflight.Group,
+	statusRounds *trackStatusRounds,
 	upstreams *upstreamPool,
 	discovery discovery.DiscoveryStore,
 	relayAddr string,

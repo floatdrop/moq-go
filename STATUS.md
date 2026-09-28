@@ -538,6 +538,11 @@ Relay:
   by a relay peer (§6.2 has no loop protection), so it declines the second hop
   rather than loop. Self-subscriptions are otherwise "identical" (§5.1).
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
+- A shared TRACK_STATUS round asks the candidates known when it started: a
+  request joining it later is not answered by a publisher that arrived in
+  between. A TRACK_STATUS loop through different sessions (the relay's
+  request reaching it back over another one) is not detected, and its round
+  waits out its 5s bound.
 
 Open questions for interop: whether an End of Range marker carries an Object
 Payload Length (Figure 28 vs §11.4.4.2), and whether EXPIRES may appear in

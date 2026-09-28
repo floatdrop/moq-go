@@ -125,16 +125,46 @@ func (h *sessionHandler) rejectTrackStatus(ctx context.Context, req *session.Req
 	}
 }
 
+// testHookTrackStatusJoined, when set by a test, runs once a request has
+// joined, or started, the forwarded TRACK_STATUS round for its track.
+var testHookTrackStatusJoined atomic.Pointer[func(track.FullTrackName)]
+
+// trackStatusRounds is a relay's forwarded TRACK_STATUS rounds in flight, by
+// track; see [sessionHandler.forwardTrackStatus]. Its ctx ends when the relay
+// stops.
+type trackStatusRounds struct {
+	ctx context.Context
+	end context.CancelFunc
+
+	mu     sync.Mutex
+	rounds map[track.Key]*trackStatusRound
+}
+
+// trackStatusRound is one round's result, set before done closes.
+type trackStatusRound struct {
+	done chan struct{}
+	oks  []*message.TrackStatusOK
+	err  error
+}
+
+func newTrackStatusRounds() *trackStatusRounds {
+	ctx, end := context.WithCancel(context.Background())
+	return &trackStatusRounds{ctx: ctx, end: end, rounds: make(map[track.Key]*trackStatusRound)}
+}
+
 // forwardTrackStatus answers TRACK_STATUS for fullName from a round of
 // [sessionHandler.trackStatusUpstream], shared with the other requests for the
 // track that arrive while it is in flight (relay policy, so N requests do not
-// make N upstream ones). The round is bounded by its timeout, not by any one
-// requester, who stops waiting on its own STOP_SENDING.
+// make N upstream ones). The round runs on a relay-scoped goroutine, bounded
+// by its timeout and by the relay stopping, not by any one requester, who
+// stops waiting on its own STOP_SENDING.
 //
 // A request from a session the relay is asking about the track right now may
-// be the relay's own TRACK_STATUS routed back to it (§6.2), which the round
-// waits on: it runs a round of its own instead, where the loop guard skips
-// that session.
+// be the relay's own TRACK_STATUS routed back to it on that session (§6.2),
+// which the round waits on: it runs a round of its own instead, where the loop
+// guard skips that session. A loop through other sessions (relay A's request
+// reaching it back over a different session) is not detected; such a round
+// waits out its timeout.
 func (h *sessionHandler) forwardTrackStatus(
 	ctx context.Context,
 	req *session.Request,
@@ -143,16 +173,33 @@ func (h *sessionHandler) forwardTrackStatus(
 	waitCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer context.AfterFunc(req.Stream.Context(), cancel)()
-	if h.tracks.RequestPending(message.TypeTrackStatus, h.sess, fullName.Key()) {
+	key := fullName.Key()
+	if h.tracks.RequestPending(message.TypeTrackStatus, h.sess, key) {
 		return h.trackStatusUpstream(waitCtx, fullName)
 	}
-	round := h.statusRounds.DoChan(string(fullName.Key().Bytes()), func() (any, error) {
-		return h.trackStatusUpstream(context.WithoutCancel(ctx), fullName)
-	})
+
+	rs := h.statusRounds
+	rs.mu.Lock()
+	round := rs.rounds[key]
+	if round == nil {
+		round = &trackStatusRound{done: make(chan struct{})}
+		rs.rounds[key] = round
+		// Started from this tracked handler, so Stop joins it.
+		h.relayGo(func() {
+			round.oks, round.err = h.trackStatusUpstream(rs.ctx, fullName)
+			rs.mu.Lock()
+			delete(rs.rounds, key)
+			rs.mu.Unlock()
+			close(round.done)
+		})
+	}
+	rs.mu.Unlock()
+	if hook := testHookTrackStatusJoined.Load(); hook != nil {
+		(*hook)(fullName)
+	}
 	select {
-	case r := <-round:
-		oks, _ := r.Val.([]*message.TrackStatusOK)
-		return oks, r.Err
+	case <-round.done:
+		return round.oks, round.err
 	case <-waitCtx.Done():
 		return nil, waitCtx.Err()
 	}
