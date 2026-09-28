@@ -539,10 +539,25 @@ func TestSubscribe_UnsupportedMandatoryPropertyOutranksMalformed(t *testing.T) {
 	}
 }
 
+// requireRetryableExcessiveLoad fails unless err is EXCESSIVE_LOAD inviting a
+// retry after about a second (§10.6.2).
+func requireRetryableExcessiveLoad(t *testing.T, err error) {
+	t.Helper()
+	requireRejectedWithCode(t, err, moqt.RequestExcessiveLoad)
+	if rej, _ := errors.AsType[*session.RequestRejectedError](
+		err,
+	); rej.RetryInterval < 1001 ||
+		rej.RetryInterval > 1500 {
+		t.Fatalf("Retry Interval = %d, want a retry after about 1s", rej.RetryInterval)
+	}
+}
+
 // TestRendezvous_NoStreamCreditEndsHold: a SUBSCRIBE the relay cannot even
 // open to a live publisher, for want of bidi-stream credit, is not a sign the
 // track has no publisher, so a RENDEZVOUS_TIMEOUT hold does not wait out its
-// budget on it: the subscriber is answered at once, as without a hold.
+// budget on it: the subscriber is answered at once, with EXCESSIVE_LOAD and a
+// retry, since the relay "cannot process the request at this time"
+// (§10.6.2).
 func TestRendezvous_NoStreamCreditEndsHold(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -552,10 +567,47 @@ func TestRendezvous_NoStreamCreditEndsHold(t *testing.T) {
 	done := subscribeRendezvous(t.Context(), subSess, 5*time.Second)
 	select {
 	case err := <-done:
-		requireRejectedWithCode(t, err, moqt.RequestDoesNotExist)
+		requireRetryableExcessiveLoad(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("SUBSCRIBE held against a live publisher the relay had no stream credit for")
 	}
+}
+
+// TestSubscribe_NoStreamCreditOutranksNoPublisherYet: a candidate the relay
+// has no stream credit for is a live publisher, so its EXCESSIVE_LOAD wins
+// over another candidate's GOING_AWAY, whatever the order; and a forwarded
+// TRACK_STATUS gets the same answer.
+func TestSubscribe_NoStreamCreditOutranksNoPublisherYet(t *testing.T) {
+	t.Parallel()
+	for _, order := range []string{"credit-less first", "credit-less last"} {
+		t.Run(order, func(t *testing.T) {
+			t.Parallel()
+			subSess, teardown := connectRelay(t, relay.Config{})
+			t.Cleanup(teardown)
+			creditless := func() {
+				pub := dialAnotherClientWithLimits(t, subSess, -1, 0)
+				publishNS(t, pub, "video")
+			}
+			if order == "credit-less first" {
+				creditless()
+			}
+			refusingPublishers(t, subSess, refuse(moqt.RequestGoingAway, 2001))
+			if order == "credit-less last" {
+				creditless()
+			}
+			_, err := subSess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns("video"), Name: []byte("cam1")})
+			requireRetryableExcessiveLoad(t, err)
+		})
+	}
+	t.Run("TRACK_STATUS", func(t *testing.T) {
+		t.Parallel()
+		subSess, teardown := connectRelay(t, relay.Config{})
+		t.Cleanup(teardown)
+		pub := dialAnotherClientWithLimits(t, subSess, -1, 0)
+		publishNS(t, pub, "video")
+		_, err := trackStatusCam1(t, subSess)
+		requireRetryableExcessiveLoad(t, err)
+	})
 }
 
 // TestSubscribe_OtherRefusalTieIsOrderFree: two refusals of the "any other"

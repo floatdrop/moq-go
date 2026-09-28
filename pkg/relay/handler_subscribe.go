@@ -569,11 +569,15 @@ func preferCandidateErr(last, err error) error {
 }
 
 // candidateRetry is the Retry Interval err is answered with: for a
-// GOING_AWAY without one, the most the relay's own jittered one can be (see
-// [upstreamRejection]), else the upstream's.
+// GOING_AWAY without one, or a request not opened for want of stream credit,
+// the most the relay's own jittered one can be (see [upstreamRejection]), else
+// the upstream's.
 func candidateRetry(err error) uint64 {
 	if errors.Is(err, errGoingAway) {
 		return goingAwayRetry
+	}
+	if errors.Is(err, session.ErrNoStreamCredit) {
+		return uint64(excessiveLoadRetry/time.Millisecond) * 3 / 2
 	}
 	rej, ok := errors.AsType[*session.RequestRejectedError](err)
 	if !ok {
@@ -977,6 +981,15 @@ func upstreamRejection(err error) *session.RequestRejectedError {
 		return &session.RequestRejectedError{
 			Code:          moqt.RequestGoingAway,
 			RetryInterval: retryIntervalAfter(goingAwayRetryAfter),
+		}
+	}
+	if errors.Is(err, session.ErrNoStreamCredit) {
+		// A live publisher the relay could not open a request to for want
+		// of stream credit: it "cannot process the request at this time"
+		// (§10.6.2), and may shortly.
+		return &session.RequestRejectedError{
+			Code:          moqt.RequestExcessiveLoad,
+			RetryInterval: retryIntervalAfter(excessiveLoadRetry),
 		}
 	}
 	up, ok := errors.AsType[*session.RequestRejectedError](err)

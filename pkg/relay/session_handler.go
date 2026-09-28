@@ -425,6 +425,8 @@ const excessiveLoadRetry = time.Second
 
 // retryIntervalAfter is a Retry Interval (§10.6.2) inviting a retry after d
 // plus up to 50% jitter, encoded as milliseconds plus one.
+//
+//nolint:unparam // callers pass separate policy constants, equal only today.
 func retryIntervalAfter(d time.Duration) uint64 {
 	ms := uint64(d / time.Millisecond) //nolint:gosec // G115: callers pass a positive constant duration.
 	return ms + rand.Uint64N(ms/2) + 1 //nolint:gosec // G404: retry jitter, not a secret.
