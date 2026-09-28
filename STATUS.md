@@ -540,11 +540,6 @@ Relay:
 - Filters are not aggregated upstream (§6.3.1 SHOULD).
 - Concurrent TRACK_STATUS requests for one track with no Established
   subscription are each forwarded upstream, not coalesced.
-- A SUBSCRIBE the relay cannot open to a candidate for want of bidi-stream
-  credit is answered DOES_NOT_EXIST with no Retry Interval ("SHOULD NOT be
-  retried"), and outranks another candidate's GOING_AWAY or TIMEOUT, though
-  the publisher is there; EXCESSIVE_LOAD with a retry would fit better
-  (§10.6.2).
 
 Open questions for interop: whether an End of Range marker carries an Object
 Payload Length (Figure 28 vs §11.4.4.2), and whether EXPIRES may appear in
