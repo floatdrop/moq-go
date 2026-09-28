@@ -14,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
@@ -298,6 +300,10 @@ type Relay struct {
 	// upstream session's data loop) with the downstream handler that issued
 	// the FETCH. Shared across every session handler.
 	fetch *registry.FetchRouter
+
+	// statusRounds shares forwarded TRACK_STATUS rounds across every
+	// session handler; see [sessionHandler.forwardTrackStatus].
+	statusRounds singleflight.Group
 
 	// upstreams dials and pools relay-to-relay sessions for Discovery-driven
 	// cross-relay upstream SUBSCRIBE. nil when Config.Dialer is unset (the
@@ -642,7 +648,7 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session, leg Leg
 
 	handler := newSessionHandler(
 		sess, r.log, r.tracks, r.names,
-		r.cfg.Authorizer, r.cfg.Metrics, leg, r.fetch, r.upstreams,
+		r.cfg.Authorizer, r.cfg.Metrics, leg, r.fetch, &r.statusRounds, r.upstreams,
 		r.cfg.Discovery, r.cfg.RelayAddr,
 		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,

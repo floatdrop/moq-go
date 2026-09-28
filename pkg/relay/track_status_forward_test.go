@@ -197,9 +197,14 @@ func TestRelay_TrackStatusLoopStopsAtSecondHop(t *testing.T) {
 			_ = r.AcceptTrackStatus(nil)
 		}()
 	})
+	start := time.Now()
 	_, _ = trackStatusCam1(t, dialAnotherClient(t, peer))
 	if n := asked.Load(); n != 1 {
 		t.Fatalf("the relay forwarded TRACK_STATUS to the peer %d times, want 1", n)
+	}
+	// Not by waiting out a round the routed-back request waits on itself.
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("answered after %v: the routed-back request deadlocked with the round", d)
 	}
 }
 
@@ -304,29 +309,82 @@ func TestTrackStatus_SilentCandidateTimesOut(t *testing.T) {
 	requireRejectedWithCode(t, err, moqt.RequestTimeout)
 }
 
-// TestTrackStatus_CancelEndsUpstream: the requester cancelling its
-// TRACK_STATUS (§3.3.3) cancels the relay's upstream one.
-func TestTrackStatus_CancelEndsUpstream(t *testing.T) {
+// TestTrackStatus_CancelReleasesRequester: the requester cancelling its
+// TRACK_STATUS (§3.3.3) stops the relay waiting on the upstream round for it,
+// freeing its place under MaxSubscriptionsPerSession (§13.1) before the round
+// ends; the round itself, which other requesters may share, runs to its bound.
+func TestTrackStatus_CancelReleasesRequester(t *testing.T) {
 	t.Parallel()
-	client, teardown := connectRelay(t, relay.Config{})
+	client, teardown := connectRelay(t, relay.Config{MaxSubscriptionsPerSession: 1})
 	t.Cleanup(teardown)
-	upstream := make(chan session.Stream, 1)
-	namespacePeer(t, client, func(r *session.Request) { upstream <- r.Stream })
+	asked := make(chan struct{}, 2)
+	namespacePeer(t, client, func(*session.Request) { asked <- struct{}{} }) // never answers
 	ctx, cancel := context.WithCancel(t.Context())
 	go func() {
 		_, _ = client.TrackStatus(ctx, &message.TrackStatus{Namespace: ns("video"), Name: []byte("cam1")})
 	}()
-	var s session.Stream
 	select {
-	case s = <-upstream:
+	case <-asked:
 	case <-time.After(2 * time.Second):
 		t.Fatal("the relay never forwarded the TRACK_STATUS")
 	}
 	cancel()
-	select {
-	case <-s.Context().Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("the relay's upstream TRACK_STATUS outlived the requester's cancel")
+	waitFor(t, 2*time.Second, func() bool {
+		// No publisher: DOES_NOT_EXIST at once, once the slot is free.
+		_, err := client.Subscribe(t.Context(), &message.Subscribe{Namespace: ns("audio"), Name: []byte("mic")})
+		rej, ok := errors.AsType[*session.RequestRejectedError](err)
+		return !ok || rej.Code != moqt.RequestExcessiveLoad
+	}, "the cancelled TRACK_STATUS still held the session's only subscription slot")
+}
+
+// TestTrackStatus_ConcurrentRequestsShareOneRound: TRACK_STATUS requests for
+// one track that arrive while a forwarded round is in flight wait for it
+// rather than each going upstream, and each is answered with its own
+// INCLUDE_PROPERTIES (§10.2.21).
+func TestTrackStatus_ConcurrentRequestsShareOneRound(t *testing.T) {
+	t.Parallel()
+	first, teardown := connectRelay(t, relay.Config{})
+	t.Cleanup(teardown)
+	second := dialAnotherClient(t, first)
+	release := make(chan struct{})
+	var asked atomic.Int32
+	namespacePeer(t, first, func(r *session.Request) {
+		asked.Add(1)
+		go func() {
+			<-release
+			_ = r.AcceptTrackStatus(&message.TrackStatusOK{TrackProperties: opaqueProps("shared")})
+		}()
+	})
+	type answer struct {
+		ok  *message.TrackStatusOK
+		err error
+	}
+	withProps, withoutProps := make(chan answer, 1), make(chan answer, 1)
+	go func() {
+		ok, err := trackStatusCam1(t, first)
+		withProps <- answer{ok, err}
+	}()
+	waitFor(t, 2*time.Second, func() bool { return asked.Load() == 1 }, "the first TRACK_STATUS was never forwarded")
+	go func() {
+		ok, err := trackStatusCam1(t, second, message.IncludePropertiesParam(false))
+		withoutProps <- answer{ok, err}
+	}()
+	time.Sleep(100 * time.Millisecond) // the second reaches the relay while the round is in flight
+	close(release)
+
+	a, b := <-withProps, <-withoutProps
+	if a.err != nil || b.err != nil {
+		t.Fatalf("TrackStatus: %v, %v", a.err, b.err)
+	}
+	if n := asked.Load(); n != 1 {
+		t.Fatalf("the publisher was asked %d times, want 1", n)
+	}
+	if !bytes.Equal(a.ok.TrackProperties, opaqueProps("shared")) || len(b.ok.TrackProperties) != 0 {
+		t.Fatalf(
+			"TrackProperties = %x and %x, want the publisher's and empty",
+			a.ok.TrackProperties,
+			b.ok.TrackProperties,
+		)
 	}
 }
 

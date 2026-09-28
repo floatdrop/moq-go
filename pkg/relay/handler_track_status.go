@@ -63,7 +63,7 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 			h.rejectExcessiveLoad(ctx, req, "subscription")
 			return
 		}
-		oks, err := h.trackStatusUpstream(ctx, req, fullName)
+		oks, err := h.forwardTrackStatus(ctx, req, fullName)
 		h.limiter.releaseSub()
 		if len(oks) == 0 {
 			h.rejectTrackStatus(ctx, req, err)
@@ -125,6 +125,39 @@ func (h *sessionHandler) rejectTrackStatus(ctx context.Context, req *session.Req
 	}
 }
 
+// forwardTrackStatus answers TRACK_STATUS for fullName from a round of
+// [sessionHandler.trackStatusUpstream], shared with the other requests for the
+// track that arrive while it is in flight (relay policy, so N requests do not
+// make N upstream ones). The round is bounded by its timeout, not by any one
+// requester, who stops waiting on its own STOP_SENDING.
+//
+// A request from a session the relay is asking about the track right now may
+// be the relay's own TRACK_STATUS routed back to it (§6.2), which the round
+// waits on: it runs a round of its own instead, where the loop guard skips
+// that session.
+func (h *sessionHandler) forwardTrackStatus(
+	ctx context.Context,
+	req *session.Request,
+	fullName track.FullTrackName,
+) ([]*message.TrackStatusOK, error) {
+	waitCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	defer context.AfterFunc(req.Stream.Context(), cancel)()
+	if h.tracks.RequestPending(message.TypeTrackStatus, h.sess, fullName.Key()) {
+		return h.trackStatusUpstream(waitCtx, fullName)
+	}
+	round := h.statusRounds.DoChan(string(fullName.Key().Bytes()), func() (any, error) {
+		return h.trackStatusUpstream(context.WithoutCancel(ctx), fullName)
+	})
+	select {
+	case r := <-round:
+		oks, _ := r.Val.([]*message.TrackStatusOK)
+		return oks, r.Err
+	case <-waitCtx.Done():
+		return nil, waitCtx.Err()
+	}
+}
+
 // trackStatusUpstream forwards TRACK_STATUS for fullName, concurrently, to
 // every candidate SUBSCRIBE would try (see [sessionHandler.subscribeUpstream]):
 // each local publisher of a covering namespace and each relay Discovery
@@ -132,16 +165,14 @@ func (h *sessionHandler) rejectTrackStatus(ctx context.Context, req *session.Req
 // are none, the refusal SUBSCRIBE would give ([preferCandidateErr]), nil when there
 // was no candidate.
 //
-// trackStatusUpstreamTimeout bounds the whole forwarding, resolving the
-// Discovery candidates included, and it all ends when the requester cancels
-// (STOP_SENDING). A draining candidate is sent nothing
+// trackStatusUpstreamTimeout bounds the whole round, resolving the Discovery
+// candidates included. A draining candidate is sent nothing
 // (§10.4). Relay policy, as for SUBSCRIBE and FETCH: the requester's own
 // session is skipped while a TRACK_STATUS for the track to it is in flight,
 // since this request may be that one routed back, and a second would loop
 // (§6.2).
 func (h *sessionHandler) trackStatusUpstream(
 	ctx context.Context,
-	req *session.Request,
 	fullName track.FullTrackName,
 ) ([]*message.TrackStatusOK, error) {
 	timeout := trackStatusUpstreamTimeout
@@ -150,7 +181,6 @@ func (h *sessionHandler) trackStatusUpstream(
 	}
 	upCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	defer context.AfterFunc(req.Stream.Context(), cancel)()
 
 	key := fullName.Key()
 	var lastErr error
