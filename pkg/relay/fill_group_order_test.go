@@ -75,7 +75,7 @@ func TestSubscribe_FillFollowsPublisherGroupOrder(t *testing.T) {
 
 // TestSubscribeTracks_FillFollowsPublisherGroupOrder: a forwarded PUBLISH's
 // subscription (§3.6.2). The PUBLISH states the Group Order it resolved to,
-// since §3.6.2 says these parameters "are explicitly communicated in
+// since §3.6.2 says these parameters are "explicitly communicated in the
 // PUBLISH".
 func TestSubscribeTracks_FillFollowsPublisherGroupOrder(t *testing.T) {
 	t.Parallel()

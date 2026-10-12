@@ -81,7 +81,7 @@ func mutableProps(v uint64) []byte {
 }
 
 // TestRelay_DuplicateConsistency: a duplicate of a cached Object with a
-// different Forwarding Preference, Subgroup ID, Priority or Payload (§7.1), or
+// different Delivery Mode, Subgroup ID, Priority or Payload (§7.1), or
 // different Immutable Properties (§12.1, §10.7), makes the track malformed.
 // Mutable Properties may differ (§7.1), and Normal may become End of Group
 // (§7.1: existing to not existing).
@@ -98,7 +98,7 @@ func TestRelay_DuplicateConsistency(t *testing.T) {
 		{"payload", sub, with(sub, func(c *objCopy) { c.payload = "b" }), true},
 		{"priority", sub, with(sub, func(c *objCopy) { c.priority = 7 }), true},
 		{"Subgroup ID", sub, with(sub, func(c *objCopy) { c.subgroup = 1 }), true},
-		{"forwarding preference", sub, dg, true},
+		{"delivery mode", sub, dg, true},
 		{
 			"Immutable Properties",
 			with(sub, func(c *objCopy) { c.props = immutableProps(1) }),

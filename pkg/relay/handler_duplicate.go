@@ -23,7 +23,7 @@ func recordRedundant(entry *registry.TrackEntry, info registry.ObjectInfo, dup *
 }
 
 // checkDuplicate compares dup, a copy that lost the §7.3 dedup claim, with the
-// first copy in c. A different Forwarding Preference, Subgroup ID, Priority or
+// first copy in c. A different Delivery Mode, Subgroup ID, Priority or
 // Payload (§7.1), or different Immutable Properties (§12.1, §10.7; one copy
 // having them and the other not counts), makes the track malformed: the error
 // wraps [session.ErrMalformedTrack]. Mutable Properties may differ (§7.1).
@@ -49,7 +49,7 @@ func checkDuplicate(c *cache.ObjectCache, dup *cache.CachedObject) error {
 	var field string
 	switch {
 	case first.ForwardingPref != dup.ForwardingPref:
-		field = "Forwarding Preference"
+		field = "Delivery Mode"
 	case first.ForwardingPref == cache.ForwardingSubgroup && first.SubgroupID != dup.SubgroupID:
 		field = "Subgroup ID"
 	case first.PublisherPriority != dup.PublisherPriority:

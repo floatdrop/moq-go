@@ -100,7 +100,7 @@ func (s *IncomingSubgroupStream) InboundTrack() (InboundTrack, bool) {
 
 // AwaitInboundTrack is [IncomingSubgroupStream.InboundTrack] that waits for
 // the stream's Track Alias to be registered, until ctx ends or the session
-// closes (§3.1.3.1 allows buffering "for a brief period").
+// closes (§3.1.3.1 allows buffering it "briefly").
 //
 // The unread stream holds connection flow control, and the bundled transports
 // do not reserve it for control streams (§3.1.3.1), so early data can stall
@@ -315,7 +315,7 @@ type DecodedFetchObject struct {
 	Payload           []byte
 
 	// Datagram reports the §11.4.1.1 Datagram bit (0x40): the object was
-	// published with Forwarding Preference "Datagram" and has no Subgroup
+	// published with Delivery Mode "Datagram" and has no Subgroup
 	// ID (SubgroupID is 0).
 	Datagram bool
 

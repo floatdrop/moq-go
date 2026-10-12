@@ -83,9 +83,9 @@ func (ns TrackNamespace) ByteLen() int {
 
 // HasPrefix reports whether prefix is a (non-strict) prefix of ns in the
 // field-by-field sense of §2.4.2. A zero-length prefix matches every ns,
-// matching the §4.2 "Either message with zero Track Namespace fields
-// indicates the sender is interested in all namespaces" rule used by
-// SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS matching.
+// matching the rule that a SUBSCRIBE_NAMESPACE "with zero Track Namespace
+// fields indicates the sender is interested in all namespaces" (§4.2), and a
+// SUBSCRIBE_TRACKS one requests "a Subscription for all Tracks" (§3.6).
 //
 // Fields are compared as opaque binary; namespace components MAY contain
 // any bytes per §2.4.1.

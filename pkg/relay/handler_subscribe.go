@@ -405,7 +405,7 @@ func (h *sessionHandler) acquireUpstream(
 				slog.String("name", string(msg.Name)),
 				slog.Uint64("request_id", msg.RequestID))
 			// §9.20.6: "If the timeout expires without a publisher, the relay
-			// SHOULD respond with REQUEST_ERROR with error code TIMEOUT."
+			// SHOULD respond with SUBSCRIBE_ERROR with error code TIMEOUT."
 			_ = req.RejectError(moqt.RequestTimeout, "relay: no publisher within RENDEZVOUS_TIMEOUT")
 			return false, 0, false
 		}
@@ -426,7 +426,7 @@ func (h *sessionHandler) acquireUpstream(
 			slog.String("name", string(msg.Name)),
 			slog.Uint64("request_id", msg.RequestID))
 		// §9.20.6: without RENDEZVOUS_TIMEOUT, or with 0, "The relay MUST
-		// immediately return REQUEST_ERROR with error code DOES_NOT_EXIST".
+		// immediately return SUBSCRIBE_ERROR with error code DOES_NOT_EXIST".
 		_ = req.RejectError(moqt.RequestDoesNotExist, "relay: no publisher for namespace")
 		return false, 0, false
 	}

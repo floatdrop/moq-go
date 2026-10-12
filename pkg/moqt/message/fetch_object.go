@@ -250,7 +250,7 @@ func (o *FetchObject) IsEndOfTimedOutRange() bool {
 func (o *FetchObject) IsEndOfRange() bool { return isEndOfRange(o.SerializationFlags) }
 
 // IsDatagram reports whether the Datagram bit (0x40) is set: the object was
-// published with Forwarding Preference "Datagram" and carries no Subgroup ID.
+// published with Delivery Mode "Datagram" and carries no Subgroup ID.
 func (o *FetchObject) IsDatagram() bool {
 	return o.SerializationFlags&FetchFlagDatagram != 0
 }
@@ -278,7 +278,8 @@ func (o *FetchObject) Validate() error {
 }
 
 // ErrInvalidFetchFlags is a Serialization Flags value of 128 or more that is
-// not an End of Range marker: "Any other value is a PROTOCOL_VIOLATION"
+// not an End of Range marker: "Any other value 128 or greater is a
+// PROTOCOL_VIOLATION"
 // (§11.4.1). [FetchObject.Parse] returns it right after the flags.
 var ErrInvalidFetchFlags = errors.New("moqt/message: invalid fetch object serialization flags")
 

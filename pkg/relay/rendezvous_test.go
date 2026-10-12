@@ -245,7 +245,7 @@ func TestRendezvous_Expires(t *testing.T) {
 }
 
 // TestRendezvous_NoHold: RENDEZVOUS_TIMEOUT 0 "MUST immediately return
-// REQUEST_ERROR with error code DOES_NOT_EXIST" (§9.20.6), as does any
+// SUBSCRIBE_ERROR with error code DOES_NOT_EXIST" (§9.20.6), as does any
 // SUBSCRIBE on a relay configured to hold none.
 func TestRendezvous_NoHold(t *testing.T) {
 	t.Parallel()

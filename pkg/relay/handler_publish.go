@@ -150,7 +150,7 @@ var notEchoedInPublish = []message.ParamID{
 //   - FORWARD=0 only when the subscriber set it;
 //   - GROUP_ORDER always: the subscriber's, else the publisher's preference
 //     (§9.20.8), which the subscription's fills follow; §3.6.2 has these
-//     "explicitly communicated in PUBLISH";
+//     "explicitly communicated in the PUBLISH";
 //   - LARGEST_OBJECT is the relay's own watermark (§9.20.17).
 func publishParamsForSubscriber(tp *registry.TracksParams, entry *registry.TrackEntry) message.Parameters {
 	var out message.Parameters

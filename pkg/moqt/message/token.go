@@ -159,7 +159,7 @@ func AuthorizationTokenParam(t Token) Parameter {
 
 // TokensFromParam extracts and parses all AUTHORIZATION_TOKEN parameters from
 // ps. The spec allows the parameter to be repeated within a message (§8.9:
-// "The AUTHORIZATION TOKEN parameter MAY be repeated within a message as long
+// "An Authorization Token MAY be repeated within a message as long
 // as the combination of Token Type and Token Value are unique after resolving
 // any aliases"). Returns an error if any Token is malformed.
 func TokensFromParam(ps Parameters) ([]Token, error) {

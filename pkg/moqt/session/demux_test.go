@@ -231,7 +231,7 @@ func TestDemuxParksStreamsUntilAliasKnown(t *testing.T) {
 const parkLimitForTest = 8
 
 // TestDemuxParkingIsBounded: parked streams hold flow control, so parking is
-// bounded and the rest are abandoned (§3.1.3.1: buffer "for a brief period").
+// bounded and the rest are abandoned (§3.1.3.1: buffer it "briefly").
 func TestDemuxParkingIsBounded(t *testing.T) {
 	t.Parallel()
 

@@ -271,9 +271,9 @@ func capFetchEndLocation(filter *message.LocationFilter, largest message.Locatio
 
 // stitchedFetchObjects answers a FETCH range [start, end] from the relay's
 // cache, asking an upstream about the Locations whose status it does not know
-// (§3.2.3: "If it encounters an object in the requested range that is not
-// cached and has unknown status, the relay MUST pause subsequent delivery
-// until it has confirmed the object's status upstream"). See fetch_ranges.go
+// (§3.2.3: "When a relay encounters Objects within the requested range that
+// are not immediately available and have unknown status, it issues one or more
+// upstream FETCHes to retrieve them"). See fetch_ranges.go
 // for what the relay knows.
 //
 // With a fetch-capable upstream, one FETCH covers the span from the first
@@ -283,8 +283,8 @@ func capFetchEndLocation(filter *message.LocationFilter, largest message.Locatio
 // and what the relay knows does not exist stays a gap. With no such upstream, or
 // when its FETCH fails or times out, the unknown Locations are marked End of
 // Unknown or Timed-Out Range (§11.4.1.2) and the cached Objects served: the
-// relay can "indicate the range of unknown Objects and continue serving other
-// known Objects" (§3.2.2). Upstream-fetched objects are NOT cached back: the
+// relay can "indicate the range of unknown Objects (…) and continue serving
+// other known Objects" (§3.2.2). Upstream-fetched objects are NOT cached back: the
 // FIFO ring is keyed by arrival, so old backfill would evict live objects.
 //
 // A non-nil refusal (see fetchUpstreamRange) means the track must not be

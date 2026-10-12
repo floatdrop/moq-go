@@ -58,7 +58,7 @@ func (h *sessionHandler) maybeServeFill(
 		return err
 	}
 
-	// §3.4.1: only "while Forward State is 1"; a later unpause does not
+	// §3.4.1: only "while the subscription is not paused"; a later unpause does not
 	// open one retroactively.
 	if sub.ForwardState() != 1 {
 		return nil

@@ -144,8 +144,9 @@ func TestLateUpdateAnswerKeepsSession(t *testing.T) {
 
 // TestRequesterStrayResponseCloses: on this side's FETCH or
 // SUBSCRIBE_NAMESPACE, a REQUEST_OK before any REQUEST_UPDATE is a second
-// response to the request (§3.2: "exactly one FETCH_OK or REQUEST_ERROR") and
-// closes the session with PROTOCOL_VIOLATION.
+// response to the request (§3.2: "exactly one FETCH_OK or FETCH_ERROR"; §4.2:
+// "a single SUBSCRIBE_NAMESPACE_OK or SUBSCRIBE_NAMESPACE_ERROR") and closes
+// the session with PROTOCOL_VIOLATION.
 func TestRequesterStrayResponseCloses(t *testing.T) {
 	for _, tc := range []struct {
 		name string

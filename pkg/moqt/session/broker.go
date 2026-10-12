@@ -384,8 +384,8 @@ func (b *RequestBroker) writeThenClose(msg message.Message) error {
 // route delivers a REQUEST_OK / REQUEST_ERROR read off the stream to
 // in-flight Update calls: a REQUEST_OK answers the oldest waiter; a
 // REQUEST_ERROR answers ALL of them, because §9.5.1 lets the peer coalesce
-// pipelined updates and "only a single REQUEST_ERROR will be sent" for the
-// batch. It reports whether any waiter consumed the message; false means
+// pipelined updates and "only a single REQUEST_UPDATE_ERROR will be sent"
+// for the batch. It reports whether any waiter consumed the message; false means
 // none was pending (an unsolicited response Serve hands to its callback).
 func (b *RequestBroker) route(msg message.Message) bool {
 	b.mu.Lock()
@@ -473,7 +473,8 @@ func (b *RequestBroker) receiveUpdate(m *message.RequestUpdate, updates *Request
 		_ = b.sess.Close(moqt.SessionTooManyRequestUpdates, err.Error())
 		return err
 	}
-	// §9.5: "MUST respond with exactly one REQUEST_OK or REQUEST_ERROR".
+	// §9.5: "MUST respond with exactly one REQUEST_UPDATE_OK or
+	// REQUEST_UPDATE_ERROR" (a REQUEST_OK or REQUEST_ERROR on the wire).
 	// onMsg still observes the update.
 	accepted, err := b.answerUpdate(m)
 	if err != nil {

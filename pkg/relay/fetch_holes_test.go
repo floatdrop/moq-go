@@ -16,9 +16,8 @@ import (
 // A FETCH served from the relay's cache says an Object does not exist only
 // when the relay knows it (§2.1.2: "A gap in the observed Object IDs does not by
 // itself convey any information about the skipped Objects"). Any other
-// uncached Location is asked of an upstream (§3.2.3: "the relay MUST pause
-// subsequent delivery until it has confirmed the object's status upstream"),
-// or, with none to ask, marked End of Unknown Range (§11.4.1.2).
+// uncached Location is asked of an upstream (§3.2.3: the relay "issues one or
+// more upstream FETCHes to retrieve them"), or, with none to ask, marked End of Unknown Range (§11.4.1.2).
 
 // cam1Object is one Object of video/cam1 to publish: its Location, and its
 // Object Properties.

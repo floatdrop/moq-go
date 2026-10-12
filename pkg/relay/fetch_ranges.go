@@ -10,10 +10,11 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
-// A FETCH response asserts what it does not carry: "Any gaps in the Group and
-// Object IDs in the response stream indicate objects that do not exist"
-// (§3.2.2), and "All signals that an Object does not exist are
-// authoritative" (§2.1.2). The relay knows an Object does not exist only from a
+// A FETCH response without Range Filters, which is all the relay sends
+// upstream, asserts what it does not carry: "any gaps in the Group and Object
+// IDs in the response stream that are not otherwise marked indicate objects
+// that do not exist" (§3.2.2), and "All signals that an Object does not exist
+// are authoritative" (§2.1.2). The relay knows an Object does not exist only from a
 // signal — a Prior Group or Object ID Gap (§10.8, §10.9), a Group's or the
 // Track's end (§11.1.1, §11.3.1), or an upstream's FETCH response — never from a gap in
 // what it happened to receive: "A gap in the observed Object IDs does not by

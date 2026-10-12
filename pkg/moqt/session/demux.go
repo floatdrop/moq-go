@@ -46,13 +46,13 @@ type FetchHandler func(*IncomingFetchStream)
 // one CDN it did worse — two streams reset on arrival and the subscription
 // then delivered nothing for the rest of the run.
 //
-// §3.1.3.1 says exactly what the choice is — "if an endpoint receives a
-// subgroup with an unknown Track Alias, it MAY abandon the stream, or choose
-// to buffer it for a brief period to handle reordering with the control
-// message that establishes the Track Alias" — and abandoning was measured to
-// cost whole runs.
+// §3.1.3.1 says exactly what the choice is — "When an endpoint receives a
+// datagram or a new stream with a Track Alias that is not yet associated with
+// an Established subscription, it MAY drop the data or buffer it briefly to
+// handle reordering with the control message that establishes the Track
+// Alias" — and dropping was measured to cost whole runs.
 //
-// "A brief period" is what [parkLimit] bounds: at most that many streams wait
+// "Briefly" is what [parkLimit] bounds: at most that many streams wait
 // per alias, past which the oldest is reset, and [Demux.Run] resets whatever
 // is still parked when it returns. Without a bound a stream for an alias
 // nobody ever resolves would sit open with its flow control withheld for the
@@ -76,9 +76,9 @@ type Demux struct {
 // and parkTotalLimit how many may wait across all of them. The window being
 // covered is a single control-message round trip, so a few Groups' worth is
 // the right order; past either bound a stream is reset, which is §3.1.3.1's
-// other option ("MAY abandon the stream").
+// other option ("MAY drop the data").
 //
-// Both are counts, where §3.1.3.1 says "for a brief period" — time. Nothing
+// Both are counts, where §3.1.3.1 says "briefly" — time. Nothing
 // here evicts on a timer: with fewer than parkLimit streams for an alias that
 // is never claimed, they wait until [Demux.Run] returns. What the counts bound
 // is how much can be pinned open at once, which is the part that matters for
@@ -89,8 +89,8 @@ type Demux struct {
 // each. A parked stream is header-parsed and then unread, so its body sits in
 // the transport's receive buffers and consumes the CONNECTION-level window —
 // and §3.1.3.1 continues, past the sentence quoted on [Demux]: "To prevent
-// deadlocks, endpoints MUST allocate connection flow control to the control
-// streams before allocating it to any data streams. Otherwise, a receiver
+// deadlocks, endpoints MUST allocate connection flow control to control
+// streams before allocating it to any data streams; otherwise a receiver
 // might wait for a control message containing a Track Alias to release flow
 // control, while the sender waits for flow control to send the message." That
 // MUST binds the transport adapter, which is below this layer and does not

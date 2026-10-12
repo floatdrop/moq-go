@@ -264,9 +264,8 @@ func (h *sessionHandler) resolveImplicitSubgroupID(
 }
 
 // A subgroup stream can arrive before the SUBSCRIBE_OK binding its Track Alias
-// (§3.1.3). §3.1.3.1 lets the receiver "abandon the stream, or choose to buffer
-// it for a brief period"; the relay leaves it unread for up to earlyAliasWait,
-// then abandons it.
+// (§3.1.3). §3.1.3.1 lets the receiver "drop the data or buffer it
+// briefly"; the relay leaves it unread for up to earlyAliasWait, then drops it.
 //
 // The deadline also breaks a flow-control deadlock: the bundled transports do
 // not reserve connection credit for control streams (§3.1.3.1), so unread

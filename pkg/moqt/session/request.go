@@ -774,9 +774,11 @@ func awaitRequestResponse[OK message.Message, R any](
 		return zero, s.rejection(rerr, m.Type())
 	}
 	err = fmt.Errorf("moqt/session: unexpected %s in %s response", resp.Type(), m.Type())
-	// §4.2, §3.6: "If the subscriber receives any message other than a
-	// REQUEST_OK or a REQUEST_ERROR as the first message on the response half
-	// of the stream, then it MUST close the session with a PROTOCOL_VIOLATION."
+	// §3.6: "If the subscriber receives any message other than a
+	// SUBSCRIBE_TRACKS_OK or a SUBSCRIBE_TRACKS_ERROR as the first message on
+	// the response half of the stream, then it MUST close the session with a
+	// PROTOCOL_VIOLATION", and §4.2 the same for SUBSCRIBE_NAMESPACE (both are
+	// a REQUEST_OK or REQUEST_ERROR on the wire).
 	if t := m.Type(); t == message.TypeSubscribeNamespace || t == message.TypeSubscribeTracks {
 		return zero, s.closeProtocolViolation(err)
 	}
