@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Eyevinn/mp4ff/mp4"
@@ -422,5 +423,33 @@ func TestChunkBytesContinuesTheTimelineOnARepeatPass(t *testing.T) {
 	if second[0] <= first[len(first)-1] {
 		t.Errorf("pass 2 opens at %d, which is not after pass 1's last frame at %d",
 			second[0], first[len(first)-1])
+	}
+}
+
+// TestOpenSourceRejectsShortTimeToSampleTable: a progressive file whose stts
+// covers fewer samples than its stsz is malformed — the last samples have no
+// decode time — and openSource reports it instead of inventing one.
+func TestOpenSourceRejectsShortTimeToSampleTable(t *testing.T) {
+	var buf bytes.Buffer
+	writeProgressive(t, &buf, synthSamples("IPPIPP"))
+	f, err := mp4.DecodeFile(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	// Count 0 on the last entry keeps every box the same size, so the
+	// chunk offset still points into mdat.
+	stts := f.Moov.Trak.Mdia.Minf.Stbl.Stts
+	stts.SampleCount[len(stts.SampleCount)-1] = 0
+	var out bytes.Buffer
+	if err := f.Encode(&out); err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "short-stts.mp4")
+	if err := os.WriteFile(path, out.Bytes(), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	_, err = openSource(path, 0)
+	if err == nil || !strings.Contains(err.Error(), "sample 6") {
+		t.Fatalf("openSource = %v, want an error for sample 6, which the stts does not cover", err)
 	}
 }

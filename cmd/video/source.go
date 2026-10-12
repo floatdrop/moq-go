@@ -350,7 +350,10 @@ func progressiveSamples(f *mp4.File, trak *mp4.TrakBox) ([]mp4.FullSample, error
 		if offset < mdatStart || offset+uint64(size) > mdatStart+mdatLen {
 			return nil, fmt.Errorf("video: sample %d lies outside mdat", nr)
 		}
-		decTime, dur := stbl.Stts.GetDecodeTime(nr)
+		decTime, dur, err := stbl.Stts.GetDecodeTime(nr)
+		if err != nil {
+			return nil, fmt.Errorf("video: sample %d: %w", nr, err)
+		}
 		var cto int32
 		if stbl.Ctts != nil {
 			cto = stbl.Ctts.GetCompositionTimeOffset(nr)
