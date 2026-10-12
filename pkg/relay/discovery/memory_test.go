@@ -684,7 +684,7 @@ func TestMemoryStore_OverflowReleasesWatch(t *testing.T) {
 				Prefix: ns(strconv.Itoa(i*3 + j)), RelayAddr: "relay-C",
 			})
 		}
-		for range ch { //nolint:revive // drain until the overflow close
+		for range ch { // drain until the overflow close
 		}
 	}
 	time.Sleep(50 * time.Millisecond)

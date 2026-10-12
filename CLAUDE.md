@@ -74,7 +74,7 @@ The lint config's enabled formatters are `goimports` and `golines`, so format
 with those (not plain `gofmt`).
 
 The `modernize` linter is enabled, which covers `errorsastype` (rewrite
-`errors.As(err, &t)` → `errors.AsType[*T](err)`). golangci-lint v2.13.0 bundles
+`errors.As(err, &t)` → `errors.AsType[*T](err)`). golangci-lint v2.14.0 bundles
 a modernize snapshot that ships that analyzer, so `golangci-lint run` covers it.
 CI additionally runs the analyzer standalone at `@latest`, which catches
 analyzers newer than the bundled snapshot; run it the same way when you want

@@ -2,7 +2,7 @@ module github.com/floatdrop/moq-go
 
 go 1.27
 
-toolchain go1.27.0
+toolchain go1.27.2
 
 require (
 	github.com/Eyevinn/mp4ff v0.59.0
@@ -15,8 +15,8 @@ require (
 require (
 	github.com/dunglas/httpsfv v1.1.1 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect
-	golang.org/x/crypto v0.54.0 // indirect
-	golang.org/x/net v0.56.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.40.0 // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 )
