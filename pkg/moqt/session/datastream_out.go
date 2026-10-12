@@ -85,8 +85,8 @@ type OutgoingSubgroupStream struct {
 	encPrevObject uint64
 	encHavePrev   bool
 
-	// Set by [Publication.OpenSubgroup]: onObject is told each written
-	// object's Location, paused reports a Forward State of 0 (§11.3.2), ended
+	// Set by [Publication.OpenSubgroup]: onObject is told each object's
+	// Location as its write begins (§3.1.4), paused reports a Forward State of 0 (§11.3.2), ended
 	// reports that the publication ended (Done), and onEnd is told when the
 	// stream is FINished or reset.
 	onObject func(group, object uint64)
@@ -184,6 +184,17 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	if err := s.checkObjectTimeout(receivedAt); err != nil {
 		return err
 	}
+	// §11.3.1: delta + 1 after the first.
+	objectID := obj.ObjectIDDelta
+	if s.encHavePrev {
+		objectID = s.encPrevObject + obj.ObjectIDDelta + 1
+	}
+	// §3.1.4: Largest Object advances as the Object's first byte is
+	// published, not once the write completes; it stays even if the write
+	// then fails.
+	if s.onObject != nil {
+		s.onObject(s.header.GroupID, objectID)
+	}
 	wr, _ := writerPool.Get().(*wire.Writer)
 	wr.Reset()
 	obj.Append(wr, s.header.Properties)
@@ -192,15 +203,7 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	if err != nil {
 		return err
 	}
-	// §11.3.1: delta + 1 after the first.
-	objectID := obj.ObjectIDDelta
-	if s.encHavePrev {
-		objectID = s.encPrevObject + obj.ObjectIDDelta + 1
-	}
 	s.encPrevObject, s.encHavePrev = objectID, true
-	if s.onObject != nil {
-		s.onObject(s.header.GroupID, objectID)
-	}
 	return nil
 }
 

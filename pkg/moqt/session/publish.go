@@ -165,7 +165,8 @@ var acceptedUpdateParams = []message.ParamID{
 	message.ParamAuthorizationToken,
 }
 
-// noteObject records a written object for LARGEST_OBJECT.
+// noteObject records an Object whose first byte is being published, for
+// LARGEST_OBJECT (§3.1.4).
 func (p *Publication) noteObject(group, object uint64) {
 	loc := message.Location{Group: group, Object: object}
 	p.largestMu.Lock()

@@ -257,3 +257,44 @@ func TestInvalidForwardClosesSession(t *testing.T) {
 		requireClosedProtocolViolation(t, server)
 	})
 }
+
+// TestPublicationLargestObjectOnFirstByte: Largest Object advances "when the
+// first byte of an Object ... is published" (§3.1.4), so a REQUEST_UPDATE_OK
+// answered while an Object's write is still blocked on the subscriber already
+// reports it.
+func TestPublicationLargestObjectOnFirstByte(t *testing.T) {
+	client, sub, pub := servedPublication(t)
+
+	// Accept the stream (the header write completes) but read nothing of it,
+	// so the Object's write blocks part way, until release.
+	release := make(chan struct{})
+	go func() {
+		ds, err := client.AcceptDataStream(t.Context())
+		if err != nil {
+			return
+		}
+		<-release
+		if in, ok := ds.(*session.IncomingSubgroupStream); ok {
+			for {
+				if _, err := in.ReadObject(); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	sg, err := pub.OpenSubgroup(message.SubgroupHeader{GroupID: 5, SubgroupIDMode: message.SubgroupIDExplicit})
+	must(t, err)
+	written := make(chan error, 1)
+	go func() { written <- sg.WriteObjectAt(3, &message.SubgroupObject{Payload: []byte("abc")}) }()
+	time.Sleep(50 * time.Millisecond) // the write is under way and blocked
+
+	ok, err := sub.Update(t.Context(), message.Parameters{message.ForwardParam(true)})
+	must(t, err)
+	p, found := ok.Parameters.Find(message.ParamLargestObject)
+	close(release)
+	must(t, <-written)
+	if !found || p.Group != 5 || p.Object != 3 {
+		t.Fatalf("REQUEST_UPDATE_OK LARGEST_OBJECT = %+v (found %v) mid-write, want {5, 3}", p, found)
+	}
+	must(t, sg.Close())
+}
