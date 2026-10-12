@@ -177,7 +177,7 @@ end to end; each has its own README. `cmd/video` streams a real media file as a
 CMSF broadcast and reports what the transport did to it, which is also the tool
 to reach for when a player is showing artefacts and the cause is unclear.
 
-A per-feature breakdown of draft-20 completeness, the full list of what's
+A per-feature breakdown of draft-22 completeness, the full list of what's
 implemented per package, and known limitations live in
 [`STATUS.md`](STATUS.md).
 
