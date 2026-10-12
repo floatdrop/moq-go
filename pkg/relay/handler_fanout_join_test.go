@@ -31,7 +31,7 @@ func newWedgeableWriter(t *testing.T, cli *session.Session) *subgroupWriter {
 		done:  make(chan struct{}),
 		log:   slog.Default(),
 		// Long enough that a scheduler hiccup between publish and dequeue
-		// cannot trip the §8 lag check instead (which would end the writer
+		// cannot trip the §5.2 lag check instead (which would end the writer
 		// without exercising the join escalation under test).
 		maxLag:  time.Second,
 		metrics: NopMetrics{},

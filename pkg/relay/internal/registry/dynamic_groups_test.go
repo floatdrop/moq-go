@@ -17,9 +17,9 @@ func dynamicGroupsProps(t *testing.T, value uint64) []byte {
 	})
 }
 
-// TestTrackEntry_DynamicGroups pins the §12.6 DYNAMIC_GROUPS decode that
+// TestTrackEntry_DynamicGroups pins the §10.6 DYNAMIC_GROUPS decode that
 // SetProperties performs once and caches: an absent property and value 0 are
-// false, and value 1 is true. The session closes on a value above 1 (§12.6)
+// false, and value 1 is true. The session closes on a value above 1 (§10.6)
 // before Properties reach the registry.
 func TestTrackEntry_DynamicGroups(t *testing.T) {
 	t.Parallel()
@@ -61,7 +61,7 @@ func TestTrackEntry_DynamicGroups(t *testing.T) {
 	})
 }
 
-// TestTrackEntry_DefaultGroupOrder pins the §12.5 DEFAULT_PUBLISHER_GROUP_ORDER
+// TestTrackEntry_DefaultGroupOrder pins the §10.5 DEFAULT_PUBLISHER_GROUP_ORDER
 // decode: Ascending when omitted, the value when allowed, and Ascending for a
 // value outside {1, 2} or a malformed block, including one that would
 // truncate to an allowed byte.
@@ -102,7 +102,7 @@ func TestTrackEntry_DefaultGroupOrder(t *testing.T) {
 	}
 }
 
-// TestConsiderNewGroupRequest pins the §10.2.19 relay decision and its
+// TestConsiderNewGroupRequest pins the §9.20.19 relay decision and its
 // outstanding-request bookkeeping.
 func TestConsiderNewGroupRequest(t *testing.T) {
 	t.Parallel()
@@ -180,7 +180,7 @@ func TestConsiderNewGroupRequest(t *testing.T) {
 }
 
 // TestTrackEntry_PropertiesInsideImmutable: every Track Property the relay
-// decodes is also found inside Immutable Properties (§12.7).
+// decodes is also found inside Immutable Properties (§10.7).
 func TestTrackEntry_PropertiesInsideImmutable(t *testing.T) {
 	t.Parallel()
 	nested := message.AppendTrackProperties([]wire.KVPair{

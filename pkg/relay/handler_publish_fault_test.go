@@ -13,7 +13,7 @@ import (
 )
 
 // TestPublish_FailedRequestOKRollsBackRegistration: a PUBLISH whose REQUEST_OK
-// could not be written releases its Track Alias (§11.1) and its upstream. The
+// could not be written releases its Track Alias (§3.1.3) and its upstream. The
 // probe uses another track, since re-offering the same one under the same alias
 // is accepted either way.
 func TestPublish_FailedRequestOKRollsBackRegistration(t *testing.T) {

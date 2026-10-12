@@ -36,7 +36,7 @@ func answerSubscribes(t *testing.T, sess *session.Session, alias uint64) <-chan 
 
 // TestRelay_SelfSubscribeUnderOwnNamespace: "An endpoint MAY SUBSCRIBE to a
 // Track it is publishing ... Such self-subscriptions are identical to
-// subscriptions initiated by other endpoints" (§5.1). A client that
+// subscriptions initiated by other endpoints" (§3.1). A client that
 // PUBLISH_NAMESPACEd video and SUBSCRIBEs video/self is SUBSCRIBEd for it in
 // turn, and its own Objects reach its subscription.
 func TestRelay_SelfSubscribeUnderOwnNamespace(t *testing.T) {
@@ -76,7 +76,7 @@ func TestRelay_SelfSubscribeUnderOwnNamespace(t *testing.T) {
 
 // TestRelay_SelfSubscribeAlongsideAnotherPublisher: with another publisher
 // already serving the track, the subscribing client, which also publishes the
-// namespace, is SUBSCRIBEd too, as every matching publisher is (§9.5).
+// namespace, is SUBSCRIBEd too, as every matching publisher is (§7.6).
 func TestRelay_SelfSubscribeAlongsideAnotherPublisher(t *testing.T) {
 	t.Parallel()
 	other, teardown := connectRelay(t, relay.Config{})
@@ -105,7 +105,7 @@ func TestRelay_SelfSubscribeAlongsideAnotherPublisher(t *testing.T) {
 
 // TestRelay_SelfFetchStitchesFromOwnSession: a FETCH whose only fetch-capable
 // upstream is the requester's own session asks that session for a cache hole,
-// as it would ask any other (§5.1: self-subscriptions "are identical"), rather
+// as it would ask any other (§3.1: self-subscriptions "are identical"), rather
 // than marking the hole unknown.
 func TestRelay_SelfFetchStitchesFromOwnSession(t *testing.T) {
 	t.Parallel()
@@ -163,7 +163,7 @@ func TestRelay_SelfFetchStitchesFromOwnSession(t *testing.T) {
 // TestRelay_SelfSubscribeReusingAnUpstream: a client subscribing to a track
 // the relay already receives from another publisher's PUBLISH, under a
 // namespace the client itself published, is SUBSCRIBEd too, as every covering
-// publisher missing from the track is (§9.5, §5.1).
+// publisher missing from the track is (§7.6, §3.1).
 func TestRelay_SelfSubscribeReusingAnUpstream(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)
@@ -188,7 +188,7 @@ const loopCap = 10
 
 // TestRelay_SelfSubscribeLoopStopsAtSecondHop: a peer relay that
 // PUBLISH_NAMESPACEd video and routes every SUBSCRIBE it gets back to the
-// relay on the same session (§6.2: PUBLISH_NAMESPACE "does not protect against
+// relay on the same session (§4.1: PUBLISH_NAMESPACE "does not protect against
 // loops") gets one SUBSCRIBE: its routed-back SUBSCRIBE finds the relay's own
 // still pending on that session and is not SUBSCRIBEd back again.
 func TestRelay_SelfSubscribeLoopStopsAtSecondHop(t *testing.T) {

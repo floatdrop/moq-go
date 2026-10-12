@@ -18,7 +18,7 @@ import (
 type forwarded struct {
 	stream int // 1-based index of the subgroup stream it came on
 	id     uint64
-	replay bool  // the stream's header had FIRST_OBJECT clear (§11.4.2)
+	replay bool  // the stream's header had FIRST_OBJECT clear (§11.3.1)
 	end    error // io.EOF for a FIN
 }
 
@@ -63,8 +63,8 @@ func awaitForwarded(t *testing.T, in <-chan forwarded) forwarded {
 
 // TestSubgroupWriter_RelayDropBreaksRun: an Object the relay dropped was not
 // sent, so the upstream's next Object is not "the next Object" after the one
-// before it (§11.4.3: "with no other Objects in between"). It goes on a new
-// stream, without FIRST_OBJECT (§11.4.2), and both streams end with a reset,
+// before it (§11.3.2: "with no other Objects in between"). It goes on a new
+// stream, without FIRST_OBJECT (§11.3.1), and both streams end with a reset,
 // since an Object was omitted.
 func TestSubgroupWriter_RelayDropBreaksRun(t *testing.T) {
 	t.Parallel()

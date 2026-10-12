@@ -412,7 +412,7 @@ func (c optionalIfaceConn) OpenUniStream() (session.SendStream, error) {
 }
 
 // TestFaulty_PanicsOnUnforwardableStream covers the loud-failure choice in
-// Faulty's doc comment. Silently dropping SetSendPriority would turn a §7.2
+// Faulty's doc comment. Silently dropping SetSendPriority would turn a §5.1.2
 // priority test into one that asserts nothing, which is precisely the failure
 // mode the repo's coverage rules exist to prevent.
 func TestFaulty_PanicsOnUnforwardableStream(t *testing.T) {

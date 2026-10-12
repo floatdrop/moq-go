@@ -87,7 +87,7 @@ func (m *RequestMux) OnUnknown(f func(*Request)) {
 // returns.
 //
 // Run surfaces an AcceptRequest error unchanged. Any but ctx's means the
-// session has ended: a protocol violation (§3.3, §10, §10.1, §10.2.2) arrives
+// session has ended: a protocol violation (§6.3, §9, §6.4.2.1, §9.20.2) arrives
 // already closed with the mapped code (see [Session.AcceptRequest]).
 //
 // Dispatch is synchronous: a handler runs to completion before Run accepts the

@@ -31,7 +31,7 @@ func TestSubscribeOKRoundTrip(t *testing.T) {
 	})
 }
 
-// TestSubscribeFullTrackNameLimit pins the §2.4.1 4096-byte Full Track Name
+// TestSubscribeFullTrackNameLimit pins the §8.7 4096-byte Full Track Name
 // cap at the message layer: exactly 4096 bytes round-trips, 4097 is rejected
 // at parse time (ParsePayload runs Validate).
 func TestSubscribeFullTrackNameLimit(t *testing.T) {
@@ -50,10 +50,10 @@ func TestSubscribeFullTrackNameLimit(t *testing.T) {
 		t.Fatalf("4096-byte full track name rejected: %v", err)
 	}
 	if _, err := ParsePayload(TypeSubscribe, build(4000, 97)); err == nil {
-		t.Fatal("4097-byte full track name accepted, want §2.4.1 rejection")
+		t.Fatal("4097-byte full track name accepted, want §8.7 rejection")
 	}
 	// Namespace-only overflow is caught by wire.Reader.TrackNamespace.
 	if _, err := ParsePayload(TypeSubscribe, build(4097, 0)); err == nil {
-		t.Fatal("4097-byte namespace accepted, want §2.4.1 rejection")
+		t.Fatal("4097-byte namespace accepted, want §8.7 rejection")
 	}
 }

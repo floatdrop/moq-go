@@ -12,7 +12,7 @@ import (
 )
 
 // TestPublish_TrackEntryPrecedesAliasRouting: a publisher may send Objects
-// before PUBLISH_OK (§10.11), so a subgroup routed by its alias (§11.1) before
+// before PUBLISH_OK (§9.8), so a subgroup routed by its alias (§3.1.3) before
 // the relay created the track entry must not be lost. The hook holds that
 // window open.
 func TestPublish_TrackEntryPrecedesAliasRouting(t *testing.T) {
@@ -83,7 +83,7 @@ func TestPublish_TrackEntryPrecedesAliasRouting(t *testing.T) {
 
 // TestPublish_DuplicateAliasLeavesTrackUnknown: a PUBLISH whose duplicate
 // alias closes the session leaves no track entry behind, so a FETCH is
-// DOES_NOT_EXIST (§10.6), not INVALID_RANGE.
+// DOES_NOT_EXIST (§12.3), not INVALID_RANGE.
 func TestPublish_DuplicateAliasLeavesTrackUnknown(t *testing.T) {
 	video := ns("video")
 	const alias = uint64(91)
@@ -101,7 +101,7 @@ func TestPublish_DuplicateAliasLeavesTrackUnknown(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = pub.Close() })
 
-	// §11.1: the alias is taken, so this PUBLISH closes the session — after
+	// §3.1.3: the alias is taken, so this PUBLISH closes the session — after
 	// the relay has already created the entry for `second`.
 	if _, err := pubSess.Publish(t.Context(), &message.Publish{
 		Namespace: video, Name: second, TrackAlias: alias,

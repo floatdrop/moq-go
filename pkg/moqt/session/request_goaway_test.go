@@ -12,7 +12,7 @@ import (
 
 // TestRequestStreamGoawayViolationCloses: a second GOAWAY on one request
 // stream, or a GOAWAY carrying a New Session URI received by the server,
-// closes the session with PROTOCOL_VIOLATION (§10.4), read by the receiving
+// closes the session with PROTOCOL_VIOLATION (§9.2), read by the receiving
 // handle's broker.
 func TestRequestStreamGoawayViolationCloses(t *testing.T) {
 	uri := &message.Goaway{NewSessionURI: []byte("https://relay.example/moq")}
@@ -51,7 +51,7 @@ func TestRequestStreamGoawayViolationCloses(t *testing.T) {
 }
 
 // TestRequestStreamGoawayOnceIsDelivered: one GOAWAY on a request stream, with
-// a New Session URI when sent to the client, is legal (§10.4) and reaches
+// a New Session URI when sent to the client, is legal (§9.2) and reaches
 // Serve's callback.
 func TestRequestStreamGoawayOnceIsDelivered(t *testing.T) {
 	cli, srv := openPair(t)

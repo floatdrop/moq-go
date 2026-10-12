@@ -10,7 +10,7 @@ import (
 
 // TestRelay_RequestStreamGoaway: on a subscriber's request stream the relay
 // (the server) closes the session for a second GOAWAY or for one carrying a
-// New Session URI (§10.4), and tolerates a single plain one.
+// New Session URI (§9.2), and tolerates a single plain one.
 func TestRelay_RequestStreamGoaway(t *testing.T) {
 	t.Parallel()
 	uri := &message.Goaway{NewSessionURI: []byte("https://relay.example/moq")}

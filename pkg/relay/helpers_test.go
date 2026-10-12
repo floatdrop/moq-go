@@ -33,7 +33,7 @@ func trackProp(typ, v uint64) []wire.KVPair {
 }
 
 // badRangeFilter is a PRIORITY_FILTER ranging past 255, which the relay
-// refuses per request with INVALID_FILTER (§10.2.12).
+// refuses per request with INVALID_FILTER (§9.20.12).
 func badRangeFilter() message.Parameter {
 	return message.RangeFilterParam(&message.RangeFilter{
 		Type: message.ParamPriorityFilter, Ranges: []message.Range{{Start: 0, End: 300}},

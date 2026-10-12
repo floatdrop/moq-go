@@ -15,7 +15,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 )
 
-// RENDEZVOUS_TIMEOUT (§10.2.6): a SUBSCRIBE for a track with no publisher is
+// RENDEZVOUS_TIMEOUT (§9.20.6): a SUBSCRIBE for a track with no publisher is
 // held for one to appear, up to the requested duration.
 
 // subscribeRendezvous sends a SUBSCRIBE for video/cam1 with RENDEZVOUS_TIMEOUT d from
@@ -178,7 +178,7 @@ func TestRendezvous_OtherErrorEndsHold(t *testing.T) {
 }
 
 // TestRendezvous_DrainingPublisherKeepsHold: a namespace's only publisher
-// having sent GOAWAY leaves the track without a current publisher (§10.4: the
+// having sent GOAWAY leaves the track without a current publisher (§9.2: the
 // relay initiates no request to it), so the SUBSCRIBE is held until another
 // arrives, rather than refused with GOING_AWAY.
 func TestRendezvous_DrainingPublisherKeepsHold(t *testing.T) {
@@ -216,7 +216,7 @@ func TestRendezvous_DrainingPublisherKeepsHold(t *testing.T) {
 }
 
 // TestRendezvous_Expires: with no publisher by the deadline the relay answers
-// REQUEST_ERROR TIMEOUT (§10.2.6), at the requested duration or at
+// REQUEST_ERROR TIMEOUT (§9.20.6), at the requested duration or at
 // [relay.Config.MaxRendezvousTimeout] if shorter ("The relay MAY use a shorter
 // timeout than requested").
 func TestRendezvous_Expires(t *testing.T) {
@@ -245,7 +245,7 @@ func TestRendezvous_Expires(t *testing.T) {
 }
 
 // TestRendezvous_NoHold: RENDEZVOUS_TIMEOUT 0 "MUST immediately return
-// REQUEST_ERROR with error code DOES_NOT_EXIST" (§10.2.6), as does any
+// REQUEST_ERROR with error code DOES_NOT_EXIST" (§9.20.6), as does any
 // SUBSCRIBE on a relay configured to hold none.
 func TestRendezvous_NoHold(t *testing.T) {
 	t.Parallel()
@@ -273,7 +273,7 @@ func TestRendezvous_NoHold(t *testing.T) {
 }
 
 // TestRendezvous_CancelEndsHold: a subscriber cancelling its held SUBSCRIBE
-// (§3.3.3) ends the hold, so a publisher arriving afterwards is not
+// (§6.4.2.3) ends the hold, so a publisher arriving afterwards is not
 // SUBSCRIBEd for it.
 func TestRendezvous_CancelEndsHold(t *testing.T) {
 	t.Parallel()
@@ -356,7 +356,7 @@ func TestCrossRelay_RendezvousRemoteNamespaceArrives(t *testing.T) {
 // on relay A while A's upstream SUBSCRIBE is held on relay B serves the
 // subscriber at once, rather than once B's hold runs out ("If a publisher
 // becomes available within this time, the relay proceeds with the
-// subscription normally", §10.2.6).
+// subscription normally", §9.20.6).
 func TestCrossRelay_RendezvousArrivalCutsRemoteHoldShort(t *testing.T) {
 	t.Parallel()
 	store := discovery.NewMemoryStore()

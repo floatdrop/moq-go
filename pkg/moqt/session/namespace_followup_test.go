@@ -90,8 +90,8 @@ func serveBriefly(t *testing.T, b *session.RequestBroker, onMsg func(message.Mes
 }
 
 // TestNamespaceSubscriptionViolationCloses: on a NamespaceSubscription's
-// broker a NAMESPACE_DONE with no NAMESPACE before it (§10.19), and a
-// PUBLISH_STATE_NOTIFY (§10.10) or REQUEST_UPDATE (§10.9) from the publisher,
+// broker a NAMESPACE_DONE with no NAMESPACE before it (§4.2), and a
+// PUBLISH_STATE_NOTIFY (§9.10) or REQUEST_UPDATE (§9.5) from the publisher,
 // close the session with PROTOCOL_VIOLATION.
 func TestNamespaceSubscriptionViolationCloses(t *testing.T) {
 	for _, tc := range []struct {
@@ -149,8 +149,8 @@ func TestNamespaceSubscriptionFollowupsDelivered(t *testing.T) {
 	requireStaysOpen(t, cli, 50*time.Millisecond)
 }
 
-// TestTrackSubscriptionPeerMessagesClose: a PUBLISH_STATE_NOTIFY (§10.10) or
-// REQUEST_UPDATE (§10.9) from the publisher of a SUBSCRIBE_TRACKS closes the
+// TestTrackSubscriptionPeerMessagesClose: a PUBLISH_STATE_NOTIFY (§9.10) or
+// REQUEST_UPDATE (§9.5) from the publisher of a SUBSCRIBE_TRACKS closes the
 // session with PROTOCOL_VIOLATION, read by ReadPublishSkipped or the broker.
 func TestTrackSubscriptionPeerMessagesClose(t *testing.T) {
 	for _, served := range []bool{false, true} {
@@ -175,7 +175,7 @@ func TestTrackSubscriptionPeerMessagesClose(t *testing.T) {
 }
 
 // TestReadPublishSkippedGoaway: ReadPublishSkipped skips a single GOAWAY
-// (§10.4) to return the PUBLISH_SKIPPED after it, and closes the session on a
+// (§9.2) to return the PUBLISH_SKIPPED after it, and closes the session on a
 // second.
 func TestReadPublishSkippedGoaway(t *testing.T) {
 	skipped := &message.PublishSkipped{TrackNamespaceSuffix: wire.TrackNamespace{[]byte("a")}, TrackName: []byte("t")}
@@ -204,7 +204,7 @@ func TestReadPublishSkippedGoaway(t *testing.T) {
 }
 
 // TestNamespaceSubscriptionUpdate: the subscriber may update a
-// SUBSCRIBE_NAMESPACE (§10.9), and its broker pairs the answer.
+// SUBSCRIBE_NAMESPACE (§9.5), and its broker pairs the answer.
 func TestNamespaceSubscriptionUpdate(t *testing.T) {
 	cli, srv := openPair(t)
 	sub, stream := namespaceSubscribePair(t, cli, srv)
@@ -225,7 +225,7 @@ func TestNamespaceSubscriptionUpdate(t *testing.T) {
 
 // TestNamespaceSubscriptionPrefixUpdate: NAMESPACE_DONE suffixes after the
 // REQUEST_OK accepting a TRACK_NAMESPACE_PREFIX update are relative to the new
-// prefix (§10.9.2), so the §10.19 check resolves them there; before it, or
+// prefix (§9.5.2), so the §4.2 check resolves them there; before it, or
 // after a REQUEST_ERROR, against the old one.
 func TestNamespaceSubscriptionPrefixUpdate(t *testing.T) {
 	ab := &message.Namespace{TrackNamespaceSuffix: wire.TrackNamespace{[]byte("a"), []byte("b")}}

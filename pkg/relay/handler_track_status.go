@@ -19,25 +19,25 @@ import (
 var trackStatusTimeout atomic.Int64
 
 // trackStatusUpstreamTimeout bounds a forwarded TRACK_STATUS's upstream round
-// trip, as FILL_TIMEOUT's default bounds a stitch FETCH's (§13.6): a
+// trip, as FILL_TIMEOUT's default bounds a stitch FETCH's (§15.6): a
 // candidate that does not answer within it counts as TIMEOUT.
 const trackStatusUpstreamTimeout = defaultUpstreamFetchTimeout
 
-// handleTrackStatus implements TRACK_STATUS (§10.15): a metadata-only query for
+// handleTrackStatus implements TRACK_STATUS (§9.13): a metadata-only query for
 // a track's Properties and existence, which the relay "treats ... identically
 // as if it had received a SUBSCRIBE", without creating a subscription. The
 // reply is TRACK_STATUS_OK (a REQUEST_OK, [message.TrackStatusOK]) carrying
-// what the relay's SUBSCRIBE_OK would: the Track Properties and §10.2.17
+// what the relay's SUBSCRIBE_OK would: the Track Properties and §9.20.17
 // LARGEST_OBJECT.
 //
 // A track with an Established subscription is answered from the track
 // registry. Otherwise, as SUBSCRIBE would go upstream, TRACK_STATUS is
-// forwarded to every candidate SUBSCRIBE would try (§10.15: relays "MAY
+// forwarded to every candidate SUBSCRIBE would try (§9.13: relays "MAY
 // forward TRACK_STATUS to one or more publishers"; see
 // [sessionHandler.trackStatusUpstream]), and their answers are combined as a
 // SUBSCRIBE_OK's would be: the entry's Track Properties if it has any, else
-// the first answer's (§9.6), and the largest LARGEST_OBJECT of all, the
-// entry's included (§10.2.17). If none answers OK, the refusal is the one
+// the first answer's (§7.7), and the largest LARGEST_OBJECT of all, the
+// entry's included (§9.20.17). If none answers OK, the refusal is the one
 // SUBSCRIBE would give.
 func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Request, msg *message.TrackStatus) {
 	if err := h.auth.AuthorizeTrackStatus(ctx, h.sess, msg); err != nil {
@@ -57,7 +57,7 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 		largest, hasLargest = entry.GetLargest()
 	}
 	if !known || !hasEstablishedUpstream(entry) {
-		// §13.1: a forwarded TRACK_STATUS holds upstream requests open, so
+		// §15.1: a forwarded TRACK_STATUS holds upstream requests open, so
 		// it counts against the subscription cap while it does.
 		if !h.limiter.acquireSub() {
 			h.rejectExcessiveLoad(ctx, req, "subscription")
@@ -73,15 +73,15 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 	}
 
 	reply := &message.TrackStatusOK{}
-	// §10.2.21: INCLUDE_PROPERTIES=0 empties the Track Properties only.
+	// §9.20.21: INCLUDE_PROPERTIES=0 empties the Track Properties only.
 	if includeProperties(msg.Parameters) {
 		reply.TrackProperties = properties
 	}
-	// §10.2.17: LARGEST_OBJECT only once Objects have been published.
+	// §9.20.17: LARGEST_OBJECT only once Objects have been published.
 	if hasLargest {
 		reply.Parameters = message.Parameters{message.LargestObjectParam(largest.Group, largest.Object)}
 	}
-	// AcceptTrackStatus FINs after the reply (§10.15).
+	// AcceptTrackStatus FINs after the reply (§9.13).
 	if err := req.AcceptTrackStatus(reply); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "TRACK_STATUS_OK write failed",
 			slog.String("err", err.Error()))
@@ -90,8 +90,8 @@ func (h *sessionHandler) handleTrackStatus(ctx context.Context, req *session.Req
 
 // mergeTrackStatus combines TRACK_STATUS_OKs with what the relay already
 // knows of the track, as a SUBSCRIBE_OK's would be: its Track Properties if
-// any, else the first answer's (§9.6), and the largest LARGEST_OBJECT
-// (§10.2.17).
+// any, else the first answer's (§7.7), and the largest LARGEST_OBJECT
+// (§9.20.17).
 func mergeTrackStatus(
 	oks []*message.TrackStatusOK,
 	properties []byte,
@@ -160,7 +160,7 @@ func newTrackStatusRounds() *trackStatusRounds {
 // stops waiting on its own STOP_SENDING.
 //
 // A request from a session the relay is asking about the track right now may
-// be the relay's own TRACK_STATUS routed back to it on that session (§6.2),
+// be the relay's own TRACK_STATUS routed back to it on that session (§4.1),
 // which the round waits on: it runs a round of its own instead, where the loop
 // guard skips that session. A loop through other sessions (relay A's request
 // reaching it back over a different session) is not detected; such a round
@@ -214,10 +214,10 @@ func (h *sessionHandler) forwardTrackStatus(
 //
 // trackStatusUpstreamTimeout bounds the whole round, resolving the Discovery
 // candidates included. A draining candidate is sent nothing
-// (§10.4). Relay policy, as for SUBSCRIBE and FETCH: the requester's own
+// (§9.2). Relay policy, as for SUBSCRIBE and FETCH: the requester's own
 // session is skipped while a TRACK_STATUS for the track to it is in flight,
 // since this request may be that one routed back, and a second would loop
-// (§6.2).
+// (§4.1).
 func (h *sessionHandler) trackStatusUpstream(
 	ctx context.Context,
 	fullName track.FullTrackName,

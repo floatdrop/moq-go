@@ -91,7 +91,7 @@ var families = []family{
 	},
 	{
 		name:   "moqt_relay_objects_received_total",
-		help:   "Objects read off inbound subgroup streams and won by this contributor, after §9.3 duplicate suppression across redundant upstreams.",
+		help:   "Objects read off inbound subgroup streams and won by this contributor, after §7.3 duplicate suppression across redundant upstreams.",
 		kind:   kindCounter,
 		labels: []string{labelTrack, labelLeg, labelSubgroup},
 	},
@@ -103,7 +103,7 @@ var families = []family{
 	},
 	{
 		name:   "moqt_relay_objects_dropped_total",
-		help:   "Objects dropped because a subscriber's bounded send queue was full (§8 slow-reader pressure). Drops on subgroup 0 are the base layer and break the picture; drops on higher subgroups may be a publisher's disposable enhancement layer working as designed.",
+		help:   "Objects dropped because a subscriber's bounded send queue was full (§5.2 slow-reader pressure). Drops on subgroup 0 are the base layer and break the picture; drops on higher subgroups may be a publisher's disposable enhancement layer working as designed.",
 		kind:   kindCounter,
 		labels: []string{labelTrack, labelLeg, labelSubgroup},
 	},
@@ -115,7 +115,7 @@ var families = []family{
 	},
 	{
 		name:   "moqt_relay_subscription_resets_total",
-		help:   "Subscriptions terminated by the relay for falling too far behind, by §3.3.4 cause.",
+		help:   "Subscriptions terminated by the relay for falling too far behind, by §12.5 cause.",
 		kind:   kindCounter,
 		labels: []string{labelTrack, labelLeg, labelCause},
 	},

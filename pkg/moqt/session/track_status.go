@@ -10,7 +10,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 )
 
-// TrackStatusRequest is a completed TRACK_STATUS request (§10.15), returned by
+// TrackStatusRequest is a completed TRACK_STATUS request (§9.13), returned by
 // [Session.TrackStatus] with the peer's TRACK_STATUS_OK. It cannot be updated,
 // so this side of the stream is already FINned. Close stops reading.
 type TrackStatusRequest struct {
@@ -26,18 +26,18 @@ func (t *TrackStatusRequest) Close() error {
 	return nil
 }
 
-// AcceptTrackStatus accepts an inbound TRACK_STATUS (§10.15) and replies
+// AcceptTrackStatus accepts an inbound TRACK_STATUS (§9.13) and replies
 // TRACK_STATUS_OK with the given status fields — the accept-side counterpart of
 // [Session.TrackStatus]. r.First MUST be a *message.TrackStatus.
 //
 // ok carries the TRACK_STATUS_OK fields (status, largest location, Track
 // Properties — [message.TrackStatusOK] is an alias of [message.RequestOK]); it
 // may be nil for the all-default reply. The stream is FINned after the reply
-// (§10.15), so no handle is returned.
+// (§9.13), so no handle is returned.
 //
 // Any later message from the requester closes the session with
-// PROTOCOL_VIOLATION (§10.9, §10). Interpretation: for a well-formed message
-// other than REQUEST_UPDATE this reads §10.15's "first and only message"; the
+// PROTOCOL_VIOLATION (§9.5, §9). Interpretation: for a well-formed message
+// other than REQUEST_UPDATE this reads §9.13's "first and only message"; the
 // draft names no consequence.
 func (r *Request) AcceptTrackStatus(ok *message.TrackStatusOK) error {
 	if _, isTS := r.First.(*message.TrackStatus); !isTS {
@@ -91,19 +91,19 @@ func (e *readErrRecorder) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// TrackStatus opens a TRACK_STATUS request stream (§10.15) and awaits
+// TrackStatus opens a TRACK_STATUS request stream (§9.13) and awaits
 // REQUEST_OK (TRACK_STATUS_OK) or REQUEST_ERROR. The session assigns
 // m.RequestID; the caller supplies Namespace, Name, and optional Parameters.
 //
-// On success this side of the stream is FINned (§3.3.2) and a
+// On success this side of the stream is FINned (§6.4.2.2) and a
 // [TrackStatusRequest] holding the TRACK_STATUS_OK is returned. On
 // REQUEST_ERROR the stream is closed and a *RequestRejectedError is returned.
 func (s *Session) TrackStatus(ctx context.Context, m *message.TrackStatus) (*TrackStatusRequest, error) {
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.RequestOK) (*TrackStatusRequest, error) {
-			// Assumption: §2.5.1 lists only PUBLISH, SUBSCRIBE_OK and FETCH_OK,
+			// Assumption: §3.7 lists only PUBLISH, SUBSCRIBE_OK and FETCH_OK,
 			// but TRACK_STATUS_OK carries the Track Properties "it would have
-			// set in a SUBSCRIBE_OK" (§10.15), so the SUBSCRIBE_OK rule applies.
+			// set in a SUBSCRIBE_OK" (§9.13), so the SUBSCRIBE_OK rule applies.
 			if err := s.validateTrackProperties(ok.TrackProperties, "TRACK_STATUS_OK"); err != nil {
 				_ = stream.Close()
 				return nil, err

@@ -58,7 +58,7 @@ func testAnnounceOnly(ctx context.Context, h *harness) error {
 }
 
 // testPublishNamespaceDone announces, gets REQUEST_OK, then withdraws the
-// namespace by cancelling the request (§6.2: a PUBLISH_NAMESPACE "is withdrawn
+// namespace by cancelling the request (§4.1: a PUBLISH_NAMESPACE "is withdrawn
 // by cancelling the request"), which is what NamespacePublication.Close does.
 func testPublishNamespaceDone(ctx context.Context, h *harness) error {
 	sess, err := h.connect(ctx)

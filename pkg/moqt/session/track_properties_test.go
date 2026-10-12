@@ -76,8 +76,8 @@ func TestValidateTrackProperties_Empty(t *testing.T) {
 }
 
 // TestValidateTrackProperties_MalformedBytes: a truncated pair is a parse error,
-// not *ErrUnsupportedMandatoryTrackProperty, whose §2.5.1 remedies do not fit.
-// 0x02 is Delta Type 2 (§1.4.3), an even Type whose varint value is missing.
+// not *ErrUnsupportedMandatoryTrackProperty, whose §3.7 remedies do not fit.
+// 0x02 is Delta Type 2 (§8.3), an even Type whose varint value is missing.
 func TestValidateTrackProperties_MalformedBytes(t *testing.T) {
 	pairs, err := session.ValidateTrackProperties([]byte{0x02}, nil, "SUBSCRIBE_OK")
 	if err == nil {
@@ -96,7 +96,7 @@ func TestValidateTrackProperties_MalformedBytes(t *testing.T) {
 }
 
 // TestValidateTrackProperties_InsideImmutable: Immutable Properties are searched
-// too (§12.7), so a Mandatory Track Property inside is screened (§2.5.1) and
+// too (§10.7), so a Mandatory Track Property inside is screened (§3.7) and
 // unparseable contents make the Track Properties malformed.
 func TestValidateTrackProperties_InsideImmutable(t *testing.T) {
 	wrap := func(nested []byte) []byte {
@@ -120,7 +120,7 @@ func TestValidateTrackProperties_InsideImmutable(t *testing.T) {
 }
 
 // TestErrUnsupportedMandatoryTrackPropertyError pins the parts of the error text
-// a reader depends on: package prefix, type in hex, context, and §2.5.1.
+// a reader depends on: package prefix, type in hex, context, and §3.7.
 func TestErrUnsupportedMandatoryTrackPropertyError(t *testing.T) {
 	err := &session.ErrUnsupportedMandatoryTrackProperty{
 		PropertyType: 0x5000,
@@ -128,7 +128,7 @@ func TestErrUnsupportedMandatoryTrackPropertyError(t *testing.T) {
 	}
 	got := err.Error()
 	// "0x5000" covers the hex rendering: a %d or a dropped 0x prefix both miss.
-	for _, want := range []string{"moqt/session:", "0x5000", "SUBSCRIBE_OK", "§2.5.1"} {
+	for _, want := range []string{"moqt/session:", "0x5000", "SUBSCRIBE_OK", "§3.7"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Error() = %q, want it to contain %q", got, want)
 		}
@@ -564,7 +564,7 @@ func TestInboundPublishMandatoryTrackPropertyValidation(t *testing.T) {
 			serverErr = errors.New("expected *ErrUnsupportedMandatoryTrackProperty from ValidateTrackProperties")
 			return
 		}
-		// Reject with UNSUPPORTED_EXTENSION per §2.5.1.
+		// Reject with UNSUPPORTED_EXTENSION per §3.7.
 		serverErr = r.RejectError(moqt.RequestUnsupportedExtension, "unsupported mandatory track property")
 	})
 
@@ -585,7 +585,7 @@ func TestInboundPublishMandatoryTrackPropertyValidation(t *testing.T) {
 // TestDefaultRefusesUnknownMandatoryTrackProperty: without
 // WithKnownMandatoryTrackProperties no Mandatory Track Property is understood,
 // so one in SUBSCRIBE_OK, FETCH_OK or TRACK_STATUS_OK fails the request with
-// *ErrUnsupportedMandatoryTrackProperty (§2.5.1: "MUST NOT process or forward
+// *ErrUnsupportedMandatoryTrackProperty (§3.7: "MUST NOT process or forward
 // that track"), and one in PUBLISH is refused with UNSUPPORTED_EXTENSION.
 func TestDefaultRefusesUnknownMandatoryTrackProperty(t *testing.T) {
 	props := mandatoryTrackProps(0x5000, 42)
@@ -677,8 +677,8 @@ func TestMandatoryTrackPropertyBoundaries(t *testing.T) {
 }
 
 // TestTrackPropertyValueOutOfRangeCloses: a DEFAULT_PUBLISHER_GROUP_ORDER
-// outside {1, 2} (§12.5) or a DYNAMIC_GROUPS above 1 (§12.6), also inside
-// Immutable Properties (§12.7), closes the receiver with PROTOCOL_VIOLATION on
+// outside {1, 2} (§10.5) or a DYNAMIC_GROUPS above 1 (§10.6), also inside
+// Immutable Properties (§10.7), closes the receiver with PROTOCOL_VIOLATION on
 // each path Track Properties arrive by, whether or not it enforces Mandatory
 // Track Properties.
 func TestTrackPropertyValueOutOfRangeCloses(t *testing.T) {

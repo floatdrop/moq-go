@@ -120,8 +120,8 @@ func TestTrackStatusRejected(t *testing.T) {
 }
 
 // TestTrackStatusStreamClosesBothWays: the responder FINs after
-// TRACK_STATUS_OK (§10.15), and the requester, which cannot send
-// REQUEST_UPDATE, FINs its side too (§3.3.2).
+// TRACK_STATUS_OK (§9.13), and the requester, which cannot send
+// REQUEST_UPDATE, FINs its side too (§6.4.2.2).
 func TestTrackStatusStreamClosesBothWays(t *testing.T) {
 	client, server := openPair(t)
 	accepted := make(chan session.Stream, 1)
@@ -148,7 +148,7 @@ func TestTrackStatusStreamClosesBothWays(t *testing.T) {
 
 // TestTrackStatusFollowupClosesSession: anything the requester sends after
 // TRACK_STATUS closes the session with PROTOCOL_VIOLATION — a REQUEST_UPDATE
-// (§10.9) or an unknown message type (§10).
+// (§9.5) or an unknown message type (§9).
 func TestTrackStatusFollowupClosesSession(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -189,8 +189,8 @@ func TestTrackStatusFollowupClosesSession(t *testing.T) {
 }
 
 // TestAcceptPublishTrackPropertiesRejected: a PUBLISH with an unknown
-// Mandatory Track Property is refused with UNSUPPORTED_EXTENSION (§2.5.1), and
-// unparseable Track Properties with INTERNAL_ERROR (§10.6.2 defines
+// Mandatory Track Property is refused with UNSUPPORTED_EXTENSION (§3.7), and
+// unparseable Track Properties with INTERNAL_ERROR (§12.3 defines
 // MALFORMED_TRACK only for FETCH).
 func TestAcceptPublishTrackPropertiesRejected(t *testing.T) {
 	for _, tc := range []struct {

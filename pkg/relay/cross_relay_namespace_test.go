@@ -63,7 +63,7 @@ func TestCrossRelay_WatchNamespacesForwardsUnpublish(t *testing.T) {
 }
 
 // TestCrossRelay_WatchNamespacesSkipsTrackSubscribers: a remote relay's
-// namespace is not sent to a SUBSCRIBE_TRACKS holder (§6.1, §10.20). The
+// namespace is not sent to a SUBSCRIBE_TRACKS holder (§3.6, §9.18). The
 // SUBSCRIBE_NAMESPACE holder is the control that shows it was delivered at all.
 func TestCrossRelay_WatchNamespacesSkipsTrackSubscribers(t *testing.T) {
 	t.Parallel()

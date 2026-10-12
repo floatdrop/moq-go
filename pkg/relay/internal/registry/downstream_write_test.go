@@ -140,7 +140,7 @@ func answeredDownstreamSub(t *testing.T) (*registry.DownstreamSub, *recordingStr
 }
 
 // TestDownstreamSub_TerminateBeforeOKAnswersWithRequestError: a termination
-// that beats SUBSCRIBE_OK answers the SUBSCRIBE with REQUEST_ERROR (§5.1),
+// that beats SUBSCRIBE_OK answers the SUBSCRIBE with REQUEST_ERROR (§3.1),
 // and the late OK is suppressed.
 func TestDownstreamSub_TerminateBeforeOKAnswersWithRequestError(t *testing.T) {
 	t.Parallel()
@@ -165,7 +165,7 @@ func TestDownstreamSub_TerminateBeforeOKAnswersWithRequestError(t *testing.T) {
 	if re.ErrorCode != moqt.RequestDoesNotExist {
 		t.Errorf("REQUEST_ERROR code = 0x%X, want DOES_NOT_EXIST", uint64(re.ErrorCode))
 	}
-	// §3.3.4: the request ended by REQUEST_ERROR is cancelled, not failed.
+	// §12.5: the request ended by REQUEST_ERROR is cancelled, not failed.
 	stream.mu.Lock()
 	codes := stream.readCodes
 	stream.mu.Unlock()
@@ -192,7 +192,7 @@ func (s *failingWriteStream) CancelWrite(code uint64) {
 
 // TestDownstreamSub_TerminateBeforeOKWriteFailureResets: when the REQUEST_ERROR
 // cannot be written, the stream is reset with INTERNAL_ERROR, a genuine
-// failure (§3.3.4), as [session.Request.RejectError] does, not cancelled.
+// failure (§12.5), as [session.Request.RejectError] does, not cancelled.
 func TestDownstreamSub_TerminateBeforeOKWriteFailureResets(t *testing.T) {
 	t.Parallel()
 	stream := &failingWriteStream{recordingStream: newRecordingStream()}
@@ -219,7 +219,7 @@ func TestDownstreamSub_TerminateBeforeOKWriteFailureResets(t *testing.T) {
 }
 
 // TestDownstreamSub_TerminateAfterOKSendsPublishDone: once SUBSCRIBE_OK is out,
-// a termination follows up with PUBLISH_DONE (§10.12).
+// a termination follows up with PUBLISH_DONE (§9.9).
 func TestDownstreamSub_TerminateAfterOKSendsPublishDone(t *testing.T) {
 	t.Parallel()
 
@@ -240,7 +240,7 @@ func TestDownstreamSub_TerminateAfterOKSendsPublishDone(t *testing.T) {
 }
 
 // TestDownstreamSub_SubscribeOKTerminateRace: on every interleaving the wire
-// carries exactly one request response (§5.1) — SUBSCRIBE_OK then
+// carries exactly one request response (§3.1) — SUBSCRIBE_OK then
 // PUBLISH_DONE, or REQUEST_ERROR.
 func TestDownstreamSub_SubscribeOKTerminateRace(t *testing.T) {
 	t.Parallel()
@@ -278,7 +278,7 @@ func TestDownstreamSub_SubscribeOKTerminateRace(t *testing.T) {
 	}
 }
 
-// TestDownstreamSub_PublishDoneStreamCount pins the §10.12 Stream Count: exact
+// TestDownstreamSub_PublishDoneStreamCount pins the §9.9 Stream Count: exact
 // even with an open in flight at termination, and no stream begins after it.
 func TestDownstreamSub_PublishDoneStreamCount(t *testing.T) {
 	t.Parallel()
@@ -331,7 +331,7 @@ func TestDownstreamSub_PublishDoneStreamCount(t *testing.T) {
 	}
 }
 
-// TestDownstreamSub_PublishDoneWaitsForOpenStreams: §10.12 PUBLISH_DONE waits
+// TestDownstreamSub_PublishDoneWaitsForOpenStreams: §9.9 PUBLISH_DONE waits
 // until every stream of the subscription is closed.
 func TestDownstreamSub_PublishDoneWaitsForOpenStreams(t *testing.T) {
 	t.Parallel()
@@ -351,7 +351,7 @@ func TestDownstreamSub_PublishDoneWaitsForOpenStreams(t *testing.T) {
 	}
 }
 
-// TestDownstreamSub_PublishDoneWaitsForDatagramSend: §10.12 PUBLISH_DONE waits
+// TestDownstreamSub_PublishDoneWaitsForDatagramSend: §9.9 PUBLISH_DONE waits
 // for a datagram send in progress, and none starts after termination.
 func TestDownstreamSub_PublishDoneWaitsForDatagramSend(t *testing.T) {
 	t.Parallel()

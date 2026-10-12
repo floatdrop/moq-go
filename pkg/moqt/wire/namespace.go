@@ -5,19 +5,19 @@ import (
 	"fmt"
 )
 
-// MaxTrackNamespaceFields is the upper bound on tuple count per §2.4.1.
+// MaxTrackNamespaceFields is the upper bound on tuple count per §8.7.
 const MaxTrackNamespaceFields = 32
 
 // MaxFullTrackNameBytes is the upper bound on the sum of all namespace field
-// lengths plus the track name length per §2.4.1.
+// lengths plus the track name length per §8.7.
 const MaxFullTrackNameBytes = 4096
 
-// TrackNamespace is an ordered set of 0..32 binary fields (§2.4.1).
+// TrackNamespace is an ordered set of 0..32 binary fields (§8.7).
 type TrackNamespace [][]byte
 
 // Namespace builds a TrackNamespace from string fields — the ergonomic form of
 // the TrackNamespace{[]byte("a"), []byte("b")} literal. Each argument becomes
-// one §2.4.1 field, in order. Namespace fields MAY contain arbitrary bytes; for
+// one §8.7 field, in order. Namespace fields MAY contain arbitrary bytes; for
 // non-UTF-8 fields use the [][]byte literal directly.
 func Namespace(parts ...string) TrackNamespace {
 	ns := make(TrackNamespace, len(parts))
@@ -27,7 +27,7 @@ func Namespace(parts ...string) TrackNamespace {
 	return ns
 }
 
-// TrackNamespace reads a TrackNamespace per §2.4.1. Each field must be at least
+// TrackNamespace reads a TrackNamespace per §8.7. Each field must be at least
 // one byte; the tuple count must not exceed MaxTrackNamespaceFields. The
 // returned slices are owned by the caller (see Reader.FixedBytes).
 func (r *Reader) TrackNamespace() (TrackNamespace, error) {
@@ -48,7 +48,7 @@ func (r *Reader) TrackNamespace() (TrackNamespace, error) {
 		if len(field) == 0 {
 			return nil, fmt.Errorf("moqt/wire: track namespace field %d has zero length", i)
 		}
-		// §2.4.1: "If an endpoint receives a Track Namespace or a Full
+		// §8.7: "If an endpoint receives a Track Namespace or a Full
 		// Track Name exceeding 4,096 bytes, it MUST close the session with
 		// a PROTOCOL_VIOLATION." The namespace-only half is enforced here,
 		// at the single parse point every message shares; messages that
@@ -56,14 +56,14 @@ func (r *Reader) TrackNamespace() (TrackNamespace, error) {
 		total += len(field)
 		if total > MaxFullTrackNameBytes {
 			return nil, fmt.Errorf(
-				"moqt/wire: track namespace exceeds %d bytes (§2.4.1)", MaxFullTrackNameBytes)
+				"moqt/wire: track namespace exceeds %d bytes (§8.7)", MaxFullTrackNameBytes)
 		}
 		ns = append(ns, field)
 	}
 	return ns, nil
 }
 
-// TrackNamespace appends a TrackNamespace per §2.4.1.
+// TrackNamespace appends a TrackNamespace per §8.7.
 func (w *Writer) TrackNamespace(ns TrackNamespace) {
 	w.Varint(uint64(len(ns)))
 	for _, field := range ns {
@@ -82,8 +82,8 @@ func (ns TrackNamespace) ByteLen() int {
 }
 
 // HasPrefix reports whether prefix is a (non-strict) prefix of ns in the
-// field-by-field sense of §2.4.1. A zero-length prefix matches every ns,
-// matching the §6.1 "Either message with zero Track Namespace fields
+// field-by-field sense of §2.4.2. A zero-length prefix matches every ns,
+// matching the §4.2 "Either message with zero Track Namespace fields
 // indicates the sender is interested in all namespaces" rule used by
 // SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS matching.
 //

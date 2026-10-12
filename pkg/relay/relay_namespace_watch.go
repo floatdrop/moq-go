@@ -85,7 +85,7 @@ const (
 
 // forwardNamespaceEvent records one remote namespace event in the namespace
 // registry, counted together with local publishers of the same namespace
-// (§10.18: NAMESPACE_DONE is per namespace). Own-relay events are skipped.
+// (§9.17: NAMESPACE_DONE is per namespace). Own-relay events are skipped.
 func (r *Relay) forwardNamespaceEvent(_ context.Context, ev discovery.NamespaceEvent) {
 	if ev.Info.RelayAddr == r.cfg.RelayAddr {
 		return // our own advertisement — already counted locally

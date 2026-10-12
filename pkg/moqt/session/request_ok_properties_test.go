@@ -12,7 +12,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// §10.5 REQUEST_OK: Track Properties belong in TRACK_STATUS_OK and are empty
+// §9.3 REQUEST_OK: Track Properties belong in TRACK_STATUS_OK and are empty
 // in PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and
 // PUBLISH_NAMESPACE_OK; receiving them there is a PROTOCOL_VIOLATION. The
 // session also refuses to send them there.
@@ -110,7 +110,7 @@ func TestRequestUpdateOKWithTrackPropertiesClosesSession(t *testing.T) {
 }
 
 // TestLateRequestUpdateOKWithTrackPropertiesClosesSession: a REQUEST_UPDATE_OK
-// arriving after its Update gave up reaches Serve as unsolicited, and §10.5
+// arriving after its Update gave up reaches Serve as unsolicited, and §9.3
 // still applies.
 func TestLateRequestUpdateOKWithTrackPropertiesClosesSession(t *testing.T) {
 	client, server := openPair(t)
@@ -213,7 +213,7 @@ func (u streamUpdater) Update(ctx context.Context, params message.Parameters) (*
 }
 
 // TestReplyRefusesUpdateOKTrackProperties: a REQUEST_OK after a SUBSCRIBE_OK
-// or FETCH_OK is a REQUEST_UPDATE_OK, whose Track Properties are empty (§10.5);
+// or FETCH_OK is a REQUEST_UPDATE_OK, whose Track Properties are empty (§9.3);
 // so is every SUBSCRIBE_TRACKS REQUEST_OK after the first.
 func TestReplyRefusesUpdateOKTrackProperties(t *testing.T) {
 	for _, tc := range []struct {
@@ -231,7 +231,7 @@ func TestReplyRefusesUpdateOKTrackProperties(t *testing.T) {
 			},
 		},
 		{
-			// §10.5 does not name the SUBSCRIBE_TRACKS OK, so its first
+			// §9.3 does not name the SUBSCRIBE_TRACKS OK, so its first
 			// REQUEST_OK may carry Track Properties.
 			"SUBSCRIBE_TRACKS",
 			func(r *session.Request) error { return r.Reply(&message.RequestOK{TrackProperties: trackProps}) },

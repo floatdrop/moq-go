@@ -76,7 +76,7 @@ func TestFetchObjectRoundTrip(t *testing.T) {
 	}
 }
 
-// TestIncomingFetchStream_ReadDecoded exercises the session-layer §11.4.4
+// TestIncomingFetchStream_ReadDecoded exercises the session-layer §11.4.1
 // delta decoder: first-object absolute, same-group and cross-group transitions
 // in both group orders, the subgroup modes, and End of Range markers.
 func TestIncomingFetchStream_ReadDecoded(t *testing.T) {
@@ -88,7 +88,7 @@ func TestIncomingFetchStream_ReadDecoded(t *testing.T) {
 	}{
 		{
 			// Mirrors what the relay's streamFetchObjects writes for an
-			// ascending FETCH response. §11.4.4.1: without a Group ID Delta
+			// ascending FETCH response. §11.4.1.1: without a Group ID Delta
 			// "the Object ID is the prior Object's ID plus the Object ID
 			// Delta" — no +1, unlike the subgroup rule — and an absent Object
 			// ID Delta means "the prior Object's ID plus one, regardless of
@@ -181,7 +181,7 @@ func TestIncomingFetchStream_ReadDecoded(t *testing.T) {
 		{
 			// End of Range markers surface as EndOfNonExistentRange and become
 			// the prior Group and Object ID; the prior Subgroup ID and Priority
-			// stay the last Object's (§11.4.4.2).
+			// stay the last Object's (§11.4.1.2).
 			name: "EndOfRange",
 			written: []*message.FetchObject{
 				{
@@ -201,7 +201,7 @@ func TestIncomingFetchStream_ReadDecoded(t *testing.T) {
 					GroupIDDelta:       7,
 					ObjectIDDelta:      3,
 				},
-				// No deltas: per §11.4.4.2 the prior Group/Object IDs are the
+				// No deltas: per §11.4.1.2 the prior Group/Object IDs are the
 				// MARKER's, so it decodes as {7, 4}; its Subgroup (mode Prior) and
 				// Priority (flag absent) come from the last ACTUAL object.
 				{
@@ -212,14 +212,14 @@ func TestIncomingFetchStream_ReadDecoded(t *testing.T) {
 			want: []session.DecodedFetchObject{
 				{GroupID: 5, ObjectID: 0, SubgroupID: 9, PublisherPriority: 42, Payload: []byte("real")},
 				{GroupID: 7, ObjectID: 3, EndOfNonExistentRange: true},
-				// The marker IS the prior (§11.4.4.2).
+				// The marker IS the prior (§11.4.1.2).
 				{GroupID: 7, ObjectID: 4, SubgroupID: 9, PublisherPriority: 42, Payload: []byte("real2")},
 			},
 		},
 	}
 
 	// Subgroup ID and Priority are not present on an End of Range
-	// (§11.4.4.2), so a marker compares by Location only.
+	// (§11.4.1.2), so a marker compares by Location only.
 	view := func(d *session.DecodedFetchObject) string {
 		if d.EndOfNonExistentRange {
 			return fmt.Sprintf("{G=%d O=%d endOfNonExistentRange}", d.GroupID, d.ObjectID)
@@ -254,7 +254,7 @@ func TestIncomingFetchStream_ReadDecoded(t *testing.T) {
 
 // TestIncomingFetchStream_ReadDecoded_FirstObjectViolations: a first Object
 // missing a delta, or referencing any prior-Object field, closes the session
-// with PROTOCOL_VIOLATION (§11.4.4.1).
+// with PROTOCOL_VIOLATION (§11.4.1.1).
 func TestIncomingFetchStream_ReadDecoded_FirstObjectViolations(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -326,7 +326,7 @@ func TestIncomingFetchStream_ReadDecoded_FirstObjectViolations(t *testing.T) {
 	}
 }
 
-// TestIncomingFetchStream_ReadDecoded_MarkerFirst pins the §11.4.4.2 rules
+// TestIncomingFetchStream_ReadDecoded_MarkerFirst pins the §11.4.1.2 rules
 // when an End-of-Range marker is the FIRST element on the stream: the marker
 // supplies the prior Group/Object IDs, so the following object may omit the
 // deltas — but with no prior ACTUAL object it must not reference the prior

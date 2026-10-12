@@ -74,7 +74,7 @@ type reliableSpyStream struct {
 
 func (s *reliableSpyStream) SetReliableBoundary() { s.marks++ }
 
-// TestOutgoingSubgroupStream_MarkReliable pins the §11.4.3 RESET_STREAM_AT
+// TestOutgoingSubgroupStream_MarkReliable pins the §11.3.2 RESET_STREAM_AT
 // plumbing: MarkReliable forwards to the underlying stream when it implements
 // [session.ReliableResetStream], and is a silent no-op otherwise.
 func TestOutgoingSubgroupStream_MarkReliable(t *testing.T) {

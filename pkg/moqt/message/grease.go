@@ -7,12 +7,12 @@ import (
 )
 
 // GREASE (Generate Random Extensions And Sustain Extensibility) support per
-// §14 of draft-ietf-moq-transport-20 and RFC 9170 §3.3.
+// §13 of draft-ietf-moq-transport-22 and RFC 9170 §3.3.
 //
 // GREASE values follow the pattern 0x7F * N + 0x9D for non-negative integer
 // values of N (that is, 0x9D, 0x11C, 0x19B, ..., 0x3FFFFFFFFFFFFFDE).
 //
-// §14 reserves GREASE values in the Setup Options, Properties, error-code, and
+// §13 reserves GREASE values in the Setup Options, Properties, error-code, and
 // Auth Token Type registries: implementations "MUST handle unknown values
 // gracefully", and endpoints "MUST NOT close the session solely because they
 // received an unknown value".
@@ -23,7 +23,7 @@ const (
 	greaseStep uint64 = 0x7F
 )
 
-// maxGreaseN is the largest N in §14's reserved range, whose last value is
+// maxGreaseN is the largest N in §13's reserved range, whose last value is
 // 0x3fffffffffffffde.
 // 0x7F * N + 0x9D ≤ 0x3FFFFFFFFFFFFFFF  →  N ≤ (0x3FFFFFFFFFFFFFFF - 0x9D) / 0x7F.
 const maxGreaseN uint64 = (0x3FFFFFFFFFFFFFFF - greaseBase) / greaseStep
@@ -38,7 +38,7 @@ func GreaseValue() uint64 {
 }
 
 // GreaseSetupOption returns a KVPair with a random GREASE type suitable for
-// inclusion in a SETUP message's option list. Per §1.4.3, even types carry a
+// inclusion in a SETUP message's option list. Per §8.3, even types carry a
 // varint value and odd types carry bytes; the GREASE pattern produces both
 // parities, so the helper picks a value and fills the appropriate field with
 // a small random payload.

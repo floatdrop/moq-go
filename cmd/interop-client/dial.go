@@ -67,20 +67,20 @@ func quicConfig() *quic.Config {
 		MaxIdleTimeout:                   30 * time.Second,
 		KeepAlivePeriod:                  5 * time.Second,
 		EnableDatagrams:                  true,
-		EnableStreamResetPartialDelivery: true, // §11.4.3 RESET_STREAM_AT
+		EnableStreamResetPartialDelivery: true, // §11.3.2 RESET_STREAM_AT
 	}
 }
 
 func (h *harness) dialQUIC(ctx context.Context, u *url.URL) (*session.Session, error) {
 	// internal/dial parses the moqt:// URI itself and carries its authority
-	// and path/query in the AUTHORITY / PATH Setup Options (§10.3.1.1, §10.3.1.2) — the
-	// §10.3.1.1 MUST this binary's hand-rolled dial used to drop.
+	// and path/query in the AUTHORITY / PATH Setup Options (§9.1.1, §9.1.2) — the
+	// §9.1.1 MUST this binary's hand-rolled dial used to drop.
 	return dialpkg.QUIC(ctx, u.String(), dialpkg.Options{
 		Implementation:     "moq-interop-client/0.1",
 		InsecureSkipVerify: h.insecure, // CLI flag for self-signed interop relays
-		// Offer the one MOQT-over-QUIC ALPN we speak. Per §3.1 the selected
+		// Offer the one MOQT-over-QUIC ALPN we speak. Per §6.2 the selected
 		// "moqt-NN" ALPN fixes the draft version — SETUP carries no version
-		// field (§10.3).
+		// field (§9.1).
 		ALPN: []string{"moqt-20"},
 	})
 }

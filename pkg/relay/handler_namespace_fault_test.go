@@ -52,7 +52,7 @@ func awaitFault(t *testing.T, fired <-chan struct{}) {
 
 // TestPublishNamespace_FailedRequestOKIsNotAdvertised: a PUBLISH_NAMESPACE whose
 // REQUEST_OK could not be written is unregistered and never advertised to
-// subscribers (§6.2).
+// subscribers (§4.1).
 func TestPublishNamespace_FailedRequestOKIsNotAdvertised(t *testing.T) {
 	t.Parallel()
 	fault, fired, _ := requestStreamWriteFault()

@@ -35,9 +35,9 @@ func publish(ctx context.Context, addr string) error {
 
 	// Serve the publish request stream through its broker: subscriber
 	// REQUEST_UPDATEs are applied by the Publication's built-in handling
-	// (FORWARD pauses and resumes OpenSubgroup) and answered as §10.9
+	// (FORWARD pauses and resumes OpenSubgroup) and answered as §9.5
 	// requires, AUTHORIZATION_TOKEN parameters go through the session token
-	// cache (§10.2.2), and — with the broker attached — the shutdown
+	// cache (§8.9), and — with the broker attached — the shutdown
 	// [session.Publication.Done] below is automatically serialized against
 	// those replies.
 	go func() {
@@ -70,7 +70,7 @@ func publish(ctx context.Context, addr string) error {
 				GroupID:        groupID,
 			})
 			if errors.Is(err, session.ErrForwardPaused) {
-				// §5.1: no objects while the subscriber's Forward State is
+				// §3.1.1: no objects while the subscriber's Forward State is
 				// 0. The clock keeps ticking; this second is skipped.
 				groupID++
 				continue

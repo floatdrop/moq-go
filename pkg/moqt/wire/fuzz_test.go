@@ -7,7 +7,7 @@ import (
 )
 
 // maxVarint is the largest value the MoQT varint encodes: "All 64 bit numbers
-// can be encoded" (§1.4.1).
+// can be encoded" (§8.1).
 const maxVarint = math.MaxUint64
 
 // FuzzVarintRoundTrip asserts that every encodable value survives an

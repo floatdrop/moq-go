@@ -29,11 +29,11 @@ import (
 // ends run on one machine when debugging locally, so the two clocks are
 // the same clock and the subtraction is meaningful.
 //
-// Even, so it carries a varint (§1.4.3), and inside [0x3800, 0x3FFF] —
-// the two-byte range §2.5 reserves for application-specific use, which
+// Even, so it carries a varint (§8.3), and inside [0x3800, 0x3FFF] —
+// the two-byte range §8.4 reserves for application-specific use, which
 // IANA will never allocate and which a relay that does not understand the
 // application format MUST forward unchanged. 0x3800 itself is not a
-// GREASE value (§14's 0x7F*N + 0x9D lands on 0x382D first), so no peer
+// GREASE value (§13's 0x7F*N + 0x9D lands on 0x382D first), so no peer
 // may discard it as one.
 //
 // Not 0x8000-and-above: that range is registrable, so a future
@@ -43,7 +43,7 @@ import (
 // deployment this tool is measuring.
 //
 // Nothing is obliged to understand it either way: it is outside the
-// [0x4000, 0x7FFF] Mandatory Track Property range (§2.5.1), so a
+// [0x4000, 0x7FFF] Mandatory Track Property range (§3.7), so a
 // subscriber that does not know it simply reports no latency.
 const propSendTime message.PropertyType = 0x3800
 
@@ -179,7 +179,7 @@ func stream(ctx context.Context, media *session.Publication, src *source, opts p
 					EndOfGroup: true,
 				})
 				if errors.Is(err, session.ErrForwardPaused) {
-					// §5.1: no objects while Forward State is 0. The timeline
+					// §3.1.1: no objects while Forward State is 0. The timeline
 					// keeps running; this Group is skipped whole.
 					openGroup, skipping = c.Group, true
 					continue
@@ -284,7 +284,7 @@ func writeCatalog(pub *session.Publication, payload []byte) error {
 }
 
 // openPublication opens one PUBLISH request stream and starts its broker,
-// which answers subscriber REQUEST_UPDATEs with the REQUEST_OK §10.9
+// which answers subscriber REQUEST_UPDATEs with the REQUEST_OK §9.5
 // mandates and serializes those replies against a later Done.
 func openPublication(
 	ctx context.Context,

@@ -28,8 +28,8 @@ func TestFetchPredecessor(t *testing.T) {
 }
 
 // TestCapFetchEndLocation: the response ends at the requested end, or at
-// Largest Object when the request reaches past it or is open-ended (§10.14,
-// §5.1.2).
+// Largest Object when the request reaches past it or is open-ended (§9.12,
+// §3.3.1).
 func TestCapFetchEndLocation(t *testing.T) {
 	largest := message.Location{Group: 10, Object: 4}
 

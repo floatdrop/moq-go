@@ -12,7 +12,7 @@ import (
 )
 
 // TestSecondResponseCloses: a second response to a SUBSCRIBE or PUBLISH read
-// by the requester's broker closes the session with PROTOCOL_VIOLATION (§5.1:
+// by the requester's broker closes the session with PROTOCOL_VIOLATION (§3.1:
 // "The peer SHOULD close the session with a protocol error if it receives more
 // than one"), as does a REQUEST_ERROR where no REQUEST_UPDATE was sent.
 func TestSecondResponseCloses(t *testing.T) {
@@ -54,7 +54,7 @@ func TestSecondResponseCloses(t *testing.T) {
 
 // TestResponderStreamStrayResponseCloses: on a stream this side answered, a
 // REQUEST_OK or REQUEST_ERROR from the requester answers nothing when this
-// side sent no REQUEST_UPDATE (§10.9), and closes the session with
+// side sent no REQUEST_UPDATE (§9.5), and closes the session with
 // PROTOCOL_VIOLATION: on an accepted SUBSCRIBE, where only the requester may
 // send one, and on an accepted PUBLISH that this side never updated.
 func TestResponderStreamStrayResponseCloses(t *testing.T) {
@@ -95,7 +95,7 @@ func TestResponderStreamStrayResponseCloses(t *testing.T) {
 }
 
 // TestSubscribeOKOnPublishKeepsSession: a SUBSCRIBE_OK is no response to a
-// PUBLISH (§5.1), so on this side's PUBLISH it reaches Serve's callback.
+// PUBLISH (§3.1), so on this side's PUBLISH it reaches Serve's callback.
 func TestSubscribeOKOnPublishKeepsSession(t *testing.T) {
 	cli, srv := openPair(t)
 	h, pub := establishOnAlias(t, cli, srv, true, "t", 7)
@@ -119,7 +119,7 @@ func TestSubscribeOKOnPublishKeepsSession(t *testing.T) {
 }
 
 // TestLateUpdateAnswerKeepsSession: the answer to a REQUEST_UPDATE whose
-// Update gave up still answers a REQUEST_UPDATE that was sent (§10.9), so it
+// Update gave up still answers a REQUEST_UPDATE that was sent (§9.5), so it
 // does not read as a second response.
 func TestLateUpdateAnswerKeepsSession(t *testing.T) {
 	cli, srv := openPair(t)
@@ -144,7 +144,7 @@ func TestLateUpdateAnswerKeepsSession(t *testing.T) {
 
 // TestRequesterStrayResponseCloses: on this side's FETCH or
 // SUBSCRIBE_NAMESPACE, a REQUEST_OK before any REQUEST_UPDATE is a second
-// response to the request (§5.2: "exactly one FETCH_OK or REQUEST_ERROR") and
+// response to the request (§3.2: "exactly one FETCH_OK or REQUEST_ERROR") and
 // closes the session with PROTOCOL_VIOLATION.
 func TestRequesterStrayResponseCloses(t *testing.T) {
 	for _, tc := range []struct {

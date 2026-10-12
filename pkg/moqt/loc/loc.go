@@ -15,7 +15,7 @@
 // draft-ietf-moq-loc-04 finalises all six LOC properties in the IANA "MOQ
 // Object Properties" registry (§6.1); the constants below use those
 // assigned values. Each ID's parity selects its wire encoding per the
-// MoQ Transport KV-pair convention (§1.4.3): an even ID carries a single
+// MoQ Transport KV-pair convention (§8.3): an even ID carries a single
 // varint value (no length prefix), an odd ID carries a length-prefixed
 // byte string.
 //

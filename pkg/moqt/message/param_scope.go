@@ -9,11 +9,11 @@ import (
 )
 
 // ErrUnknownParameter is wrapped by the parse error for an undefined Message
-// Parameter type, a PROTOCOL_VIOLATION (§10.2).
+// Parameter type, a PROTOCOL_VIOLATION (§9.20).
 var ErrUnknownParameter = errors.New("moqt/message: unknown parameter type")
 
-// ParamScope is the message form a parameter block arrived in (§10.2.1). A
-// REQUEST_OK takes its form from the request it answers (§10.5), and a
+// ParamScope is the message form a parameter block arrived in (§9.20.1). A
+// REQUEST_OK takes its form from the request it answers (§9.3), and a
 // REQUEST_UPDATE from the request it updates. Values are bit flags.
 type ParamScope uint32
 
@@ -36,7 +36,7 @@ const (
 	ScopeRequestUpdateOK
 	// ScopeUpdateFromSubscriber is a REQUEST_UPDATE on a subscription sent by
 	// its subscriber, ScopeUpdateFromPublisher one sent by the publisher of a
-	// PUBLISH. §5.1.4 allows the Range Filters only "from the subscriber".
+	// PUBLISH. §3.3.2 allows the Range Filters only "from the subscriber".
 	ScopeUpdateFromSubscriber
 	ScopeUpdateFromPublisher
 	ScopeUpdateFetch
@@ -50,7 +50,7 @@ const (
 	scopeUpdateSubscription = ScopeUpdateFromSubscriber | ScopeUpdateFromPublisher
 	scopeAnyUpdate          = scopeUpdateSubscription | ScopeUpdateFetch | ScopeUpdateTrackStatus |
 		ScopeUpdateSubscribeNamespace | ScopeUpdateSubscribeTracks | ScopeUpdatePublishNamespace
-	// §5.1.4 is ambiguous on where each filter may appear; all five share the
+	// §3.3.2 is ambiguous on where each filter may appear; all five share the
 	// widest reading, which closes fewer sessions.
 	scopeRangeFilter = ScopeSubscribe | ScopeFetch | ScopeSubscribeTracks |
 		ScopeUpdateFromSubscriber | ScopeUpdateSubscribeTracks
@@ -58,47 +58,47 @@ const (
 
 // paramScopes is each parameter's "MAY appear in" list, from its definition.
 // [Parameters.CheckScope] adds SUBSCRIBE_TRACKS to every SUBSCRIBE parameter
-// (§10.20.1).
+// (§3.6.2).
 var paramScopes = map[ParamID]ParamScope{
-	// §10.2.2
+	// §9.20.2
 	ParamAuthorizationToken: ScopePublish | ScopeSubscribe | scopeAnyUpdate | ScopeSubscribeNamespace |
 		ScopeSubscribeTracks | ScopePublishNamespace | ScopeTrackStatus | ScopeFetch,
-	// §10.2.3, §10.2.4
+	// §9.20.3, §9.20.4
 	ParamSubgroupDeliveryTimeout: ScopeSubscribe | ScopePublish | scopeAnyUpdate,
 	ParamObjectDeliveryTimeout:   ScopeSubscribe | ScopePublish | scopeAnyUpdate,
-	// §10.2.5 (also inside FILL_PARAMETERS, a separate scope)
+	// §9.20.5 (also inside FILL_PARAMETERS, a separate scope)
 	ParamFillTimeout: ScopeFetch,
-	// §10.2.6
+	// §9.20.6
 	ParamRendezvousTimeout: ScopeSubscribe,
-	// §10.2.7
+	// §9.20.7
 	ParamSubscriberPriority: ScopeSubscribe | ScopePublish | ScopeFetch | scopeUpdateSubscription | ScopeUpdateFetch,
-	// §10.2.8
+	// §9.20.8
 	ParamGroupOrder: ScopeSubscribe | ScopePublish | ScopeSubscribeTracks | ScopeFetch,
-	// §10.2.9
+	// §9.20.9
 	ParamLocationFilter: ScopeFetch | ScopeSubscribe | ScopePublish | scopeUpdateSubscription |
 		ScopePublishStateNotify,
-	// §10.2.10–§10.2.14, §5.1.4
+	// §9.20.10–§9.20.14, §3.3.2
 	ParamSubgroupFilter:       scopeRangeFilter,
 	ParamObjectIDFilter:       scopeRangeFilter,
 	ParamPriorityFilter:       scopeRangeFilter,
 	ParamObjectPropertyFilter: scopeRangeFilter,
 	ParamTrackPropertyFilter:  scopeRangeFilter,
-	// §10.2.15
+	// §9.20.15
 	ParamFillParameters: ScopeSubscribe | scopeUpdateSubscription,
-	// §10.2.16
+	// §9.20.16
 	ParamExpires: ScopeSubscribeOK | ScopePublish | ScopePublishOK | ScopeSubscribeNamespaceOK |
 		ScopeSubscribeTracksOK | ScopePublishNamespaceOK | ScopeRequestUpdateOK,
-	// §10.2.17
+	// §9.20.17
 	ParamLargestObject: ScopeSubscribeOK | ScopePublish | ScopeRequestUpdateOK | ScopeTrackStatusOK |
 		ScopePublishStateNotify,
-	// §10.2.18
+	// §9.20.18
 	ParamForward: ScopeSubscribe | scopeUpdateSubscription | ScopeUpdateSubscribeTracks | ScopePublish |
 		ScopeSubscribeTracks | ScopePublishStateNotify,
-	// §10.2.19
+	// §9.20.19
 	ParamNewGroupRequest: ScopeSubscribe | scopeUpdateSubscription,
-	// §10.2.20
+	// §9.20.20
 	ParamTrackNamespacePrefix: ScopeUpdateSubscribeNamespace | ScopeUpdateSubscribeTracks,
-	// §10.2.21
+	// §9.20.21
 	ParamIncludeProperties: ScopeSubscribe | ScopeTrackStatus | ScopeFetch | ScopeSubscribeTracks,
 }
 
@@ -127,7 +127,7 @@ func (s ParamScope) String() string {
 	return strings.Join(names, "|")
 }
 
-// ScopeOfRequest is the scope of a request opener's parameters (§3.3), or 0
+// ScopeOfRequest is the scope of a request opener's parameters (§6.3), or 0
 // for a type that does not open a request.
 func ScopeOfRequest(t Type) ParamScope {
 	//exhaustive:ignore // every other type maps to 0
@@ -152,7 +152,7 @@ func ScopeOfRequest(t Type) ParamScope {
 }
 
 // ScopeOfResponse is the scope of the success response to a request of type
-// request: SUBSCRIBE_OK, FETCH_OK, or the REQUEST_OK form §10.5 names for it.
+// request: SUBSCRIBE_OK, FETCH_OK, or the REQUEST_OK form §9.3 names for it.
 func ScopeOfResponse(request Type) ParamScope {
 	//exhaustive:ignore // every other type maps to 0
 	switch request {
@@ -203,8 +203,8 @@ func ScopeOfUpdate(request Type) ParamScope {
 }
 
 // ParamScopeError reports a Message Parameter in a message form its
-// definition does not list (§10.2.1), or repeated where it may not be
-// (§10.2). Either is a PROTOCOL_VIOLATION.
+// definition does not list (§9.20.1), or repeated where it may not be
+// (§9.20). Either is a PROTOCOL_VIOLATION.
 type ParamScopeError struct {
 	Type      ParamID
 	Scope     ParamScope
@@ -213,27 +213,27 @@ type ParamScopeError struct {
 
 func (e *ParamScopeError) Error() string {
 	if e.Duplicate {
-		return fmt.Sprintf("moqt/message: duplicate %s in %s (PROTOCOL_VIOLATION §10.2)", e.Type, e.Scope)
+		return fmt.Sprintf("moqt/message: duplicate %s in %s (PROTOCOL_VIOLATION §9.20)", e.Type, e.Scope)
 	}
-	return fmt.Sprintf("moqt/message: %s not allowed in %s (PROTOCOL_VIOLATION §10.2.1)", e.Type, e.Scope)
+	return fmt.Sprintf("moqt/message: %s not allowed in %s (PROTOCOL_VIOLATION §9.20.1)", e.Type, e.Scope)
 }
 
 // ErrValueFormatting marks a parameter whose value does not match the
-// serialization its type defines. §1.4.3: the receiver "MUST close the session
+// serialization its type defines. §8.3: the receiver "MUST close the session
 // with error code KEY_VALUE_FORMATTING_ERROR".
 var ErrValueFormatting = errors.New("moqt/message: value does not match its type's serialization")
 
 // CheckScope reports the first parameter of ps not allowed in a message of the
-// given scope (§10.2.1) or repeated where it may not be (§10.2), and validates
+// given scope (§9.20.1) or repeated where it may not be (§9.20), and validates
 // the values a receiver must close the session for, in ps and inside its
-// FILL_PARAMETERS (§10.2.15): GROUP_ORDER (§10.2.8), FORWARD (§10.2.18),
-// INCLUDE_PROPERTIES (§10.2.21) and LOCATION_FILTER (§5.1.2). Every error is a
+// FILL_PARAMETERS (§9.20.15): GROUP_ORDER (§9.20.8), FORWARD (§9.20.18),
+// INCLUDE_PROPERTIES (§9.20.21) and LOCATION_FILTER (§9.20.9). Every error is a
 // session-level PROTOCOL_VIOLATION, except one wrapping [ErrValueFormatting],
 // a KEY_VALUE_FORMATTING_ERROR.
 func (ps Parameters) CheckScope(scope ParamScope) error {
 	for _, p := range ps {
 		allowed := paramScopes[p.Type]
-		// §10.20.1: SUBSCRIBE parameters are valid in SUBSCRIBE_TRACKS.
+		// §3.6.2: SUBSCRIBE parameters are valid in SUBSCRIBE_TRACKS.
 		if allowed&ScopeSubscribe != 0 {
 			allowed |= ScopeSubscribeTracks
 		}
@@ -259,10 +259,10 @@ func (ps Parameters) CheckScope(scope ParamScope) error {
 func (ps Parameters) checkValues() error {
 	if p, ok := ps.Find(ParamGroupOrder); ok &&
 		GroupOrder(p.Byte) != GroupOrderAscending && GroupOrder(p.Byte) != GroupOrderDescending {
-		return fmt.Errorf("moqt/message: GROUP_ORDER value %d outside {1,2} (PROTOCOL_VIOLATION §10.2.8)", p.Byte)
+		return fmt.Errorf("moqt/message: GROUP_ORDER value %d outside {1,2} (PROTOCOL_VIOLATION §9.20.8)", p.Byte)
 	}
 	if p, ok := ps.Find(ParamForward); ok && p.Byte > 1 {
-		return fmt.Errorf("moqt/message: FORWARD value %d outside {0,1} (PROTOCOL_VIOLATION §10.2.18)", p.Byte)
+		return fmt.Errorf("moqt/message: FORWARD value %d outside {0,1} (PROTOCOL_VIOLATION §9.20.18)", p.Byte)
 	}
 	if _, err := IncludePropertiesFromParam(ps); err != nil {
 		return err
@@ -276,8 +276,8 @@ func (ps Parameters) checkValues() error {
 }
 
 // firstDuplicate reports the first parameter type repeated in ps where its
-// definition does not allow it (§10.2). The Range Filters (§5.1.4) and
-// AUTHORIZATION_TOKEN (§10.2.2) may repeat.
+// definition does not allow it (§9.20). The Range Filters (§3.3.2) and
+// AUTHORIZATION_TOKEN (§8.9) may repeat.
 func (ps Parameters) firstDuplicate() (ParamID, bool) {
 	for i, p := range ps {
 		if IsRangeFilterParam(p.Type) || p.Type == ParamAuthorizationToken {

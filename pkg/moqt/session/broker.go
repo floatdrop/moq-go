@@ -15,7 +15,7 @@ import (
 )
 
 // RequestBroker owns an established request stream's read side and
-// serializes its writes, so REQUEST_UPDATE (§10.9) and long-lived follow-up
+// serializes its writes, so REQUEST_UPDATE (§9.5) and long-lived follow-up
 // traffic can safely coexist. [Session.UpdateRequest] reads its response
 // directly off the stream and therefore cannot run concurrently with any
 // other reader; once a request outlives its initial response — a relay's
@@ -23,24 +23,24 @@ import (
 // one reader must own the stream, and that reader is [RequestBroker.Serve]:
 //
 //   - REQUEST_OK / REQUEST_ERROR answer in-flight [RequestBroker.Update]
-//     calls, including §10.9's coalescing rule (a peer may answer N
+//     calls, including §9.5's coalescing rule (a peer may answer N
 //     pipelined updates with a single REQUEST_ERROR, which fails them all).
 //   - AUTHORIZATION_TOKEN parameters on follow-ups are resolved through the
-//     session token cache (§10.2.2); a cache fault closes the session with
+//     session token cache (§8.9); a cache fault closes the session with
 //     the mandated code.
-//   - A peer REQUEST_UPDATE is answered (§10.9) by the handler installed with
+//   - A peer REQUEST_UPDATE is answered (§9.5) by the handler installed with
 //     [RequestBroker.HandleUpdates], or declined with NOT_SUPPORTED when there
 //     is none, since acknowledging an unapplied update would misstate the
 //     request's state.
 //   - A REQUEST_OK / REQUEST_ERROR before this side sent any REQUEST_UPDATE
 //     answers nothing and closes the session: on a request this side sent it
-//     is a second response (§5.1, §5.2, §6.2), and on a stream this side
+//     is a second response (§3.1, §3.2, §4.1), and on a stream this side
 //     answered only the requester sends REQUEST_UPDATE, bar a PUBLISH's
-//     subscriber (§10.9). So does a SUBSCRIBE_OK on a Subscription (§5.1).
+//     subscriber (§9.5). So does a SUBSCRIBE_OK on a Subscription (§3.1).
 //   - On a [NamespaceSubscription]'s broker, a NAMESPACE_DONE for a suffix no
-//     NAMESPACE announced closes the session (§10.19).
+//     NAMESPACE announced closes the session (§4.2).
 //   - A second GOAWAY on the stream, or one with a New Session URI received
-//     by a server, closes the session (§10.4; see [RequestGoaways]).
+//     by a server, closes the session (§9.2; see [RequestGoaways]).
 //   - Everything else (PUBLISH_DONE, other unsolicited responses, …) is
 //     handed to Serve's callback.
 //
@@ -54,7 +54,7 @@ type RequestBroker struct {
 	sess   *Session
 
 	// mu serializes stream writes and guards the waiter queue. It is
-	// deliberately held across the REQUEST_UPDATE write: §10.9 responses
+	// deliberately held across the REQUEST_UPDATE write: §9.5 responses
 	// arrive in request order, so the waiter queue order must match the
 	// write order.
 	mu      sync.Mutex
@@ -70,12 +70,12 @@ type RequestBroker struct {
 	updated bool
 
 	// onUpdate decides each peer REQUEST_UPDATE; nil declines it.
-	// onUpdateFailed runs after a declined update (§10.9.1). Both are set
+	// onUpdateFailed runs after a declined update (§9.5.1). Both are set
 	// before Serve runs.
 	onUpdate       UpdateHandler
 	onUpdateFailed func()
 
-	// updateScope is the §10.2.1 scope of peer REQUEST_UPDATEs; 0 skips the
+	// updateScope is the §9.20.1 scope of peer REQUEST_UPDATEs; 0 skips the
 	// check.
 	updateScope message.ParamScope
 
@@ -88,9 +88,9 @@ type RequestBroker struct {
 	handle *requestHandle
 
 	// Serve's per-stream state, kept across calls: the stream's GOAWAYs
-	// (§10.4) when there is no handle to keep them, and on a
+	// (§9.2) when there is no handle to keep them, and on a
 	// SUBSCRIBE_NAMESPACE the current prefix and the full namespaces a
-	// NAMESPACE announced and no NAMESPACE_DONE withdrew (§10.19, §10.9.2).
+	// NAMESPACE announced and no NAMESPACE_DONE withdrew (§4.2, §9.5.2).
 	goaways    RequestGoaways
 	nsPrefix   wire.TrackNamespace
 	namespaces map[track.Key]struct{}
@@ -100,33 +100,33 @@ type RequestBroker struct {
 	nsPrefixLost bool
 }
 
-// PeerMessages declares whether the peer may send REQUEST_UPDATE (§10.9) and
-// PUBLISH_STATE_NOTIFY (§10.10) on this stream; a disallowed one closes the
+// PeerMessages declares whether the peer may send REQUEST_UPDATE (§9.5) and
+// PUBLISH_STATE_NOTIFY (§9.10) on this stream; a disallowed one closes the
 // session with PROTOCOL_VIOLATION. Typed handles set this; a broker from
 // [Session.NewRequestBroker] allows both. Call it before [RequestBroker.Serve].
 func (b *RequestBroker) PeerMessages(requestUpdate, publishStateNotify bool) {
 	b.noPeerUpdate, b.noPeerNotify = !requestUpdate, !publishStateNotify
 }
 
-// UpdateScope sets the §10.2.1 parameter scope of the peer's REQUEST_UPDATEs;
+// UpdateScope sets the §9.20.1 parameter scope of the peer's REQUEST_UPDATEs;
 // one carrying a parameter outside it closes the session with
 // PROTOCOL_VIOLATION. Typed handles set this; a broker from
 // [Session.NewRequestBroker] checks nothing. Call it before
 // [RequestBroker.Serve].
 func (b *RequestBroker) UpdateScope(s message.ParamScope) { b.updateScope = s }
 
-// UpdateHandler decides a peer's REQUEST_UPDATE (§10.9). It returns the
+// UpdateHandler decides a peer's REQUEST_UPDATE (§9.5). It returns the
 // REQUEST_OK to send, or an error: a *[RequestRejectedError] is sent as
 // REQUEST_ERROR with its code, reason and Retry Interval, any other error as
 // INTERNAL_ERROR. So is a REDIRECT, which cannot answer a REQUEST_UPDATE
-// (§10.6.2).
+// (§12.3).
 type UpdateHandler func(upd *message.RequestUpdate) (*message.RequestOK, error)
 
 // HandleUpdates installs the handler that decides peer REQUEST_UPDATEs,
 // replacing any earlier one. Call it before [RequestBroker.Serve].
 func (b *RequestBroker) HandleUpdates(h UpdateHandler) { b.onUpdate = h }
 
-// answerUpdate writes the §10.9 response to upd and reports whether the
+// answerUpdate writes the §9.5 response to upd and reports whether the
 // update was accepted.
 func (b *RequestBroker) answerUpdate(upd *message.RequestUpdate) (bool, error) {
 	var (
@@ -152,7 +152,7 @@ func (b *RequestBroker) answerUpdate(upd *message.RequestUpdate) (bool, error) {
 			ok = &message.RequestOK{}
 		}
 		if len(ok.TrackProperties) > 0 {
-			// §10.5: REQUEST_UPDATE_OK's Track Properties are empty.
+			// §9.3: REQUEST_UPDATE_OK's Track Properties are empty.
 			err = fmt.Errorf("%w: REQUEST_UPDATE_OK", ErrTrackPropertiesNotAllowed)
 		}
 	}
@@ -189,7 +189,7 @@ func (b *RequestBroker) goawayState() *RequestGoaways {
 // namespaceFollowup tracks a NAMESPACE or NAMESPACE_DONE on a
 // SUBSCRIBE_NAMESPACE's broker: "If a subscriber receives a NAMESPACE_DONE
 // before the corresponding NAMESPACE, it MUST close the session with a
-// 'PROTOCOL_VIOLATION'" (§10.19). Other brokers do not track them.
+// 'PROTOCOL_VIOLATION'" (§4.2). Other brokers do not track them.
 func (b *RequestBroker) namespaceFollowup(m message.Message) error {
 	if b.handle == nil || !b.handle.namespaces {
 		return nil
@@ -226,16 +226,16 @@ func (b *RequestBroker) answered() message.Type {
 	return b.handle.answered
 }
 
-// updateWaiter is one sent REQUEST_UPDATE awaiting its §10.9 response and,
+// updateWaiter is one sent REQUEST_UPDATE awaiting its §9.5 response and,
 // when the update sets TRACK_NAMESPACE_PREFIX, the prefix it switches a
-// namespace subscription to once accepted (§10.9.2).
+// namespace subscription to once accepted (§9.5.2).
 type updateWaiter struct {
 	ch         chan updateResult
 	prefix     wire.TrackNamespace
 	setsPrefix bool
 }
 
-// updateResult carries one §10.9 response to a waiting Update call.
+// updateResult carries one §9.5 response to a waiting Update call.
 type updateResult struct {
 	ok  *message.RequestOK
 	err error
@@ -256,9 +256,9 @@ func (s *Session) NewRequestBroker(stream Stream) *RequestBroker {
 	return &RequestBroker{stream: stream, sess: s}
 }
 
-// mapUpdateResponse converts a §10.9 response: REQUEST_OK passes through,
+// mapUpdateResponse converts a §9.5 response: REQUEST_OK passes through,
 // REQUEST_ERROR becomes a *RequestRejectedError, anything else is an error. A
-// REQUEST_UPDATE_OK carrying Track Properties closes the session (§10.5).
+// REQUEST_UPDATE_OK carrying Track Properties closes the session (§9.3).
 func (s *Session) mapUpdateResponse(msg message.Message) (*message.RequestOK, error) {
 	switch m := msg.(type) {
 	case *message.RequestOK:
@@ -276,7 +276,7 @@ func (s *Session) mapUpdateResponse(msg message.Message) (*message.RequestOK, er
 	}
 }
 
-// Update sends a REQUEST_UPDATE (§10.9) on the request stream and awaits the
+// Update sends a REQUEST_UPDATE (§9.5) on the request stream and awaits the
 // single REQUEST_OK / REQUEST_ERROR the spec mandates, delivered by the
 // [RequestBroker.Serve] reader. params carries only the fields to change;
 // any parameter omitted keeps its prior value on the peer.
@@ -300,9 +300,9 @@ func (b *RequestBroker) Update(ctx context.Context, params message.Parameters) (
 	}
 	// Write while holding mu: it serializes writers on the stream AND keeps
 	// the waiter queue order equal to the write order, which is what lets
-	// the reader pair each §10.9 response with its update. The ID is
+	// the reader pair each §9.5 response with its update. The ID is
 	// allocated under the same lock so IDs appear on this stream in
-	// increasing order — §10.1: REQUEST_UPDATE consumes a fresh Request ID
+	// increasing order — §6.4.2.1: REQUEST_UPDATE consumes a fresh Request ID
 	// from the sender's space (the stream, not the ID, names the request
 	// being updated; a reused ID is a session-fatal duplicate).
 	err := message.Marshal(b.stream, &message.RequestUpdate{
@@ -331,7 +331,7 @@ func (b *RequestBroker) Update(ctx context.Context, params message.Parameters) (
 		if i := slices.IndexFunc(b.waiters, func(w updateWaiter) bool { return w.ch == ch }); i >= 0 {
 			// Its late answer will pair with the next update, so on a
 			// SUBSCRIBE_NAMESPACE where a prefix update's REQUEST_OK falls
-			// among the NAMESPACEs (§10.9.2) is no longer known.
+			// among the NAMESPACEs (§9.5.2) is no longer known.
 			if b.handle != nil && b.handle.namespaces {
 				b.nsPrefixLost = true
 			}
@@ -383,7 +383,7 @@ func (b *RequestBroker) writeThenClose(msg message.Message) error {
 
 // route delivers a REQUEST_OK / REQUEST_ERROR read off the stream to
 // in-flight Update calls: a REQUEST_OK answers the oldest waiter; a
-// REQUEST_ERROR answers ALL of them, because §10.9 lets the peer coalesce
+// REQUEST_ERROR answers ALL of them, because §9.5.1 lets the peer coalesce
 // pipelined updates and "only a single REQUEST_ERROR will be sent" for the
 // batch. It reports whether any waiter consumed the message; false means
 // none was pending (an unsolicited response Serve hands to its callback).
@@ -403,7 +403,7 @@ func (b *RequestBroker) route(msg message.Message) bool {
 
 	ok, err := b.sess.mapUpdateResponse(msg)
 	if err == nil && recipients[0].setsPrefix {
-		// §10.9.2: suffixes after this REQUEST_OK are relative to the new
+		// §9.5.2: suffixes after this REQUEST_OK are relative to the new
 		// prefix. Only Serve's goroutine reads nsPrefix.
 		b.nsPrefix = recipients[0].prefix
 	}
@@ -428,11 +428,11 @@ func (b *RequestBroker) closeUpdates() {
 	}
 }
 
-// Close cancels the request (§3.3.3): pending and future Updates fail with
+// Close cancels the request (§6.4.2.3): pending and future Updates fail with
 // [ErrRequestStreamClosed] and both directions are reset with code, which
 // unblocks a running Serve. On a broker from a [Subscription] or
-// [IncomingPublication] the subscription is Terminated (§5.1) and its Track
-// Alias released (§11.1). Serialized against in-flight writes; idempotent.
+// [IncomingPublication] the subscription is Terminated (§3.1) and its Track
+// Alias released (§3.1.3). Serialized against in-flight writes; idempotent.
 // Must not be called with locks that Serve's callback might need held.
 func (b *RequestBroker) Close(code moqt.StreamResetCode) {
 	if b.handle != nil {
@@ -449,7 +449,7 @@ func (b *RequestBroker) Close(code moqt.StreamResetCode) {
 	b.stream.CancelWrite(uint64(code))
 }
 
-// receiveUpdate checks and answers a peer REQUEST_UPDATE for Serve (§10.9).
+// receiveUpdate checks and answers a peer REQUEST_UPDATE for Serve (§9.5).
 // A non-nil error means Serve stops; a violation closed the session.
 func (b *RequestBroker) receiveUpdate(m *message.RequestUpdate, updates *RequestUpdateLimiter) error {
 	if b.noPeerUpdate {
@@ -461,19 +461,19 @@ func (b *RequestBroker) receiveUpdate(m *message.RequestUpdate, updates *Request
 			return err
 		}
 	}
-	// §10.1: a REQUEST_UPDATE consumes a Request ID from the sender's space;
+	// §6.4.2.1: a REQUEST_UPDATE consumes a Request ID from the sender's space;
 	// a wrong-parity or duplicate ID is session-fatal.
 	if err := b.sess.CheckPeerRequestID(m.RequestID); err != nil {
 		_ = b.sess.Close(moqt.SessionInvalidRequestID, err.Error())
 		return err
 	}
-	// §10.3.1.7: reject a REQUEST_UPDATE that exceeds the per-stream
+	// §9.1.7: reject a REQUEST_UPDATE that exceeds the per-stream
 	// MAX_REQUEST_UPDATES limit before acting on it.
 	if err := updates.Received(); err != nil {
 		_ = b.sess.Close(moqt.SessionTooManyRequestUpdates, err.Error())
 		return err
 	}
-	// §10.9: "MUST respond with exactly one REQUEST_OK or REQUEST_ERROR".
+	// §9.5: "MUST respond with exactly one REQUEST_OK or REQUEST_ERROR".
 	// onMsg still observes the update.
 	accepted, err := b.answerUpdate(m)
 	if err != nil {
@@ -498,7 +498,7 @@ func (b *RequestBroker) readFailed(ctx context.Context, err error) error {
 		}
 		return nil
 	case errors.Is(err, message.ErrMalformedMessage):
-		// §10, and §10.2 for an unknown parameter.
+		// §9, and §9.20 for an unknown parameter.
 		b.stream.CancelRead(uint64(moqt.StreamResetInternalError))
 		return b.sess.closeProtocolViolation(err)
 	default:
@@ -515,20 +515,20 @@ func (b *RequestBroker) readFailed(ctx context.Context, err error) error {
 // calls fail with [ErrRequestStreamClosed].
 //
 // Responses route to Update waiters; a token cache fault closes the session
-// (§10.2.2); peer REQUEST_UPDATEs are answered as described on
+// (§9.20.2); peer REQUEST_UPDATEs are answered as described on
 // [RequestBroker], and a REQUEST_OK or REQUEST_ERROR before this side sent a
-// REQUEST_UPDATE closes the session (§5.1, §10.9). Every other message,
+// REQUEST_UPDATE closes the session (§3.1, §9.5). Every other message,
 // including each REQUEST_UPDATE, is passed to onMsg (nil means "discard");
 // return false from onMsg to stop serving.
 //
 // A read error resets the read side with INTERNAL_ERROR; a malformed follow-up
-// also closes the session with PROTOCOL_VIOLATION (§10). Serve returns nil on
+// also closes the session with PROTOCOL_VIOLATION (§9). Serve returns nil on
 // a clean FIN or an onMsg stop, ctx.Err() on cancellation, and the read/token
 // error otherwise.
 //
 // On a broker from a [Subscription] or [IncomingPublication], every exit but
-// an onMsg stop Terminates the subscription (§5.1) and releases its Track
-// Alias (§11.1).
+// an onMsg stop Terminates the subscription (§3.1) and releases its Track
+// Alias (§3.1.3).
 func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) bool) error {
 	defer b.closeUpdates()
 	stopped := false // by onMsg: the stream may still carry the subscription
@@ -542,7 +542,7 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 	})
 	defer stop()
 
-	// §10.3.1.7: per-stream MAX_REQUEST_UPDATES enforcement. One limiter per
+	// §9.1.7: per-stream MAX_REQUEST_UPDATES enforcement. One limiter per
 	// stream, since the limit is scoped to a single request stream.
 	updates := b.sess.NewRequestUpdateLimiter()
 
@@ -552,7 +552,7 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 			return b.readFailed(ctx, err)
 		}
 
-		// §10.2.2: follow-ups may REGISTER/DELETE token aliases; skipping
+		// §8.9: follow-ups may REGISTER/DELETE token aliases; skipping
 		// this would silently desynchronize the peer's view of the token
 		// cache. A cache fault is session-fatal with the mandated code.
 		if _, err := b.sess.ProcessFollowupTokens(msg); err != nil {
@@ -564,7 +564,7 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 
 		switch m := msg.(type) {
 		case *message.SubscribeOK:
-			// §5.1: the response to this side's SUBSCRIBE was read already,
+			// §3.1: the response to this side's SUBSCRIBE was read already,
 			// and "The peer SHOULD close the session with a protocol error if
 			// it receives more than one."
 			if b.answered() == message.TypeSubscribe {
@@ -573,11 +573,11 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 		case *message.RequestOK, *message.RequestError:
 			// The request's own response was read before the broker
 			// attached, so every REQUEST_OK here is a REQUEST_UPDATE_OK
-			// (§10.5), even one whose Update gave up. Before any Update it
+			// (§9.3), even one whose Update gave up. Before any Update it
 			// answers nothing: on a request this side sent it is a second
-			// response, a second PUBLISH_OK among them (§5.1, §5.2, §6.2),
+			// response, a second PUBLISH_OK among them (§3.1, §3.2, §4.1),
 			// and on a stream this side answered the peer, as requester, was
-			// sent no REQUEST_UPDATE to answer (§10.9).
+			// sent no REQUEST_UPDATE to answer (§9.5).
 			b.mu.Lock()
 			updated := b.updated
 			b.mu.Unlock()
@@ -588,7 +588,7 @@ func (b *RequestBroker) Serve(ctx context.Context, onMsg func(message.Message) b
 			if err := b.sess.checkRequestOKTrackProperties(nil, m); err != nil {
 				return err
 			}
-			// §10.6.1, before routing: an unsolicited REQUEST_ERROR reaches
+			// §9.4.1, before routing: an unsolicited REQUEST_ERROR reaches
 			// onMsg instead of an Update.
 			if e, isErr := m.(*message.RequestError); isErr {
 				if err := redirectViolation(

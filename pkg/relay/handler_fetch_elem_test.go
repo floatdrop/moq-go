@@ -10,7 +10,7 @@ import (
 // TestUpstreamFetchElemOK: an upstream FETCH element, Object or marker, may be
 // re-served only if it lies in the span and comes after the previous element
 // in the order the response carries them: Object IDs ascending within a
-// Group, Groups in the response's order (§11.4.4). A wrong one would re-encode
+// Group, Groups in the response's order (§11.4.1). A wrong one would re-encode
 // to well-formed but wrong IDs.
 func TestUpstreamFetchElemOK(t *testing.T) {
 	t.Parallel()

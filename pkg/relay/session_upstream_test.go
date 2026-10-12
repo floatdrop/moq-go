@@ -17,7 +17,7 @@ import (
 
 // On-demand upstream SUBSCRIBE: a SUBSCRIBE under a namespace a client
 // advertised with PUBLISH_NAMESPACE makes the relay SUBSCRIBE that client, and
-// the upstream follows its downstream subscribers (§9.2, §9.4).
+// the upstream follows its downstream subscribers (§7.2, §7.4).
 
 // namespacePublisher starts a relay whose first client advertises video, so a
 // SUBSCRIBE under it makes the relay SUBSCRIBE that client upstream.
@@ -86,7 +86,7 @@ func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 
 	subReq := subscribeCam1(t, dialAnotherClient(t, pubSess))
 	<-pubResponded
-	// §9.6: the Track Properties from the upstream SUBSCRIBE_OK are echoed on
+	// §7.7: the Track Properties from the upstream SUBSCRIBE_OK are echoed on
 	// the downstream one.
 	if got, want := subReq.OK.TrackProperties, opaqueProps("upstream props"); !bytes.Equal(got, want) {
 		t.Fatalf("downstream TrackProperties = %x, want %x", got, want)
@@ -94,7 +94,7 @@ func TestSubscribe_OnDemandUpstreamSubscribe(t *testing.T) {
 }
 
 // upstreamForwardFor SUBSCRIBEs a downstream client with params and returns the
-// FORWARD the relay's upstream SUBSCRIBE carried; absent means 1 (§10.2.18).
+// FORWARD the relay's upstream SUBSCRIBE carried; absent means 1 (§9.20.18).
 func upstreamForwardFor(t *testing.T, params ...message.Parameter) (value uint8, present bool) {
 	t.Helper()
 	pubSess := namespacePublisher(t, relay.Config{})
@@ -135,7 +135,7 @@ func upstreamForwardFor(t *testing.T, params ...message.Parameter) (value uint8,
 	return f.value, f.present
 }
 
-// TestSubscribe_UpstreamForwardPausedWhenDownstreamForwardZero pins §9.2: when
+// TestSubscribe_UpstreamForwardPausedWhenDownstreamForwardZero pins §7.2: when
 // the only downstream subscriber sets Forward=0, the relay exercises its
 // discretion and pauses the upstream with an explicit FORWARD=0.
 func TestSubscribe_UpstreamForwardPausedWhenDownstreamForwardZero(t *testing.T) {
@@ -145,7 +145,7 @@ func TestSubscribe_UpstreamForwardPausedWhenDownstreamForwardZero(t *testing.T) 
 	}
 }
 
-// TestSubscribe_UpstreamForwardOmittedWhenDownstreamForwards pins §9.2: when a
+// TestSubscribe_UpstreamForwardOmittedWhenDownstreamForwards pins §7.2: when a
 // downstream subscriber wants forwarding (FORWARD omitted → default 1), the
 // relay's upstream SUBSCRIBE omits FORWARD too (implicit 1).
 func TestSubscribe_UpstreamForwardOmittedWhenDownstreamForwards(t *testing.T) {
@@ -157,7 +157,7 @@ func TestSubscribe_UpstreamForwardOmittedWhenDownstreamForwards(t *testing.T) {
 
 // TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins: a paused upstream
 // is resumed with REQUEST_UPDATE FORWARD=1 when a Forward=1 subscriber joins
-// (§9.2).
+// (§7.2).
 func TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins(t *testing.T) {
 	t.Parallel()
 	pubSess := namespacePublisher(t, relay.Config{})
@@ -203,7 +203,7 @@ func TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins(t *testing.T) {
 		if p, ok := upd.Parameters.Find(message.ParamForward); ok {
 			r.resumeForward = int(p.Byte)
 		}
-		// Answer the §10.9 REQUEST_UPDATE so the relay's resume completes
+		// Answer the §9.5 REQUEST_UPDATE so the relay's resume completes
 		// rather than timing out.
 		if err := message.Marshal(req.Stream, &message.RequestOK{}); err != nil {
 			t.Errorf("publisher REQUEST_OK: %v", err)
@@ -226,12 +226,12 @@ func TestSubscribe_UpstreamResumedWhenForwardingSubscriberJoins(t *testing.T) {
 			t.Errorf("upstream resume REQUEST_UPDATE FORWARD = %d, want 1", got.resumeForward)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("publisher did not observe the §9.2 upstream resume REQUEST_UPDATE")
+		t.Fatal("publisher did not observe the §7.2 upstream resume REQUEST_UPDATE")
 	}
 }
 
 // TestSubscribe_UpstreamSurvivesInitiatingSubscriber: an on-demand upstream
-// outlives the subscriber that triggered it while another still uses it (§9.4).
+// outlives the subscriber that triggered it while another still uses it (§7.4).
 func TestSubscribe_UpstreamSurvivesInitiatingSubscriber(t *testing.T) {
 	t.Parallel()
 	closed := &recordingMetrics{}
@@ -276,7 +276,7 @@ func TestSubscribe_LastDownstreamTearsDownUpstream(t *testing.T) {
 
 // TestSubscribe_UpstreamAliasReusableAfterTeardown: once the relay ends its
 // upstream subscription, the publisher may use its Track Alias for a different
-// Track (§11.1) without the relay closing the session with
+// Track (§3.1.3) without the relay closing the session with
 // DUPLICATE_TRACK_ALIAS.
 func TestSubscribe_UpstreamAliasReusableAfterTeardown(t *testing.T) {
 	t.Parallel()
@@ -308,7 +308,7 @@ func TestSubscribe_UpstreamAliasReusableAfterTeardown(t *testing.T) {
 // code about the track passes downstream, GOING_AWAY among them (an upstream
 // relay draining, as the relay answers for a draining publisher itself); one
 // about the relay's own hop, or not defined for SUBSCRIBE (MALFORMED_TRACK
-// answers a FETCH), becomes INTERNAL_ERROR (§10.6.2). The Retry Interval is
+// answers a FETCH), becomes INTERNAL_ERROR (§12.3). The Retry Interval is
 // kept either way.
 func TestSubscribe_UpstreamRejects_PropagatesRejection(t *testing.T) {
 	t.Parallel()
@@ -415,7 +415,7 @@ func refuse(code moqt.RequestErrorCode, retry uint64) func(*session.Request) {
 	}
 }
 
-// reset cancels the request at the transport (§3.3.3): no REQUEST_ERROR.
+// reset cancels the request at the transport (§6.4.2.3): no REQUEST_ERROR.
 func reset(r *session.Request) {
 	r.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
 	r.Stream.CancelWrite(uint64(moqt.StreamResetCancelled))
@@ -432,7 +432,7 @@ func subscribeCam1Rejected(t *testing.T, subSess *session.Session) *session.Requ
 }
 
 // TestSubscribe_UpstreamGoingAwayWithoutRetry: an upstream GOING_AWAY that says
-// not to retry (Retry Interval 0, §10.6.2) speaks for the upstream's own
+// not to retry (Retry Interval 0, §9.4.2) speaks for the upstream's own
 // draining hop, so the subscriber is told to retry after the relay's own
 // interval, as when the relay sees the drain itself.
 func TestSubscribe_UpstreamGoingAwayWithoutRetry(t *testing.T) {
@@ -449,7 +449,7 @@ func TestSubscribe_UpstreamGoingAwayWithoutRetry(t *testing.T) {
 
 // TestSubscribe_TiedRefusalsSoonestRetry: of refusals with the same code, the
 // subscriber gets the one allowing the soonest retry, whatever the order;
-// "SHOULD NOT be retried" (0, §10.6.2) only when every one says so.
+// "SHOULD NOT be retried" (0, §9.4.2) only when every one says so.
 func TestSubscribe_TiedRefusalsSoonestRetry(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -479,7 +479,7 @@ func TestSubscribe_TiedRefusalsSoonestRetry(t *testing.T) {
 // fails at the transport, with no REQUEST_ERROR, says nothing about the
 // track, so it ranks as DOES_NOT_EXIST (the code it is answered with): it
 // does not mask another candidate's GOING_AWAY, and a RENDEZVOUS_TIMEOUT hold
-// goes on (§10.2.6).
+// goes on (§9.20.6).
 func TestSubscribe_TransportFailureIsNoPublisherYet(t *testing.T) {
 	t.Parallel()
 	for _, order := range []string{"reset first", "reset last"} {
@@ -513,7 +513,7 @@ func TestSubscribe_TransportFailureIsNoPublisherYet(t *testing.T) {
 
 // TestSubscribe_UnsupportedMandatoryPropertyOutranksMalformed: of two
 // candidates whose SUBSCRIBE_OKs carry bad Track Properties, an unknown
-// Mandatory Track Property (§2.5.1: UNSUPPORTED_EXTENSION, a MUST) wins over
+// Mandatory Track Property (§3.7: UNSUPPORTED_EXTENSION, a MUST) wins over
 // Properties that do not parse, whatever the order.
 func TestSubscribe_UnsupportedMandatoryPropertyOutranksMalformed(t *testing.T) {
 	t.Parallel()
@@ -540,7 +540,7 @@ func TestSubscribe_UnsupportedMandatoryPropertyOutranksMalformed(t *testing.T) {
 }
 
 // requireRetryableExcessiveLoad fails unless err is EXCESSIVE_LOAD inviting a
-// retry after about a second (§10.6.2).
+// retry after about a second (§9.4.2).
 func requireRetryableExcessiveLoad(t *testing.T, err error) {
 	t.Helper()
 	requireRejectedWithCode(t, err, moqt.RequestExcessiveLoad)
@@ -557,7 +557,7 @@ func requireRetryableExcessiveLoad(t *testing.T, err error) {
 // track has no publisher, so a RENDEZVOUS_TIMEOUT hold does not wait out its
 // budget on it: the subscriber is answered at once, with EXCESSIVE_LOAD and a
 // retry, since the relay "cannot process the request at this time"
-// (§10.6.2).
+// (§12.3).
 func TestRendezvous_NoStreamCreditEndsHold(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})

@@ -172,7 +172,7 @@ func TestString_RoundTrips(t *testing.T) {
 
 // TestParse_PercentEncodedPathStaysRaw pins that URI.Path carries the RAW
 // path-abempty component: percent-escapes survive parsing, so the PATH Setup
-// Option (§3.1.5, §10.3.1.2) stays unambiguous and String()/HTTPSURL() emit valid
+// Option (§6.2.2, §9.1.2) stays unambiguous and String()/HTTPSURL() emit valid
 // URIs.
 func TestParse_PercentEncodedPathStaysRaw(t *testing.T) {
 	u, err := uri.Parse("moqt://relay.example/a%3Fb/c%20d?x=1")

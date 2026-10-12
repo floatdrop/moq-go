@@ -277,7 +277,7 @@ func TestSubgroupObject_ParseErrors(t *testing.T) {
 	}
 }
 
-// TestSubgroupObject_StreamFINMidObject pins §11.4: a FIN mid-Object is
+// TestSubgroupObject_StreamFINMidObject pins §11.3: a FIN mid-Object is
 // io.ErrUnexpectedEOF; only a FIN on an Object boundary is io.EOF.
 func TestSubgroupObject_StreamFINMidObject(t *testing.T) {
 	tests := []struct {
@@ -307,7 +307,7 @@ func TestSubgroupObject_StreamFINMidObject(t *testing.T) {
 	}
 }
 
-// TestSubgroupObject_ValidateRejectsPropertiesOnStatusObject pins §11.2.1.2:
+// TestSubgroupObject_ValidateRejectsPropertiesOnStatusObject pins §11.1.2:
 // properties on a non-Normal status Object are a PROTOCOL_VIOLATION; a
 // Properties Length of 0 is no properties.
 func TestSubgroupObject_ValidateRejectsPropertiesOnStatusObject(t *testing.T) {

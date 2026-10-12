@@ -1,4 +1,4 @@
-// Package cache holds the relay's per-track Object Cache (§9.1 caching
+// Package cache holds the relay's per-track Object Cache (§7.1 caching
 // relays). Storage is a fixed-capacity circular ring buffer (FIFO) with
 // an auxiliary {GroupID, ObjectID} → ring-slot index map for O(1) point
 // lookup and overwrite-in-place.
@@ -15,7 +15,7 @@
 //     only consumers of stored data are the FETCH handlers, which
 //     can't see anything Get / GetRange filters out.
 //
-// The §10.2.17 LARGEST_OBJECT watermark is maintained outside the ring,
+// The §9.20.17 LARGEST_OBJECT watermark is maintained outside the ring,
 // under the same mutex, and is monotonic — evictions and TTL expiry
 // don't roll it back.
 package cache
@@ -36,8 +36,8 @@ import (
 // constructor. 1<<16 is large enough that no in-tree test fills it.
 const defaultUnboundedCapacity = 1 << 16
 
-// ForwardingPreference distinguishes objects that arrived on a §11.4.2
-// SUBGROUP_HEADER stream from objects that arrived as §11.3 datagrams.
+// ForwardingPreference distinguishes objects that arrived on a §11.3.1
+// SUBGROUP_HEADER stream from objects that arrived as §11.2 datagrams.
 // A FETCH response must replay this verbatim because the subscriber's
 // decoding depends on it.
 type ForwardingPreference uint8
@@ -45,7 +45,7 @@ type ForwardingPreference uint8
 const (
 	// ForwardingSubgroup: the object came from a SUBGROUP_HEADER stream.
 	ForwardingSubgroup ForwardingPreference = iota
-	// ForwardingDatagram: the object arrived as a §11.3 OBJECT_DATAGRAM.
+	// ForwardingDatagram: the object arrived as a §11.2 OBJECT_DATAGRAM.
 	ForwardingDatagram
 )
 
@@ -59,12 +59,12 @@ type CachedObject struct {
 	SubgroupID        uint64 // 0 for datagrams (no subgroup notion)
 	PublisherPriority uint8
 	ForwardingPref    ForwardingPreference
-	Status            uint64 // §11.2.1.1; 0 for normal objects
+	Status            uint64 // §11.1.1; 0 for normal objects
 	Properties        []byte // retained by reference; opaque to the cache
 	Payload           []byte // retained by reference; opaque
 	ReceivedAt        time.Time
 
-	// MaxCacheDuration is the MAX_CACHE_DURATION (§12.3) of the upstream the
+	// MaxCacheDuration is the MAX_CACHE_DURATION (§10.3) of the upstream the
 	// Object arrived through (per upstream, so it can differ within a track),
 	// and HasMaxCacheDuration whether it sent one. A present 0 means never
 	// serve from the cache (this implementation's reading).
@@ -76,7 +76,7 @@ type CachedObject struct {
 	// MaxCacheDuration bounds it, not the relay's TTL (see [ObjectCache.Expired]).
 	Stitched bool
 
-	// EndOfUnknownRange marks this element as a §11.4.4.2 End of Unknown
+	// EndOfUnknownRange marks this element as a §11.4.1.2 End of Unknown
 	// Range (0x10C) FETCH marker rather than a stored object: every Location
 	// from the previous element in the response stream (exclusive) through
 	// {GroupID, ObjectID} (inclusive) has unknown status. Markers exist only
@@ -85,21 +85,21 @@ type CachedObject struct {
 	// cache ring.
 	EndOfUnknownRange bool
 
-	// EndOfTimedOutRange marks this element as a §11.4.4.2 End of Timed-Out
+	// EndOfTimedOutRange marks this element as a §11.4.1.2 End of Timed-Out
 	// Range (0x20C) FETCH marker: same shape as EndOfUnknownRange, but the
-	// Objects it covers were abandoned because FILL_TIMEOUT (§10.2.5) expired
+	// Objects it covers were abandoned because FILL_TIMEOUT (§9.20.5) expired
 	// rather than because no source could vouch for them. draft-20 split the
 	// two so a subscriber can tell "retry might help" from "status unknown".
 	EndOfTimedOutRange bool
 }
 
-// IsRangeMarker reports whether the element is any §11.4.4.2 end-of-range
+// IsRangeMarker reports whether the element is any §11.4.1.2 end-of-range
 // marker rather than a stored object.
 func (o *CachedObject) IsRangeMarker() bool {
 	return o.EndOfUnknownRange || o.EndOfTimedOutRange
 }
 
-// IsStatusMarker reports whether the object is a §11.2.1.1 status marker
+// IsStatusMarker reports whether the object is a §11.1.1 status marker
 // (End of Group / End of Track) rather than a real object. Markers describe
 // the absence of objects: the subscription path forwards them, but FETCH
 // responses never serialize them — the Object Status field "is absent in
@@ -199,7 +199,7 @@ func (c *ObjectCache) Put(obj *CachedObject) {
 	c.mu.Unlock()
 }
 
-// PutDatagram is a thin adapter that converts a §11.3 OBJECT_DATAGRAM
+// PutDatagram is a thin adapter that converts a §11.2 OBJECT_DATAGRAM
 // into a CachedObject and stores it. Datagrams have no subgroup, so
 // SubgroupID is 0; ForwardingPref records the wire shape so a FETCH
 // response can replay it as a datagram even if the subscriber's transport
@@ -264,7 +264,7 @@ func (c *ObjectCache) notExpiredLocked(obj *CachedObject) bool {
 }
 
 // Expired reports whether obj, in a FETCH or fill response on this cache's
-// track, may no longer be served (§12.3: "MUST NOT start forwarding"): one
+// track, may no longer be served (§10.3: "MUST NOT start forwarding"): one
 // taken from this cache within its own MAX_CACHE_DURATION and the relay's TTL
 // (see notExpiredLocked). Range markers never expire. An
 // Object stitched from an upstream FETCH expires only past its own
@@ -333,7 +333,7 @@ func (c *ObjectCache) Len() int {
 //   - [message.GroupOrderDescending]: groups desc, objects asc within group.
 //
 // Within a group the inner order is always ascending by Object ID, matching
-// §10.13: "Within each group, objects are sent in Object ID order".
+// §3.2.1: "Within each group, objects are sent in Object ID order".
 //
 // An empty or inverted range (end < start) returns nil.
 //
@@ -362,7 +362,7 @@ func (c *ObjectCache) GetRange(start, end message.Location, order message.GroupO
 			continue
 		}
 		if !c.notExpiredLocked(obj) {
-			continue // §12.3: its state "becomes unknown"; the caller treats it so
+			continue // §10.3: its state "becomes unknown"; the caller treats it so
 		}
 		// Append the stored pointer directly — Put never recycles or
 		// mutates a stored struct, so this never aliases storage a later

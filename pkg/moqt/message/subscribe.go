@@ -2,7 +2,7 @@ package message
 
 import "github.com/floatdrop/moq-go/pkg/moqt/wire"
 
-// Subscribe is the SUBSCRIBE message (§10.7).
+// Subscribe is the SUBSCRIBE message (§9.6).
 type Subscribe struct {
 	RequestID  uint64
 	Namespace  wire.TrackNamespace
@@ -32,7 +32,7 @@ func (m *Subscribe) Parse(r *wire.Reader) error {
 	return m.Parameters.parse(r)
 }
 
-// SubscribeOK is the SUBSCRIBE_OK message (§10.8). Track Properties span the
+// SubscribeOK is the SUBSCRIBE_OK message (§9.7). Track Properties span the
 // remaining bytes; we currently treat them as opaque.
 type SubscribeOK struct {
 	TrackAlias      uint64
@@ -61,7 +61,7 @@ func (m *SubscribeOK) Parse(r *wire.Reader) error {
 	return nil
 }
 
-// Validate enforces the §2.4.1 Full Track Name size limit; ParsePayload
+// Validate enforces the §8.7 Full Track Name size limit; ParsePayload
 // invokes it automatically after decoding a SUBSCRIBE frame.
 func (m *Subscribe) Validate() error {
 	return validateFullTrackName(m.Namespace, m.Name)

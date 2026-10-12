@@ -16,21 +16,21 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/cache"
 )
 
-// TrackEntry is the central per-track control block (§9 of
-// draft-ietf-moq-transport-20). One entry exists for every track the relay
+// TrackEntry is the central per-track control block (§7 of
+// draft-ietf-moq-transport-22). One entry exists for every track the relay
 // currently knows about — created on the first SUBSCRIBE or
 // PUBLISH/PUBLISH_NAMESPACE for that track, destroyed when the last upstream
 // and the last downstream subscription have both gone.
 //
 // The Upstream slice is intentionally a list (not a single value) so the
-// relay can represent the three cases §9.3 / §9.5.1 explicitly allow:
+// relay can represent the three cases §7.3 / §7.6.1 explicitly allow:
 //
 //   - multiple independent publishers claiming the same Full Track Name,
 //   - graceful publisher relay switchover where a publisher holds two
 //     overlapping sessions while migrating WiFi → cellular,
 //   - redundant origins (N-redundant encoders) used for live-media
 //     reliability — the relay deduplicates objects by {GroupID, ObjectID}
-//     (§9.3) via [TrackEntry.ClaimDelivered] so each object is forwarded
+//     (§7.3) via [TrackEntry.ClaimDelivered] so each object is forwarded
 //     downstream exactly once.
 //
 // Concurrency:
@@ -55,7 +55,7 @@ type TrackEntry struct {
 
 	// Properties are the raw Track Properties the relay learned from the
 	// upstream publisher (in SUBSCRIBE_OK / PUBLISH / TRACK_STATUS_OK /
-	// FETCH_OK). §9.6 requires the relay to forward them on every reply
+	// FETCH_OK). §7.7 requires the relay to forward them on every reply
 	// it generates downstream, so they are captured once and replayed.
 	// The bytes are the on-the-wire encoding of the Track Properties
 	// block; the relay treats them opaquely.
@@ -63,7 +63,7 @@ type TrackEntry struct {
 
 	// decoded holds the Track Properties the relay acts on, extracted once
 	// from the raw Properties block (which is otherwise forwarded opaquely
-	// per §9.6). Properties are immutable for the entry's lifetime (§9.6,
+	// per §7.7). Properties are immutable for the entry's lifetime (§7.7,
 	// first-setter-wins), so decoding happens once when Properties is set —
 	// see [decodeTrackProperties] for how to add a field. Set together with
 	// Properties by setPropertiesLocked.
@@ -71,13 +71,13 @@ type TrackEntry struct {
 
 	// LargestObject is the (Group, Object) high-water mark observed for
 	// this track, updated by the fanout path on every incoming object and
-	// by upstream control messages that carry a LARGEST_OBJECT value. §10.2.17
+	// by upstream control messages that carry a LARGEST_OBJECT value. §9.20.17
 	// requires the relay to advertise the *maximum* of these in any
 	// outbound message that includes LARGEST_OBJECT.
 	//
 	// The companion HasLargestObject flag distinguishes "no objects
 	// observed yet" from "the first object was published at Location
-	// {0, 0}" — §10.2.17 reserves wire-level omission for the former
+	// {0, 0}" — §9.20.17 reserves wire-level omission for the former
 	// and the in-memory mirror needs the same distinction. Callers
 	// SHOULD read via [TrackEntry.GetLargest] rather than touching
 	// these fields directly so the lock is honoured.
@@ -95,7 +95,7 @@ type TrackEntry struct {
 	// Downstream is the set of subscriber subscriptions to fan out to.
 	Downstream []*DownstreamSub
 
-	// refusals are the publisher registrations that refused a §9.5
+	// refusals are the publisher registrations that refused a §7.6
 	// late-publisher SUBSCRIBE for this track, each with the time it may be
 	// asked again (zero: never); see [TrackEntry.NoteRefusal]. Guarded by mu.
 	refusals map[*PublisherEntry]time.Time
@@ -119,7 +119,7 @@ type TrackEntry struct {
 	Cache *cache.ObjectCache
 
 	// newGroupOutstanding records whether the relay has a NEW_GROUP_REQUEST
-	// (§10.2.19) in flight upstream for this track. It stays outstanding until
+	// (§9.20.19) in flight upstream for this track. It stays outstanding until
 	// the Largest Group advances past newGroupReqGroup, at which point the
 	// publisher is deemed to have honoured the request. Guarded by mu; see
 	// [TrackEntry.ConsiderNewGroupRequest].
@@ -138,7 +138,7 @@ type TrackEntry struct {
 	// mu-guarded control mutations.
 	deliveredMu sync.Mutex
 
-	// delivered is the dedup ledger across multiple upstream publishers (§9.3):
+	// delivered is the dedup ledger across multiple upstream publishers (§7.3):
 	// GroupID → set of Object IDs already forwarded downstream. The first upstream
 	// to reach a {GroupID, ObjectID} forwards it; later copies from redundant or
 	// lagging peers are dropped (§2.1 — SubgroupID is not part of object
@@ -149,12 +149,12 @@ type TrackEntry struct {
 	// first, and an Object of a pruned or lower Group is [ClaimAgedOut].
 	// deliveredFloor is the lowest Group held, while delivered is non-empty.
 	//
-	// It also holds the Prior Group and Object ID Gaps (§12.8, §12.9) seen:
+	// It also holds the Prior Group and Object ID Gaps (§10.8, §10.9) seen:
 	// each Group its Object ID gaps and Group gap value, and groupGaps the Group
 	// ID ranges announced absent, pruned with the same window.
 	delivered map[uint64]*deliveredGroup
 	groupGaps []idRange
-	// trackEnd is where the Track ends, its END_OF_TRACK (§2.4.2), if
+	// trackEnd is where the Track ends, its END_OF_TRACK (§12.1), if
 	// hasTrackEnd; kept past the window.
 	trackEnd       message.Location
 	hasTrackEnd    bool
@@ -162,7 +162,7 @@ type TrackEntry struct {
 
 	// subgroups holds the shared outbound fan-out state for each
 	// (GroupID, SubgroupID) currently being produced by one or more upstreams.
-	// §9.3 lets N redundant upstreams feed one track; §2.2 requires that the
+	// §7.3 lets N redundant upstreams feed one track; §2.2 requires that the
 	// objects of a single Subgroup go out on exactly ONE downstream stream per
 	// subscriber. Sharing this state across every inbound runFanout goroutine
 	// (each of which carries one (group, subgroup)) is what lets the relay merge
@@ -233,7 +233,7 @@ func (e *TrackEntry) CopySubgroups() []*SharedSubgroup {
 
 // deliveredGroupWindow bounds the §2.1 dedup ledger ([TrackEntry.delivered])
 // to that many distinct Groups, counted rather than spanned by ID, since Group
-// IDs need not be consecutive (§2.3.1, §12.8). The window must comfortably
+// IDs need not be consecutive (§2.3.1, §10.8). The window must comfortably
 // exceed any realistic inter-publisher group lag (a redundant origin or relay
 // running a few groups behind) while keeping per-track dedup memory bounded.
 //
@@ -258,7 +258,7 @@ const (
 	ClaimAgedOut
 )
 
-// ClaimDelivered is the dedup gate across multiple upstream publishers (§9.3).
+// ClaimDelivered is the dedup gate across multiple upstream publishers (§7.3).
 // It records (group, object) as forwarded and reports whether the caller is
 // the first to do so ([ClaimFresh]) or it was already forwarded by a peer
 // upstream ([ClaimRedundant]). The ledger persists on the entry (not on a
@@ -267,23 +267,23 @@ const (
 // than the cache capacity, still dedup correctly. Memory is bounded to
 // [deliveredGroupWindow] Groups; an Object of an older one is [ClaimAgedOut].
 //
-// gaps are the Object's Prior Group and Object ID Gaps (§12.8, §12.9), which
+// gaps are the Object's Prior Group and Object ID Gaps (§10.8, §10.9), which
 // the ledger records for the whole track. An Object inside a gap announced
-// earlier is known not to exist, and that is permanent (§2.1): ClaimRedundant,
-// since a caching relay "SHOULD NOT cache or forward" it (§9.1). A gap covering an
+// earlier is known not to exist, and that is permanent (§2.1.2): ClaimRedundant,
+// since a caching relay "SHOULD NOT cache or forward" it (§7.1). A gap covering an
 // Object already received is accepted: an Object may go from existing to not
-// existing (§2.1).
+// existing (§2.1.2).
 //
-// Interpretation: §12.8 and §12.9 list both cases as making the track
-// malformed, but §2.1 says the first "is not a protocol error and the Track is
-// not malformed"; the relay follows §2.1 and §9.1 for both. It also takes
-// §9.1's specific SHOULD NOT forward over §9.4's general "MUST NOT reorder or
+// Interpretation: §10.8 and §10.9 list both cases as making the track
+// malformed, but §2.1.2 says the first "is not a protocol error and the Track is
+// not malformed"; the relay follows §2.1.2 and §7.1 for both. It also takes
+// §7.1's specific SHOULD NOT forward over §7.4's general "MUST NOT reorder or
 // drop objects received on a multi-object stream". A cached copy of an Object
-// a gap later covers is kept (§9.1 makes updating the cache a MAY). The one gap rule
+// a gap later covers is kept (§7.1 makes updating the cache a MAY). The one gap rule
 // it does report, as an error wrapping [session.ErrMalformedTrack], is a Group
-// carrying two Prior Group ID Gap values (§12.8). An Object ClaimDelivered
+// carrying two Prior Group ID Gap values (§10.8). An Object ClaimDelivered
 // rejects leaves no state in the ledger, and a duplicate records only its
-// gaps, since the caller's §9.1 check may still reject it.
+// gaps, since the caller's §7.1 check may still reject it.
 func (e *TrackEntry) ClaimDelivered(o ObjectInfo) (Claim, error) {
 	group, object, gaps := o.Group, o.Object, o.Gaps
 	e.deliveredMu.Lock()
@@ -294,7 +294,7 @@ func (e *TrackEntry) ClaimDelivered(o ObjectInfo) (Claim, error) {
 		return ClaimAgedOut, nil
 	}
 	if gaps.HasGroup && g != nil && g.hasGroupGap && g.groupGap != gaps.Group {
-		return ClaimRedundant, fmt.Errorf("%w: Group %d carries Prior Group ID Gaps %d and %d (§12.8)",
+		return ClaimRedundant, fmt.Errorf("%w: Group %d carries Prior Group ID Gaps %d and %d (§10.8)",
 			session.ErrMalformedTrack, group, g.groupGap, gaps.Group)
 	}
 	if err := e.checkEndsLocked(g, o); err != nil {
@@ -344,32 +344,32 @@ func (e *TrackEntry) addDeliveredGroupLocked(group uint64, g *deliveredGroup) {
 // the earlier Objects of the track.
 type ObjectInfo struct {
 	Group, Object uint64
-	// Subgroup is the Object's Subgroup ID, unless Datagram (§11.2.1).
+	// Subgroup is the Object's Subgroup ID, unless Datagram (§11.1).
 	Subgroup uint64
 	Datagram bool
-	// Priority is the resolved Publisher Priority (§7).
+	// Priority is the resolved Publisher Priority (§5.1).
 	Priority uint8
-	// Status is the Object Status (§11.2.1.1).
+	// Status is the Object Status (§11.1.1).
 	Status uint64
-	// EndOfGroup is a datagram's END_OF_GROUP bit (§11.3.1).
+	// EndOfGroup is a datagram's END_OF_GROUP bit (§11.2.1).
 	EndOfGroup bool
-	// Gaps are the Object's Prior Group and Object ID Gaps (§12.8, §12.9).
+	// Gaps are the Object's Prior Group and Object ID Gaps (§10.8, §10.9).
 	Gaps message.PriorGaps
 }
 
 // end is where a Subgroup, Group or Track ends: its first missing Object ID
-// (§2.4.2). A status Object at M ends it at M (§11.2.1.1); a FIN after Object N
-// (§11.4.3), or an END_OF_GROUP bit on it (§11.4.2, §11.3.1), at N+1. The two
-// agree when M = N+1, as §9.1 lets a relay turn one into the other.
+// (§12.1). A status Object at M ends it at M (§11.1.1); a FIN after Object N
+// (§11.3.2), or an END_OF_GROUP bit on it (§11.3.1, §11.2.1), at N+1. The two
+// agree when M = N+1, as §7.1 lets a relay turn one into the other.
 //
-// Interpretation: §2.4.2 calls both the "final Object", the status Object at
+// Interpretation: §12.1 calls both the "final Object", the status Object at
 // M and the Object N, which would make M = N+1 two different finals.
 type end struct {
 	at  uint64
 	set bool
 	// hard reports that a FIN or END_OF_GROUP bit set it. Only then is a
 	// Normal Object at at past the end: with status Objects alone, it is the
-	// Object going from existing to not existing (§9.1), or the late Object of
+	// Object going from existing to not existing (§7.1), or the late Object of
 	// §2.1, in either order.
 	hard bool
 }
@@ -382,7 +382,7 @@ func (e end) past(id uint64, normal bool) bool {
 
 // conflicts reports whether e already ends somewhere other than at (set by a
 // FIN or bit if hard). A status end at M and a hard end at M+1 agree: Object M
-// went from existing to not existing (§9.1), and the end is M.
+// went from existing to not existing (§7.1), and the end is M.
 func (e end) conflicts(at uint64, hard bool) bool {
 	switch {
 	case !e.set, e.at == at:
@@ -418,7 +418,7 @@ type subgroupLedger struct {
 	hasNormal, hasStatus bool
 	end                  end
 	// minObject is the lowest Object ID forwarded, if hasObject: a
-	// FIRST_OBJECT claim above it is wrong (§11.4.2, §2.2). A duplicate
+	// FIRST_OBJECT claim above it is wrong (§11.3.1, §2.2). A duplicate
 	// whose first copy was in another Subgroup or a datagram counts too;
 	// that can only clear FIRST_OBJECT, never set it.
 	minObject uint64
@@ -427,8 +427,8 @@ type subgroupLedger struct {
 
 // SubgroupEnded records that an inbound subgroup stream ended with a FIN after
 // lastObj: that ends its Subgroup (see [end]; on a status Object, at it) and,
-// if the stream's header set END_OF_GROUP (§11.4.2), the Group. An error
-// wrapping [session.ErrMalformedTrack] reports a §2.4.2 condition: another
+// if the stream's header set END_OF_GROUP (§11.3.1), the Group. An error
+// wrapping [session.ErrMalformedTrack] reports a §12.1 condition: another
 // stream of the Subgroup ended elsewhere, or an Object past this end was
 // received; the Objects past the lower end are then removed from the cache.
 func (e *TrackEntry) SubgroupEnded(lastObj ObjectInfo, endOfGroup bool) error {
@@ -456,21 +456,21 @@ func (e *TrackEntry) SubgroupEnded(lastObj ObjectInfo, endOfGroup bool) error {
 	switch {
 	case sg.end.conflicts(at, hard):
 		e.purgePastLocked(group, &subgroup, lower(sg.end, ends))
-		return fmt.Errorf("%w: Subgroup %d of Group %d ends at Objects %d and %d (§2.4.2)",
+		return fmt.Errorf("%w: Subgroup %d of Group %d ends at Objects %d and %d (§12.1)",
 			session.ErrMalformedTrack, subgroup, group, sg.end.at, at)
 	case sg.hasStatus && sgEnd.past(sg.maxStatus, false),
 		sg.hasNormal && sgEnd.past(sg.maxNormal, true):
 		e.purgePastLocked(group, &subgroup, sgEnd)
-		return fmt.Errorf("%w: Subgroup %d of Group %d ends at Object %d below an Object received (§2.4.2)",
+		return fmt.Errorf("%w: Subgroup %d of Group %d ends at Object %d below an Object received (§12.1)",
 			session.ErrMalformedTrack, subgroup, group, at)
 	case !endOfGroup:
 	case g.end.conflicts(at, hard):
 		e.purgePastLocked(group, nil, lower(g.end, ends))
-		return fmt.Errorf("%w: Group %d ends at Objects %d and %d (§2.4.2)",
+		return fmt.Errorf("%w: Group %d ends at Objects %d and %d (§12.1)",
 			session.ErrMalformedTrack, group, g.end.at, at)
 	case g.pastEnd(gEnd):
 		e.purgePastLocked(group, nil, gEnd)
-		return fmt.Errorf("%w: Group %d ends at Object %d below an Object received (§2.4.2)",
+		return fmt.Errorf("%w: Group %d ends at Object %d below an Object received (§12.1)",
 			session.ErrMalformedTrack, group, at)
 	}
 	sg.end = sgEnd
@@ -494,12 +494,12 @@ func lower(a, b end) end {
 
 // RecordDuplicate records what o, a copy [TrackEntry.ClaimDelivered] reported
 // as already delivered, says about its Subgroup, Group and Track, once the
-// caller's §9.1 check found it consistent with the first copy: an
+// caller's §7.1 check found it consistent with the first copy: an
 // END_OF_GROUP arriving after a Normal Object at its ID still ends the Group,
 // and a Normal copy of a status Object still counts as received.
 //
 // Objects claimed since o's [TrackEntry.ClaimDelivered] are checked too: an
-// error wrapping [session.ErrMalformedTrack] reports a §2.4.2 condition.
+// error wrapping [session.ErrMalformedTrack] reports a §12.1 condition.
 func (e *TrackEntry) RecordDuplicate(o ObjectInfo) error {
 	e.deliveredMu.Lock()
 	defer e.deliveredMu.Unlock()
@@ -518,7 +518,7 @@ func (e *TrackEntry) RecordDuplicate(o ObjectInfo) error {
 }
 
 // TrackEnd reports where the Track ends, if an END_OF_TRACK Object said so.
-// §2.4.2: "The final Object in a Track is the Object with Status END_OF_TRACK
+// §12.1: "The final Object in a Track is the Object with Status END_OF_TRACK
 // or the last Object sent in a FETCH whose response indicated End of Track";
 // the relay does not record the FETCH half.
 func (e *TrackEntry) TrackEnd() (message.Location, bool) {
@@ -530,7 +530,7 @@ func (e *TrackEntry) TrackEnd() (message.Location, bool) {
 // LowestForwarded reports the lowest Object ID forwarded in Subgroup
 // (group, subgroup), if any, within the window. The writers of a Subgroup
 // forget it when its last contributor leaves; this keeps it for a later
-// contributor's FIRST_OBJECT claim (§11.4.2, §2.2).
+// contributor's FIRST_OBJECT claim (§11.3.1, §2.2).
 func (e *TrackEntry) LowestForwarded(group, subgroup uint64) (uint64, bool) {
 	e.deliveredMu.Lock()
 	defer e.deliveredMu.Unlock()
@@ -545,11 +545,11 @@ func (e *TrackEntry) LowestForwarded(group, subgroup uint64) (uint64, bool) {
 // LocRange is an inclusive range of Locations, Lo through Hi.
 type LocRange struct{ Lo, Hi message.Location }
 
-// KnownAbsent reports the Locations the ledger knows do not exist (§2.1:
+// KnownAbsent reports the Locations the ledger knows do not exist (§2.1.2:
 // "All signals that an Object does not exist are authoritative"), within the
-// Groups it holds: each Group's end onward (§11.2.1.1, §11.4.2; a status end
+// Groups it holds: each Group's end onward (§11.1.1, §11.3.1; a status end
 // at M from M, since a status Object is not one a FETCH serializes), and the Object
-// and Group ID gaps announced (§12.8, §12.9). The ranges may overlap and are
+// and Group ID gaps announced (§10.8, §10.9). The ranges may overlap and are
 // in no particular order. A FIN or END_OF_GROUP bit that ended a Group is
 // known only here, not from the cache.
 func (e *TrackEntry) KnownAbsent() []LocRange {
@@ -580,9 +580,9 @@ func (e *TrackEntry) KnownAbsent() []LocRange {
 }
 
 // groupEnd reports where o ends its Group (see [end]), if it does: an
-// END_OF_GROUP or END_OF_TRACK status at M at M (§11.2.1.1); a datagram's
-// END_OF_GROUP bit on Object N at N+1, which §2.4.2's non-exhaustive list does
-// not name but §11.3.1 defines alike. After Object 2^64-1 nothing lies past,
+// END_OF_GROUP or END_OF_TRACK status at M at M (§11.1.1); a datagram's
+// END_OF_GROUP bit on Object N at N+1, which §12.1's non-exhaustive list does
+// not name but §11.2.1 defines alike. After Object 2^64-1 nothing lies past,
 // so that bit ends nothing.
 func groupEnd(o ObjectInfo) (at uint64, hard, ok bool) {
 	switch {
@@ -594,7 +594,7 @@ func groupEnd(o ObjectInfo) (at uint64, hard, ok bool) {
 	return 0, false, false
 }
 
-// checkEndsLocked reports the §2.4.2 conditions an Object o makes against the
+// checkEndsLocked reports the §12.1 conditions an Object o makes against the
 // earlier ones, g being its Group's ledger entry: a Publisher Priority other
 // than its Subgroup's, an Object past its Subgroup's, Group's or Track's end,
 // or an end placed elsewhere or below an Object received; the Objects past the
@@ -604,22 +604,22 @@ func (e *TrackEntry) checkEndsLocked(g *deliveredGroup, o ObjectInfo) error {
 	loc := message.Location{Group: o.Group, Object: o.Object}
 	switch {
 	case e.hasTrackEnd && e.trackEnd.Less(loc):
-		return fmt.Errorf("%w: Object %d of Group %d is past END_OF_TRACK at %d/%d (§2.4.2)",
+		return fmt.Errorf("%w: Object %d of Group %d is past END_OF_TRACK at %d/%d (§12.1)",
 			session.ErrMalformedTrack, o.Object, o.Group, e.trackEnd.Group, e.trackEnd.Object)
 	case o.Status != message.ObjectStatusEndOfTrack:
 	case e.hasTrackEnd && e.trackEnd != loc:
 		e.purgeTrackPastLocked(loc) // below the earlier one: not past it
-		return fmt.Errorf("%w: END_OF_TRACK at Object %d of Group %d and at %d/%d (§2.4.2)",
+		return fmt.Errorf("%w: END_OF_TRACK at Object %d of Group %d and at %d/%d (§12.1)",
 			session.ErrMalformedTrack, o.Object, o.Group, e.trackEnd.Group, e.trackEnd.Object)
 	case e.purgeTrackPastLocked(loc):
-		return fmt.Errorf("%w: END_OF_TRACK at Object %d of Group %d is below an Object received (§2.4.2)",
+		return fmt.Errorf("%w: END_OF_TRACK at Object %d of Group %d is below an Object received (§12.1)",
 			session.ErrMalformedTrack, o.Object, o.Group)
 	}
 	if g == nil {
 		return nil
 	}
 	if g.end.past(o.Object, normal) {
-		return fmt.Errorf("%w: Object %d of Group %d is past its end at %d (§2.4.2)",
+		return fmt.Errorf("%w: Object %d of Group %d is past its end at %d (§12.1)",
 			session.ErrMalformedTrack, o.Object, o.Group, g.end.at)
 	}
 	if at, hard, ok := groupEnd(o); ok {
@@ -627,11 +627,11 @@ func (e *TrackEntry) checkEndsLocked(g *deliveredGroup, o ObjectInfo) error {
 		switch {
 		case g.end.conflicts(at, hard):
 			e.purgePastLocked(o.Group, nil, lower(g.end, end{at: at, set: true, hard: hard}))
-			return fmt.Errorf("%w: Group %d ends at Objects %d and %d (§2.4.2)",
+			return fmt.Errorf("%w: Group %d ends at Objects %d and %d (§12.1)",
 				session.ErrMalformedTrack, o.Group, g.end.at, at)
 		case g.pastEnd(gEnd):
 			e.purgePastLocked(o.Group, nil, gEnd)
-			return fmt.Errorf("%w: Group %d ends at Object %d below an Object received (§2.4.2)",
+			return fmt.Errorf("%w: Group %d ends at Object %d below an Object received (§12.1)",
 				session.ErrMalformedTrack, o.Group, at)
 		}
 	}
@@ -642,10 +642,10 @@ func (e *TrackEntry) checkEndsLocked(g *deliveredGroup, o ObjectInfo) error {
 	switch {
 	case !seen:
 	case sg.priority != o.Priority:
-		return fmt.Errorf("%w: Subgroup %d of Group %d has Publisher Priorities %d and %d (§2.4.2)",
+		return fmt.Errorf("%w: Subgroup %d of Group %d has Publisher Priorities %d and %d (§12.1)",
 			session.ErrMalformedTrack, o.Subgroup, o.Group, sg.priority, o.Priority)
 	case sg.end.past(o.Object, normal):
-		return fmt.Errorf("%w: Object %d of Subgroup %d in Group %d is past its end at %d (§2.4.2)",
+		return fmt.Errorf("%w: Object %d of Subgroup %d in Group %d is past its end at %d (§12.1)",
 			session.ErrMalformedTrack, o.Object, o.Subgroup, o.Group, sg.end.at)
 	}
 	return nil
@@ -653,7 +653,7 @@ func (e *TrackEntry) checkEndsLocked(g *deliveredGroup, o ObjectInfo) error {
 
 // purgeTrackPastLocked reports whether an Object past END_OF_TRACK at loc was
 // received, in the window, and removes those from the cache. END_OF_TRACK is a
-// status end (see [end]): a Normal Object at loc is the late Object of §2.1.
+// status end (see [end]): a Normal Object at loc is the late Object of §2.1.2.
 func (e *TrackEntry) purgeTrackPastLocked(loc message.Location) bool {
 	found := false
 	ended := end{at: loc.Object, set: true}
@@ -671,7 +671,7 @@ func (e *TrackEntry) purgeTrackPastLocked(loc message.Location) bool {
 }
 
 // purgeGroupLocked removes every Object of group from the cache, status
-// Objects included (§2.4.2).
+// Objects included (§12.1).
 func (e *TrackEntry) purgeGroupLocked(group uint64) {
 	objs := e.Cache.GetRange(
 		message.Location{Group: group},
@@ -685,7 +685,7 @@ func (e *TrackEntry) purgeGroupLocked(group uint64) {
 
 // purgePastLocked removes from the cache the Objects of group, in subgroup if
 // not nil, past ended: Object(s) triggering Malformed Track status MUST NOT be
-// cached (§2.4.2).
+// cached (§12.1).
 func (e *TrackEntry) purgePastLocked(group uint64, subgroup *uint64, ended end) {
 	objs := e.Cache.GetRange(
 		message.Location{Group: group, Object: ended.at},
@@ -749,9 +749,9 @@ type deliveredGroup struct {
 	hasNormal, hasStatus bool
 	subgroups            map[uint64]subgroupLedger // created on first use
 	end                  end
-	// objectGaps are the Object ID ranges announced absent (§12.9).
+	// objectGaps are the Object ID ranges announced absent (§10.9).
 	objectGaps []idRange
-	// groupGap is the Group's Prior Group ID Gap (§12.8), if hasGroupGap.
+	// groupGap is the Group's Prior Group ID Gap (§10.8), if hasGroupGap.
 	groupGap    uint64
 	hasGroupGap bool
 }
@@ -767,7 +767,7 @@ type idRange struct{ lo, hi uint64 }
 func (r idRange) contains(id uint64) bool { return r.lo <= id && id <= r.hi }
 
 // gapRange is the IDs a Prior Group or Object ID Gap of n on id announces
-// absent (§12.8, §12.9); none for n == 0. The session layer has already
+// absent (§10.8, §10.9); none for n == 0. The session layer has already
 // rejected an n above id ([message.CheckObjectProperties]).
 func gapRange(id, n uint64) (idRange, bool) {
 	return idRange{lo: id - n, hi: id - 1}, n > 0
@@ -818,7 +818,7 @@ func (e *TrackEntry) ReleaseSubgroup(key SubgroupKey) (last bool) {
 // UpdateLargest moves the entry's LargestObject forward. The very first
 // call flips the "has any object been observed" bit regardless of value,
 // so that a publisher whose first Object is at Location {0, 0} is still
-// distinguishable from "no objects observed yet" — §10.2.17 reserves the
+// distinguishable from "no objects observed yet" — §9.20.17 reserves the
 // wire-level omission of LARGEST_OBJECT for the latter, and the
 // in-memory mirror needs the same distinction. Subsequent calls advance
 // the watermark only when loc is strictly greater than the current
@@ -841,7 +841,7 @@ func (e *TrackEntry) UpdateLargest(loc message.Location) bool {
 // GetLargest returns the current largest-object watermark and a bool that is
 // true iff at least one object has been observed on this track. The bool
 // distinguishes "no objects observed yet" from "first object was published at
-// Location {0, 0}" — §10.2.17 reserves wire-level omission of LARGEST_OBJECT
+// Location {0, 0}" — §9.20.17 reserves wire-level omission of LARGEST_OBJECT
 // for the former, so the in-memory mirror needs the same distinction.
 func (e *TrackEntry) GetLargest() (message.Location, bool) {
 	e.mu.RLock()
@@ -849,14 +849,14 @@ func (e *TrackEntry) GetLargest() (message.Location, bool) {
 	return e.LargestObject, e.HasLargestObject
 }
 
-// ConsiderNewGroupRequest applies the §10.2.19 relay rules for a
+// ConsiderNewGroupRequest applies the §9.20.19 relay rules for a
 // NEW_GROUP_REQUEST received on an Established subscription and reports whether
 // the relay must forward it upstream (via an upstream REQUEST_UPDATE). When it
 // returns true the request is recorded as outstanding.
 //
 // value is the downstream NEW_GROUP_REQUEST (largest known Group + 1, or 0 for
 // "no Group information"). dynamicGroups reports whether the track advertised
-// DYNAMIC_GROUPS=1 (§12.6). The rules:
+// DYNAMIC_GROUPS=1 (§10.6). The rules:
 //
 //   - The Track must support dynamic Groups (unless-clause 1).
 //   - The request is forwarded only when value is 0 or larger than the current
@@ -945,7 +945,7 @@ func (e *TrackEntry) UpdateLargestAndDetectNew(
 
 // SetProperties stores the Track Properties learned from the upstream. The
 // caller hands over ownership of props; callers MUST NOT mutate props after
-// this call. (Properties are immutable once captured — §9.6 expects them to
+// this call. (Properties are immutable once captured — §7.7 expects them to
 // be replayed verbatim.)
 func (e *TrackEntry) SetProperties(props []byte) {
 	e.mu.Lock()
@@ -991,7 +991,7 @@ func (e *TrackEntry) AddFetch(cancel context.CancelCauseFunc) (remove func()) {
 }
 
 // CancelFetches cancels every fetch stream registered with
-// [TrackEntry.AddFetch] with cause: §2.4.2, a relay that detects a malformed
+// [TrackEntry.AddFetch] with cause: §12.1, a relay that detects a malformed
 // track MUST "reset any fetch streams".
 func (e *TrackEntry) CancelFetches(cause error) {
 	e.mu.RLock()

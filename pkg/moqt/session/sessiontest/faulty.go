@@ -107,7 +107,7 @@ type FaultFunc func(FaultOp) error
 //   - Wrapped streams do not forward the optional [session.PrioritizedSendStream],
 //     [session.ReliableResetStream] and [session.DeliveryTrackingSendStream]
 //     interfaces. No sessiontest stream implements any of them, and silently
-//     dropping §7.2 priority, RESET_STREAM_AT or §8 SUBGROUP_DELIVERY_TIMEOUT
+//     dropping §5.1.2 priority, RESET_STREAM_AT or §5.2 SUBGROUP_DELIVERY_TIMEOUT
 //     would be a confusing way to find that out, so Faulty panics rather than
 //     wrap a stream that does.
 func Faulty(c session.Conn, fault FaultFunc) session.Conn {

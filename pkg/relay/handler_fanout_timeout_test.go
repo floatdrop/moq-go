@@ -11,8 +11,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// A §8 delivery timeout resets one stream and the track keeps flowing, unlike a
-// lag-window breach, which ends the subscription (§3.3.4; see
+// A §5.2 delivery timeout resets one stream and the track keeps flowing, unlike a
+// lag-window breach, which ends the subscription (§12.5; see
 // TestFanout_LagWindowResetsSlowSubscriber). MaxFanoutLag stays zero here, so
 // only the escalation under test can fire.
 
@@ -33,7 +33,7 @@ func countUntilEnd(sg *session.IncomingSubgroupStream, within time.Duration) int
 
 // TestFanout_DeliveryTimeoutKeepsSubscriptionAlive: a subscriber stalled past
 // OBJECT_DELIVERY_TIMEOUT loses only that subgroup; the next group still
-// arrives (§8, §3.3.4).
+// arrives (§5.2, §12.5).
 func TestFanout_DeliveryTimeoutKeepsSubscriptionAlive(t *testing.T) {
 	const timeout = 100 * time.Millisecond
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -51,8 +51,8 @@ func TestFanout_DeliveryTimeoutKeepsSubscriptionAlive(t *testing.T) {
 	}
 	defer pubReq.Close()
 
-	// The subscriber asks for the timeout (§10.2.4); the publisher declares
-	// none, so §8's "smaller of the two non-zero values" resolves to this one.
+	// The subscriber asks for the timeout (§9.20.4); the publisher declares
+	// none, so §5.2's "smaller of the two non-zero values" resolves to this one.
 	subSess := dialAnotherClient(t, pubSess)
 	subReq, err := subSess.Subscribe(t.Context(), &message.Subscribe{
 		Namespace: video, Name: name,
@@ -106,13 +106,13 @@ func TestFanout_DeliveryTimeoutKeepsSubscriptionAlive(t *testing.T) {
 }
 
 // TestFanout_PublisherTrackDeliveryTimeoutApplies: a delivery timeout from the
-// publisher's Track Properties (§12.2) applies downstream too.
+// publisher's Track Properties (§10.2) applies downstream too.
 func TestFanout_PublisherTrackDeliveryTimeoutApplies(t *testing.T) {
 	const timeout = 100 * time.Millisecond
 	prop := wire.KVPair{Type: message.PropertyObjectDeliveryTimeout, IntVal: uint64(timeout / time.Millisecond)}
 	for name, props := range map[string][]wire.KVPair{
 		"mutable": {prop},
-		// §12.7: "processors MUST search both the mutable properties and the
+		// §10.7: "processors MUST search both the mutable properties and the
 		// contents of Immutable Properties".
 		"inside Immutable Properties": {{
 			Type:    message.PropertyImmutableProperties,
@@ -214,10 +214,10 @@ func TestFanout_NoDeliveryTimeoutLeavesStalledSubscriberAlone(t *testing.T) {
 
 // TestFanout_ReplayStreamKeepsFirstObjectDeliveryTimeout: an
 // OBJECT_DELIVERY_TIMEOUT on a Subgroup's first Object overrides the Track
-// for the whole Subgroup (§8: "the publisher's value is the Object Property
-// when present on the first object of the subgroup"; §12.2), including on a
+// for the whole Subgroup (§5.2: "the publisher's value is the Object Property
+// when present on the first object of the subgroup"; §10.2), including on a
 // replay stream that starts past that Object: a subscriber that joined after
-// it, or a stream reopened after a gap (§11.4.3).
+// it, or a stream reopened after a gap (§11.3.2).
 func TestFanout_ReplayStreamKeepsFirstObjectDeliveryTimeout(t *testing.T) {
 	const timeout = 100 * time.Millisecond
 	props := message.AppendTrackProperties([]wire.KVPair{{
@@ -295,14 +295,14 @@ func TestFanout_ReplayStreamKeepsFirstObjectDeliveryTimeout(t *testing.T) {
 
 		// A second stream of the same Subgroup resumes at Object 2: Object 1
 		// is not known to be skipped, so the relay resets the subscriber's
-		// stream and reopens a replay one (§11.4.3).
+		// stream and reopens a replay one (§11.3.2).
 		hdr.ReplayingSubgroup = true
 		replay, err := pub.OpenSubgroup(hdr)
 		if err != nil {
 			t.Fatalf("OpenSubgroup (replay): %v", err)
 		}
 		go func() {
-			// A FIN would end the Subgroup at Object 0 (§2.4.2), so the first
+			// A FIN would end the Subgroup at Object 0 (§12.1), so the first
 			// stream resets, leaving the replay stream's FIN to end it.
 			defer first.Cancel(moqt.StreamResetCancelled)
 			for id := uint64(2); id < 2+objects; id++ {

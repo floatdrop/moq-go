@@ -56,7 +56,7 @@ func TestLocationFilterWireBytes(t *testing.T) {
 	}
 }
 
-// §5.1.2's start resolution, which is the part draft-20 reshaped most: one
+// §9.20.9's start resolution, which is the part draft-20 reshaped most: one
 // field counts back from the Next Group, two zero fields mean the Next Object,
 // and anything else is absolute.
 func TestLocationFilterStart(t *testing.T) {
@@ -107,7 +107,7 @@ func TestLocationFilterStart(t *testing.T) {
 	}
 }
 
-// The two saturation points §5.1.2 calls out, at the top of the Group and
+// The two saturation points §9.20.9 calls out, at the top of the Group and
 // Object spaces.
 func TestLocationFilterStartSaturates(t *testing.T) {
 	maxGroup := Location{Group: math.MaxUint64, Object: 0}
@@ -182,7 +182,7 @@ func TestLocationFilterValidate(t *testing.T) {
 	}
 }
 
-// A fifth field has no meaning in §5.1.2, so it is a decode error rather than
+// A fifth field has no meaning in §9.20.9, so it is a decode error rather than
 // something silently ignored.
 func TestLocationFilterParseTooManyFields(t *testing.T) {
 	if _, err := ParseLocationFilter([]byte{1, 2, 3, 4, 5}); err == nil {
@@ -199,7 +199,7 @@ func TestLocationFilterParseTruncatedVarint(t *testing.T) {
 	}
 }
 
-// §1.4.1 lets a peer use a non-minimal encoding, so the field *count* — not
+// §8.1 lets a peer use a non-minimal encoding, so the field *count* — not
 // the byte count — has to drive the interpretation.
 func TestLocationFilterParseNonMinimalVarints(t *testing.T) {
 	// Two fields, each encoded in 2 bytes rather than 1: still the Next
@@ -347,7 +347,7 @@ func TestFilterConstructors(t *testing.T) {
 	}
 }
 
-// An absolute start of {0,0} is "equivalent to unfiltered" (§5.1.2), and it
+// An absolute start of {0,0} is "equivalent to unfiltered" (§3.3.1), and it
 // cannot be encoded as two zero fields — that spelling is already taken by the
 // Next Object filter. Encoding it as unfiltered is what keeps the two apart.
 func TestAbsoluteStartFilterAtOriginIsUnfiltered(t *testing.T) {

@@ -110,10 +110,10 @@ func TestTrackEntry_ClaimDeliveredWindowNotFull(t *testing.T) {
 }
 
 // TestTrackEntry_ClaimDeliveredGapProperties pins how the ledger treats the
-// Prior Group and Object ID Gaps (§12.8, §12.9) of earlier Objects. An Object
-// inside an announced gap is known not to exist (§2.1) and dropped (§9.1); a gap
-// covering a received Object is accepted (§2.1); two Prior Group ID Gap values
-// in one Group make the track malformed (§12.8).
+// Prior Group and Object ID Gaps (§10.8, §10.9) of earlier Objects. An Object
+// inside an announced gap is known not to exist (§2.1.2) and dropped (§7.1); a gap
+// covering a received Object is accepted (§2.1.2); two Prior Group ID Gap values
+// in one Group make the track malformed (§10.8).
 func TestTrackEntry_ClaimDeliveredGapProperties(t *testing.T) {
 	t.Parallel()
 	type claim struct {
@@ -133,14 +133,14 @@ func TestTrackEntry_ClaimDeliveredGapProperties(t *testing.T) {
 		claims []claim // all but the last are forwarded
 		want   int     // the last one's outcome
 	}{
-		// §12.9
+		// §10.9
 		{"object gap over missing IDs", []claim{{1, 0, none}, {1, 3, objectGap(2)}}, forwarded},
 		{"object gap covering a received Object", []claim{{1, 1, none}, {1, 3, objectGap(2)}}, forwarded},
 		{"Object inside an announced object gap", []claim{{1, 3, objectGap(2)}, {1, 2, none}}, dropped},
 		{"Object below an announced object gap", []claim{{1, 3, objectGap(2)}, {1, 0, none}}, forwarded},
 		{"same ID in another Group", []claim{{1, 3, objectGap(2)}, {2, 2, none}}, forwarded},
 		{"a copy with the same object gap", []claim{{1, 3, objectGap(2)}, {1, 3, objectGap(2)}}, dropped},
-		// §12.8
+		// §10.8
 		{"group gap over missing Groups", []claim{{1, 0, none}, {4, 0, groupGap(2)}}, forwarded},
 		{"group gap covering a received Group", []claim{{2, 5, none}, {4, 0, groupGap(2)}}, forwarded},
 		{"Group inside an announced group gap", []claim{{4, 0, groupGap(2)}, {3, 0, none}}, dropped},
@@ -203,22 +203,22 @@ func TestTrackEntry_ClaimDeliveredMalformedLeavesNoTrace(t *testing.T) {
 	}
 	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 5}, registry.ClaimFresh)
 
-	// A duplicate records no Subgroup state: the §9.1 check may still reject
+	// A duplicate records no Subgroup state: the §7.1 check may still reject
 	// it (the caller's), so Subgroup 3 keeps no priority from it.
 	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 5, Subgroup: 3, Priority: 9}, registry.ClaimRedundant)
 	mustClaim(t, e, registry.ObjectInfo{Group: 9, Object: 6, Subgroup: 3, Priority: 1}, registry.ClaimFresh)
 }
 
-// TestTrackEntry_FinalObjects pins the §2.4.2 conditions that need earlier
+// TestTrackEntry_FinalObjects pins the §12.1 conditions that need earlier
 // Objects: a Subgroup's Publisher Priority changing (1), an Object past a
 // Subgroup's end (2) or two different ends (3), and an Object past the Group's
 // (4) or the Track's (5) end, detected in either order. An end is the first
-// missing ID: a status at M ends at M (§11.2.1.1), a FIN or END_OF_GROUP bit
-// after N at N+1 (§11.4.2, §11.3.1), so the two agree when M = N+1 (§9.1).
+// missing ID: a status at M ends at M (§11.1.1), a FIN or END_OF_GROUP bit
+// after N at N+1 (§11.3.1, §11.2.1), so the two agree when M = N+1 (§7.1).
 func TestTrackEntry_FinalObjects(t *testing.T) {
 	t.Parallel()
 	type step func(*registry.TrackEntry) error
-	// claim does what the relay does: a duplicate, once the §9.1 check
+	// claim does what the relay does: a duplicate, once the §7.1 check
 	// passed, is recorded too.
 	claim := func(o registry.ObjectInfo) step {
 		return func(e *registry.TrackEntry) error {
@@ -307,7 +307,7 @@ func TestTrackEntry_FinalObjects(t *testing.T) {
 			sub(1, 0, 0), sub(1, 1, 0), fin(0, 1, false), finOnStatus(0, 2),
 		}, false},
 		// A status end at M and a FIN end at M+1 are Object M going from
-		// existing to not existing (§9.1).
+		// existing to not existing (§7.1).
 		{"a Subgroup ending on a status, and after the Object at it", []step{
 			sub(1, 0, 0), sub(1, 1, 0), fin(0, 1, false), finOnStatus(0, 1),
 		}, false},
@@ -323,7 +323,7 @@ func TestTrackEntry_FinalObjects(t *testing.T) {
 		{"a Subgroup ending two apart", []step{
 			sub(1, 0, 0), sub(1, 1, 0), fin(0, 1, false), finOnStatus(0, 0),
 		}, true},
-		// A Normal Object at a status's own ID is the late Object of §2.1.
+		// A Normal Object at a status's own ID is the late Object of §2.1.2.
 		{"Object at END_OF_GROUP's ID", []step{status(1, 2, eog), sub(1, 2, 1)}, false},
 		{"Object at END_OF_TRACK's ID", []step{status(1, 2, eot), sub(1, 2, 1)}, false},
 		{"Object at the ID after an END_OF_GROUP FIN", []step{
@@ -413,7 +413,7 @@ func TestTrackEntry_RecordDuplicateChecksAgain(t *testing.T) {
 		e,
 		eog,
 		registry.ClaimRedundant,
-	) // a duplicate; the caller's §9.1 check runs now
+	) // a duplicate; the caller's §7.1 check runs now
 	mustClaim(t, e, registry.ObjectInfo{Group: 1, Object: 5}, registry.ClaimFresh) // meanwhile, another upstream
 	if err := e.RecordDuplicate(eog); !errors.Is(err, session.ErrMalformedTrack) {
 		t.Fatalf("RecordDuplicate = %v, want the Group ending below Object 5 to be malformed", err)
@@ -422,7 +422,7 @@ func TestTrackEntry_RecordDuplicateChecksAgain(t *testing.T) {
 
 // TestTrackEntry_LateEndPurgesCache: an end placed below Normal Objects
 // already received makes them past it, and Object(s) triggering Malformed
-// Track status MUST NOT be cached (§2.4.2).
+// Track status MUST NOT be cached (§12.1).
 func TestTrackEntry_LateEndPurgesCache(t *testing.T) {
 	t.Parallel()
 	e := newTestEntry("purge")
@@ -504,7 +504,7 @@ func TestTrackEntry_LateEndPurgesCache(t *testing.T) {
 
 // TestTrackEntry_LowestForwarded: the lowest Object ID forwarded per Subgroup,
 // status Objects included and datagrams not, outlives the writers of the
-// Subgroup so a later FIRST_OBJECT claim can be checked (§11.4.2, §2.2).
+// Subgroup so a later FIRST_OBJECT claim can be checked (§11.3.1, §2.2).
 func TestTrackEntry_LowestForwarded(t *testing.T) {
 	t.Parallel()
 	e := newTestEntry("lowest")

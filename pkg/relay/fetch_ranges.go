@@ -12,18 +12,18 @@ import (
 
 // A FETCH response asserts what it does not carry: "Any gaps in the Group and
 // Object IDs in the response stream indicate objects that do not exist"
-// (§10.13), and "All signals that an Object does not exist are
-// authoritative" (§2.1). The relay knows an Object does not exist only from a
-// signal — a Prior Group or Object ID Gap (§12.8, §12.9), a Group's or the
-// Track's end (§11.2.1.1, §11.4.2), or an upstream's FETCH response — never from a gap in
+// (§3.2.2), and "All signals that an Object does not exist are
+// authoritative" (§2.1.2). The relay knows an Object does not exist only from a
+// signal — a Prior Group or Object ID Gap (§10.8, §10.9), a Group's or the
+// Track's end (§11.1.1, §11.3.1), or an upstream's FETCH response — never from a gap in
 // what it happened to receive: "A gap in the observed Object IDs does not by
-// itself convey any information about the skipped Objects" (§2.1). So a
+// itself convey any information about the skipped Objects" (§2.1.2). So a
 // response is built from the requested range classified into Objects, known
 // absent Locations, and the rest, whose status is unknown and is either asked
-// of an upstream (§10.13) or marked with an End of Unknown Range (§11.4.4.2).
+// of an upstream (§3.2.3) or marked with an End of Unknown Range (§11.4.1.2).
 //
 // Interpretation: an End of Range marker covers "Locations between the last
-// serialized Object, if any, and this Location" (§11.4.4.2) in the order the
+// serialized Object, if any, and this Location" (§11.4.1.2) in the order the
 // response carries them: Groups in its Group Order, Object IDs ascending
 // within a Group. In Descending order that is not Location order.
 
@@ -66,8 +66,8 @@ func uncovered(start, end message.Location, known []registry.LocRange) []registr
 
 // knownFromCache is what objs, Objects the cache holds, establish: each
 // Object's Location; from an END_OF_GROUP or END_OF_TRACK status, the rest of
-// its Group or of the Track (§11.2.1.1); and the gaps its Prior Group and
-// Object ID Gaps announce (§12.8, §12.9). [message.CheckObjectProperties]
+// its Group or of the Track (§11.1.1); and the gaps its Prior Group and
+// Object ID Gaps announce (§10.8, §10.9). [message.CheckObjectProperties]
 // rejected a gap above an Object's ID on receipt.
 func knownFromCache(objs []*cache.CachedObject) []registry.LocRange {
 	out := make([]registry.LocRange, 0, len(objs))
@@ -110,7 +110,7 @@ func unknownIn(
 }
 
 // streamCompare orders Locations as a FETCH response in order carries them
-// (§10.13): Groups in the Group Order, Object IDs ascending within a Group.
+// (§3.2.1): Groups in the Group Order, Object IDs ascending within a Group.
 func streamCompare(a, b message.Location, order message.GroupOrder) int {
 	if order == message.GroupOrderDescending && a.Group != b.Group {
 		return cmp.Compare(b.Group, a.Group)
@@ -135,7 +135,7 @@ func runEnds(r registry.LocRange, order message.GroupOrder) []message.Location {
 
 // fetchElements orders objs for a response in order and adds, at the end of
 // each run of unknown and timedOut Locations, an End of Unknown or Timed-Out
-// Range marker (§11.4.4.2), so that a plain gap in the response only ever
+// Range marker (§11.4.1.2), so that a plain gap in the response only ever
 // covers Locations known not to exist. unknown and timedOut must be disjoint
 // and hold no Object of objs. A marker's run starts after the previous
 // element, so it may also cover known-absent Locations: weaker, never false.

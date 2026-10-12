@@ -11,7 +11,7 @@ import (
 )
 
 // TestWriteObjectAt: WriteObjectAt is the exact encoding inverse of
-// ReadDecoded — absolute Object IDs become the §11.4.2 deltas on the wire
+// ReadDecoded — absolute Object IDs become the §11.3.1 deltas on the wire
 // (first object's delta = absolute ID; later = currentID-prevID-1).
 func TestWriteObjectAt(t *testing.T) {
 	cli, srv := openPair(t)
@@ -96,7 +96,7 @@ func TestWriteObjectAtRejectsNonIncreasing(t *testing.T) {
 
 // TestIncomingSubgroupStream_ReadDecoded covers absolute ObjectID
 // reconstruction (first object's delta is the absolute ID; subsequent deltas
-// encode currentID - prevID - 1) and the three §11.4.2 SubgroupID modes.
+// encode currentID - prevID - 1) and the three §11.3.1 SubgroupID modes.
 func TestIncomingSubgroupStream_ReadDecoded(t *testing.T) {
 	cases := []struct {
 		name       string

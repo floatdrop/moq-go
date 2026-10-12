@@ -49,8 +49,8 @@ func receiveSubgroupObjects(ctx context.Context, sess *session.Session, out chan
 }
 
 // TestRelay_ObjectInsideAnnouncedGapDropped: an Object inside a Prior Object or
-// Group ID Gap announced earlier is known not to exist (§2.1), so the relay
-// neither forwards nor caches it (§9.1), and the track goes on.
+// Group ID Gap announced earlier is known not to exist (§2.1.2), so the relay
+// neither forwards nor caches it (§7.1), and the track goes on.
 func TestRelay_ObjectInsideAnnouncedGapDropped(t *testing.T) {
 	t.Parallel()
 	type object struct {

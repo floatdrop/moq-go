@@ -17,7 +17,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
-// handlePublishNamespace implements the PUBLISH_NAMESPACE flow (§6.2, §10.16):
+// handlePublishNamespace implements the PUBLISH_NAMESPACE flow (§4.1, §9.14):
 //
 //  1. Authorize.
 //  2. Register the namespace in [registry.NamespaceRegistry].
@@ -26,8 +26,8 @@ import (
 //     ([registry.NamespaceRegistry.AnnouncePublisher]); unregistration
 //     withdraws it.
 //  5. SUBSCRIBE the publisher for every existing track the namespace covers
-//     (§9.5; see [sessionHandler.subscribeExistingTracks]).
-//  6. Serve follow-ups until the publisher cancels the request (§6.2), then
+//     (§7.6; see [sessionHandler.subscribeExistingTracks]).
+//  6. Serve follow-ups until the publisher cancels the request (§4.1), then
 //     unregister.
 func (h *sessionHandler) handlePublishNamespace(
 	ctx context.Context,
@@ -49,7 +49,7 @@ func (h *sessionHandler) handlePublishNamespace(
 	}
 	h.names.AnnouncePublisher(entry)
 
-	// §9.5: no further SUBSCRIBEs once the publisher withdraws.
+	// §7.6: no further SUBSCRIBEs once the publisher withdraws.
 	nsCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	h.spawn(func() { h.subscribeExistingTracks(nsCtx, entry) })
@@ -60,7 +60,7 @@ func (h *sessionHandler) handlePublishNamespace(
 // publishNamespaceUpdate answers a REQUEST_UPDATE on a PUBLISH_NAMESPACE with
 // REQUEST_OK. One whose tokens the TokenVerifier denies fails, and the relay
 // closes the stream: "When a REQUEST_UPDATE fails for a ... PUBLISH_NAMESPACE,
-// the responder MUST close the bidi stream" (§10.9.1). This goroutine is the
+// the responder MUST close the bidi stream" (§9.5.1). This goroutine is the
 // only writer on the stream after REQUEST_OK, so the replies write directly.
 func (h *sessionHandler) publishNamespaceUpdate(
 	req *session.Request,
@@ -82,7 +82,7 @@ func (h *sessionHandler) publishNamespaceUpdate(
 }
 
 // subscribeExistingTracks SUBSCRIBEs pub for every existing track its
-// namespace covers (§9.5: "it MUST send a SUBSCRIBE to the publisher").
+// namespace covers (§7.6: "it MUST send a SUBSCRIBE to the publisher").
 // Tracks it skips, and a racing downstream SUBSCRIBE, are covered by
 // [sessionHandler.subscribeMissingPublishers].
 func (h *sessionHandler) subscribeExistingTracks(ctx context.Context, pub *registry.PublisherEntry) {
@@ -119,15 +119,15 @@ func (h *sessionHandler) subscribeMissingPublishers(
 
 // subscribeLatePublisher opens an upstream subscription for an existing track
 // on pubEntry, a publisher whose PUBLISH_NAMESPACE covers it but which is not
-// yet among the track's upstreams (§9.5).
+// yet among the track's upstreams (§7.6).
 //
 // A refusal is recorded on the track entry: a REQUEST_ERROR until its Retry
-// Interval passes, or for good when it is 0 (§10.6.2), and a Track Properties
-// mismatch (§2.5.1) for good, while the entry and registration last.
+// Interval passes, or for good when it is 0 (§9.4.2), and a Track Properties
+// mismatch (§3.7) for good, while the entry and registration last.
 //
-// Deviation (§9.5 does not qualify "each matching subscription"): skipped
+// Deviation (§7.6 does not qualify "each matching subscription"): skipped
 // while the track has no downstream, since the upstream would never be
-// released. A pub that itself receives the track is SUBSCRIBEd too (§5.1:
+// released. A pub that itself receives the track is SUBSCRIBEd too (§3.1:
 // self-subscriptions "are identical to subscriptions initiated by other
 // endpoints").
 func (h *sessionHandler) subscribeLatePublisher(
@@ -167,21 +167,21 @@ func (h *sessionHandler) subscribeLatePublisher(
 			slog.String("name", string(fullName.Name)))
 		return
 	}
-	// Or switched to Forward=1 before this upstream was registered for §9.2
-	// propagation. Not bound to ctx: a withdrawal (§9.5) stops only new
+	// Or switched to Forward=1 before this upstream was registered for §7.2
+	// propagation. Not bound to ctx: a withdrawal (§7.6) stops only new
 	// subscriptions.
 	if up.ForwardState() == 0 && anyDownstreamForwards(entry) {
 		h.propagateForwardUpstream(context.WithoutCancel(ctx), fullName)
 	}
 }
 
-// handleSubscribeNamespace implements SUBSCRIBE_NAMESPACE (§6.1, §10.19):
+// handleSubscribeNamespace implements SUBSCRIBE_NAMESPACE (§4.2, §9.15):
 //
 //  1. Authorize and reserve the prefix (PREFIX_OVERLAP).
 //  2. Reply REQUEST_OK.
 //  3. Register in [registry.NamespaceRegistry], which queues NAMESPACE /
-//     NAMESPACE_DONE for existing and later namespaces (§6.1).
-//  4. Serve REQUEST_UPDATEs, including TRACK_NAMESPACE_PREFIX (§10.9.2),
+//     NAMESPACE_DONE for existing and later namespaces (§4.2).
+//  4. Serve REQUEST_UPDATEs, including TRACK_NAMESPACE_PREFIX (§9.5.2),
 //     until the subscriber cancels.
 func (h *sessionHandler) handleSubscribeNamespace(
 	ctx context.Context,
@@ -198,11 +198,11 @@ func (h *sessionHandler) handleSubscribeNamespace(
 			"prefix overlaps an established SUBSCRIBE_NAMESPACE in this session")
 		return
 	}
-	// prefix follows TRACK_NAMESPACE_PREFIX updates (§10.9.2).
+	// prefix follows TRACK_NAMESPACE_PREFIX updates (§9.5.2).
 	prefix := msg.TrackNamespacePrefix
 	defer func() { h.nsPrefixes.release(prefix) }()
 
-	// §6.1: REQUEST_OK before any NAMESPACE, so reply before registering.
+	// §4.2: REQUEST_OK before any NAMESPACE, so reply before registering.
 	if err := req.Reply(&message.RequestOK{}); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "SubscribeNamespace REQUEST_OK write failed",
 			slog.String("err", err.Error()))
@@ -225,13 +225,13 @@ func (h *sessionHandler) handleSubscribeNamespace(
 	h.serveNamespaceFollowups(ctx, req, h.namespaceUpdate(entry, &prefix, msg))
 }
 
-// handleSubscribeTracks implements SUBSCRIBE_TRACKS (§6.1, §10.20):
+// handleSubscribeTracks implements SUBSCRIBE_TRACKS (§3.6, §9.18):
 //
-//  1. Authorize, validate its subscription parameters (§10.20.1), and
+//  1. Authorize, validate its subscription parameters (§3.6.2), and
 //     reserve the prefix (PREFIX_OVERLAP).
 //  2. Reply REQUEST_OK.
 //  3. Register in [registry.NamespaceRegistry] with forwardTrack, then
-//     forward the tracks that already exist under the prefix (§10.20).
+//     forward the tracks that already exist under the prefix (§3.6).
 //     Later tracks are forwarded by handlePublish.
 //  4. Serve REQUEST_UPDATEs until the subscriber cancels.
 func (h *sessionHandler) handleSubscribeTracks(
@@ -244,7 +244,7 @@ func (h *sessionHandler) handleSubscribeTracks(
 		return
 	}
 
-	// §10.20.1: refused on a SUBSCRIBE's terms.
+	// §3.6.2: refused on a SUBSCRIBE's terms.
 	params, err := h.resolveTracksParams(msg.Parameters)
 	if err != nil {
 		h.refuseSubscriptionParams(ctx, req, err)
@@ -278,7 +278,7 @@ func (h *sessionHandler) handleSubscribeTracks(
 	defer h.names.UnregisterSubscriber(entry)
 
 	h.spawn(entry.RunWriter)
-	// §10.20: forward the tracks that already exist under the prefix.
+	// §3.6: forward the tracks that already exist under the prefix.
 	for _, te := range h.tracks.MatchNamespace(msg.TrackNamespacePrefix) {
 		if hasEstablishedUpstream(te) {
 			entry.ForwardTrack(entry, te)
@@ -289,8 +289,8 @@ func (h *sessionHandler) handleSubscribeTracks(
 	h.serveNamespaceFollowups(ctx, req, h.tracksUpdate(entry, &prefix, msg))
 }
 
-// subscribeTracksForwarding resolves a SUBSCRIBE_TRACKS's FORWARD (§10.2.18,
-// default true) and GROUP_ORDER (§10.2.8, 0 when omitted), which §10.20.1
+// subscribeTracksForwarding resolves a SUBSCRIBE_TRACKS's FORWARD (§9.20.18,
+// default true) and GROUP_ORDER (§9.20.8, 0 when omitted), which §3.6.2
 // copies onto forwarded PUBLISHes.
 func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder byte) {
 	forward = true
@@ -304,7 +304,7 @@ func subscribeTracksForwarding(ps message.Parameters) (forward bool, groupOrder 
 }
 
 // serveNamespaceFollowups holds a namespace request stream open and answers
-// each REQUEST_UPDATE (§10.9), validating its Request ID (§10.1) and resolving
+// each REQUEST_UPDATE (§9.5), validating its Request ID (§6.4.2.1) and resolving
 // its tokens; update authorizes and applies it, and replies. Other follow-ups
 // are ignored.
 func (h *sessionHandler) serveNamespaceFollowups(
@@ -323,7 +323,7 @@ func (h *sessionHandler) serveNamespaceFollowups(
 		if !ok {
 			return true
 		}
-		// §10.2.1: parameters outside this request's update scope are
+		// §9.20.1: parameters outside this request's update scope are
 		// session-fatal.
 		if h.sess.CheckPeerParams(scope, upd) != nil {
 			return false
@@ -331,7 +331,7 @@ func (h *sessionHandler) serveNamespaceFollowups(
 		if !h.handleFollowupRequestID(ctx, upd) {
 			return false
 		}
-		// §10.3.1.7: enforce the per-stream MAX_REQUEST_UPDATES limit.
+		// §9.1.7: enforce the per-stream MAX_REQUEST_UPDATES limit.
 		if !h.handleRequestUpdateLimit(ctx, updates) {
 			return false
 		}
@@ -347,14 +347,14 @@ func (h *sessionHandler) serveNamespaceFollowups(
 		return true
 	})
 	if fin {
-		// §3.3.2: a FIN is not a cancellation (§6.1, §6.2); keep the state
+		// §6.4.2.2: a FIN is not a cancellation (§4.2, §4.1); keep the state
 		// until the peer resets or sends STOP_SENDING.
 		awaitRequestEnd(ctx, stream)
 	}
 }
 
 // updatePrefixParam reads a REQUEST_UPDATE's TRACK_NAMESPACE_PREFIX
-// (§10.2.20), if any. ok is false when it is malformed: the session is then
+// (§9.20.20), if any. ok is false when it is malformed: the session is then
 // closed with PROTOCOL_VIOLATION.
 func (h *sessionHandler) updatePrefixParam(upd *message.RequestUpdate) (prefix wire.TrackNamespace, found, ok bool) {
 	p, found := upd.Parameters.Find(message.ParamTrackNamespacePrefix)
@@ -370,7 +370,7 @@ func (h *sessionHandler) updatePrefixParam(upd *message.RequestUpdate) (prefix w
 }
 
 // namespaceUpdate answers a REQUEST_UPDATE on the SUBSCRIBE_NAMESPACE msg: a
-// TRACK_NAMESPACE_PREFIX is authorized and applied (§10.9.2); anything else is
+// TRACK_NAMESPACE_PREFIX is authorized and applied (§9.5.2); anything else is
 // acknowledged. A refused update ends the request (see [endAfterFinish]).
 func (h *sessionHandler) namespaceUpdate(
 	e *registry.SubscriberEntry,
@@ -409,11 +409,11 @@ func (h *sessionHandler) namespaceUpdate(
 
 // tracksUpdate answers a REQUEST_UPDATE on a SUBSCRIBE_TRACKS. Its parameters
 // are merged (see [mergeTracksUpdate]) and apply only to future forwards
-// (§10.2.18: "Existing subscriptions are unaffected"). A refused update
+// (§9.20.18: "Existing subscriptions are unaffected"). A refused update
 // changes nothing and ends the request (see [endAfterFinish]).
 //
 // Existing tracks that newly match, by prefix or Range Filter, are forwarded
-// (§10.20); a track that matched before is not offered again.
+// (§3.6); a track that matched before is not offered again.
 func (h *sessionHandler) tracksUpdate(
 	e *registry.SubscriberEntry,
 	cur *wire.TrackNamespace,
@@ -473,10 +473,10 @@ func (h *sessionHandler) tracksUpdate(
 }
 
 // refuseUpdate authorizes a REQUEST_UPDATE on a namespace subscription,
-// returning the REQUEST_ERROR that refuses it, or nil. Its tokens (§10.2.2)
+// returning the REQUEST_ERROR that refuses it, or nil. Its tokens (§9.20.2)
 // go through the TokenVerifier as an opener's do. When it changes the prefix,
-// authorize runs the Authorizer on the subscription it would become: §10.19
-// and §10.20 require that "the subscriber is authorized to perform this
+// authorize runs the Authorizer on the subscription it would become: §4.2.1
+// and §3.6 require that "the subscriber is authorized to perform this
 // namespace subscription".
 func (h *sessionHandler) refuseUpdate(
 	ctx context.Context,
@@ -500,7 +500,7 @@ func (h *sessionHandler) refuseUpdate(
 }
 
 // authorizingTokens is the AUTHORIZATION_TOKENs in ps that can authorize a
-// request: all but DELETEs, which only retire an alias (§10.2.2).
+// request: all but DELETEs, which only retire an alias (§8.9).
 func authorizingTokens(ps message.Parameters) message.Parameters {
 	var out message.Parameters
 	for _, p := range ps {
@@ -517,7 +517,7 @@ func authorizingTokens(ps message.Parameters) message.Parameters {
 
 // updatedTokens is the tokens a namespace subscription holds after an update
 // carrying upd: its authorizing tokens replace cur when it has any; otherwise
-// cur "remains unchanged" (§10.9).
+// cur "remains unchanged" (§9.5).
 func updatedTokens(cur, upd message.Parameters) message.Parameters {
 	if toks := authorizingTokens(upd); len(toks) > 0 {
 		return toks
@@ -536,7 +536,7 @@ func withTokens(ps, toks message.Parameters) message.Parameters {
 
 // mergeTracksUpdate applies a REQUEST_UPDATE's parameters to a
 // SUBSCRIBE_TRACKS's: each type present in upd replaces every stored one of
-// that type (§10.9); a zero-length Range Filter removes it (§5.1.4).
+// that type (§9.5); a zero-length Range Filter removes it (§3.3.2).
 // TRACK_NAMESPACE_PREFIX and AUTHORIZATION_TOKEN belong to the update and
 // are not kept; a token in upd drops the stored one.
 func mergeTracksUpdate(stored, upd message.Parameters) message.Parameters {
@@ -555,7 +555,7 @@ func mergeTracksUpdate(stored, upd message.Parameters) message.Parameters {
 }
 
 // resolveTracksParams validates a SUBSCRIBE_TRACKS's Range Filters on a
-// SUBSCRIBE's terms (§10.20.1) and MAX_FILTER_RANGES (§5.1.4), and resolves
+// SUBSCRIBE's terms (§3.6.2) and MAX_FILTER_RANGES (§3.3.2), and resolves
 // what forwarding needs. An error is INVALID_FILTER.
 func (h *sessionHandler) resolveTracksParams(ps message.Parameters) (*registry.TracksParams, error) {
 	forward, groupOrder := subscribeTracksForwarding(ps)
@@ -572,8 +572,8 @@ func (h *sessionHandler) resolveTracksParams(ps message.Parameters) (*registry.T
 	return &registry.TracksParams{Params: ps, Forward: forward, GroupOrder: groupOrder, RangeFilters: rangeFilters}, nil
 }
 
-// prefixUpdater applies a TRACK_NAMESPACE_PREFIX update (§10.9.2) to e and
-// replies. An overlapping prefix is refused with PREFIX_OVERLAP (§10.2.20),
+// prefixUpdater applies a TRACK_NAMESPACE_PREFIX update (§9.5.2) to e and
+// replies. An overlapping prefix is refused with PREFIX_OVERLAP (§9.20.20),
 // and the updater reports false.
 func (h *sessionHandler) prefixUpdater(
 	e *registry.SubscriberEntry,
@@ -595,7 +595,7 @@ func (h *sessionHandler) prefixUpdater(
 }
 
 // endAfterFinish ends a namespace subscription whose REQUEST_UPDATE was
-// refused (§10.9.1: "MUST close the bidi stream"). It waits for the writer to
+// refused (§9.5.1: "MUST close the bidi stream"). It waits for the writer to
 // send the queued REQUEST_ERROR and FIN, then reports false.
 func endAfterFinish(ctx context.Context, e *registry.SubscriberEntry) bool {
 	select {
@@ -606,7 +606,7 @@ func endAfterFinish(ctx context.Context, e *registry.SubscriberEntry) bool {
 }
 
 // prefixSet holds one session's established namespace-subscription prefixes
-// of one type, for PREFIX_OVERLAP (§10.19 / §10.20). The zero value is ready.
+// of one type, for PREFIX_OVERLAP (§4.2 / §3.6). The zero value is ready.
 type prefixSet struct {
 	mu       sync.Mutex
 	prefixes []wire.TrackNamespace
@@ -628,7 +628,7 @@ func (p *prefixSet) reserve(prefix wire.TrackNamespace) bool {
 }
 
 // replace swaps the reservation of old for prefix and reports true, or false
-// when prefix overlaps a reservation other than old (§10.9.2).
+// when prefix overlaps a reservation other than old (§9.5.2).
 func (p *prefixSet) replace(old, prefix wire.TrackNamespace) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

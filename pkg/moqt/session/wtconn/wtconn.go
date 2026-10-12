@@ -91,7 +91,7 @@ func (c *conn) CloseWithError(code uint64, reason string) error {
 func (c *conn) Context() context.Context { return c.s.Context() }
 
 // IsWebTransport reports that this Conn runs over WebTransport, which
-// §10.3.1.1 and §10.3.1.2 make relevant: the PATH and AUTHORITY setup options
+// §9.1.1 and §9.1.2 make relevant: the PATH and AUTHORITY setup options
 // MUST NOT be used on a WebTransport session, since HTTP/3 already carries that
 // information in the CONNECT request. The session layer asserts for this
 // method to refuse those options before sending them.

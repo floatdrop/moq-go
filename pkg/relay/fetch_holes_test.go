@@ -14,11 +14,11 @@ import (
 )
 
 // A FETCH served from the relay's cache says an Object does not exist only
-// when the relay knows it (§2.1: "A gap in the observed Object IDs does not by
+// when the relay knows it (§2.1.2: "A gap in the observed Object IDs does not by
 // itself convey any information about the skipped Objects"). Any other
-// uncached Location is asked of an upstream (§10.13: "the relay MUST pause
+// uncached Location is asked of an upstream (§3.2.3: "the relay MUST pause
 // subsequent delivery until it has confirmed the object's status upstream"),
-// or, with none to ask, marked End of Unknown Range (§11.4.4.2).
+// or, with none to ask, marked End of Unknown Range (§11.4.1.2).
 
 // cam1Object is one Object of video/cam1 to publish: its Location, and its
 // Object Properties.
@@ -333,10 +333,10 @@ func TestFetch_UpstreamUnknownKeepsWhatTheRelayKnows(t *testing.T) {
 }
 
 // TestFetch_FillTimeoutBoundsUpstreamRead: FILL_TIMEOUT is the budget for the
-// whole upstream FETCH, its response included (§10.2.5). An upstream that
+// whole upstream FETCH, its response included (§9.20.5). An upstream that
 // sends part of its answer and stalls has what it sent served, and the rest
 // reported "as Timed-Out gaps" — between what it sent too, since without a FIN
-// its gaps assert nothing (§10.13).
+// its gaps assert nothing (§3.2.2).
 func TestFetch_FillTimeoutBoundsUpstreamRead(t *testing.T) {
 	t.Parallel()
 	upSess, teardown := connectRelay(t, relay.Config{})
@@ -397,7 +397,7 @@ func TestFetch_FillTimeoutBoundsUpstreamRead(t *testing.T) {
 
 // TestFetch_CancelResetsStreams: a requester that cancels a FETCH while the
 // relay still waits on the upstream for a hole has the data stream and the
-// request stream reset with CANCELLED (§5.2: "It MUST reset the bidi request
+// request stream reset with CANCELLED (§3.2.4: "It MUST reset the bidi request
 // stream and unidirectional data stream associated with the FETCH"), not
 // served once FILL_TIMEOUT runs out.
 func TestFetch_CancelResetsStreams(t *testing.T) {

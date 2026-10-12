@@ -6,7 +6,7 @@ package session
 // (usleep/cond_signal/cond_wait on every object), this benchmark measures
 // ONLY the per-object forwarding codec work the relay does on the hot path:
 //
-//	IncomingSubgroupStream.ReadObject  (parse §11.4.2 framing)
+//	IncomingSubgroupStream.ReadObject  (parse §11.3.1 framing)
 //	OutgoingSubgroupStream.WriteObject (re-encode + serialize)
 //
 // There is no transport, no channel hop, and no per-subscriber inbox
@@ -72,7 +72,7 @@ func BenchmarkSubgroupForwardCodec(b *testing.B) {
 
 	// Pre-encode a single consecutive (delta 0) object; repeatReader replays
 	// it as an endless run of objects with consecutive Object IDs, matching
-	// the 1->1 fanout steady state (no §11.4.3 reopen).
+	// the 1->1 fanout steady state (no §11.3.2 reopen).
 	payload := make([]byte, payloadSize)
 	for i := range payload {
 		payload[i] = byte(i)

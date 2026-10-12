@@ -71,7 +71,7 @@ func TestDeliveryTimeoutsFromParams(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// ApplyObjectProperties (§12.1/§12.2 first-object override)
+// ApplyObjectProperties (§10.1/§10.2 first-object override)
 // ---------------------------------------------------------------------------
 
 func TestApplyObjectProperties(t *testing.T) {

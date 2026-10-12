@@ -61,7 +61,7 @@ func TestTypeString_UnknownRendersAsHex(t *testing.T) {
 }
 
 // TestParamIDString_EveryRegisteredParamIsNamed is the same invariant for
-// §10.2 parameters, keyed off kindOf — a parameter is registered exactly when
+// §9.20 parameters, keyed off kindOf — a parameter is registered exactly when
 // kindOf knows its value encoding.
 func TestParamIDString_EveryRegisteredParamIsNamed(t *testing.T) {
 	t.Parallel()

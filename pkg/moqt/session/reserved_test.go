@@ -10,7 +10,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// TestReservedNamespaceRejection_Classifier pins the §3.2.1 / §3.2.2 rules
+// TestReservedNamespaceRejection_Classifier pins the §2.4.3 / §6.5 rules
 // across the namespace-bearing request types: only an exact "." and the
 // ".session" first field are rejected; other "."-prefixed namespaces and
 // ordinary namespaces pass through.

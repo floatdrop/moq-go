@@ -68,7 +68,7 @@ func (s *Session) ReceiveDatagram(ctx context.Context) (*message.ObjectDatagram,
 // SendDatagram serializes d and sends it as a single QUIC DATAGRAM
 // frame. Returns an error if d fails validation or the payload exceeds the
 // negotiated max_datagram_frame_size (the transport returns an error in that
-// case; per §11.3 the object is silently dropped at the sender).
+// case; per §11.2 the object is silently dropped at the sender).
 //
 // SendDatagram is the publisher-side counterpart of [Session.ReceiveDatagram].
 func (s *Session) SendDatagram(d *message.ObjectDatagram) error {

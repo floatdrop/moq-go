@@ -12,9 +12,9 @@ import (
 )
 
 // The relay dedups Objects from redundant upstreams against the last 32
-// Groups (§9.3). Past that it forwards an Object only above every one it
+// Groups (§7.3). Past that it forwards an Object only above every one it
 // forwarded in its Subgroup; one it drops leaves its stream missing an Object,
-// so that stream is reset, not FINed (§11.4.3).
+// so that stream is reset, not FINed (§11.3.2).
 
 // readSubgroupsConcurrently reads every subgroup stream sess accepts to its
 // end, each on its own goroutine, so an open stream does not hold up the
@@ -86,7 +86,7 @@ func writeOpenGroup0(
 }
 
 // writeIDs writes Objects ids (ascending) on sg after Object prev, -1 for
-// none (§11.4.2 delta encoding).
+// none (§11.3.1 delta encoding).
 func writeIDs(t *testing.T, sg *session.OutgoingSubgroupStream, prev int64, ids ...uint64) {
 	t.Helper()
 	for _, id := range ids {
@@ -112,7 +112,7 @@ func publishGroups(t *testing.T, pubSess *session.Session, alias uint64, reads <
 }
 
 // TestFanout_GroupIDJumpKeepsOpenSubgroup: Group IDs need not be consecutive
-// (§2.3.1, §12.8), so a jump to Group 100 while Group 0's stream is still open
+// (§2.3.1, §10.8), so a jump to Group 100 while Group 0's stream is still open
 // does not age Group 0 out; its later Objects are forwarded.
 func TestFanout_GroupIDJumpKeepsOpenSubgroup(t *testing.T) {
 	t.Parallel()
@@ -138,7 +138,7 @@ func TestFanout_GroupIDJumpKeepsOpenSubgroup(t *testing.T) {
 // TestFanout_AgedOutNextObjectForwarded: once 32 newer Groups push Group 0
 // out of the dedup window, the next Object on its open stream is still
 // forwarded: it is above every Object forwarded in its Subgroup, so it
-// repeats none (§9.4: "MUST NOT reorder or drop objects received on a
+// repeats none (§7.4: "MUST NOT reorder or drop objects received on a
 // multi-object stream").
 func TestFanout_AgedOutNextObjectForwarded(t *testing.T) {
 	t.Parallel()
@@ -164,7 +164,7 @@ func TestFanout_AgedOutNextObjectForwarded(t *testing.T) {
 // forwarded in its Subgroup (here Object 1, from a second stream, after 0 and
 // 2) may be a repeat the relay can no longer detect, so it is dropped; the
 // stream missing it is reset rather than FINed, which with END_OF_GROUP would
-// say it does not exist (§11.4.2, §11.4.3). A subscription whose Start
+// say it does not exist (§11.3.1, §11.3.2). A subscription whose Start
 // Location is past the dropped Object was not owed it, so its stream FINs.
 func TestFanout_AgedOutObjectResetsStream(t *testing.T) {
 	t.Parallel()
@@ -176,7 +176,7 @@ func TestFanout_AgedOutObjectResetsStream(t *testing.T) {
 	subscribeCam1(t, lateSess, message.AbsoluteStartFilter(message.Location{Group: 0, Object: 2}))
 	lateReads := readSubgroupsConcurrently(t, lateSess)
 	// Its OBJECTID_FILTER omits Object 1, which resets its stream as it would
-	// had Object 1 been forwarded (§11.4.3).
+	// had Object 1 been forwarded (§11.3.2).
 	filteredSess := dialAnotherClient(t, pubSess)
 	subscribeCam1(t, filteredSess, message.RangeFilterParam(&message.RangeFilter{
 		Type: message.ParamObjectIDFilter, Ranges: []message.Range{{Start: 0, End: 0}, {Start: 2, End: 2}},
@@ -215,7 +215,7 @@ func TestFanout_AgedOutObjectResetsStream(t *testing.T) {
 
 // TestFanout_AgedOutRepeatDropped: an aged-out Object this Subgroup already
 // forwarded, here Objects 1 and 2 again from a second stream, is a redundant
-// copy (§9.3): dropped without resetting the streams that got the first.
+// copy (§7.3): dropped without resetting the streams that got the first.
 func TestFanout_AgedOutRepeatDropped(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, nil)

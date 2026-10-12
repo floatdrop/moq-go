@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestVarintSpecVectors pins the §1.4.1 leading-ones encoding against
+// TestVarintSpecVectors pins the §8.1 leading-ones encoding against
 // hand-computed byte vectors, including message-type codes whose QUIC-varint
 // encoding differs (SETUP 0x2F00, SUBSCRIBE_NAMESPACE 0x50, PUBLISH_NAMESPACE
 // 0x06).
@@ -71,7 +71,7 @@ func TestVarintBoundaries(t *testing.T) {
 	}
 }
 
-// TestVarintNonMinimal verifies §1.4.1's allowance that integers need not use
+// TestVarintNonMinimal verifies §8.1's allowance that integers need not use
 // the minimum number of bytes: a value encoded in a longer form must decode to
 // the same value.
 func TestVarintNonMinimal(t *testing.T) {

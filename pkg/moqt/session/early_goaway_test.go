@@ -13,8 +13,8 @@ import (
 )
 
 // A GOAWAY "MAY also be sent on a request stream to initiate migration of that
-// individual request" (§10.4), before the request's response too, unless the
-// response MUST come first (§6.1, §6.2). The requester keeps waiting for the
+// individual request" (§9.2), before the request's response too, unless the
+// response MUST come first (§4.2, §4.1). The requester keeps waiting for the
 // response and reads the GOAWAY as the stream's first follow-up, as it would
 // one sent after the response.
 
@@ -89,7 +89,7 @@ func TestEarlyRequestGoawayThenResponse(t *testing.T) {
 }
 
 // TestEarlyRequestGoawayOnPublishNamespace: a PUBLISH_NAMESPACE's response
-// MUST be "the first message on the bidi stream" (§6.2), so a GOAWAY ahead of
+// MUST be "the first message on the bidi stream" (§4.1), so a GOAWAY ahead of
 // it fails the request, leaving the session open as with any other unexpected
 // first message.
 func TestEarlyRequestGoawayOnPublishNamespace(t *testing.T) {
@@ -120,7 +120,7 @@ func TestEarlyRequestGoawayThenRejection(t *testing.T) {
 	requireStaysOpen(t, cli, 50*time.Millisecond)
 }
 
-// TestEarlyRequestGoawayViolationCloses: the §10.4 checks apply from the
+// TestEarlyRequestGoawayViolationCloses: the §9.2 checks apply from the
 // first message: a second GOAWAY before the response, one after an early one,
 // or a New Session URI to the server closes the session with
 // PROTOCOL_VIOLATION.

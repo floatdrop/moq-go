@@ -90,7 +90,7 @@ func TestRelay_AcceptsSession(t *testing.T) {
 }
 
 // TestRelay_StopBroadcastsGoaway: Stop sends every session GOAWAY with Timeout
-// = Config.GoawayTimeout and no NewSessionURI (§10.4).
+// = Config.GoawayTimeout and no NewSessionURI (§9.2).
 func TestRelay_StopBroadcastsGoaway(t *testing.T) {
 	t.Parallel()
 	const grace = 250 * time.Millisecond
@@ -313,7 +313,7 @@ func TestRelay_StopWithdrawFailureIsNotFatal(t *testing.T) {
 }
 
 // TestRelay_RunGoawaysOnShutdownSignal: cancelling Run's context (as a signal
-// does) still sends every session GOAWAY (§10.4), and Run returns only once the
+// does) still sends every session GOAWAY (§9.2), and Run returns only once the
 // drain has finished.
 func TestRelay_RunGoawaysOnShutdownSignal(t *testing.T) {
 	t.Parallel()
@@ -425,7 +425,7 @@ func TestRelay_StopReturnsEarlyOnCleanDrain(t *testing.T) {
 }
 
 // TestRelay_StopForceClosesOnTimeout: a client that ignores GOAWAY is closed at
-// GoawayTimeout with session error GOAWAY_TIMEOUT (§10.4).
+// GoawayTimeout with session error GOAWAY_TIMEOUT (§9.2).
 func TestRelay_StopForceClosesOnTimeout(t *testing.T) {
 	t.Parallel()
 	const grace = 200 * time.Millisecond

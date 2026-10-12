@@ -11,7 +11,7 @@ import (
 )
 
 // TestRelay_SharedTrackAliasSurvivesFirstSubscriptionEnd: two racing upstream
-// SUBSCRIBEs answered with the same Track Alias (§5.1) keep routing after the
+// SUBSCRIBEs answered with the same Track Alias (§3.1) keep routing after the
 // first one ends.
 func TestRelay_SharedTrackAliasSurvivesFirstSubscriptionEnd(t *testing.T) {
 	t.Parallel()

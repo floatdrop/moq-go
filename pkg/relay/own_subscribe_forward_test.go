@@ -105,7 +105,7 @@ func releaseSubscribe(t *testing.T, release func(), done <-chan error, reqs <-ch
 
 // TestSubscribeTracks_OwnSubscribeInFlight_ExistingTracks: a SUBSCRIBE_TRACKS
 // sent while the session's SUBSCRIBE is in flight does not forward that track
-// among the existing ones (§10.20).
+// among the existing ones (§3.6).
 func TestSubscribeTracks_OwnSubscribeInFlight_ExistingTracks(t *testing.T) {
 	const name = "own-window-existing"
 	parked, release := parkOwnSubscribe(t, name)
@@ -118,7 +118,7 @@ func TestSubscribeTracks_OwnSubscribeInFlight_ExistingTracks(t *testing.T) {
 }
 
 // TestSubscribeTracks_OwnSubscribeInFlight_PrefixUpdate: the same for a
-// TRACK_NAMESPACE_PREFIX update that newly covers the track (§10.9.2).
+// TRACK_NAMESPACE_PREFIX update that newly covers the track (§9.5.2).
 func TestSubscribeTracks_OwnSubscribeInFlight_PrefixUpdate(t *testing.T) {
 	const name = "own-window-update"
 	parked, release := parkOwnSubscribe(t, name)
@@ -135,7 +135,7 @@ func TestSubscribeTracks_OwnSubscribeInFlight_PrefixUpdate(t *testing.T) {
 }
 
 // TestSubscribeTracks_OwnSubscribeInFlight_NewPublish: the same for a PUBLISH
-// of the track from another session (§6.1).
+// of the track from another session (§3.6).
 func TestSubscribeTracks_OwnSubscribeInFlight_NewPublish(t *testing.T) {
 	const name = "own-window-publish"
 	parked, release := parkOwnSubscribe(t, name)
@@ -150,7 +150,7 @@ func TestSubscribeTracks_OwnSubscribeInFlight_NewPublish(t *testing.T) {
 
 // TestSubscribeTracks_OwnSubscribeFails_HeldForwardSent: a forward held back
 // for the session's SUBSCRIBE is sent once that SUBSCRIBE fails, since the
-// track is published "within matching namespaces" (§10.20) and the session
+// track is published "within matching namespaces" (§3.6) and the session
 // receives it no other way.
 func TestSubscribeTracks_OwnSubscribeFails_HeldForwardSent(t *testing.T) {
 	t.Parallel()

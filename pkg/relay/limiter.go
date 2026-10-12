@@ -2,8 +2,8 @@ package relay
 
 import "sync"
 
-// sessionLimiter enforces the per-session resource caps from §13.1
-// (subscription amplification) and §13.7.1 (relay state maintenance): a bound
+// sessionLimiter enforces the per-session resource caps from §15.1
+// (subscription amplification) and §15.7.1 (relay state maintenance): a bound
 // on the number of concurrently-active subscriptions and on concurrently-active
 // namespace-state requests (PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE /
 // SUBSCRIBE_TRACKS) a single session may hold. A non-positive max disables the

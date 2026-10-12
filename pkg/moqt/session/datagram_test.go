@@ -43,7 +43,7 @@ func TestSendReceiveDatagram_RoundTrip(t *testing.T) {
 func TestSendDatagram_ValidationError(t *testing.T) {
 	cli, _ := openPair(t)
 
-	// PROPERTIES bit set with empty Properties is a PROTOCOL_VIOLATION (§11.3.1):
+	// PROPERTIES bit set with empty Properties is a PROTOCOL_VIOLATION (§11.2.1):
 	// SendDatagram must reject it locally before touching the transport.
 	bad := &message.ObjectDatagram{
 		Type:          message.DatagramPropertiesBit,
@@ -94,7 +94,7 @@ func TestReceiveDatagram_UnknownTypeClosesSession(t *testing.T) {
 	_, srv, cliConn, _ := openPairWithConns(t)
 	ctx := t.Context()
 
-	// 0x10 is neither a valid OBJECT_DATAGRAM type (§11.3.1) nor the PADDING
+	// 0x10 is neither a valid OBJECT_DATAGRAM type (§11.2.1) nor the PADDING
 	// type, so the receiver MUST close the session with PROTOCOL_VIOLATION.
 	bogus := wire.NewWriter(nil)
 	bogus.Varint(0x10)

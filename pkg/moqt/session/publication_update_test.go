@@ -11,9 +11,9 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 )
 
-// A Publication answering REQUEST_UPDATE (§10.9): exactly one REQUEST_OK or
-// REQUEST_ERROR, no Objects at Forward State 0 (§5.1), LARGEST_OBJECT in the
-// OK, and PUBLISH_DONE UPDATE_FAILED after a declined update (§10.9.1).
+// A Publication answering REQUEST_UPDATE (§9.5): exactly one REQUEST_OK or
+// REQUEST_ERROR, no Objects at Forward State 0 (§3.1.1), LARGEST_OBJECT in the
+// OK, and PUBLISH_DONE UPDATE_FAILED after a declined update (§9.5.1).
 
 // servedPublication subscribes a client to a server Publication whose broker is serving.
 func servedPublication(t *testing.T) (*session.Session, *session.Subscription, *session.Publication) {
@@ -64,7 +64,7 @@ func TestPublicationAppliesForwardUpdate(t *testing.T) {
 func TestPublicationUpdateOKCarriesLargestObject(t *testing.T) {
 	client, sub, pub := servedPublication(t)
 
-	// Nothing published yet: §10.2.17 omits LARGEST_OBJECT.
+	// Nothing published yet: §9.20.17 omits LARGEST_OBJECT.
 	ok, err := sub.Update(t.Context(), message.Parameters{message.ForwardParam(true)})
 	must(t, err)
 	if _, found := ok.Parameters.Find(message.ParamLargestObject); found {
@@ -147,7 +147,7 @@ func TestPublicationCustomUpdateHandler(t *testing.T) {
 }
 
 // TestBrokerWithoutHandlerDeclines: a broker without an update handler
-// declines with REQUEST_ERROR NOT_SUPPORTED rather than ignoring it (§10.9).
+// declines with REQUEST_ERROR NOT_SUPPORTED rather than ignoring it (§9.5).
 func TestBrokerWithoutHandlerDeclines(t *testing.T) {
 	client, server := openPair(t)
 	sub, pub := subscribePair(t, client, server)
@@ -161,7 +161,7 @@ func TestBrokerWithoutHandlerDeclines(t *testing.T) {
 }
 
 // TestPublishOKForwardClosesSession: FORWARD is not defined for PUBLISH_OK
-// (§10.2.18), so receiving it there is a PROTOCOL_VIOLATION (§10.2.1).
+// (§9.20.18), so receiving it there is a PROTOCOL_VIOLATION (§9.20.1).
 func TestPublishOKForwardClosesSession(t *testing.T) {
 	client, server := openPair(t)
 	go func() {
@@ -178,7 +178,7 @@ func TestPublishOKForwardClosesSession(t *testing.T) {
 }
 
 // TestForwardPauseResetsOpenSubgroup: FORWARD=0 also resets subgroups already
-// open (§11.4.3).
+// open (§11.3.2).
 func TestForwardPauseResetsOpenSubgroup(t *testing.T) {
 	client, sub, pub := servedPublication(t)
 	peer := make(chan session.DataStream, 1)
@@ -229,7 +229,7 @@ func TestDeclinedUpdateEndsPublication(t *testing.T) {
 }
 
 // TestInvalidForwardClosesSession: FORWARD other than 0 or 1 closes the session
-// with PROTOCOL_VIOLATION (§10.2.18), in SUBSCRIBE and REQUEST_UPDATE alike.
+// with PROTOCOL_VIOLATION (§9.20.18), in SUBSCRIBE and REQUEST_UPDATE alike.
 func TestInvalidForwardClosesSession(t *testing.T) {
 	bad := message.ByteParam(message.ParamForward, 2)
 	t.Run("REQUEST_UPDATE", func(t *testing.T) {

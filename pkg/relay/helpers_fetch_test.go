@@ -18,7 +18,7 @@ import (
 // TRACK_STATUS watermark wait that FETCH tests synchronise on.
 
 // waitRelayLargest polls TRACK_STATUS until the relay reports Largest Object
-// {wantGroup, wantObject} (§10.2.17), failing after 10s.
+// {wantGroup, wantObject} (§9.20.17), failing after 10s.
 func waitRelayLargest(
 	t *testing.T,
 	sess *session.Session,
@@ -51,7 +51,7 @@ func waitRelayLargest(
 	}
 }
 
-// fetchRangeFilter is the LOCATION_FILTER (§5.1.2) for the inclusive FETCH
+// fetchRangeFilter is the LOCATION_FILTER (§3.3.1) for the inclusive FETCH
 // range [start, endIncl]; an end Object of MaxUint64 means the whole end group.
 func fetchRangeFilter(start, endIncl message.Location) message.Parameter {
 	if endIncl.Object == math.MaxUint64 {
@@ -135,9 +135,9 @@ func awaitTailCached(t *testing.T, written <-chan struct{}) {
 	time.Sleep(50 * time.Millisecond)
 }
 
-// decodeFetchStream reads fs to EOF, reversing the §11.4.4.1 delta encoding
+// decodeFetchStream reads fs to EOF, reversing the §11.4.1.1 delta encoding
 // itself rather than through the session decoder. End of Range markers
-// (§11.4.4.2) are skipped, but anchor the Object after them.
+// (§11.4.1.2) are skipped, but anchor the Object after them.
 func decodeFetchStream(t *testing.T, fs *session.IncomingFetchStream, order message.GroupOrder) []decodedFetchObject {
 	t.Helper()
 	var (
@@ -189,7 +189,7 @@ func decodeFetchStream(t *testing.T, fs *session.IncomingFetchStream, order mess
 	}
 }
 
-// isEndOfRange reports whether flags are a §11.4.4.2 End of Range marker's.
+// isEndOfRange reports whether flags are a §11.4.1.2 End of Range marker's.
 func isEndOfRange(flags uint64) bool {
 	switch flags {
 	case message.FetchEndOfNonExistentRange, message.FetchEndOfUnknownRange, message.FetchEndOfTimedOutRange:
@@ -198,7 +198,7 @@ func isEndOfRange(flags uint64) bool {
 	return false
 }
 
-// fetchElem is one element of a FETCH response: an Object or a §11.4.4.2
+// fetchElem is one element of a FETCH response: an Object or a §11.4.1.2
 // End of Range marker.
 type fetchElem struct {
 	Group, Object uint64
@@ -383,7 +383,7 @@ func fetchRange(
 }
 
 // writeFetchGroupRange writes one Object per group startG..endG to a FETCH
-// response in ascending delta encoding (§11.4.4).
+// response in ascending delta encoding (§11.4.1).
 func writeFetchGroupRange(out *session.OutgoingFetchStream, startG, endG uint64) {
 	first := true
 	for g := startG; g <= endG; g++ {

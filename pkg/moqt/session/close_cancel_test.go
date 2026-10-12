@@ -13,7 +13,7 @@ import (
 )
 
 // Closing a request handle cancels the request with RESET_STREAM /
-// STOP_SENDING (§3.3.3); a FIN is not a cancellation (§3.3.2).
+// STOP_SENDING (§6.4.2.3); a FIN is not a cancellation (§6.4.2.2).
 
 // requireCancelled reads s until it fails, skipping messages, and requires a reset rather than a clean FIN.
 func requireCancelled(t *testing.T, s session.Stream) {
@@ -132,7 +132,7 @@ func TestCloseCancelsRequest(t *testing.T) {
 }
 
 // TestPublicationCloseAfterDoneKeepsPublishDone: after Done's PUBLISH_DONE and
-// FIN (§3.3.2), Close only stops reading and must not reset the send side.
+// FIN (§6.4.2.2), Close only stops reading and must not reset the send side.
 func TestPublicationCloseAfterDoneKeepsPublishDone(t *testing.T) {
 	client, server := openPair(t)
 	sub, pub := subscribePair(t, client, server)
@@ -168,7 +168,7 @@ func TestPublicationCloseAfterDoneKeepsPublishDone(t *testing.T) {
 }
 
 // TestFetchOKUnknownMandatoryPropertyCancels: a FETCH_OK with an unknown
-// Mandatory Track Property makes the subscriber cancel the fetch (§2.5.1).
+// Mandatory Track Property makes the subscriber cancel the fetch (§3.7).
 func TestFetchOKUnknownMandatoryPropertyCancels(t *testing.T) {
 	client, server := openPairWithOpts(t,
 		[]session.Option{session.WithKnownMandatoryTrackProperties(map[message.PropertyType]struct{}{})}, nil)
@@ -185,7 +185,7 @@ func TestFetchOKUnknownMandatoryPropertyCancels(t *testing.T) {
 }
 
 // TestRequestBrokerCloseCancels: RequestBroker.Close cancels the stream it
-// wraps (§3.3.3).
+// wraps (§6.4.2.3).
 func TestRequestBrokerCloseCancels(t *testing.T) {
 	client, server := openPair(t)
 	peer := acceptWith(t, server, func(r *session.Request) (session.Stream, error) {

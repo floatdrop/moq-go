@@ -18,21 +18,21 @@ type config struct {
 	knownMandatoryTrackProperties map[message.PropertyType]struct{}
 
 	// maxAuthTokenCacheSize is the byte budget for the inbound
-	// authorization-token alias cache (§10.2.2). It mirrors the value
+	// authorization-token alias cache (§8.9). It mirrors the value
 	// advertised to the peer via MAX_AUTH_TOKEN_CACHE_SIZE and is captured
 	// here by WithMaxAuthTokenCacheSize so open() can size the cache. The
-	// default (0) prohibits alias registration per §10.3.1.3.
+	// default (0) prohibits alias registration per §9.1.3.
 	maxAuthTokenCacheSize uint64
 
 	// maxRequestUpdates is the per-request-stream limit on unacknowledged
-	// inbound REQUEST_UPDATEs (§10.3.1.7). It mirrors the value advertised to
+	// inbound REQUEST_UPDATEs (§9.1.7). It mirrors the value advertised to
 	// the peer via MAX_REQUEST_UPDATES and is captured here by
 	// WithMaxRequestUpdates so the session can enforce it on the receive side.
 	// The default (0) means REQUEST_UPDATE concurrency is not limited.
 	maxRequestUpdates uint64
 
 	// maxFilterRanges is the per-subscription/fetch limit on the total number
-	// of Range Filter ranges (§10.3.1.6). It mirrors the value advertised via
+	// of Range Filter ranges (§9.1.6). It mirrors the value advertised via
 	// MAX_FILTER_RANGES and is captured by WithMaxFilterRanges so the receive
 	// side can reject over-limit filters with INVALID_FILTER. The default (0)
 	// prohibits Range Filters entirely.
@@ -48,11 +48,11 @@ type config struct {
 	tokenVerifier TokenVerifier
 }
 
-// WithSetupToken adds an AUTHORIZATION TOKEN setup option (§10.3.1.4). Repeat
+// WithSetupToken adds an AUTHORIZATION TOKEN setup option (§9.1.4). Repeat
 // it for several tokens; they are sent in order.
 //
 // Opening the session fails on DELETE, USE_ALIAS or a repeated REGISTER alias
-// (§10.2.2). [Session.SetupTokenAliases] reports which REGISTERed aliases fit
+// (§9.1.4). [Session.SetupTokenAliases] reports which REGISTERed aliases fit
 // the peer's cache.
 func WithSetupToken(t message.Token) Option {
 	return func(c *config) {
@@ -72,7 +72,7 @@ func WithImplementation(nameAndVersion string) Option {
 	}
 }
 
-// WithPath sets the PATH SETUP option (§10.3.1.2). Client-only — using
+// WithPath sets the PATH SETUP option (§9.1.2). Client-only — using
 // this on Server is a protocol violation per the spec.
 func WithPath(pathAndQuery string) Option {
 	return func(c *config) {
@@ -80,7 +80,7 @@ func WithPath(pathAndQuery string) Option {
 	}
 }
 
-// WithAuthority sets the AUTHORITY SETUP option (§10.3.1.1). Client-only.
+// WithAuthority sets the AUTHORITY SETUP option (§9.1.1). Client-only.
 func WithAuthority(authority string) Option {
 	return func(c *config) {
 		c.setupOptions = append(c.setupOptions, message.AuthorityOption(authority))
@@ -88,13 +88,13 @@ func WithAuthority(authority string) Option {
 }
 
 // WithMaxAuthTokenCacheSize sets MAX_AUTH_TOKEN_CACHE_SIZE — the maximum
-// byte size of the per-session authorization-token alias cache (§10.2.2).
+// byte size of the per-session authorization-token alias cache (§8.9).
 //
 // The same budget sizes the inbound TokenCache the session uses to process
 // AUTHORIZATION_TOKEN aliases on request streams: maxBytes is both advertised
 // to the peer in SETUP and used to bound how many REGISTER tokens the peer may
 // install. The default (option absent) is 0, which prohibits alias
-// registration entirely per §10.3.1.3.
+// registration entirely per §9.1.3.
 func WithMaxAuthTokenCacheSize(maxBytes uint64) Option {
 	return func(c *config) {
 		c.maxAuthTokenCacheSize = maxBytes
@@ -102,7 +102,7 @@ func WithMaxAuthTokenCacheSize(maxBytes uint64) Option {
 	}
 }
 
-// WithMaxRequestUpdates sets MAX_REQUEST_UPDATES (§10.3.1.7) — the maximum
+// WithMaxRequestUpdates sets MAX_REQUEST_UPDATES (§9.1.7) — the maximum
 // number of unacknowledged REQUEST_UPDATE messages this endpoint is willing to
 // receive on any single request stream. The value is both advertised to the
 // peer in SETUP and enforced on inbound follow-ups: a REQUEST_UPDATE that
@@ -119,9 +119,9 @@ func WithMaxRequestUpdates(maxUpdates uint64) Option {
 	}
 }
 
-// WithMaxFilterRanges sets MAX_FILTER_RANGES (§10.3.1.6) — the maximum total
+// WithMaxFilterRanges sets MAX_FILTER_RANGES (§9.1.6) — the maximum total
 // number of Range Filter ranges this endpoint will accept across all Range
-// Filter parameters on a single subscription or fetch (§5.1.4). The value is
+// Filter parameters on a single subscription or fetch (§3.3.2). The value is
 // advertised to the peer in SETUP and used to reject over-limit or (when 0)
 // any Range Filters with INVALID_FILTER. The default (option absent, or 0)
 // prohibits Range Filters entirely.
@@ -133,11 +133,11 @@ func WithMaxFilterRanges(maxRanges uint64) Option {
 }
 
 // WithTokenVerifier installs an application policy that authorizes resolved
-// AUTHORIZATION_TOKEN tokens (§10.2.2). After the session resolves a request's
+// AUTHORIZATION_TOKEN tokens (§9.20.2). After the session resolves a request's
 // tokens (handling REGISTER / USE_ALIAS / USE_VALUE / DELETE against the
 // inbound cache), it invokes v.VerifyToken for each resolved token so the
 // application can validate signatures, expiry, audience, and scope — concerns
-// the transport deliberately leaves out (§13.3).
+// the transport deliberately leaves out (§15.3).
 //
 // Passing nil (or never calling this option) disables verification: tokens are
 // still parsed and aliases are still maintained, but no allow/deny decision is
@@ -148,12 +148,12 @@ func WithTokenVerifier(v TokenVerifier) Option {
 	}
 }
 
-// WithGrease enables GREASE (§14): a random unknown SETUP option is injected
+// WithGrease enables GREASE (§13): a random unknown SETUP option is injected
 // into the outbound SETUP message to exercise the peer's tolerance of unknown
 // values. GREASE values follow the pattern 0x7F * N + 0x9D and are always
 // larger than all currently defined SETUP option types, so appending preserves
-// the non-decreasing Type order that §1.4.3's Delta Type encoding requires
-// (Setup Options are Key-Value-Pairs, not §10.2 Message Parameters).
+// the non-decreasing Type order that §8.3's Delta Type encoding requires
+// (Setup Options are Key-Value-Pairs, not §9.20 Message Parameters).
 func WithGrease() Option {
 	return func(c *config) {
 		c.setupOptions = append(c.setupOptions, message.GreaseSetupOption())
@@ -161,7 +161,7 @@ func WithGrease() Option {
 }
 
 // WithKnownMandatoryTrackProperties configures the set of Mandatory Track
-// Property types (range 0x4000–0x7FFF per §2.5.1) that this endpoint
+// Property types (range 0x4000–0x7FFF per §3.7) that this endpoint
 // understands. When the session receives Track Properties (in SUBSCRIBE_OK,
 // FETCH_OK, or TRACK_STATUS_OK) containing a mandatory property not in this
 // set, it returns *ErrUnsupportedMandatoryTrackProperty; [Request.AcceptPublish]
@@ -169,7 +169,7 @@ func WithGrease() Option {
 //
 // If this option is never called, or types is empty or nil, no Mandatory Track
 // Property is known and every one is refused: an endpoint that does not
-// understand one "MUST NOT process or forward that track" (§2.5.1). List the
+// understand one "MUST NOT process or forward that track" (§3.7). List the
 // types this endpoint understands to accept them.
 func WithKnownMandatoryTrackProperties(types map[message.PropertyType]struct{}) Option {
 	return func(c *config) {

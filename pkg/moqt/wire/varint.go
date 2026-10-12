@@ -7,7 +7,7 @@ import (
 	"math/bits"
 )
 
-// MoQT variable-length integers (draft-ietf-moq-transport-20 §1.4.1).
+// MoQT variable-length integers (draft-ietf-moq-transport-22 §8.1).
 //
 // Unlike QUIC's RFC 9000 §16 varints — which use the high 2 bits of the first
 // byte to select a 1/2/4/8-byte length — MoQT uses a "leading-ones" scheme: the
@@ -26,7 +26,7 @@ import (
 //	11111110     | 8      | 11111110   | 7
 //	11111111     | 9      | 11111111   | 8
 //
-// §1.4.1 also notes integers "do not need to be encoded using the minimum
+// §8.1 also notes integers "do not need to be encoded using the minimum
 // number of bytes", so decoders accept non-minimal encodings; AppendVarint
 // always emits the minimal form.
 

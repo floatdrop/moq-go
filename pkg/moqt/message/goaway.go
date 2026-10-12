@@ -6,10 +6,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// MaxGoawayURIBytes is the maximum New Session URI length per §10.4.
+// MaxGoawayURIBytes is the maximum New Session URI length per §9.2.
 const MaxGoawayURIBytes = 8192
 
-// Goaway is the GOAWAY message (§10.4).
+// Goaway is the GOAWAY message (§9.2).
 type Goaway struct {
 	NewSessionURI []byte
 	Timeout       uint64

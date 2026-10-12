@@ -10,7 +10,7 @@ import (
 )
 
 // TestIncomingFetchStreamCancelResetsTheReadSide: Cancel resets the read side
-// so the peer's writer sees the stream fail (§3.3.4).
+// so the peer's writer sees the stream fail (§12.5).
 func TestIncomingFetchStreamCancelResetsTheReadSide(t *testing.T) {
 	cli, srv := openPair(t)
 	ctx := t.Context()

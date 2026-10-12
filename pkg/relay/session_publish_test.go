@@ -12,7 +12,7 @@ import (
 )
 
 // Inbound PUBLISH, and the PUBLISH the relay forwards to SUBSCRIBE_TRACKS
-// holders on a new bidi stream of their own (§6.1, §9.5, §10.20).
+// holders on a new bidi stream of their own (§3.6, §7.6, §3.6).
 
 // TestPublish_AcceptedAndRegistered: a PUBLISH is accepted, its request stream
 // stays open, and closing it lets the handler exit cleanly.
@@ -36,7 +36,7 @@ func TestPublish_AcceptedAndRegistered(t *testing.T) {
 
 // TestPublish_DuplicateAliasClosesSession: reusing the Track Alias of a
 // published track on the session for another track closes the session with
-// DUPLICATE_TRACK_ALIAS (§11.1).
+// DUPLICATE_TRACK_ALIAS (§3.1.3).
 func TestPublish_DuplicateAliasClosesSession(t *testing.T) {
 	t.Parallel()
 	clientSess, teardown := connectRelay(t, relay.Config{})
@@ -55,7 +55,7 @@ func TestPublish_DuplicateAliasClosesSession(t *testing.T) {
 
 // TestPublish_SavesLargestObjectFromPublish: LARGEST_OBJECT on an inbound
 // PUBLISH feeds the relay's watermark before any Object arrives, and the next
-// SUBSCRIBE_OK carries it (§10.2.17).
+// SUBSCRIBE_OK carries it (§9.20.17).
 func TestPublish_SavesLargestObjectFromPublish(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -108,22 +108,22 @@ func forwardedCam7(t *testing.T, params ...message.Parameter) *message.Publish {
 
 // TestPublish_ForwardsToSubscribeTracks: a PUBLISH matching a SUBSCRIBE_TRACKS
 // is forwarded on its own new bidi stream, not on the SUBSCRIBE_TRACKS stream
-// (§6.1, §9.5).
+// (§3.6, §7.6).
 func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	t.Parallel()
 	pub := forwardedCam7(t)
 	if string(pub.Name) != "rtp" {
 		t.Fatalf("forwarded Name = %q, want %q", pub.Name, "rtp")
 	}
-	// §11.1: the alias is per session, so the relay allocates its own on the
+	// §3.1.3: the alias is per session, so the relay allocates its own on the
 	// subscriber's session (never 0) rather than copying the publisher's 99;
 	// see TestPublish_ForwardedAliasDoesNotCollide.
 	if pub.TrackAlias == 0 {
 		t.Fatal("forwarded TrackAlias is 0; want one allocated on the subscriber's session")
 	}
-	// §10.20.1: the SUBSCRIBE_TRACKS omitted FORWARD and GROUP_ORDER.
+	// §3.6.2: the SUBSCRIBE_TRACKS omitted FORWARD and GROUP_ORDER.
 	// FORWARD defaults to 1 and is omitted; GROUP_ORDER is the publisher's
-	// preference (§10.2.8), Ascending for this track (§12.5), and stated.
+	// preference (§9.20.8), Ascending for this track (§10.5), and stated.
 	if p, ok := pub.Parameters.Find(message.ParamForward); ok {
 		t.Errorf("forwarded FORWARD present (=%d), want omitted", p.Byte)
 	}
@@ -133,8 +133,8 @@ func TestPublish_ForwardsToSubscribeTracks(t *testing.T) {
 	}
 }
 
-// TestPublish_ForwardsSubscribeTracksParams pins §10.20.1: the FORWARD
-// (§10.2.18) and GROUP_ORDER (§10.2.8) parameters on a SUBSCRIBE_TRACKS are
+// TestPublish_ForwardsSubscribeTracksParams pins §3.6.2: the FORWARD
+// (§9.20.18) and GROUP_ORDER (§9.20.8) parameters on a SUBSCRIBE_TRACKS are
 // copied onto the PUBLISH the relay generates for that subscriber.
 func TestPublish_ForwardsSubscribeTracksParams(t *testing.T) {
 	t.Parallel()
@@ -150,7 +150,7 @@ func TestPublish_ForwardsSubscribeTracksParams(t *testing.T) {
 
 // TestPublish_ForwardedAliasDoesNotCollide: a forwarded PUBLISH's Track Alias
 // comes from the subscriber session's own alias space, so it cannot collide
-// with one the relay handed out in SUBSCRIBE_OK (§11.1).
+// with one the relay handed out in SUBSCRIBE_OK (§3.1.3).
 func TestPublish_ForwardedAliasDoesNotCollide(t *testing.T) {
 	t.Parallel()
 	pub1, teardown := connectRelay(t, relay.Config{})
@@ -166,7 +166,7 @@ func TestPublish_ForwardedAliasDoesNotCollide(t *testing.T) {
 		Name:       []byte("rtp"),
 		TrackAlias: subReq.OK.TrackAlias, // the alias the subscriber already holds for cam1
 	})
-	// cam1 is already published, so its PUBLISH is forwarded too (§10.20), in
+	// cam1 is already published, so its PUBLISH is forwarded too (§3.6), in
 	// either order: register each forwarded alias until the rtp one's. This is
 	// the alias registration AcceptPublish performs, without its REQUEST_OK
 	// write: the relay does not yet read its end of a forwarded PUBLISH stream,
@@ -183,7 +183,7 @@ func TestPublish_ForwardedAliasDoesNotCollide(t *testing.T) {
 	t.Fatal("the rtp PUBLISH was not forwarded")
 }
 
-// TestSubscribeTracks_InvalidGroupOrderClosesSession pins §10.2.8: a
+// TestSubscribeTracks_InvalidGroupOrderClosesSession pins §9.20.8: a
 // SUBSCRIBE_TRACKS carrying a GROUP_ORDER outside {Ascending, Descending} is a
 // session-level PROTOCOL_VIOLATION, so the relay closes the whole session.
 func TestSubscribeTracks_InvalidGroupOrderClosesSession(t *testing.T) {
@@ -197,12 +197,12 @@ func TestSubscribeTracks_InvalidGroupOrderClosesSession(t *testing.T) {
 			message.GroupOrderParam(message.GroupOrder(0x07)), // out of range
 		},
 	})
-	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER SUBSCRIBE_TRACKS (§10.2.8)")
+	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER SUBSCRIBE_TRACKS (§9.20.8)")
 }
 
 // TestPublish_ForwardedPublishCarriesEntryLargestObject: a forwarded PUBLISH
 // carries the largest LARGEST_OBJECT the relay observed, not the upstream
-// PUBLISH's own (§10.2.17). Two publishers, the second with a lower value.
+// PUBLISH's own (§9.20.17). Two publishers, the second with a lower value.
 func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
 	t.Parallel()
 	pubA, teardown := connectRelay(t, relay.Config{})
@@ -218,7 +218,7 @@ func TestPublish_ForwardedPublishCarriesEntryLargestObject(t *testing.T) {
 		Parameters: message.Parameters{message.LargestObjectParam(3, 4)},
 	})
 
-	// Existing tracks are forwarded when the SUBSCRIBE_TRACKS arrives (§10.20).
+	// Existing tracks are forwarded when the SUBSCRIBE_TRACKS arrives (§3.6).
 	subSess := dialAnotherClient(t, pubA)
 	subscribeTracks(t, subSess, ns("video"))
 	pub := nextForwardedPublish(t, subSess)

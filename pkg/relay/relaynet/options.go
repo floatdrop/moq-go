@@ -28,7 +28,7 @@ type Option func(*quic.Config)
 // [DialQUIC] has no such guard and none is added here: the config goes straight
 // to quic-go, and a caller who disables DATAGRAM on a cross-relay leg owns the
 // consequence, which is that objects this relay would have sent as datagrams
-// (§11.3) stop crossing that hop with only a Debug line to show for it.
+// (§11.2) stop crossing that hop with only a Debug line to show for it.
 func WithQUICConfig(tune func(*quic.Config)) Option { return Option(tune) }
 
 // quicConfig applies opts to a fresh copy of the relay's default QUIC tuning.

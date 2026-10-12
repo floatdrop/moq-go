@@ -31,7 +31,7 @@ func answerRaw(t *testing.T, sess *session.Session, resp message.Message) {
 }
 
 // TestRedirectFollowable: a REDIRECT's Redirect reaches the requester on its
-// RequestRejectedError (§10.6.1), sent with Reject, and a Connect URI to the
+// RequestRejectedError (§9.4.1), sent with Reject, and a Connect URI to the
 // client or a Track Name for a SUBSCRIBE keeps the session open.
 func TestRedirectFollowable(t *testing.T) {
 	cli, srv := openPair(t)
@@ -65,7 +65,7 @@ func TestRedirectFollowable(t *testing.T) {
 
 // TestReceivedRedirectViolationCloses: a Redirect with a Connect URI received
 // by a server, or with a Track Name for a namespace-scoped request, closes the
-// session with PROTOCOL_VIOLATION (§10.6.1), on every path a REQUEST_ERROR is
+// session with PROTOCOL_VIOLATION (§9.4.1), on every path a REQUEST_ERROR is
 // read.
 func TestReceivedRedirectViolationCloses(t *testing.T) {
 	uri := message.Redirect{ConnectURI: []byte("https://other.example/moq")}
@@ -118,7 +118,7 @@ func TestReceivedRedirectViolationCloses(t *testing.T) {
 
 // TestReceivedRedirectViolationClosesOnUpdate: a Redirect carrying a Connect
 // URI on a server's request stream after the response closes the session
-// (§10.6.1): answering a REQUEST_UPDATE read by Update itself or routed by the
+// (§9.4.1): answering a REQUEST_UPDATE read by Update itself or routed by the
 // broker, or unsolicited, handed to Serve's callback.
 func TestReceivedRedirectViolationClosesOnUpdate(t *testing.T) {
 	for _, tc := range []struct {
@@ -156,7 +156,7 @@ func TestReceivedRedirectViolationClosesOnUpdate(t *testing.T) {
 }
 
 // TestRejectRefusesSessionFatalRedirect: Reject does not send a Redirect its
-// peer would have to close the session for (§10.6.1), so the request can still
+// peer would have to close the session for (§9.4.1), so the request can still
 // be refused another way.
 func TestRejectRefusesSessionFatalRedirect(t *testing.T) {
 	ns := wire.TrackNamespace{[]byte("ns")}
@@ -209,7 +209,7 @@ func TestRejectRefusesSessionFatalRedirect(t *testing.T) {
 }
 
 // TestUpdateHandlerRedirectSentAsInternalError: REDIRECT cannot answer a
-// REQUEST_UPDATE (§10.6.2), so an UpdateHandler's REDIRECT goes out as
+// REQUEST_UPDATE (§12.3), so an UpdateHandler's REDIRECT goes out as
 // INTERNAL_ERROR rather than as a REDIRECT the peer cannot parse, and both
 // sessions stay open.
 func TestUpdateHandlerRedirectSentAsInternalError(t *testing.T) {

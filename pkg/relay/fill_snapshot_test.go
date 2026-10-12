@@ -58,7 +58,7 @@ func fillStream(t *testing.T, sess *session.Session, d time.Duration) *session.I
 }
 
 // TestFill_EndsAtTheLargestObjectReported: the fill paired with a Next Object
-// filter "the publisher will end at Largest Object" (§5.1.3), the one its
+// filter "the publisher will end at Largest Object" (§3.4), the one its
 // SUBSCRIBE_OK reported. An Object arriving before the fill is evaluated goes
 // out live only, and with no Largest reported there is nothing to fill.
 func TestFill_EndsAtTheLargestObjectReported(t *testing.T) {

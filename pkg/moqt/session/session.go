@@ -1,6 +1,6 @@
 // Package session implements the MoQT session layer: SETUP handshake, control
 // stream multiplexing, request-ID allocation, and graceful termination via
-// GOAWAY (§3.3, §3.5, §10.3, §10.4 of draft-ietf-moq-transport-20).
+// GOAWAY (§6.3, §6.6, §9.1, §9.2 of draft-ietf-moq-transport-22).
 //
 // The package does not depend on a specific transport. It operates against the
 // Conn interface, which any QUIC-like transport can satisfy.
@@ -21,7 +21,7 @@ import (
 
 // role identifies whether this endpoint initiated (client) or accepted
 // (server) the underlying QUIC connection. role determines Request ID parity
-// per §10.1: client IDs are even, server IDs are odd. The type is unexported
+// per §6.4.2.1: client IDs are even, server IDs are odd. The type is unexported
 // because callers select a role by calling Client or Server rather than
 // passing a value.
 type role uint8
@@ -44,7 +44,7 @@ type Session struct {
 	peerOptions []wire.KVPair
 
 	// earlyData holds data streams that arrived before the peer's control
-	// stream (§3.3); see acceptControlStream.
+	// stream (§6.3); see acceptControlStream.
 	earlyMu   sync.Mutex
 	earlyData []ReceiveStream
 
@@ -54,10 +54,10 @@ type Session struct {
 	setupTokens       []ResolvedToken
 
 	// Outgoing Request ID allocator: client starts at 0 (even), server at 1
-	// (odd); each AllocRequestID advances by 2 (§10.1).
+	// (odd); each AllocRequestID advances by 2 (§6.4.2.1).
 	nextRequestID atomic.Uint64
 
-	// Outgoing Track Alias allocator. §11.1: aliases are scoped to the
+	// Outgoing Track Alias allocator. §3.1.3: aliases are scoped to the
 	// publisher → subscriber direction of one session, so each end keeps an
 	// independent counter for tracks it advertises to the peer. The first
 	// allocation is 1, not 0: AllocOutboundTrackAlias reserves 0 as the
@@ -82,7 +82,7 @@ type Session struct {
 	goawayHandler func(*message.Goaway)
 	goawayFired   bool
 
-	// Inbound Request ID tracking (§10.1). Protected by mu.
+	// Inbound Request ID tracking (§6.4.2.1). Protected by mu.
 	// peerRequestIDSeen is false until the first inbound Request ID arrives;
 	// peerRequestIDMax is the high-water mark. The peer allocates IDs in +2
 	// increments, but requests ride separate QUIC streams and can be
@@ -94,7 +94,7 @@ type Session struct {
 	peerRequestIDMax  uint64
 	peerRequestIDGaps map[uint64]struct{}
 
-	// Inbound Track Alias → track mapping (§11.1). Protected by mu.
+	// Inbound Track Alias → track mapping (§3.1.3). Protected by mu.
 	// Populated via RegisterInboundTrack when the peer assigns an alias
 	// (SUBSCRIBE_OK or PUBLISH). A duplicate alias for a different track is
 	// a DUPLICATE_TRACK_ALIAS session error.
@@ -113,11 +113,11 @@ type Session struct {
 	// WithKnownMandatoryTrackProperties. nil means none are known.
 	knownMandatoryTrackProperties map[message.PropertyType]struct{}
 
-	// tokenCache is the inbound authorization-token alias cache (§10.2.2).
+	// tokenCache is the inbound authorization-token alias cache (§8.9).
 	// AcceptRequest drives Register / Delete / Resolve on it from the
 	// AUTHORIZATION_TOKEN parameters of each inbound request. Always non-nil
 	// (sized 0 when MAX_AUTH_TOKEN_CACHE_SIZE was not negotiated, which
-	// prohibits aliasing per §10.3.1.3). The cache has its own internal
+	// prohibits aliasing per §9.1.3). The cache has its own internal
 	// mutex; it is not protected by mu.
 	tokenCache *TokenCache
 
@@ -128,12 +128,12 @@ type Session struct {
 
 	// maxRequestUpdates is the per-request-stream limit on unacknowledged
 	// inbound REQUEST_UPDATEs we advertised via MAX_REQUEST_UPDATES
-	// (§10.3.1.7). 0 means unlimited. Set once at construction via
+	// (§9.1.7). 0 means unlimited. Set once at construction via
 	// WithMaxRequestUpdates; read by NewRequestUpdateLimiter, so no lock.
 	maxRequestUpdates uint64
 
 	// maxFilterRanges is the total Range Filter range budget we advertised via
-	// MAX_FILTER_RANGES (§10.3.1.6). 0 prohibits Range Filters. Set once at
+	// MAX_FILTER_RANGES (§9.1.6). 0 prohibits Range Filters. Set once at
 	// construction via WithMaxFilterRanges; read via MaxFilterRanges(), no lock.
 	maxFilterRanges uint64
 
@@ -147,7 +147,7 @@ type Session struct {
 
 // Client performs the SETUP handshake from the client side (the initiator of
 // the underlying QUIC connection) and returns a ready Session. Request IDs on
-// this side are even (§10.1). If the handshake fails, conn is closed and the
+// this side are even (§6.4.2.1). If the handshake fails, conn is closed and the
 // error is returned. On success the caller owns the Session and must Close it.
 func Client(ctx context.Context, conn Conn, opts ...Option) (*Session, error) {
 	return open(ctx, conn, opts, roleClient)
@@ -155,7 +155,7 @@ func Client(ctx context.Context, conn Conn, opts ...Option) (*Session, error) {
 
 // Server performs the SETUP handshake from the server side (the acceptor of
 // the underlying QUIC connection) and returns a ready Session. Request IDs on
-// this side are odd (§10.1). Errors and ownership match Client.
+// this side are odd (§6.4.2.1). Errors and ownership match Client.
 func Server(ctx context.Context, conn Conn, opts ...Option) (*Session, error) {
 	return open(ctx, conn, opts, roleServer)
 }
@@ -169,7 +169,7 @@ func open(ctx context.Context, conn Conn, opts []Option, r role) (*Session, erro
 	s := &Session{
 		conn: conn,
 		role: r,
-		// Control-stream traffic is sparse (only GOAWAY after SETUP per §10
+		// Control-stream traffic is sparse (only GOAWAY after SETUP per §9
 		// table 5, and at most one outbound GOAWAY per session). A buffer of
 		// 1 lets a sender hand off while the previous frame is being written
 		// to the transport; anything larger just delays backpressure.
@@ -231,7 +231,7 @@ func (s *Session) PeerOptions() []wire.KVPair { return s.peerOptions }
 // the wtconn adapter in this repo, not a third-party WebTransport adapter that
 // stays silent.
 //
-// Deliberately not a Conn method: only the §10.3.1 PATH/AUTHORITY rules need
+// Deliberately not a Conn method: only the §9.1 PATH/AUTHORITY rules need
 // it, and per CLAUDE.md anything added to that interface must land in all three
 // adapters plus any external one.
 type webTransportConn interface {
@@ -243,8 +243,8 @@ func overWebTransport(conn Conn) bool {
 	return ok && wt.IsWebTransport()
 }
 
-// checkOutboundSetupOptions enforces the send side of PATH (§10.3.1.2) and
-// AUTHORITY (§10.3.1.1). Each says the option "MUST NOT be used by the server,
+// checkOutboundSetupOptions enforces the send side of PATH (§9.1.2) and
+// AUTHORITY (§9.1.1). Each says the option "MUST NOT be used by the server,
 // or when WebTransport is used" — so unlike checkPeerSetupOptions, which
 // handles what a peer did to us, this catches what we are about to do to a
 // peer, before the SETUP goes out.
@@ -270,11 +270,11 @@ func checkOutboundSetupOptions(r role, conn Conn, opts []wire.KVPair) error {
 			continue
 		}
 		if r == roleServer {
-			return fmt.Errorf("moqt/session: %s setup option is client-only (§10.3.1)", name)
+			return fmt.Errorf("moqt/session: %s setup option is client-only (§9.1)", name)
 		}
 		if overWebTransport(conn) {
 			return fmt.Errorf(
-				"moqt/session: %s setup option must not be used on a WebTransport session (§10.3.1); "+
+				"moqt/session: %s setup option must not be used on a WebTransport session (§9.1); "+
 					"HTTP/3 carries the path and authority in the CONNECT request", name)
 		}
 	}
@@ -285,12 +285,12 @@ func checkOutboundSetupOptions(r role, conn Conn, opts []wire.KVPair) error {
 	return nil
 }
 
-// checkPeerSetupOptions enforces the receive side of the PATH (§10.3.1.2) and
-// AUTHORITY (§10.3.1.1) setup options. Each names three conditions under which
+// checkPeerSetupOptions enforces the receive side of the PATH (§9.1.2) and
+// AUTHORITY (§9.1.1) setup options. Each names three conditions under which
 // a received option MUST close the session — it came from a server, it arrived
 // on a WebTransport session, or the server does not support the value — with
 // INVALID_PATH and INVALID_AUTHORITY respectively, whose numeric values come
-// from the §3.5 registry. Returns that close code and the reason, or a nil
+// from the §12.2 registry. Returns that close code and the reason, or a nil
 // error when the peer's options are acceptable.
 //
 // The first two are enforced. The third is not: it needs the server to be told
@@ -299,7 +299,7 @@ func checkOutboundSetupOptions(r role, conn Conn, opts []wire.KVPair) error {
 //
 // Note the asymmetry with the role gate. A server ignores these options over
 // native QUIC because receiving them there is precisely what they are for; it
-// must still reject them over WebTransport, where §10.3.1 forbids them
+// must still reject them over WebTransport, where §9.1 forbids them
 // outright and HTTP/3 carries the same information in the CONNECT request.
 func (s *Session) checkPeerSetupOptions() (moqt.SessionErrorCode, error) {
 	overWT := overWebTransport(s.conn)
@@ -309,9 +309,9 @@ func (s *Session) checkPeerSetupOptions() (moqt.SessionErrorCode, error) {
 	violation := func(name string) error {
 		if overWT {
 			return fmt.Errorf(
-				"peer sent a %s setup option on a WebTransport session (§10.3.1)", name)
+				"peer sent a %s setup option on a WebTransport session (§9.1)", name)
 		}
-		return fmt.Errorf("server sent a %s setup option, which is client-only (§10.3.1)", name)
+		return fmt.Errorf("server sent a %s setup option, which is client-only (§9.1)", name)
 	}
 	for _, opt := range s.peerOptions {
 		switch message.SetupOption(opt.Type) {
@@ -325,17 +325,17 @@ func (s *Session) checkPeerSetupOptions() (moqt.SessionErrorCode, error) {
 			message.SetupOptionMOQTImplementation,
 			message.SetupOptionMaxRequestUpdates:
 			// Legal in both directions. Listed rather than folded into the
-			// default so that adding a §10.3.1 option fails the exhaustive
+			// default so that adding a §9.1 option fails the exhaustive
 			// linter until someone decides whether a server may send it.
 		default:
-			// §10.3 requires a receiver ignore options it does not recognize.
+			// §9.1 requires a receiver ignore options it does not recognize.
 		}
 	}
 	return moqt.SessionNoError, nil
 }
 
-// checkPathAndAuthoritySyntax checks PATH (§10.3.1.2) and AUTHORITY
-// (§10.3.1.1) against RFC 3986, returning MALFORMED_PATH or
+// checkPathAndAuthoritySyntax checks PATH (§9.1.2) and AUTHORITY
+// (§9.1.1) against RFC 3986, returning MALFORMED_PATH or
 // MALFORMED_AUTHORITY as the close code.
 func checkPathAndAuthoritySyntax(opts []wire.KVPair) (moqt.SessionErrorCode, error) {
 	for _, opt := range opts {
@@ -360,12 +360,12 @@ func checkPathAndAuthoritySyntax(opts []wire.KVPair) (moqt.SessionErrorCode, err
 }
 
 // MaxFilterRanges returns the MAX_FILTER_RANGES value this session advertised
-// (§10.3.1.6) — the total Range Filter range budget it will accept on any one
+// (§9.1.6) — the total Range Filter range budget it will accept on any one
 // subscription or fetch. 0 prohibits Range Filters. The relay enforces this
 // when validating a request's Range Filters against [message.RangeFilterSet.Validate].
 func (s *Session) MaxFilterRanges() uint64 { return s.maxFilterRanges }
 
-// AllocRequestID returns the next outbound Request ID per §10.1.
+// AllocRequestID returns the next outbound Request ID per §6.4.2.1.
 func (s *Session) AllocRequestID() uint64 {
 	return s.nextRequestID.Add(2) - 2
 }
@@ -373,7 +373,7 @@ func (s *Session) AllocRequestID() uint64 {
 // Done returns a channel that is closed when the session has terminated.
 func (s *Session) Done() <-chan struct{} { return s.done }
 
-// Err returns the close cause — a *ClosedError carrying the §3.5
+// Err returns the close cause — a *ClosedError carrying the §12.2
 // error code and reason of the first Close call — or nil when the session
 // was closed cleanly (SessionNoError) or is still open. The value is
 // published before Done is closed, so the natural pattern
@@ -399,7 +399,7 @@ func (e *ClosedError) Error() string {
 }
 
 // Close terminates the session, cancelling the control streams and closing
-// the underlying connection with the given code (§3.5). Calling Close more
+// the underlying connection with the given code (§6.6). Calling Close more
 // than once is safe; only the first call's code takes effect. The returned
 // error is the transport's close error (nil in the common case), NOT the
 // close cause — that is what [Session.Err] reports.
@@ -413,7 +413,7 @@ func (s *Session) Close(code moqt.SessionErrorCode, reason string) error {
 		}
 		close(s.done)
 		// CancelRead first so the recv loop unblocks. The control stream
-		// must not be FIN'd cleanly during session lifetime (§3.3); we
+		// must not be FIN'd cleanly during session lifetime (§6.3); we
 		// reset both directions instead.
 		if s.recvCtrl != nil {
 			s.recvCtrl.CancelRead(uint64(moqt.StreamResetSessionClosed))

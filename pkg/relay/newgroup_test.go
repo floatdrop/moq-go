@@ -19,7 +19,7 @@ func newGroupReqValue(ps message.Parameters) (uint64, bool) {
 
 // TestNewGroupRequest_ForwardedUpstreamOnUpdate: a NEW_GROUP_REQUEST in a
 // downstream REQUEST_UPDATE on a DYNAMIC_GROUPS track reaches the publisher
-// (§10.2.19).
+// (§9.20.19).
 func TestNewGroupRequest_ForwardedUpstreamOnUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -139,7 +139,7 @@ func TestNewGroupRequest_BackToBackUpdatesSurvive(t *testing.T) {
 	}
 }
 
-// TestNewGroupRequest_NotForwardedWithoutDynamicGroups verifies the §10.2.13
+// TestNewGroupRequest_NotForwardedWithoutDynamicGroups verifies the §9.20.13
 // unless-clause 1: a track that does not advertise DYNAMIC_GROUPS=1 does not
 // get a NEW_GROUP_REQUEST forwarded upstream even when a subscriber asks.
 func TestNewGroupRequest_NotForwardedWithoutDynamicGroups(t *testing.T) {

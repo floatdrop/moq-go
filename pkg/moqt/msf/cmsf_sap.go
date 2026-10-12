@@ -34,7 +34,7 @@ func (r SAPRecord) validate() error {
 	// that every Group begin with a SAP type 1 or 2 Object.
 	//
 	// Object ID 0 is the only first-in-Group case a single record can
-	// prove: [MoQTransport] §2.1 lets Object IDs start above 0 and skip
+	// prove: [MoQTransport] §2.1.2 lets Object IDs start above 0 and skip
 	// values, so a Group whose first Object is, say, 5 is
 	// indistinguishable here from a mid-Group record. Checking it would
 	// need the whole Group, and a timeline document may legitimately

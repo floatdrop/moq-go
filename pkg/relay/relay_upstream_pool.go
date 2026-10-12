@@ -47,7 +47,7 @@ type upstreamPool struct {
 	// fanIn optionally caps how many rendezvous-ranked upstreams
 	// resolveUpstreams subscribes to per namespace (Config.UpstreamFanIn).
 	// Zero (or negative) means unbounded — fan in to every advertiser, the
-	// §9.5 default.
+	// §7.6 default.
 	fanIn int
 
 	mu      sync.Mutex
@@ -115,11 +115,11 @@ func newUpstreamPool(cfg upstreamPoolConfig) *upstreamPool {
 // relay-to-relay stream count stays bounded instead of trending toward a full
 // O(n²) mesh — a tree rooted at ns's highest-weighted relays.
 //
-// §9.5 requires subscribing to every matching publisher (the fanout then dedups
+// §7.6 requires subscribing to every matching publisher (the fanout then dedups
 // the redundant copies they push), so fanIn == 0 (the default) fans into all of
 // them. A positive fanIn (Config.UpstreamFanIn) is an opt-in deviation: it
 // bounds the subscription to the top fanIn ranked upstreams — 1 is a pure tree,
-// 2 keeps one backup — trading the §9.5 fan-in for a bounded relay mesh. That is
+// 2 keeps one backup — trading the §7.6 fan-in for a bounded relay mesh. That is
 // only sound where the advertisers are redundant sources of the same objects,
 // never where different relays hold distinct objects for the track. Candidates
 // are dialled in rank order and, when bounded, the first fanIn that connect are
@@ -128,7 +128,7 @@ func newUpstreamPool(cfg upstreamPoolConfig) *upstreamPool {
 //
 // Returns nil when Discovery knows no usable remote (none advertised, only this
 // relay itself, or every candidate failed to dial). draining reports whether a
-// candidate was skipped for having sent GOAWAY (§10.4), which the caller
+// candidate was skipped for having sent GOAWAY (§9.2), which the caller
 // answers as it would a draining publisher. Discovery-lookup and
 // per-peer dial failures are logged and treated as "skip that candidate" —
 // consistent with the best-effort advertise side: the local registry / a clean
@@ -181,7 +181,7 @@ func (p *upstreamPool) resolveUpstreams(
 			continue // fall through to the next-ranked relay
 		}
 		if goingAway(sess) {
-			// §10.4: a draining relay takes no new requests, so it must not
+			// §9.2: a draining relay takes no new requests, so it must not
 			// hold a fan-in slot.
 			draining = true
 			continue
@@ -316,7 +316,7 @@ func (p *upstreamPool) dial(relayAddr string) (*session.Session, error) {
 // stopDialing blocks any further upstream dial, leaving sessions already
 // established running. [Relay.Stop] calls it as shutdown begins: starting a new
 // cross-relay subscription while draining is pointless, but tearing the live ones
-// down is "unsubscribing from upstream publishers", which §3.6 says SHOULD happen
+// down is "unsubscribing from upstream publishers", which §6.6.1 says SHOULD happen
 // only after the downstream GOAWAY has gone out — so that half is [upstreamPool.close].
 func (p *upstreamPool) stopDialing() {
 	p.mu.Lock()
@@ -327,7 +327,7 @@ func (p *upstreamPool) stopDialing() {
 // close cancels the pool's base context, unwinding any in-flight dial and the
 // handler loops of dialled sessions. This is the "unsubscribe from upstream"
 // step, so [Relay.Stop] calls it only after the GOAWAY broadcast and drain
-// (§3.6).
+// (§6.6.1).
 func (p *upstreamPool) close() {
 	p.cancelBase()
 }

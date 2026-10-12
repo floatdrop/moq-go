@@ -12,7 +12,7 @@ import (
 )
 
 // TestRelay_NoRequestsToPeerSentGoaway: once the relay has sent a publisher
-// GOAWAY it avoids initiating requests to it (§10.4: "the sender SHOULD avoid
+// GOAWAY it avoids initiating requests to it (§9.2: "the sender SHOULD avoid
 // initiating requests unless required by migration"), so a SUBSCRIBE that
 // needs that publisher is refused with GOING_AWAY rather than sent upstream.
 func TestRelay_NoRequestsToPeerSentGoaway(t *testing.T) {

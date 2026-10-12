@@ -8,7 +8,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// RequestUpdate is the REQUEST_UPDATE message (§10.9).
+// RequestUpdate is the REQUEST_UPDATE message (§9.5).
 type RequestUpdate struct {
 	RequestID  uint64
 	Parameters Parameters
@@ -32,7 +32,7 @@ func (m *RequestUpdate) Parse(r *wire.Reader) error {
 	return m.Parameters.parse(r)
 }
 
-// RequestOK is the REQUEST_OK message (§10.5). Track Properties are populated
+// RequestOK is the REQUEST_OK message (§9.3). Track Properties are populated
 // when used as a TRACK_STATUS_OK response and empty otherwise (PUBLISH, REQUEST_UPDATE).
 type RequestOK struct {
 	Parameters      Parameters
@@ -54,14 +54,14 @@ func (m *RequestOK) Parse(r *wire.Reader) error {
 	return nil
 }
 
-// Redirect carries the optional redirect payload of REQUEST_ERROR (§10.6.1).
+// Redirect carries the optional redirect payload of REQUEST_ERROR (§9.4.1).
 type Redirect struct {
 	ConnectURI []byte
 	Namespace  wire.TrackNamespace
 	TrackName  []byte
 }
 
-// RequestError is the REQUEST_ERROR message (§10.6.2). Redirect is non-nil
+// RequestError is the REQUEST_ERROR message (§9.4.2). Redirect is non-nil
 // when ErrorCode is REDIRECT.
 type RequestError struct {
 	ErrorCode     moqt.RequestErrorCode
@@ -107,7 +107,7 @@ func (m *RequestError) Parse(r *wire.Reader) error {
 	return nil
 }
 
-// Validate enforces the §10.6.2 REQUEST_ERROR invariants. It is invoked
+// Validate enforces the §9.4.2 REQUEST_ERROR invariants. It is invoked
 // automatically by [ParsePayload] after decode, so a malformed REQUEST_ERROR
 // (REDIRECT code without a Redirect block, or vice versa) is rejected at the
 // parse boundary rather than reaching the session layer.
@@ -115,7 +115,7 @@ func (m *RequestError) Validate() error {
 	return m.ValidateRedirect()
 }
 
-// ValidateRedirect enforces the §10.6.2 constraints: the Redirect block MUST
+// ValidateRedirect enforces the §9.4.2 constraints: the Redirect block MUST
 // be present when ErrorCode is REDIRECT, and MUST NOT be present otherwise.
 // It is the implementation behind [RequestError.Validate]; callers may also
 // invoke it directly.

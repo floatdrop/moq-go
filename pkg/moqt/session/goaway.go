@@ -22,7 +22,7 @@ func (s *Session) PeerGoaway() *message.Goaway {
 
 // OnGoaway registers a callback invoked exactly once when the first GOAWAY
 // arrives from the peer, passing the parsed message (whose NewSessionURI and
-// Timeout drive client-side session migration per §3.6/§10.4). The handler
+// Timeout drive client-side session migration per §6.6.1/§9.2). The handler
 // runs in its own goroutine so it must not assume any ordering with other
 // session activity, and it may safely block (e.g. to dial a new session and
 // re-issue subscriptions) without stalling the control-receive loop.
@@ -56,7 +56,7 @@ func (s *Session) OnGoaway(handler func(*message.Goaway)) {
 // to the draining state. newURI may be empty; timeout is the grace period
 // before the local side may forcibly close the session with GOAWAY_TIMEOUT.
 // Returns an error if GOAWAY has already been sent, or if the local role is
-// client and newURI is non-empty (§10.4: "A client MUST send a zero-length
+// client and newURI is non-empty (§9.2: "A client MUST send a zero-length
 // New Session URI in any GOAWAY").
 func (s *Session) SendGoaway(timeout time.Duration, newURI string) error {
 	if s.role == roleClient && newURI != "" {
@@ -79,7 +79,7 @@ func (s *Session) SendGoaway(timeout time.Duration, newURI string) error {
 }
 
 // GoawaySent reports whether [Session.SendGoaway] was called: the session is
-// draining, and §10.4 says its sender "SHOULD avoid initiating requests unless
+// draining, and §9.2 says its sender "SHOULD avoid initiating requests unless
 // required by migration".
 func (s *Session) GoawaySent() bool {
 	s.mu.Lock()
@@ -88,7 +88,7 @@ func (s *Session) GoawaySent() bool {
 }
 
 // handleGoaway records a received GOAWAY and notifies any waiter on
-// GoawayReceived. §10.4: a second GOAWAY on the same control stream MUST
+// GoawayReceived. §9.2: a second GOAWAY on the same control stream MUST
 // terminate the session with PROTOCOL_VIOLATION.
 func (s *Session) handleGoaway(m *message.Goaway) error {
 	s.mu.Lock()
@@ -118,7 +118,7 @@ func (s *Session) handleGoaway(m *message.Goaway) error {
 	return nil
 }
 
-// checkGoawayURI enforces §10.4 "If a server receives a GOAWAY with a
+// checkGoawayURI enforces §9.2 "If a server receives a GOAWAY with a
 // non-zero New Session URI Length it MUST close the session with a
 // PROTOCOL_VIOLATION": a client cannot direct a server to migrate.
 func (s *Session) checkGoawayURI(m *message.Goaway) error {
@@ -128,7 +128,7 @@ func (s *Session) checkGoawayURI(m *message.Goaway) error {
 	return nil
 }
 
-// RequestGoaways checks the GOAWAYs one request stream carries (§10.4): "The
+// RequestGoaways checks the GOAWAYs one request stream carries (§9.2): "The
 // endpoint MUST close the session with a PROTOCOL_VIOLATION ... if it receives
 // more than one GOAWAY on the control stream or on a single request stream",
 // and a server closes on one carrying a New Session URI. The zero value is

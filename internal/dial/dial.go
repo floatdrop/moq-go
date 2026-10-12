@@ -1,6 +1,6 @@
 // Package dial provides the shared raw-QUIC MOQT client dial used by the
 // demo and interop CLIs: one TLS/QUIC configuration, moqt:// URI support
-// with the AUTHORITY / PATH Setup Options (§10.3.1.1, §10.3.1.2), and the MOQT handshake.
+// with the AUTHORITY / PATH Setup Options (§9.1.1, §9.1.2), and the MOQT handshake.
 // Keeping it in one place stops the per-binary copies from drifting (the
 // interop client's copy had lost the AUTHORITY/PATH options entirely).
 package dial
@@ -23,9 +23,9 @@ import (
 type Options struct {
 	// Implementation is the SETUP IMPLEMENTATION value ("name/version").
 	Implementation string
-	// ALPN is the NextProtos list offered; defaults to ["moqt-20"] (§3.1: the
+	// ALPN is the NextProtos list offered; defaults to ["moqt-20"] (§6.2: the
 	// "moqt-NN" ALPN is the draft-version signal — SETUP has no version
-	// field, §10.3).
+	// field, §9.1).
 	ALPN []string
 	// InsecureSkipVerify disables TLS certificate verification (dev/demo
 	// relays with self-signed certificates).
@@ -34,9 +34,9 @@ type Options struct {
 	SessionOptions []session.Option
 }
 
-// QUIC dials addr — a bare host:port or a moqt:// URI (§3.1.1) — and
+// QUIC dials addr — a bare host:port or a moqt:// URI (§6.1) — and
 // completes the MOQT client handshake. For a URI, the authority and
-// path/query are carried in the AUTHORITY / PATH Setup Options: §10.3.1.1
+// path/query are carried in the AUTHORITY / PATH Setup Options: §9.1.1
 // says the client MUST set AUTHORITY to the URI's authority portion.
 func QUIC(ctx context.Context, addr string, o Options) (*session.Session, error) {
 	hostPort := addr
@@ -67,7 +67,7 @@ func QUIC(ctx context.Context, addr string, o Options) (*session.Session, error)
 		MaxIdleTimeout:                   30 * time.Second,
 		KeepAlivePeriod:                  5 * time.Second,
 		EnableDatagrams:                  true,
-		EnableStreamResetPartialDelivery: true, // §11.4.3 RESET_STREAM_AT
+		EnableStreamResetPartialDelivery: true, // §11.3.2 RESET_STREAM_AT
 	}
 	// quicconn.Dial, not quic.DialAddr: it resolves a hostname to every address
 	// in RFC 6724 order and tries each, where quic.DialAddr would silently take

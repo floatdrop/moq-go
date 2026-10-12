@@ -69,7 +69,7 @@ func stopCloseCode(t *testing.T, goaway, stopWithin time.Duration) moqt.SessionE
 }
 
 // TestStopClosesWithGoawayTimeoutOnlyAfterGoaway: GOAWAY_TIMEOUT means "the
-// peer took too long to close the session in response to a GOAWAY" (§3.5), so
+// peer took too long to close the session in response to a GOAWAY" (§12.2), so
 // the relay closes with it only when it sent a GOAWAY and the grace period
 // ran out; otherwise NO_ERROR.
 func TestStopClosesWithGoawayTimeoutOnlyAfterGoaway(t *testing.T) {

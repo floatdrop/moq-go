@@ -1,12 +1,12 @@
 // Package wire implements MoQT wire-format primitives per
-// draft-ietf-moq-transport-20: variable-length integers (§1.4.1, up to 2^64-1),
-// reason phrases (§1.4.4), track namespaces (§2.4.1), key-value pairs used in
-// SETUP options (§1.4.3, §10.3.1), and control-message framing (§10).
+// draft-ietf-moq-transport-22: variable-length integers (§8.1, up to 2^64-1),
+// reason phrases (§8.5), track namespaces (§8.7), key-value pairs used in
+// SETUP options (§8.3, §9.1), and control-message framing (§9).
 //
 // Encoding follows an append-style: builders accumulate bytes into a Writer.
 // Decoding uses a stateful Reader bounded by an input buffer; running past the
 // buffer yields ErrShortBuffer, which the message layer maps to a session-level
-// PROTOCOL_VIOLATION (§3.5).
+// PROTOCOL_VIOLATION (§12.2).
 //
 // For streaming decoding (e.g. data uni-streams), use StreamReader which wraps
 // an io.Reader and exposes the same Decoder interface as Reader.
@@ -25,7 +25,7 @@ var ErrShortBuffer = errors.New("moqt/wire: short buffer")
 
 // ErrFieldTooLarge is returned by StreamReader when a length-prefixed field
 // claims more bytes than [MaxStreamFieldSize]. Callers should treat it as a
-// malformed message (PROTOCOL_VIOLATION, §3.5).
+// malformed message (PROTOCOL_VIOLATION, §12.2).
 var ErrFieldTooLarge = errors.New("moqt/wire: field exceeds maximum size")
 
 // MaxStreamFieldSize bounds a single length-prefixed field (object payload,
@@ -56,7 +56,7 @@ func (r *Reader) Remaining() int { return len(r.buf) - r.off }
 // Empty reports whether the reader has consumed all bytes.
 func (r *Reader) Empty() bool { return r.off >= len(r.buf) }
 
-// Varint reads a MoQT leading-ones varint (§1.4.1, 1–9 bytes).
+// Varint reads a MoQT leading-ones varint (§8.1, 1–9 bytes).
 func (r *Reader) Varint() (uint64, error) {
 	v, n, err := ParseVarint(r.buf[r.off:])
 	if err != nil {
@@ -121,7 +121,7 @@ func (r *Reader) varintBytes(copyBytes bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// §1.4.1 varints reach 2^64-1: bound n before the int conversion.
+	// §8.1 varints reach 2^64-1: bound n before the int conversion.
 	if n > uint64(r.Remaining()) { //nolint:gosec // G115: Remaining() is len(buf)-off >= 0.
 		return nil, ErrShortBuffer
 	}
@@ -134,7 +134,7 @@ func (r *Reader) varintBytes(copyBytes bool) ([]byte, error) {
 	return b, nil
 }
 
-// ReasonPhrase reads a varint-length-prefixed UTF-8 string per §1.4.4. The
+// ReasonPhrase reads a varint-length-prefixed UTF-8 string per §8.5. The
 // maximum allowed length is 1024 bytes; exceeding this yields an error that
 // the caller should map to PROTOCOL_VIOLATION.
 func (r *Reader) ReasonPhrase() (string, error) {
@@ -168,7 +168,7 @@ func (w *Writer) Bytes() []byte { return w.buf }
 // Reset clears the writer's buffer, allowing it to be reused.
 func (w *Writer) Reset() { w.buf = w.buf[:0] }
 
-// Varint appends a MoQT leading-ones varint (§1.4.1).
+// Varint appends a MoQT leading-ones varint (§8.1).
 func (w *Writer) Varint(v uint64) { w.buf = AppendVarint(w.buf, v) }
 
 // UInt8 appends a single byte.
@@ -183,11 +183,11 @@ func (w *Writer) VarintBytes(p []byte) {
 	w.FixedBytes(p)
 }
 
-// MaxReasonPhraseBytes is the §1.4.4 cap on an encoded reason phrase. [Reader]
+// MaxReasonPhraseBytes is the §8.5 cap on an encoded reason phrase. [Reader]
 // rejects anything longer, and [Writer.ReasonPhrase] truncates to it.
 const MaxReasonPhraseBytes = 1024
 
-// ReasonPhrase appends a reason phrase per §1.4.4, truncating to
+// ReasonPhrase appends a reason phrase per §8.5, truncating to
 // [MaxReasonPhraseBytes].
 //
 // Truncating rather than encoding as-is because a Writer method has no way to
@@ -198,7 +198,7 @@ const MaxReasonPhraseBytes = 1024
 // PUBLISH_ERROR carry one built from a token verifier's error text, and a
 // third-party [TokenVerifier] can return a string of any length.
 //
-// The cut lands on a rune boundary, since §1.4.4 specifies UTF-8 and slicing
+// The cut lands on a rune boundary, since §8.5 specifies UTF-8 and slicing
 // mid-rune would produce a phrase the peer decodes as replacement characters.
 func (w *Writer) ReasonPhrase(s string) {
 	if len(s) > MaxReasonPhraseBytes {
@@ -242,7 +242,7 @@ func NewStreamReader(r io.Reader) *StreamReader {
 	return &StreamReader{r: r, qr: NewByteReader(r)}
 }
 
-// Varint reads a MoQT leading-ones varint (§1.4.1) from the underlying stream.
+// Varint reads a MoQT leading-ones varint (§8.1) from the underlying stream.
 func (s *StreamReader) Varint() (uint64, error) {
 	return ReadVarint(s.qr)
 }
@@ -275,7 +275,7 @@ func (s *StreamReader) VarintBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	// §1.4.1 varints reach 2^64-1: bound n before the int conversion.
+	// §8.1 varints reach 2^64-1: bound n before the int conversion.
 	if n > uint64(MaxStreamFieldSize) { //nolint:gosec // G115: a size cap, never negative.
 		return nil, fmt.Errorf("%w: %d > %d", ErrFieldTooLarge, n, MaxStreamFieldSize)
 	}

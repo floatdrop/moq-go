@@ -8,7 +8,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// FetchObject represents a single object in a FETCH response stream per §11.4.4.
+// FetchObject represents a single object in a FETCH response stream per §11.4.1.
 type FetchObject struct {
 	// SerializationFlags control which fields are present and how they're encoded.
 	SerializationFlags uint64
@@ -23,7 +23,7 @@ type FetchObject struct {
 
 	// ObjectIDDelta is the delta from the previous Object ID (no +1), or the
 	// absolute Object ID on the first object and whenever GroupIDDelta is
-	// present (§11.4.4.1). Present when the
+	// present (§11.4.1.1). Present when the
 	// FetchFlagObjectIDDelta bit (0x04) is set.
 	ObjectIDDelta uint64
 
@@ -34,13 +34,13 @@ type FetchObject struct {
 	Properties []byte
 
 	// ObjectPayload is always present, encoded on the wire with a varint
-	// length prefix (§11.4.4 Figure 28). FETCH objects carry no Object
-	// Status field (§11.2.1.1); absent ranges are expressed with the
+	// length prefix (§11.4.1 Figure 29). FETCH objects carry no Object
+	// Status field (§11.1.1); absent ranges are expressed with the
 	// end-of-range markers instead.
 	ObjectPayload []byte
 }
 
-// Serialization flag bits per §11.4.4.1 (Table 8 & 9).
+// Serialization flag bits per §11.4.1.1 (Table 9 & 10).
 //
 // Bits 0–1 (mask 0x03): Subgroup ID mode — see FetchSubgroupIDMode.
 // Bit 2  (0x04): Object ID Delta present.
@@ -68,7 +68,7 @@ const (
 	FetchSubgroupIDExplicit     FetchSubgroupIDMode = 0x03 // Subgroup ID field is present
 )
 
-// End of range markers per §11.4.4.2. Each stands for every Object between
+// End of range markers per §11.4.1.2. Each stands for every Object between
 // the previously serialized one and the Location this marker carries.
 const (
 	FetchEndOfNonExistentRange = 0x8C  // End of Non-Existent Range
@@ -76,7 +76,7 @@ const (
 	FetchEndOfTimedOutRange    = 0x20C // End of Timed-Out Range (draft-20)
 )
 
-// isEndOfRange reports whether flags is any of the three §11.4.4.2 end-of-range
+// isEndOfRange reports whether flags is any of the three §11.4.1.2 end-of-range
 // markers, which share a wire shape: Group ID and Object ID follow the flags
 // varint, and Subgroup ID, Priority and Properties are all absent.
 func isEndOfRange(flags uint64) bool {
@@ -94,7 +94,7 @@ func isEndOfRange(flags uint64) bool {
 // For normal objects, the payload is length-prefixed (varint + bytes).
 func (o *FetchObject) Append(w *wire.Writer) {
 	flags := o.SerializationFlags
-	// §11.4.4.1: when the Datagram bit is set the publisher "SHOULD set the
+	// §11.4.1.1: when the Datagram bit is set the publisher "SHOULD set the
 	// two least significant bits to zero"; mask them so hand-built flag
 	// combinations stay conformant on the wire.
 	if flags&FetchFlagDatagram != 0 && flags < 128 {
@@ -102,7 +102,7 @@ func (o *FetchObject) Append(w *wire.Writer) {
 	}
 	w.Varint(flags)
 
-	// End-of-range markers: Group ID and Object ID are always present (§11.4.4.2).
+	// End-of-range markers: Group ID and Object ID are always present (§11.4.1.2).
 	if isEndOfRange(o.SerializationFlags) {
 		w.Varint(o.GroupIDDelta)  // used as absolute Group ID for end-of-range
 		w.Varint(o.ObjectIDDelta) // used as absolute Object ID for end-of-range
@@ -129,7 +129,7 @@ func (o *FetchObject) Append(w *wire.Writer) {
 		w.VarintBytes(o.Properties)
 	}
 
-	// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 28.
+	// Object Payload Length (vi64) + Object Payload (..) per §11.4.1 Figure 29.
 	w.VarintBytes(o.ObjectPayload)
 }
 
@@ -138,7 +138,7 @@ func (o *FetchObject) Append(w *wire.Writer) {
 // been consumed, so a FIN is a truncated object, not a clean end-of-stream.
 // Callers (e.g. the relay's upstream stitcher) rely on that distinction to
 // tell "the sender FIN'd between objects, vouching for the rest of the range
-// (§11.4.4)" from "the response broke off mid-object".
+// (§11.4.1)" from "the response broke off mid-object".
 func truncated(err error) error {
 	if errors.Is(err, io.EOF) {
 		return io.ErrUnexpectedEOF
@@ -159,7 +159,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 		return err
 	}
 
-	// End-of-range markers: Group ID and Object ID follow (§11.4.4.2).
+	// End-of-range markers: Group ID and Object ID follow (§11.4.1.2).
 	if isEndOfRange(flags) {
 		groupID, err := r.Varint()
 		if err != nil {
@@ -215,7 +215,7 @@ func (o *FetchObject) Parse(r wire.Decoder) error {
 		o.Properties = props
 	}
 
-	// Object Payload Length (vi64) + Object Payload (..) per §11.4.4 Figure 28.
+	// Object Payload Length (vi64) + Object Payload (..) per §11.4.1 Figure 29.
 	payload, err := r.VarintBytes()
 	if err != nil {
 		return truncated(err)
@@ -239,13 +239,13 @@ func (o *FetchObject) IsEndOfUnknownRange() bool {
 
 // IsEndOfTimedOutRange reports whether this is an End of Timed-Out Range marker
 // (0x20C): the Objects it covers were abandoned when FILL_TIMEOUT expired
-// (§10.2.5), as opposed to being known absent (0x8C) or of unknown status
+// (§9.20.5), as opposed to being known absent (0x8C) or of unknown status
 // (0x10C).
 func (o *FetchObject) IsEndOfTimedOutRange() bool {
 	return o.SerializationFlags == FetchEndOfTimedOutRange
 }
 
-// IsEndOfRange reports whether this is any §11.4.4.2 end-of-range marker rather
+// IsEndOfRange reports whether this is any §11.4.1.2 end-of-range marker rather
 // than a serialized Object.
 func (o *FetchObject) IsEndOfRange() bool { return isEndOfRange(o.SerializationFlags) }
 
@@ -257,7 +257,7 @@ func (o *FetchObject) IsDatagram() bool {
 
 // hasSubgroupIDField reports whether a Subgroup ID field is present on the
 // wire: the subgroup mode must be Explicit AND the Datagram bit must be
-// clear — §11.4.4.1 Table 9 says 0x40 means "ignore the two least
+// clear — §11.4.1.1 Table 10 says 0x40 means "ignore the two least
 // significant bits". Shared by Append and Parse so the encoder and decoder
 // cannot disagree on field presence.
 func (o *FetchObject) hasSubgroupIDField() bool {
@@ -272,14 +272,14 @@ func (o *FetchObject) SubgroupMode() FetchSubgroupIDMode {
 // Validate checks the fetch object for protocol violations.
 func (o *FetchObject) Validate() error {
 	// Note: 0x40 with non-zero subgroup-mode LSBs stays valid — the publisher
-	// only SHOULD zero them and the subscriber MUST ignore them (§11.4.4.1),
+	// only SHOULD zero them and the subscriber MUST ignore them (§11.4.1.1),
 	// so rejecting the combination would itself be non-conformant.
 	return checkFetchFlags(o.SerializationFlags)
 }
 
 // ErrInvalidFetchFlags is a Serialization Flags value of 128 or more that is
 // not an End of Range marker: "Any other value is a PROTOCOL_VIOLATION"
-// (§11.4.4). [FetchObject.Parse] returns it right after the flags.
+// (§11.4.1). [FetchObject.Parse] returns it right after the flags.
 var ErrInvalidFetchFlags = errors.New("moqt/message: invalid fetch object serialization flags")
 
 func checkFetchFlags(flags uint64) error {

@@ -40,7 +40,7 @@ func (c *stragglerCodeConn) CloseWithError(code uint64, reason string) error {
 // TestRelay_addSessionDrainsStraggler: a session registered after Stop took its
 // snapshot still goes through GOAWAY, grace and force-close, via
 // addSession's drainStraggler. It closes with GOAWAY_TIMEOUT only when it was
-// sent a GOAWAY and the grace period ran out (§3.5), and NO_ERROR when no
+// sent a GOAWAY and the grace period ran out (§12.2), and NO_ERROR when no
 // GOAWAY is configured or Stop's ctx ends the drain first, as the bulk drain
 // does.
 func TestRelay_addSessionDrainsStraggler(t *testing.T) {

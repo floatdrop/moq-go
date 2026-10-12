@@ -122,10 +122,10 @@ message* is the request; the stream then stays open for the response and
 follow-ups (REQUEST_UPDATE, PUBLISH_DONE, subgroup data). Outbound openers live
 in `pkg/moqt/session` (`Publish`/`Subscribe`/`Fetch`/…); the inbound counterpart
 is `AcceptRequest` → `Request.Reply` / `Request.RejectError`, which also enforces
-§10.1 Request-ID parity/monotonicity and resolves AUTHORIZATION_TOKEN params.
+§6.4.2.1 Request-ID parity/monotonicity and resolves AUTHORIZATION_TOKEN params.
 
 **Data streams** carry objects, not control: outbound via `OpenSubgroup` +
-`WriteObject` (§11.4.2 delta-encoded Object IDs), inbound via `AcceptDataStream`,
+`WriteObject` (§11.3.1 delta-encoded Object IDs), inbound via `AcceptDataStream`,
 which returns a typed `IncomingSubgroupStream` / `IncomingFetchStream` whose
 `ReadDecoded` resolves the deltas back to absolute IDs.
 
@@ -148,9 +148,9 @@ Only retrieve the sections relevant to the task at hand.
 
 ## Conventions
 
-- **Spec-driven, with citations.** Comments cite draft sections (`§10.1`,
-  `§11.4.2`) referencing the pinned draft versions
-  (`draft-ietf-moq-transport-20`, `-loc-04`, `-msf-01`, `-cmsf-01`) — the source of truth
+- **Spec-driven, with citations.** Comments cite draft sections (`§6.4.2.1`,
+  `§11.3.1`) referencing the pinned draft versions
+  (`draft-ietf-moq-transport-22`, `-loc-04`, `-msf-01`, `-cmsf-01`) — the source of truth
   when implementing or changing protocol behavior. See the Reference Documents
   section above for the datatracker links.
 - **Message types** implement `Append(*wire.Writer)` + `Parse(*wire.Reader)`;

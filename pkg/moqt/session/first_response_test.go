@@ -12,7 +12,7 @@ import (
 
 // TestNamespaceScopedFirstResponseCloses: a first response other than
 // REQUEST_OK or REQUEST_ERROR to SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS closes
-// the session with PROTOCOL_VIOLATION (§10.19, §10.20), even one that is legal
+// the session with PROTOCOL_VIOLATION (§4.2, §3.6), even one that is legal
 // later on the stream.
 func TestNamespaceScopedFirstResponseCloses(t *testing.T) {
 	prefix := wire.TrackNamespace{[]byte("ns")}
@@ -52,7 +52,7 @@ func TestNamespaceScopedFirstResponseCloses(t *testing.T) {
 }
 
 // TestOtherFirstResponseKeepsSession: no MUST covers the first response to
-// other requests (§5.1, §6.2 put theirs on the sender), so an unexpected one
+// other requests (§3.1, §4.1 put theirs on the sender), so an unexpected one
 // fails the request and leaves the session open.
 func TestOtherFirstResponseKeepsSession(t *testing.T) {
 	for _, tc := range []struct {

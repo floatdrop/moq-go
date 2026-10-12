@@ -8,8 +8,8 @@ import (
 )
 
 // CheckAuthority reports whether s is an RFC 3986 authority (§3.2) with a
-// non-empty host, the form the AUTHORITY Setup Option carries (§10.3.1.1,
-// §3.1.1):
+// non-empty host, the form the AUTHORITY Setup Option carries (§9.1.1,
+// §6.1):
 //
 //	authority = [ userinfo "@" ] host [ ":" port ]
 //
@@ -38,7 +38,7 @@ func CheckAuthority(s string) error {
 
 // CheckPathAndQuery reports whether s is an RFC 3986 path-abempty optionally
 // followed by "?" and a query, the form the PATH Setup Option carries
-// (§10.3.1.2):
+// (§9.1.2):
 //
 //	path-abempty = *( "/" segment )
 //	segment      = *pchar

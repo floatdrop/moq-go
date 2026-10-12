@@ -1,6 +1,6 @@
 # clock
 
-A minimal MOQT (draft-ietf-moq-transport-20) publish/subscribe demo.
+A minimal MOQT (draft-ietf-moq-transport-22) publish/subscribe demo.
 
 One binary, two modes:
 
@@ -10,9 +10,9 @@ One binary, two modes:
   fetch stream, and prints every live tick that follows.
 
 The publisher and subscriber both speak native QUIC against a relay (see
-[`cmd/relay`](../relay/)). Together they exercise the §5.1.6 "join an ongoing
+[`cmd/relay`](../relay/)). Together they exercise the §3.5 "join an ongoing
 track" pattern end-to-end: the live SUBSCRIBE delivers future objects while a
-fill fetch stream (§5.1.3) backfills cached state, so the subscriber sees the
+fill fetch stream (§3.4) backfills cached state, so the subscriber sees the
 current time immediately on connect rather than waiting for the next tick.
 
 ## Usage
@@ -32,7 +32,7 @@ A second signal force-exits.
 
 ## Publisher
 
-Each second the publisher opens a fresh §11.4.2 SUBGROUP_HEADER stream, writes
+Each second the publisher opens a fresh §11.3.1 SUBGROUP_HEADER stream, writes
 a single object whose payload is the current time as an RFC 3339 string, and
 closes the stream. Group ID advances by one per tick; each subgroup holds
 exactly one object at `ObjectID=0`.
@@ -77,7 +77,7 @@ The subscriber issues a single request carrying both halves of the pattern:
 1. A **Next Object** Location Filter — delivers every object *after* the
    relay's current LARGEST_OBJECT (i.e. all future ticks).
 2. **FILL_PARAMETERS** whose Location filter is `StartGroup=1` — fills the
-   current group from its start on a fill fetch stream (§5.1.3), contiguous
+   current group from its start on a fill fetch stream (§3.4), contiguous
    with where the subscription itself begins.
 
 draft-20 replaced draft-19's Relative Joining FETCH with this; the fill arrives

@@ -17,7 +17,7 @@ import (
 // [session.Session.UpdateRequest], whose direct read races any other reader.
 //
 // Topology: this side publishes (PUBLISH); the peer accepts and then sends a
-// REQUEST_UPDATE (answered by Serve with REQUEST_OK, §10.9) followed by its
+// REQUEST_UPDATE (answered by Serve with REQUEST_OK, §9.5) followed by its
 // own response to an Update this side issues concurrently.
 func TestBrokerServe_UpdateRoundTripWithFollowups(t *testing.T) {
 	t.Parallel()
@@ -56,7 +56,7 @@ func TestBrokerServe_UpdateRoundTripWithFollowups(t *testing.T) {
 	}
 
 	// 1. Peer → us: REQUEST_UPDATE. Serve must answer with REQUEST_OK.
-	// The server side allocates odd Request IDs (§10.1); the update consumes one.
+	// The server side allocates odd Request IDs (§6.4.2.1); the update consumes one.
 	if err := message.Marshal(req.Stream, &message.RequestUpdate{RequestID: 1}); err != nil {
 		t.Fatalf("peer write REQUEST_UPDATE: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestBrokerServe_UpdateRoundTripWithFollowups(t *testing.T) {
 			t.Fatalf("peer REQUEST_UPDATE answered with %T, want *message.RequestOK", m)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("peer REQUEST_UPDATE never answered (§10.9)")
+		t.Fatal("peer REQUEST_UPDATE never answered (§9.5)")
 	}
 
 	// 2. Us → peer: Update through the handle. The handle delegates to the
@@ -136,7 +136,7 @@ func TestBrokerServe_UpdateRoundTripWithFollowups(t *testing.T) {
 	}
 }
 
-// TestBrokerServe_RejectsInvalidUpdateRequestID pins §10.1 enforcement in the
+// TestBrokerServe_RejectsInvalidUpdateRequestID pins §6.4.2.1 enforcement in the
 // broker's Serve loop: a peer REQUEST_UPDATE consumes a Request ID, so one
 // with the wrong parity for the sender (the peer here is the server, which
 // must use odd IDs) closes the whole session with INVALID_REQUEST_ID.
@@ -174,7 +174,7 @@ func TestBrokerServe_RejectsInvalidUpdateRequestID(t *testing.T) {
 		t.Fatal("PUBLISH never accepted")
 	}
 
-	// Even ID from the server side: wrong parity (§10.1).
+	// Even ID from the server side: wrong parity (§6.4.2.1).
 	if err := message.Marshal(req.Stream, &message.RequestUpdate{RequestID: 2}); err != nil {
 		t.Fatalf("write REQUEST_UPDATE: %v", err)
 	}
@@ -199,8 +199,8 @@ func TestBrokerServe_RejectsInvalidUpdateRequestID(t *testing.T) {
 }
 
 // TestFollowupRolesEnforcedByBroker: REQUEST_UPDATE comes only from a
-// request's sender or a PUBLISH subscriber (§10.9), and PUBLISH_STATE_NOTIFY
-// only from a subscription's publisher (§10.10); anything else closes the
+// request's sender or a PUBLISH subscriber (§9.5), and PUBLISH_STATE_NOTIFY
+// only from a subscription's publisher (§9.10); anything else closes the
 // session with PROTOCOL_VIOLATION.
 func TestFollowupRolesEnforcedByBroker(t *testing.T) {
 	// Each setup serves one side's broker and returns that side's session

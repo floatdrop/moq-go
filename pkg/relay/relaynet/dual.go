@@ -34,7 +34,7 @@ const dualBacklog = 16
 
 // Listen serves both MOQT transport mappings on a single UDP socket: raw QUIC for
 // peers and native clients that dial a moqt URI, and WebTransport (HTTP/3) at
-// wtPath for anything dialing the https form of the same URI (§3.1.3, §3.1.4) —
+// wtPath for anything dialing the https form of the same URI (§6.1.2, §6.2.1) —
 // browsers included. tlsCfg must advertise [DualALPNs].
 //
 // This is what a relay behind a load balancer wants, and it is why no transport
@@ -67,7 +67,7 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger, opts .
 	// asked for: webtransport.Server.ServeQUICConn checks them one at a time and
 	// refuses the connection on the first one missing, so a listener lacking
 	// either would silently serve only half of what it advertises. MOQT can use
-	// both (§11.3, §11.4.3), but neither is what forces the hand here.
+	// both (§11.2, §11.3.2), but neither is what forces the hand here.
 	qcfg.EnableDatagrams = true
 	qcfg.EnableStreamResetPartialDelivery = true
 
@@ -96,7 +96,7 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger, opts .
 	wts := &webtransport.Server{
 		H3: h3,
 		// The WebTransport sub-protocol, not the TLS ALPN, carries the draft
-		// version for this mapping (§3.1) — same identifiers as raw QUIC so the
+		// version for this mapping (§6.2) — same identifiers as raw QUIC so the
 		// two version signals share one source.
 		ApplicationProtocols: MOQTQUICALPNs,
 		CheckOrigin:          func(*http.Request) bool { return true },
@@ -154,7 +154,7 @@ func (l *DualListener) acceptQUIC() {
 		}
 		// The mapping is not recorded on the conn, but it stays recoverable by
 		// type — quicconn and wtconn produce distinct implementations — which is
-		// what a future §10.3.1.1/§10.3.1.2 check would need (PATH and AUTHORITY
+		// what a future §9.1.1/§9.1.2 check would need (PATH and AUTHORITY
 		// MUST NOT be used over WebTransport).
 		l.deliver(quicconn.New(conn))
 	}
@@ -204,7 +204,7 @@ func (l *DualListener) Addr() net.Addr { return l.ql.Addr() }
 //
 // That is load-bearing, not incidental: [relay.Relay.Stop] closes the listener as
 // an early step and only then broadcasts GOAWAY and waits out the grace period
-// (§10.4, §3.6). A Close that dropped the socket would kill every draining
+// (§9.2, §6.6.1). A Close that dropped the socket would kill every draining
 // session with it, and no peer would ever see its GOAWAY.
 //
 // Close is idempotent and joins the failures of every step.

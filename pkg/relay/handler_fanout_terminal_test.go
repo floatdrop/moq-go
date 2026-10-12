@@ -11,7 +11,7 @@ import (
 
 // TestFanout_ObjectAfterEndOfGroupResetsStream: an Object after END_OF_GROUP on
 // the same subgroup resets the downstream stream instead of being forwarded
-// (§11.4.3, §2.4.2).
+// (§11.3.2, §12.1).
 func TestFanout_ObjectAfterEndOfGroupResetsStream(t *testing.T) {
 	t.Parallel()
 
@@ -105,7 +105,7 @@ func TestFanout_ObjectAfterEndOfGroupResetsStream(t *testing.T) {
 		t.Fatalf("second object not EndOfGroup: %+v", got)
 	}
 
-	// §11.4.3 violation: another object on the same subgroup after EndOfGroup.
+	// §11.3.2 violation: another object on the same subgroup after EndOfGroup.
 	if err := sg.WriteObject(&message.SubgroupObject{
 		ObjectIDDelta: 0,
 		Payload:       []byte("after-terminal"),

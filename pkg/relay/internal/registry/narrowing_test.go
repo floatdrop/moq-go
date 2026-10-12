@@ -6,7 +6,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 )
 
-// TestGroupOutOfRange pins the §11.4.3 group-range predicate the fanout uses to
+// TestGroupOutOfRange pins the §11.3.2 group-range predicate the fanout uses to
 // decide whether a narrowed subscription has put an in-flight Subgroup stream
 // permanently out of range.
 func TestGroupOutOfRange(t *testing.T) {

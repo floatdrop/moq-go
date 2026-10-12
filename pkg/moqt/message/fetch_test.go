@@ -11,7 +11,7 @@ import (
 
 func TestFetchValidate(t *testing.T) {
 	// draft-20 stripped FETCH down to a track name plus parameters, so the only
-	// invariant left for Validate is §2.4.1's 4,096-byte full-track-name cap —
+	// invariant left for Validate is §8.7's 4,096-byte full-track-name cap —
 	// the namespace half is already enforced by wire.Reader.TrackNamespace, and
 	// the range moved to LOCATION_FILTER.
 	ok := &Fetch{
@@ -30,14 +30,14 @@ func TestFetchValidate(t *testing.T) {
 		Name:      bytes.Repeat([]byte("t"), wire.MaxFullTrackNameBytes-ns.ByteLen()+1),
 	}
 	if err := tooLong.Validate(); err == nil {
-		t.Fatal("expected error for full track name over the §2.4.1 cap")
+		t.Fatal("expected error for full track name over the §8.7 cap")
 	}
 }
 
-// The range moved out of FETCH into LOCATION_FILTER (§5.1.2), which the
+// The range moved out of FETCH into LOCATION_FILTER (§3.3.1), which the
 // message layer no longer range-checks: a filter naming an end below its own
 // start is well-formed on the wire, and it is the publisher that answers
-// INVALID_RANGE (§10.13). Pin that division of labour so a future "helpful"
+// INVALID_RANGE (§3.2). Pin that division of labour so a future "helpful"
 // parse-time rejection doesn't turn a request-scoped error into a session kill.
 func TestFetchParseAcceptsInvertedRangeFilter(t *testing.T) {
 	inverted := &Fetch{
@@ -204,7 +204,7 @@ func TestFetchObjectWithAllFields(t *testing.T) {
 	}
 }
 
-// TestFetchObjectDatagramBit exercises §11.4.4.1 Table 9: bit 0x40 marks a
+// TestFetchObjectDatagramBit exercises §11.4.1.1 Table 10: bit 0x40 marks a
 // Datagram-preference object — the payload is still present (FETCH objects
 // never carry an Object Status field) and the two subgroup-mode LSBs are
 // ignored, so no Subgroup ID field is written or read even when they spell
@@ -246,7 +246,7 @@ func TestFetchObjectDatagramBit(t *testing.T) {
 }
 
 func TestFetchObjectEndOfRangeObject(t *testing.T) {
-	// Per §11.4.4.2: end-of-range markers carry Group ID and Object ID.
+	// Per §11.4.1.2: end-of-range markers carry Group ID and Object ID.
 	obj := &FetchObject{
 		SerializationFlags: FetchEndOfNonExistentRange,
 		GroupIDDelta:       42,  // absolute Group ID for end-of-range
@@ -272,7 +272,7 @@ func TestFetchObjectEndOfRangeObject(t *testing.T) {
 }
 
 func TestFetchObjectEndOfRangeGroup(t *testing.T) {
-	// Per §11.4.4.2: end-of-range markers carry Group ID and Object ID.
+	// Per §11.4.1.2: end-of-range markers carry Group ID and Object ID.
 	obj := &FetchObject{
 		SerializationFlags: FetchEndOfUnknownRange,
 		GroupIDDelta:       7,
@@ -298,7 +298,7 @@ func TestFetchObjectEndOfRangeGroup(t *testing.T) {
 }
 
 // draft-20 added End of Timed-Out Range (0x20C) alongside 0x8C and 0x10C, so a
-// subscriber can tell Objects abandoned when FILL_TIMEOUT expired (§10.2.5)
+// subscriber can tell Objects abandoned when FILL_TIMEOUT expired (§9.20.5)
 // from Objects whose status is genuinely unknown. All three share a wire shape.
 func TestFetchObjectEndOfTimedOutRange(t *testing.T) {
 	obj := &FetchObject{
@@ -331,7 +331,7 @@ func TestFetchObjectEndOfTimedOutRange(t *testing.T) {
 		t.Errorf("range boundary: got {%d %d}, want {11 4}", got.GroupIDDelta, got.ObjectIDDelta)
 	}
 	// Subgroup ID, Priority and Properties are absent on every end-of-range
-	// marker (§11.4.4.2).
+	// marker (§11.4.1.2).
 	if len(got.Properties) != 0 || got.SubgroupID != 0 || got.PublisherPriority != 0 {
 		t.Errorf("marker carried object fields: %+v", got)
 	}
@@ -352,7 +352,7 @@ func TestFetchObjectIsEndOfRangeCoversAllThree(t *testing.T) {
 
 // TestFetchObjectParseRejectsInvalidFlags: Parse rejects Serialization Flags
 // of 128 or more that are not End of Range markers right after reading them
-// (§11.4.4), without reading their bits as fields: 0xFF alone, with nothing
+// (§11.4.1), without reading their bits as fields: 0xFF alone, with nothing
 // after it, is ErrInvalidFetchFlags rather than a truncated object.
 func TestFetchObjectParseRejectsInvalidFlags(t *testing.T) {
 	for _, flags := range []uint64{0x80, 0xFF, 0x8D, 0x100} {
@@ -516,7 +516,7 @@ func TestLocationCompare(t *testing.T) {
 // byte (the flags varint) is a clean end-of-stream; an EOF anywhere after it
 // means a truncated object and must surface as io.ErrUnexpectedEOF. The
 // relay's upstream stitcher relies on this to tell "the sender FIN'd between
-// objects, vouching for the rest of the range (§11.4.4)" from "the response
+// objects, vouching for the rest of the range (§11.4.1)" from "the response
 // broke off mid-object".
 func TestFetchObjectParseTruncated(t *testing.T) {
 	full := &FetchObject{
@@ -551,7 +551,7 @@ func TestFetchObjectParseTruncated(t *testing.T) {
 		}
 	}
 
-	// Same for an End of Unknown Range marker (§11.4.4.2).
+	// Same for an End of Unknown Range marker (§11.4.1.2).
 	marker := &FetchObject{
 		SerializationFlags: FetchEndOfUnknownRange,
 		GroupIDDelta:       2,

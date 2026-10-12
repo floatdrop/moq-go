@@ -7,9 +7,9 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// TestSetupOptionGoldenBytes pins the §15.4 Table 10 codepoints to the exact
+// TestSetupOptionGoldenBytes pins the §16.4 Table 11 codepoints to the exact
 // bytes each option builder emits: a codec round-trip cannot catch a wrong
-// codepoint, since it agrees with itself. Per pair: the §1.4.3 type delta,
+// codepoint, since it agrees with itself. Per pair: the §8.3 type delta,
 // then (odd codepoint) a length-prefixed byte string.
 func TestSetupOptionGoldenBytes(t *testing.T) {
 	tests := []struct {

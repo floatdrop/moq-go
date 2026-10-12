@@ -38,6 +38,6 @@ func TestQUICConfigAppliesHooksInOrder(t *testing.T) {
 	}
 	// Untouched defaults survive: that is why the hook mutates rather than replaces.
 	if !cfg.EnableDatagrams || !cfg.EnableStreamResetPartialDelivery {
-		t.Error("hooks dropped the MOQT defaults (§11.3, §11.4.3) they never touched")
+		t.Error("hooks dropped the MOQT defaults (§11.2, §11.3.2) they never touched")
 	}
 }

@@ -9,63 +9,63 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// PropertyType identifies a MoQT property per §12 and the IANA 'MOQ Properties'
+// PropertyType identifies a MoQT property per §10 and the IANA 'MOQ Properties'
 // registry.  Types are used as absolute values in the KVPair.Type field; the
 // delta encoding is handled by the wire layer.
 type PropertyType = uint64
 
-// Property type constants from §12 and the IANA registry (Table 14).
-// All types listed here are from draft-ietf-moq-transport-20.
+// Property type constants from §10 and the IANA registry (Table 15).
+// All types listed here are from draft-ietf-moq-transport-22.
 const (
 	// PropertySubgroupDeliveryTimeout (0x06) is a Track or Object Property
-	// (§12.1). Value: varint (milliseconds). Semantics defined in §8. As an
+	// (§10.1). Value: varint (milliseconds). Semantics defined in §5.2. As an
 	// Object Property on the first object in a subgroup it overrides the
 	// Track-level value for that subgroup; it is ignored on any other object.
 	PropertySubgroupDeliveryTimeout PropertyType = 0x06
 
 	// PropertyObjectDeliveryTimeout (0x02) is a Track or Object Property
-	// (§12.2). Value: varint (milliseconds). Semantics defined in §8. As an
+	// (§10.2). Value: varint (milliseconds). Semantics defined in §5.2. As an
 	// Object Property on the first object in a subgroup it overrides the
 	// Track-level value for that subgroup; it is ignored on any other object.
 	PropertyObjectDeliveryTimeout PropertyType = 0x02
 
-	// PropertyMaxCacheDuration (0x04) is a Track Property (§12.3).
+	// PropertyMaxCacheDuration (0x04) is a Track Property (§10.3).
 	// Value: varint (milliseconds).
 	PropertyMaxCacheDuration PropertyType = 0x04
 
-	// PropertyDefaultPublisherPriority (0x0E) is a Track Property (§12.4).
+	// PropertyDefaultPublisherPriority (0x0E) is a Track Property (§10.4).
 	// Value: varint 0–255. Default: 128.
 	PropertyDefaultPublisherPriority PropertyType = 0x0E
 
-	// PropertyDefaultPublisherGroupOrder (0x22) is a Track Property (§12.5).
+	// PropertyDefaultPublisherGroupOrder (0x22) is a Track Property (§10.5).
 	// Value: varint; 0x1 = Ascending (default), 0x2 = Descending.
 	PropertyDefaultPublisherGroupOrder PropertyType = 0x22
 
-	// PropertyDynamicGroups (0x30) is a Track Property (§12.6).
+	// PropertyDynamicGroups (0x30) is a Track Property (§10.6).
 	// Value: varint 0 or 1.
 	PropertyDynamicGroups PropertyType = 0x30
 
-	// PropertyImmutableProperties (0x0B) is a Track or Object Property (§12.7).
+	// PropertyImmutableProperties (0x0B) is a Track or Object Property (§10.7).
 	// Value: bytes containing a nested sequence of KV pairs.
 	PropertyImmutableProperties PropertyType = 0x0B
 
-	// PropertyPriorGroupIDGap (0x3C) is an Object Property (§12.8).
+	// PropertyPriorGroupIDGap (0x3C) is an Object Property (§10.8).
 	// Value: varint.
 	PropertyPriorGroupIDGap PropertyType = 0x3C
 
-	// PropertyPriorObjectIDGap (0x3E) is an Object Property (§12.9).
+	// PropertyPriorObjectIDGap (0x3E) is an Object Property (§10.9).
 	// Value: varint.
 	PropertyPriorObjectIDGap PropertyType = 0x3E
 )
 
 // DefaultPublisherPriority is the Publisher Priority a track has when its
-// DEFAULT_PUBLISHER_PRIORITY property is omitted (§12.4).
+// DEFAULT_PUBLISHER_PRIORITY property is omitted (§10.4).
 const DefaultPublisherPriority uint8 = 128
 
-// TrackDefaultPublisherPriority returns the DEFAULT_PUBLISHER_PRIORITY (§12.4)
+// TrackDefaultPublisherPriority returns the DEFAULT_PUBLISHER_PRIORITY (§10.4)
 // in a raw Track Properties block, or [DefaultPublisherPriority] when it is
 // omitted. Immutable Properties are searched too, the mutable value winning
-// (§12.7). §12.4 prescribes no reaction to a value above 255; like a malformed
+// (§10.7). §10.4 prescribes no reaction to a value above 255; like a malformed
 // block, it is read as omitted.
 func TrackDefaultPublisherPriority(trackProperties []byte) uint8 {
 	pairs, err := ParseTrackProperties(trackProperties)
@@ -100,11 +100,11 @@ func findDefaultPublisherPriority(pairs []wire.KVPair) (uint8, bool) {
 }
 
 // ExpandImmutable returns pairs followed by the contents of each Immutable
-// Properties among them, for the lookup §12.7 requires. The first match is the
+// Properties among them, for the lookup §10.7 requires. The first match is the
 // mutable value; a last-wins loop must range over the result backwards.
 //
 // pairs is returned as is, without allocating, when it holds no Immutable
-// Properties. Contents that do not parse are an error (§12.7).
+// Properties. Contents that do not parse are an error (§10.7).
 func ExpandImmutable(pairs []wire.KVPair) ([]wire.KVPair, error) {
 	out := pairs
 	for _, kv := range pairs {
@@ -133,9 +133,9 @@ func parseSearchable(raw []byte) ([]wire.KVPair, error) {
 	return ExpandImmutable(pairs)
 }
 
-// TrackMaxCacheDuration returns the MAX_CACHE_DURATION (§12.3) in a raw Track
+// TrackMaxCacheDuration returns the MAX_CACHE_DURATION (§10.3) in a raw Track
 // Properties block and whether it is present, the mutable value winning over
-// Immutable Properties (§12.7). A block that does not parse has none.
+// Immutable Properties (§10.7). A block that does not parse has none.
 func TrackMaxCacheDuration(trackProperties []byte) (time.Duration, bool) {
 	pairs, err := parseSearchable(trackProperties)
 	if err != nil {
@@ -150,7 +150,7 @@ func TrackMaxCacheDuration(trackProperties []byte) (time.Duration, bool) {
 }
 
 // MandatoryTrackPropertyMin and MandatoryTrackPropertyMax define the range of
-// Mandatory Track Property types per §2.5.1.  Properties in [0x4000, 0x7FFF]
+// Mandatory Track Property types per §3.7.  Properties in [0x4000, 0x7FFF]
 // MUST have Track scope; receiving one as an Object Property is malformed.
 // An endpoint that does not understand a Mandatory Track Property in PUBLISH,
 // SUBSCRIBE_OK, or FETCH_OK MUST NOT process or forward that track.
@@ -160,7 +160,7 @@ const (
 )
 
 // IsMandatoryTrackProperty reports whether t is in the mandatory range
-// [0x4000, 0x7FFF] per §2.5.1.
+// [0x4000, 0x7FFF] per §3.7.
 func IsMandatoryTrackProperty(t PropertyType) bool {
 	return t >= MandatoryTrackPropertyMin && t <= MandatoryTrackPropertyMax
 }
@@ -168,11 +168,11 @@ func IsMandatoryTrackProperty(t PropertyType) bool {
 // ParseTrackProperties parses raw Track Properties bytes (the trailing field
 // in PUBLISH, SUBSCRIBE_OK, FETCH_OK, etc.) as a sequence of KV pairs.
 // Track Properties have no explicit length prefix — they are bounded by the
-// outer message frame (§2.5).  The raw bytes are typically obtained via
+// outer message frame (§8.4).  The raw bytes are typically obtained via
 // wire.Reader.RemainingBytes().
 //
 // Returns an error if any pair cannot be parsed. Mandatory Track Property
-// screening (§2.5.1) is the caller's job — see
+// screening (§3.7) is the caller's job — see
 // [FirstUnknownMandatoryTrackProperty].
 func ParseTrackProperties(raw []byte) ([]wire.KVPair, error) {
 	if len(raw) == 0 {
@@ -197,8 +197,8 @@ func AppendTrackProperties(pairs []wire.KVPair) []byte {
 
 // CheckTrackPropertyValues reports a Track Property in pairs (Immutable
 // Properties expanded, see [ExpandImmutable]) whose value the draft makes
-// session-fatal: DEFAULT_PUBLISHER_GROUP_ORDER outside {1, 2} (§12.5) or
-// DYNAMIC_GROUPS above 1 (§12.6). The caller MUST close the session with
+// session-fatal: DEFAULT_PUBLISHER_GROUP_ORDER outside {1, 2} (§10.5) or
+// DYNAMIC_GROUPS above 1 (§10.6). The caller MUST close the session with
 // PROTOCOL_VIOLATION.
 func CheckTrackPropertyValues(pairs []wire.KVPair) error {
 	for _, kv := range pairs {
@@ -206,12 +206,12 @@ func CheckTrackPropertyValues(pairs []wire.KVPair) error {
 		case PropertyDefaultPublisherGroupOrder:
 			if kv.IntVal != uint64(GroupOrderAscending) && kv.IntVal != uint64(GroupOrderDescending) {
 				return fmt.Errorf(
-					"moqt/message: DEFAULT_PUBLISHER_GROUP_ORDER value %d outside {1,2} (PROTOCOL_VIOLATION §12.5)",
+					"moqt/message: DEFAULT_PUBLISHER_GROUP_ORDER value %d outside {1,2} (PROTOCOL_VIOLATION §10.5)",
 					kv.IntVal)
 			}
 		case PropertyDynamicGroups:
 			if kv.IntVal > 1 {
-				return fmt.Errorf("moqt/message: DYNAMIC_GROUPS value %d above 1 (PROTOCOL_VIOLATION §12.6)", kv.IntVal)
+				return fmt.Errorf("moqt/message: DYNAMIC_GROUPS value %d above 1 (PROTOCOL_VIOLATION §10.6)", kv.IntVal)
 			}
 		}
 	}
@@ -224,7 +224,7 @@ func CheckTrackPropertyValues(pairs []wire.KVPair) error {
 // build their rejection error. A nil knownTypes treats every mandatory
 // property as unknown.
 //
-// Per §2.5.1, an endpoint that receives Track Properties containing an
+// Per §3.7, an endpoint that receives Track Properties containing an
 // unknown Mandatory Track Property MUST NOT process or forward that track.
 func FirstUnknownMandatoryTrackProperty(
 	pairs []wire.KVPair,

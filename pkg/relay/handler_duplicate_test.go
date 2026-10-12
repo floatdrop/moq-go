@@ -8,7 +8,7 @@ import (
 
 // TestCheckDuplicatePurgesFirstCopy: a first copy that a differing duplicate
 // makes malformed is removed from the cache: Object(s) triggering Malformed
-// Track status MUST NOT be cached (§2.4.2).
+// Track status MUST NOT be cached (§12.1).
 func TestCheckDuplicatePurgesFirstCopy(t *testing.T) {
 	t.Parallel()
 	c := cache.NewObjectCache(8, 0)

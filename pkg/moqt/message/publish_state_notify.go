@@ -2,14 +2,14 @@ package message
 
 import "github.com/floatdrop/moq-go/pkg/moqt/wire"
 
-// PublishStateNotify is a PUBLISH_STATE_NOTIFY message per §10.10, new in
+// PublishStateNotify is a PUBLISH_STATE_NOTIFY message per §9.10, new in
 // draft-20.
 //
 // The publisher sends it on a subscription's bidi stream to report that the
 // subscription's state changed for some reason other than a subscriber
 // REQUEST_UPDATE. It is unilateral: the receiver sends no REQUEST_OK or
 // REQUEST_ERROR, and it does not count against MAX_REQUEST_UPDATES
-// (§10.3.1.7). It is informative — no action is required of the recipient.
+// (§9.1.7). It is informative — no action is required of the recipient.
 //
 // It carries no Request ID: the stream it arrives on names the subscription.
 // That is also why it does not implement [WithRequestID], unlike the other
@@ -23,7 +23,7 @@ import "github.com/floatdrop/moq-go/pkg/moqt/wire"
 //	}
 //
 // Only the parameters whose values changed are present; an absent parameter is
-// unchanged. §10.10 requires LARGEST_OBJECT when known, so the subscriber can
+// unchanged. §9.10 requires LARGEST_OBJECT when known, so the subscriber can
 // tell where in the Track the change took effect.
 //
 // It applies only to subscriptions and only in the publisher-to-subscriber

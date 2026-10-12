@@ -97,7 +97,7 @@ func firstObjectTopology(
 	return pub, sub
 }
 
-// TestFanout_FirstObjectBitOnPlainForward pins the §11.4.2 baseline: a
+// TestFanout_FirstObjectBitOnPlainForward pins the §11.3.1 baseline: a
 // forwarded subgroup that begins with the subgroup's true first object
 // carries the FIRST_OBJECT bit (ReplayingSubgroup false).
 func TestFanout_FirstObjectBitOnPlainForward(t *testing.T) {
@@ -161,7 +161,7 @@ func TestFanout_FirstObjectBitNotInvented(t *testing.T) {
 }
 
 // TestFanout_ResolvesImplicitFirstObjectSubgroupID: a mode-0b01 header's
-// Subgroup ID comes from its first Object (§11.4.2), in the forwarded header
+// Subgroup ID comes from its first Object (§11.3.1), in the forwarded header
 // and in the cache a FETCH serves.
 func TestFanout_ResolvesImplicitFirstObjectSubgroupID(t *testing.T) {
 	t.Parallel()
@@ -225,7 +225,7 @@ func TestFanout_ResolvesImplicitFirstObjectSubgroupID(t *testing.T) {
 }
 
 // TestFanout_ImplicitFirstObjectEdgeStreams: a terminal-status first Object on
-// a mode-0b01 stream still enforces §11.4.3, and an empty 0b01 stream leaves no
+// a mode-0b01 stream still enforces §11.3.2, and an empty 0b01 stream leaves no
 // state behind.
 func TestFanout_ImplicitFirstObjectEdgeStreams(t *testing.T) {
 	t.Parallel()
@@ -245,7 +245,7 @@ func TestFanout_ImplicitFirstObjectEdgeStreams(t *testing.T) {
 	}
 
 	// A 0b01 stream whose FIRST object is an EndOfGroup marker (empty
-	// payload, status 0x3) at ID 4, followed by a §11.4.3-violating second
+	// payload, status 0x3) at ID 4, followed by a §11.3.2-violating second
 	// object. The marker must resolve the Subgroup ID (4), be forwarded,
 	// and set the terminal latch so the violation resets the stream.
 	term, err := pub.OpenSubgroup(message.SubgroupHeader{
@@ -263,7 +263,7 @@ func TestFanout_ImplicitFirstObjectEdgeStreams(t *testing.T) {
 		t.Fatalf("write terminal marker: %v", err)
 	}
 	// The subscriber reads the forwarded marker before the violation is
-	// sent: the relay ends the whole track over it (§2.4.2), resetting the
+	// sent: the relay ends the whole track over it (§12.1), resetting the
 	// stream, so a marker still queued then would never arrive.
 	ds, err := sub.AcceptDataStream(t.Context())
 	if err != nil {
@@ -282,7 +282,7 @@ func TestFanout_ImplicitFirstObjectEdgeStreams(t *testing.T) {
 		t.Fatalf("first forwarded Object = %+v, %v; want the terminal marker at 4", obj, err)
 	}
 
-	// §11.4.3 violation: an object after the terminal marker. The relay may
+	// §11.3.2 violation: an object after the terminal marker. The relay may
 	// reset the inbound stream while this write is in flight; an error here
 	// is acceptable.
 	_ = term.WriteObject(&message.SubgroupObject{ObjectIDDelta: 0, Payload: []byte("x")})

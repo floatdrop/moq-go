@@ -13,7 +13,7 @@ import (
 
 // TestSubscribeUpstream_TrackEntryPrecedesAliasRouting: the SUBSCRIBE
 // counterpart of TestPublish_TrackEntryPrecedesAliasRouting. The SUBSCRIBE_OK's
-// alias (§11.1) routes as soon as session.Subscribe returns, so the track entry
+// alias (§3.1.3) routes as soon as session.Subscribe returns, so the track entry
 // must exist by then or the first Group is lost.
 func TestSubscribeUpstream_TrackEntryPrecedesAliasRouting(t *testing.T) {
 	video := ns("video")
@@ -47,8 +47,8 @@ func TestSubscribeUpstream_TrackEntryPrecedesAliasRouting(t *testing.T) {
 }
 
 // TestFetch_UnconfirmedTrackIsNotKnown: while the upstream has not answered the
-// relay's SUBSCRIBE, a FETCH of the track is DOES_NOT_EXIST (§10.6), not
-// INVALID_RANGE (§10.13).
+// relay's SUBSCRIBE, a FETCH of the track is DOES_NOT_EXIST (§12.3), not
+// INVALID_RANGE (§3.2).
 func TestFetch_UnconfirmedTrackIsNotKnown(t *testing.T) {
 	video := ns("video")
 	name := []byte("cam-never-answered")

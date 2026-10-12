@@ -10,7 +10,7 @@ import (
 )
 
 // TestUpstreamSub_UpdateDelegatesToBroker: UpstreamSub.Update rides the sub's
-// §10.9 [session.RequestBroker], so once CloseOnDemand closes it updates fail
+// §9.5 [session.RequestBroker], so once CloseOnDemand closes it updates fail
 // with [session.ErrRequestStreamClosed].
 func TestUpstreamSub_UpdateDelegatesToBroker(t *testing.T) {
 	t.Parallel()

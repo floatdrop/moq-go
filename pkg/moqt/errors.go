@@ -6,7 +6,7 @@
 //   - message: typed message structs with Marshal/Parse.
 package moqt
 
-// SessionErrorCode is a MoQT session-termination error code (§3.5, IANA §15.11.1).
+// SessionErrorCode is a MoQT session-termination error code (§12.2, IANA §16.11.1).
 type SessionErrorCode uint64
 
 const (
@@ -32,7 +32,7 @@ const (
 	SessionTooManyRequestUpdates   SessionErrorCode = 0x1B
 )
 
-// RequestErrorCode is a REQUEST_ERROR code (§10.6, IANA §15.11.2).
+// RequestErrorCode is a REQUEST_ERROR code (§12.3, IANA §16.11.2).
 type RequestErrorCode uint64
 
 const (
@@ -55,7 +55,7 @@ const (
 	RequestInvalidFilter        RequestErrorCode = 0x36
 )
 
-// PublishDoneCode is a PUBLISH_DONE status code (§10.12, IANA §15.11.3).
+// PublishDoneCode is a PUBLISH_DONE status code (§12.4, IANA §16.11.3).
 type PublishDoneCode uint64
 
 const (
@@ -70,7 +70,7 @@ const (
 	PublishDoneMalformedTrack PublishDoneCode = 0x12
 )
 
-// StreamResetCode is a per-stream reset code (§3.3.4, IANA §15.11.4).
+// StreamResetCode is a per-stream reset code (§12.5, IANA §16.11.4).
 type StreamResetCode uint64
 
 const (

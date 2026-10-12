@@ -13,12 +13,12 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// PUBLISH_DONE (§10.12) as the relay sends it downstream: its status code,
+// PUBLISH_DONE (§9.9) as the relay sends it downstream: its status code,
 // its Stream Count, and its timing after every stream closes.
 
 // TestPublishDone_UpstreamCodeByMeaning: an upstream PUBLISH_DONE code about
 // the track is passed downstream as is; one about the relay's own upstream
-// subscription becomes INTERNAL_ERROR (§10.12).
+// subscription becomes INTERNAL_ERROR (§12.4).
 func TestPublishDone_UpstreamCodeByMeaning(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -49,7 +49,7 @@ func TestPublishDone_UpstreamCodeByMeaning(t *testing.T) {
 }
 
 // The StreamCount tests pin the exact count of data streams the relay opened
-// for the subscription, fill fetch streams included (§10.12).
+// for the subscription, fill fetch streams included (§9.9).
 
 // TestPublishDone_StreamCount_NoStreams: no streams opened, count 0.
 func TestPublishDone_StreamCount_NoStreams(t *testing.T) {
@@ -121,7 +121,7 @@ func TestPublishDone_StreamCount_FillStream(t *testing.T) {
 }
 
 // TestPublishDone_AfterStreamsClose: PUBLISH_DONE waits for the relay's open
-// subgroup stream to the subscriber to close (§10.12).
+// subgroup stream to the subscriber to close (§9.9).
 func TestPublishDone_AfterStreamsClose(t *testing.T) {
 	t.Parallel()
 	const stillOpen = 300 * time.Millisecond
@@ -184,7 +184,7 @@ func TestPublishDone_AfterStreamsClose(t *testing.T) {
 }
 
 // TestPublishDone_EndedSubscriptionStopsAtNextObject: a subscription ended with
-// UPDATE_FAILED (§10.9.1) while its upstream stays live has its open stream reset
+// UPDATE_FAILED (§9.5.1) while its upstream stays live has its open stream reset
 // at the next Object, so PUBLISH_DONE is not held while the upstream runs.
 func TestPublishDone_EndedSubscriptionStopsAtNextObject(t *testing.T) {
 	t.Parallel()
@@ -253,7 +253,7 @@ func TestPublishDone_EndedSubscriptionStopsAtNextObject(t *testing.T) {
 // that did not would hold PUBLISH_DONE for good, and one that reported twice
 // would let it out while a stream is still open.
 
-// TestPublishDone_AfterGapReopen: a §11.4.3 gap resets the subgroup stream
+// TestPublishDone_AfterGapReopen: a §11.3.2 gap resets the subgroup stream
 // and reopens it. PUBLISH_DONE must still come, and not before the reopened
 // stream ends.
 func TestPublishDone_AfterGapReopen(t *testing.T) {
@@ -280,7 +280,7 @@ func TestPublishDone_AfterGapReopen(t *testing.T) {
 		defer close(wrote)
 		_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte("0")})
 		// Objects 0 and 2 from two upstreams: in either order, neither is the
-		// next Object after the other (§11.4.3), so the relay resets the
+		// next Object after the other (§11.3.2), so the relay resets the
 		// first stream and opens another.
 		_ = otherSg.WriteObjectAt(2, &message.SubgroupObject{Payload: []byte("2")})
 		_ = otherSg.Close()
@@ -326,7 +326,7 @@ func TestPublishDone_AfterGapReopen(t *testing.T) {
 	}
 }
 
-// TestPublishDone_AfterDeliveryTimeout: a subgroup stream reset for §8
+// TestPublishDone_AfterDeliveryTimeout: a subgroup stream reset for §5.2
 // OBJECT_DELIVERY_TIMEOUT still counts as closed.
 func TestPublishDone_AfterDeliveryTimeout(t *testing.T) {
 	t.Parallel()
@@ -377,7 +377,7 @@ func TestPublishDone_AfterDeliveryTimeout(t *testing.T) {
 }
 
 // TestPublishDone_AfterFailedFill: a fill fetch stream the relay opens only to
-// reset it (§5.1.3.1) still counts as closed.
+// reset it (§3.4.1) still counts as closed.
 func TestPublishDone_AfterFailedFill(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})

@@ -357,7 +357,7 @@ func TestListener_AcceptYieldsSessionConn(t *testing.T) {
 }
 
 // TestConnReportsWebTransport pins the optional capability the session layer
-// asserts for when refusing to send PATH or AUTHORITY: §10.3.1.1 and §10.3.1.2
+// asserts for when refusing to send PATH or AUTHORITY: §9.1.1 and §9.1.2
 // forbid both options on a WebTransport session, because HTTP/3 already carries
 // that information in the CONNECT request.
 //
@@ -483,7 +483,7 @@ func TestRequestStreamOverWebTransport(t *testing.T) {
 	}
 }
 
-// TestDatagramRoundTripOverWebTransport is the WebTransport half of the §11.3
+// TestDatagramRoundTripOverWebTransport is the WebTransport half of the §11.2
 // datagram coverage: both Conn.SendDatagram and Conn.ReceiveDatagram were at
 // 0% across the whole suite here, so nothing had ever put a datagram through
 // this adapter.

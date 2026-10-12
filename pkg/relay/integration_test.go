@@ -155,7 +155,7 @@ func TestPublishSubscribeE2E(t *testing.T) {
 }
 
 // TestSubscriptionAggregation: two downstream subscribers of one track share
-// one upstream SUBSCRIBE (§9.4).
+// one upstream SUBSCRIBE (§7.4).
 func TestSubscriptionAggregation(t *testing.T) {
 	t.Parallel()
 
@@ -240,7 +240,7 @@ func TestSubscriptionAggregation(t *testing.T) {
 
 // TestPublishNamespaceRouting: a SUBSCRIBE_NAMESPACE holder sees NAMESPACE for a
 // matching PUBLISH_NAMESPACE, and a SUBSCRIBE is routed to that publisher
-// (§6.1, §9.5).
+// (§4.2, §7.6).
 func TestPublishNamespaceRouting(t *testing.T) {
 	t.Parallel()
 

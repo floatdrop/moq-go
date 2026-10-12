@@ -139,7 +139,7 @@ func TestFanout_UnresponsiveSubscriberDoesNotStallSubgroup(t *testing.T) {
 }
 
 // TestFanout_InboundResetCancelsDownstream: a reset inbound subgroup stream
-// resets the downstream one rather than FINning it (§11.4.3).
+// resets the downstream one rather than FINning it (§11.3.2).
 func TestFanout_InboundResetCancelsDownstream(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})

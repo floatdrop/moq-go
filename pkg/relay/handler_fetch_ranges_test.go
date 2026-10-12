@@ -58,7 +58,7 @@ func TestUncovered(t *testing.T) {
 }
 
 // TestKnownFromCache: what cached Objects establish, from status Objects and
-// gap Properties (§11.2.1.1, §12.8, §12.9).
+// gap Properties (§11.1.1, §10.8, §10.9).
 func TestKnownFromCache(t *testing.T) {
 	t.Parallel()
 	gapProps := func(typ message.PropertyType, n uint64) []byte {
@@ -123,7 +123,7 @@ func TestStreamCovered(t *testing.T) {
 }
 
 // TestFetchElements_DescendingRoundTrip: a Descending response with unknown
-// runs inside, at the head of, and across Groups encodes (§11.4.4) and decodes
+// runs inside, at the head of, and across Groups encodes (§11.4.1) and decodes
 // back to its elements, markers included, in stream order.
 func TestFetchElements_DescendingRoundTrip(t *testing.T) {
 	t.Parallel()

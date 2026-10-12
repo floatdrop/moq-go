@@ -12,7 +12,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// GOAWAY from the recipient's side (§10.4): closing the session is the
+// GOAWAY from the recipient's side (§9.2): closing the session is the
 // sender's job; the recipient SHOULD NOT initiate new requests to the peer.
 
 // TestRelay_InboundGoawayLeavesSessionOpen: the relay does not close a session
@@ -78,7 +78,7 @@ func TestRelay_NoUpstreamSubscribeToGoingAwayPublisher(t *testing.T) {
 	default:
 	}
 	// GOING_AWAY: "The endpoint has received a GOAWAY and MAY reject new
-	// requests" (§10.6.2).
+	// requests" (§12.3).
 	requireRejectedWithCode(t, err, moqt.RequestGoingAway)
 }
 

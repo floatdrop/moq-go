@@ -11,15 +11,15 @@ import (
 )
 
 // A Message Parameter outside the message types its definition lists
-// (§10.2.1), an unknown one, or an unexpected duplicate (§10.2) closes the
+// (§9.20.1), an unknown one, or an unexpected duplicate (§9.20) closes the
 // session with PROTOCOL_VIOLATION. Each receive point is covered: request
 // openers, their responses, REQUEST_UPDATE and its response, and
 // PUBLISH_STATE_NOTIFY.
 
 // TestParamScopeOpeners: a request opener carrying a parameter its message
-// does not define, a duplicate (also inside FILL_PARAMETERS, §10.2.15), or an
+// does not define, a duplicate (also inside FILL_PARAMETERS, §9.20.15), or an
 // unknown type closes the receiver. SUBSCRIBE_TRACKS takes SUBSCRIBE's
-// parameters (§10.20.1), but not response ones such as EXPIRES.
+// parameters (§3.6.2), but not response ones such as EXPIRES.
 func TestParamScopeOpeners(t *testing.T) {
 	cases := []struct {
 		name string
@@ -86,7 +86,7 @@ func TestParamScopeOpeners(t *testing.T) {
 
 // TestParamScopeResponses: a response carrying a parameter its message form
 // does not define closes the requester. REQUEST_OK's forms are told apart by
-// the request they answer (§10.5).
+// the request they answer (§9.3).
 func TestParamScopeResponses(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -129,7 +129,7 @@ func TestParamScopeResponses(t *testing.T) {
 }
 
 // TestParamScopeRequestUpdate: TRACK_NAMESPACE_PREFIX may appear only in a
-// REQUEST_UPDATE for SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS (§10.2.20); on a
+// REQUEST_UPDATE for SUBSCRIBE_NAMESPACE or SUBSCRIBE_TRACKS (§9.20.20); on a
 // subscription it closes the receiver.
 func TestParamScopeRequestUpdate(t *testing.T) {
 	client, server := openPair(t)
@@ -156,7 +156,7 @@ func TestParamScopeRequestUpdateOK(t *testing.T) {
 }
 
 // TestParamScopePublishStateNotify: GROUP_ORDER is not defined for
-// PUBLISH_STATE_NOTIFY (§10.2.8); the subscriber closes on it.
+// PUBLISH_STATE_NOTIFY (§9.20.8); the subscriber closes on it.
 func TestParamScopePublishStateNotify(t *testing.T) {
 	client, server := openPair(t)
 	sub, pub := subscribePair(t, client, server)
@@ -170,7 +170,7 @@ func TestParamScopePublishStateNotify(t *testing.T) {
 }
 
 // TestParamScopeRepeatedAuthorizationTokenAccepted: AUTHORIZATION TOKEN may
-// repeat with distinct Type and Value (§10.2.2), exempt from the duplicate rule.
+// repeat with distinct Type and Value (§8.9), exempt from the duplicate rule.
 func TestParamScopeRepeatedAuthorizationTokenAccepted(t *testing.T) {
 	client, server := openPair(t)
 	tok := func(v string) message.Parameter {
@@ -189,7 +189,7 @@ func TestParamScopeRepeatedAuthorizationTokenAccepted(t *testing.T) {
 }
 
 // TestParamScopeSubscribeTracksTakesSubscribeParameters: SUBSCRIBE's
-// parameters are valid in SUBSCRIBE_TRACKS (§10.20.1), including a Location
+// parameters are valid in SUBSCRIBE_TRACKS (§3.6.2), including a Location
 // Filter and FILL_PARAMETERS.
 func TestParamScopeSubscribeTracksTakesSubscribeParameters(t *testing.T) {
 	for _, p := range []message.Parameter{
@@ -213,7 +213,7 @@ func TestParamScopeSubscribeTracksTakesSubscribeParameters(t *testing.T) {
 }
 
 // TestIncludePropertiesOutOfRangeCloses: INCLUDE_PROPERTIES other than 0 or 1
-// is a PROTOCOL_VIOLATION (§10.2.21), in each message that may carry it.
+// is a PROTOCOL_VIOLATION (§9.20.21), in each message that may carry it.
 func TestIncludePropertiesOutOfRangeCloses(t *testing.T) {
 	t.Parallel()
 	bad := message.Parameters{message.ByteParam(message.ParamIncludeProperties, 2)}
@@ -253,9 +253,9 @@ func TestIncludePropertiesOutOfRangeCloses(t *testing.T) {
 
 // TestParamValueOutOfRangeCloses: a value the draft makes session-fatal closes
 // the receiver, in an opener and inside its FILL_PARAMETERS: GROUP_ORDER
-// outside {1, 2} (§10.2.8), FORWARD above 1 (§10.2.18), and a LOCATION_FILTER
-// whose end Group overflows (§5.1.2) are PROTOCOL_VIOLATION; a LOCATION_FILTER
-// or FILL_PARAMETERS that does not parse is KEY_VALUE_FORMATTING_ERROR (§1.4.3).
+// outside {1, 2} (§9.20.8), FORWARD above 1 (§9.20.18), and a LOCATION_FILTER
+// whose end Group overflows (§9.20.9) are PROTOCOL_VIOLATION; a LOCATION_FILTER
+// or FILL_PARAMETERS that does not parse is KEY_VALUE_FORMATTING_ERROR (§8.3).
 func TestParamValueOutOfRangeCloses(t *testing.T) {
 	t.Parallel()
 	overflow := message.AbsoluteRangeFilter(message.Location{Group: math.MaxUint64}, 1)
@@ -323,7 +323,7 @@ func TestParamValueOutOfRangeCloses(t *testing.T) {
 
 // TestParamValueOutOfRangeInFollowupsCloses: the same holds for the
 // follow-ups a broker reads: FORWARD in PUBLISH_STATE_NOTIFY and in a
-// REQUEST_UPDATE (§10.2.18).
+// REQUEST_UPDATE (§9.20.18).
 func TestParamValueOutOfRangeInFollowupsCloses(t *testing.T) {
 	t.Parallel()
 	bad := message.Parameters{message.ByteParam(message.ParamForward, 3)}

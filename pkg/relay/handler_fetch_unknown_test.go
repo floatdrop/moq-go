@@ -82,8 +82,8 @@ func unknownGapTopology(
 	// a fetch that lands early gets a legitimately different answer, with the
 	// unknown range ending wherever the cache happened to reach.
 	//
-	// Wait on the relay's watermark (TRACK_STATUS, §10.2.17), not on the
-	// subscriber: the relay may drop a lagging subscriber (§3.3.4) while the
+	// Wait on the relay's watermark (TRACK_STATUS, §9.20.17), not on the
+	// subscriber: the relay may drop a lagging subscriber (§12.5) while the
 	// cache is fully populated.
 	go drainAll(t.Context(), live)
 	awaitTailCached(t, written)
@@ -95,7 +95,7 @@ func unknownGapTopology(
 
 // TestFetch_UnknownRangeMarkerWhenUpstreamRejects: an uncached part the
 // upstream refuses to serve is covered by an End of Unknown Range marker before
-// the cached Objects, not left as a gap (§11.4.4).
+// the cached Objects, not left as a gap (§11.4.1).
 func TestFetch_UnknownRangeMarkerWhenUpstreamRejects(t *testing.T) {
 	video := ns("video")
 	name := []byte("cam-unknown")
@@ -193,14 +193,14 @@ func TestFetch_PreservesUpstreamUnknownMarker(t *testing.T) {
 			if err != nil {
 				return
 			}
-			// Leading §11.4.4.2 marker: groups 0..unknownHi unknown.
+			// Leading §11.4.1.2 marker: groups 0..unknownHi unknown.
 			_ = out.WriteObject(&message.FetchObject{
 				SerializationFlags: message.FetchEndOfUnknownRange,
 				GroupIDDelta:       unknownHi,
 				ObjectIDDelta:      math.MaxUint64,
 			})
 			// Then real objects for the remaining groups, delta-encoded
-			// relative to the marker (§11.4.4.2: the marker is the prior
+			// relative to the marker (§11.4.1.2: the marker is the prior
 			// Group/Object ID; the first actual object spells out Priority).
 			for g := unknownHi + 1; g <= sfEnd.Group; g++ {
 				fo := &message.FetchObject{
@@ -239,7 +239,7 @@ func TestFetch_PreservesUpstreamUnknownMarker(t *testing.T) {
 }
 
 // TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation: a FIN'd upstream
-// response asserts its gaps only up to its FETCH_OK EndLocation (§11.4.4), so
+// response asserts its gaps only up to its FETCH_OK EndLocation (§3.2.2), so
 // the groups past it are marked unknown.
 func TestFetch_UnknownMarkerWhenUpstreamCapsEndLocation(t *testing.T) {
 	video := ns("video")

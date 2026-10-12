@@ -15,7 +15,7 @@ import (
 // [Session.Subscribe].
 //
 // The Track Alias stays registered while the subscription is Established and
-// is released (§11.1) once it is Terminated (§5.1): on [Subscription.Close] or
+// is released (§3.1.3) once it is Terminated (§3.1): on [Subscription.Close] or
 // its broker's [RequestBroker.Close], when the publisher's FIN is read through
 // the Subscription or by its broker's [RequestBroker.Serve], or when Serve
 // cancels the stream.
@@ -30,13 +30,13 @@ type Subscription struct {
 	OK *message.SubscribeOK
 }
 
-// TrackAlias reports the §11.1 Track Alias the publisher assigned to this
+// TrackAlias reports the §3.1.3 Track Alias the publisher assigned to this
 // subscription — the integer inbound subgroup and datagram streams carry to
 // identify the track (see [Session.AcceptDataStream]). It is shorthand for
 // sub.OK.TrackAlias.
 func (sub *Subscription) TrackAlias() uint64 { return sub.OK.TrackAlias }
 
-// Subscribe opens a SUBSCRIBE request stream (§10.7) and awaits SUBSCRIBE_OK.
+// Subscribe opens a SUBSCRIBE request stream (§9.6) and awaits SUBSCRIBE_OK.
 // The session assigns m.RequestID; the caller supplies the rest. On success a
 // [Subscription] is returned whose embedded stream stays open for follow-up
 // traffic (REQUEST_UPDATE via [Subscription.Update], inbound PUBLISH_DONE) and
@@ -46,20 +46,20 @@ func (sub *Subscription) TrackAlias() uint64 { return sub.OK.TrackAlias }
 func (s *Session) Subscribe(ctx context.Context, m *message.Subscribe) (*Subscription, error) {
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, ok *message.SubscribeOK) (*Subscription, error) {
-			// §2.5.1: "the subscriber MUST cancel the subscription".
+			// §3.7: "the subscriber MUST cancel the subscription".
 			if err := s.validateTrackProperties(ok.TrackProperties, "SUBSCRIBE_OK"); err != nil {
 				cancelRequest(stream)
 				return nil, err
 			}
-			// §11.1: register the alias the publisher assigned so we can detect
+			// §3.1.3: register the alias the publisher assigned so we can detect
 			// DUPLICATE_TRACK_ALIAS if the same alias is reused for a different track.
 			key := track.NewKey(m.Namespace, m.Name)
 			if err := s.RegisterInboundTrack(ok.TrackAlias, key, ok.TrackProperties); err != nil {
 				cancelRequest(stream)
 				return nil, err
 			}
-			// The publisher may send PUBLISH_STATE_NOTIFY (§10.10) but not
-			// REQUEST_UPDATE (§10.9).
+			// The publisher may send PUBLISH_STATE_NOTIFY (§9.10) but not
+			// REQUEST_UPDATE (§9.5).
 			return &Subscription{
 				Stream:       stream,
 				s:            s,

@@ -9,7 +9,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestFanout_NarrowingUpdateResetsOutOfRangeStream pins the §11.4.3 rule that a
+// TestFanout_NarrowingUpdateResetsOutOfRangeStream pins the §11.3.2 rule that a
 // REQUEST_UPDATE moving the subscription's End Group to a smaller Group resets
 // the in-flight Subgroup streams that fall outside the new range, rather than
 // leaving them open (or FIN'ing them, which would falsely signal completeness).

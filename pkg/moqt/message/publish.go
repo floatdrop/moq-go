@@ -5,7 +5,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// Publish is the PUBLISH message (§10.11).
+// Publish is the PUBLISH message (§9.8).
 type Publish struct {
 	RequestID       uint64
 	Namespace       wire.TrackNamespace
@@ -44,7 +44,7 @@ func (m *Publish) Parse(r *wire.Reader) error {
 	return nil
 }
 
-// PublishDone is the PUBLISH_DONE message (§10.12).
+// PublishDone is the PUBLISH_DONE message (§9.9).
 type PublishDone struct {
 	StatusCode  moqt.PublishDoneCode
 	StreamCount uint64
@@ -72,7 +72,7 @@ func (m *PublishDone) Parse(r *wire.Reader) error {
 	return nil
 }
 
-// Validate enforces the §2.4.1 Full Track Name size limit; ParsePayload
+// Validate enforces the §8.7 Full Track Name size limit; ParsePayload
 // invokes it automatically after decoding a PUBLISH frame.
 func (m *Publish) Validate() error {
 	return validateFullTrackName(m.Namespace, m.Name)

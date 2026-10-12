@@ -67,7 +67,7 @@ type TrackInfo struct {
 	FullName track.FullTrackName
 
 	// Properties is the opaque Track Properties blob the upstream
-	// publisher attached (see §9.6). Stored by reference; callers
+	// publisher attached (see §7.7). Stored by reference; callers
 	// MUST NOT mutate after handing it to the store.
 	Properties []byte
 
@@ -87,7 +87,7 @@ type TrackInfo struct {
 // names start with the same Prefix.
 type NamespaceInfo struct {
 	// Prefix is the namespace tuple advertised by PUBLISH_NAMESPACE
-	// (§6.2 / §10.16). A zero-length tuple matches every track — used
+	// (§4.1 / §9.14). A zero-length tuple matches every track — used
 	// by SUBSCRIBE_NAMESPACE with no filter.
 	Prefix wire.TrackNamespace
 
@@ -155,7 +155,7 @@ type DiscoveryStore interface {
 	UnpublishNamespace(ctx context.Context, prefix wire.TrackNamespace, relayAddr string) error
 
 	// FindNamespace returns every namespace advertisement whose
-	// Prefix is a prefix of namespace (in the §9.5 / wire.TrackNamespace
+	// Prefix is a prefix of namespace (in the §7.6 / wire.TrackNamespace
 	// HasPrefix sense). A query for ["a","b","c"] matches advertised
 	// prefixes ["a"], ["a","b"], and ["a","b","c"]; advertised
 	// prefix ["a","b","c","d"] does NOT match. This is the ancestor
@@ -189,7 +189,7 @@ type DiscoveryStore interface {
 	WatchNamespaces(ctx context.Context) (<-chan NamespaceEvent, error)
 
 	// Withdraw removes every advertisement published for relayAddr, so peers
-	// stop resolving it as an upstream while it drains (§3.6). Peers observe
+	// stop resolving it as an upstream while it drains (§6.6.1). Peers observe
 	// the removals as OpUnpublish events.
 	//
 	// Withdraw is terminal for that address's advertising side: afterwards

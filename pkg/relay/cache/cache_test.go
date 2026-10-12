@@ -25,7 +25,7 @@ func locs(objs []*cache.CachedObject) []message.Location {
 }
 
 // TestObjectCache_GetRange_Order pins GetRange's sort: groups in the requested
-// order, Objects ascending within a group (§10.13). Inserts are scrambled so
+// order, Objects ascending within a group (§3.2.1). Inserts are scrambled so
 // FIFO order cannot pass.
 func TestObjectCache_GetRange_Order(t *testing.T) {
 	t.Parallel()
@@ -138,7 +138,7 @@ func TestObjectCache_Delete(t *testing.T) {
 }
 
 // TestPerObjectMaxCacheDuration: each Object keeps its upstream's
-// MAX_CACHE_DURATION (§12.3). An expired one is not returned; a present 0 is
+// MAX_CACHE_DURATION (§10.3). An expired one is not returned; a present 0 is
 // never served; absent means relay TTL.
 func TestPerObjectMaxCacheDuration(t *testing.T) {
 	c := cache.NewObjectCache(16, 0)

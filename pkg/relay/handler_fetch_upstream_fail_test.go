@@ -15,9 +15,9 @@ import (
 )
 
 // TestFetch_UpstreamOutcomeDecidesGapOrUnknown: how the upstream answers the
-// stitch FETCH decides the encoding of the uncached sub-range (§9.4): a clean
-// empty FIN is a plain gap, asserting non-existence (§9.1); a failure is an End
-// of Unknown Range marker; a timeout an End of Timed-Out Range (§11.4.4.2).
+// stitch FETCH decides the encoding of the uncached sub-range (§7.4): a clean
+// empty FIN is a plain gap, asserting non-existence (§7.1); a failure is an End
+// of Unknown Range marker; a timeout an End of Timed-Out Range (§11.4.1.2).
 func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -49,7 +49,7 @@ func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 			// Silence before FETCH_OK: the upstream never answers the request
 			// at all, so Session.Fetch itself expires. Must not wedge the
 			// downstream handler, and must not be read as "the range is empty".
-			// The short FILL_TIMEOUT is the subscriber's own budget (§10.2.5),
+			// The short FILL_TIMEOUT is the subscriber's own budget (§9.20.5),
 			// which the relay adopts for the upstream leg; without it these two
 			// cases would each wait out defaultUpstreamFetchTimeout (5s).
 			name:       "an upstream that never answers times out to timed-out",
@@ -95,7 +95,7 @@ func TestFetch_UpstreamOutcomeDecidesGapOrUnknown(t *testing.T) {
 }
 
 // TestFetch_DescendingCappedUpstreamMarksRemainder: when the upstream caps
-// FETCH_OK below the requested sub-range (§10.13), a descending response marks
+// FETCH_OK below the requested sub-range (§3.2), a descending response marks
 // what lies past the cap unknown, and nothing below it: under the upstream's
 // clean FIN the rest does not exist.
 func TestFetch_DescendingCappedUpstreamMarksRemainder(t *testing.T) {
@@ -138,7 +138,7 @@ func TestFetch_DescendingCappedUpstreamMarksRemainder(t *testing.T) {
 }
 
 // TestFetch_StitchedObjectKeepsDatagramForwardingPreference: a stitched
-// upstream Object keeps its Datagram bit (§11.4.4.1).
+// upstream Object keeps its Datagram bit (§11.4.1.1).
 func TestFetch_StitchedObjectKeepsDatagramForwardingPreference(t *testing.T) {
 	t.Parallel()
 	objs := runStitch(t, stitchOpts{
@@ -155,7 +155,7 @@ func TestFetch_StitchedObjectKeepsDatagramForwardingPreference(t *testing.T) {
 				return
 			}
 			// One datagram-flavoured object at the start of the requested
-			// sub-range. §11.4.4.1: the Datagram bit means no Subgroup ID.
+			// sub-range. §11.4.1.1: the Datagram bit means no Subgroup ID.
 			fo := &message.FetchObject{
 				SerializationFlags: message.FetchFlagGroupIDDelta |
 					message.FetchFlagObjectIDDelta |
@@ -185,7 +185,7 @@ func TestFetch_StitchedObjectKeepsDatagramForwardingPreference(t *testing.T) {
 			stitchedGroups(objs))
 	}
 	if !stitched.Datagram {
-		t.Error("stitched object lost its §11.4.4.1 Datagram bit crossing the relay; " +
+		t.Error("stitched object lost its §11.4.1.1 Datagram bit crossing the relay; " +
 			"a subscriber would see it as subgroup-published")
 	}
 	// Cached objects were published on subgroups, so the bit must not be
@@ -215,7 +215,7 @@ type stitchOpts struct {
 	fillTimeout time.Duration
 
 	// extraParams ride the downstream FETCH alongside the range — Range
-	// Filters (§5.1.4), in practice.
+	// Filters (§3.3.2), in practice.
 	extraParams message.Parameters
 }
 
@@ -400,7 +400,7 @@ func fetchStitched(
 	return readFetchResponse(t, sess, message.GroupOrderAscending, 5*time.Second), true
 }
 
-// stitchMarker names the §11.4.4.2 encoding a stitched response used for the
+// stitchMarker names the §11.4.1.2 encoding a stitched response used for the
 // sub-range it could not answer from cache.
 type stitchMarker int
 
@@ -436,7 +436,7 @@ func stitchMarkerOf(objs []*session.DecodedFetchObject) stitchMarker {
 }
 
 // stitchedGroups returns the group IDs of the actual objects, skipping the
-// §11.4.4.2 markers.
+// §11.4.1.2 markers.
 func stitchedGroups(objs []*session.DecodedFetchObject) []uint64 {
 	var groups []uint64
 	for _, o := range objs {
@@ -448,9 +448,9 @@ func stitchedGroups(objs []*session.DecodedFetchObject) []uint64 {
 	return groups
 }
 
-// TestFetch_RangeFilterKeepsTimedOutMarker: the Range Filter pass (§5.1.4) does
-// not drop End of Range markers (§11.4.4.2), which carry nothing to match;
-// dropping one would turn "timed out" into "does not exist" (§10.13).
+// TestFetch_RangeFilterKeepsTimedOutMarker: the Range Filter pass (§3.3.2) does
+// not drop End of Range markers (§11.4.1.2), which carry nothing to match;
+// dropping one would turn "timed out" into "does not exist" (§3.2.2).
 func TestFetch_RangeFilterKeepsTimedOutMarker(t *testing.T) {
 	t.Parallel()
 
@@ -462,7 +462,7 @@ func TestFetch_RangeFilterKeepsTimedOutMarker(t *testing.T) {
 		Ranges: []message.Range{{Start: 7, End: 7}},
 	})
 
-	// onFetch nil + a short FILL_TIMEOUT is the §10.2.5 budget-exhausted path,
+	// onFetch nil + a short FILL_TIMEOUT is the §9.20.5 budget-exhausted path,
 	// which reports the uncached span as an End of Timed-Out Range.
 	objs := runStitch(t, stitchOpts{
 		onFetch:     nil,
@@ -472,7 +472,7 @@ func TestFetch_RangeFilterKeepsTimedOutMarker(t *testing.T) {
 
 	if got := stitchMarkerOf(objs); got != markerTimedOut {
 		t.Fatalf("stitched response encoded %s, want an End of Timed-Out Range marker; "+
-			"the Range Filter pass must not drop §11.4.4.2 markers, which carry no "+
+			"the Range Filter pass must not drop §11.4.1.2 markers, which carry no "+
 			"subgroup, priority or properties to match on", got)
 	}
 }

@@ -8,7 +8,7 @@ import (
 )
 
 // TestMergeTracksUpdate: an updated parameter type replaces every stored one of
-// that type (§10.9), a zero-length Range Filter removes it (§5.1.4), and
+// that type (§9.5), a zero-length Range Filter removes it (§3.3.2), and
 // TRACK_NAMESPACE_PREFIX and AUTHORIZATION_TOKEN are not kept.
 func TestMergeTracksUpdate(t *testing.T) {
 	objIDs := func(start uint64) message.Parameter {

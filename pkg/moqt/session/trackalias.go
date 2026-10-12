@@ -11,7 +11,7 @@ import (
 )
 
 // AllocOutboundTrackAlias returns the next Track Alias to use when this side
-// advertises a new track to the peer (§11.1). Aliases are independent across
+// advertises a new track to the peer (§3.1.3). Aliases are independent across
 // sessions, so callers must remap when forwarding between two sessions.
 //
 // Allocation starts at 1: [Session.Publish] and [Request.AcceptSubscribe]
@@ -23,7 +23,7 @@ func (s *Session) AllocOutboundTrackAlias() uint64 {
 
 // ErrDuplicateTrackAlias is returned by [Session.RegisterInboundTrack] when the
 // peer assigns a Track Alias that is already in use for a different track
-// (§11.1). The session is already closed with
+// (§3.1.3). The session is already closed with
 // [moqt.SessionDuplicateTrackAlias].
 type ErrDuplicateTrackAlias struct {
 	Alias    uint64
@@ -38,16 +38,16 @@ func (e *ErrDuplicateTrackAlias) Error() string {
 	)
 }
 
-// InboundTrack is what an inbound Track Alias is bound to (§11.1).
+// InboundTrack is what an inbound Track Alias is bound to (§3.1.3).
 type InboundTrack struct {
 	Key track.Key
 
-	// DefaultPublisherPriority is the DEFAULT_PUBLISHER_PRIORITY (§12.4) of
+	// DefaultPublisherPriority is the DEFAULT_PUBLISHER_PRIORITY (§10.4) of
 	// the message that bound the alias, or 128 when omitted. Subgroups and
-	// datagrams with the DEFAULT_PRIORITY bit inherit it (§11.4.2, §11.3.1).
+	// datagrams with the DEFAULT_PRIORITY bit inherit it (§11.3.1, §11.2.1).
 	DefaultPublisherPriority uint8
 
-	// MaxCacheDuration is the MAX_CACHE_DURATION (§12.3) of the same message,
+	// MaxCacheDuration is the MAX_CACHE_DURATION (§10.3) of the same message,
 	// if HasMaxCacheDuration.
 	MaxCacheDuration    time.Duration
 	HasMaxCacheDuration bool
@@ -60,7 +60,7 @@ type InboundTrack struct {
 // PUBLISH (whose TrackAlias field is the alias).
 //
 // Registering an alias again for the same track counts one more registration
-// (§5.1 allows subscriptions to share an alias); it stays registered until
+// (§3.1 allows subscriptions to share an alias); it stays registered until
 // each is released by [Session.UnregisterInboundTrackAlias]. Assumption: the
 // latest Track Properties replace earlier ones — the draft does not say which
 // a shared alias carries, and a release cannot tell which registration it
@@ -68,7 +68,7 @@ type InboundTrack struct {
 //
 // If alias is registered for a different track, the session is closed with
 // DUPLICATE_TRACK_ALIAS and *ErrDuplicateTrackAlias returned: "it MUST close
-// the session with error DUPLICATE_TRACK_ALIAS" (§11.1).
+// the session with error DUPLICATE_TRACK_ALIAS" (§3.1.3).
 func (s *Session) RegisterInboundTrack(alias uint64, key track.Key, trackProperties []byte) error {
 	in := InboundTrack{
 		Key:                      key,
@@ -108,7 +108,7 @@ func (s *Session) RegisterInboundTrackAlias(alias uint64, key track.Key) error {
 
 // UnregisterInboundTrackAlias releases one registration of alias (see
 // [Session.RegisterInboundTrack]); the last release removes it. Call it once
-// the subscription is Terminated (§5.1), for an alias registered with
+// the subscription is Terminated (§3.1), for an alias registered with
 // RegisterInboundTrack directly: a [Subscription] or [IncomingPublication]
 // releases its own.
 //

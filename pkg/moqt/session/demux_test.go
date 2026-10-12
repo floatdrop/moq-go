@@ -97,7 +97,7 @@ func TestDemuxRoutesStreams(t *testing.T) {
 	}
 }
 
-// TestIncomingSubgroupTrackKeyResolvesLive verifies the §11.1 fix: TrackKey
+// TestIncomingSubgroupTrackKeyResolvesLive verifies the §3.1.3 fix: TrackKey
 // resolves against the inbound alias registry at call time, so a stream
 // accepted before its alias is registered resolves once it is.
 func TestIncomingSubgroupTrackKeyResolvesLive(t *testing.T) {
@@ -173,7 +173,7 @@ func collectEvents[T any](t *testing.T, ch <-chan T, n int) []T {
 }
 
 // TestDemuxParksStreamsUntilAliasKnown: a subgroup for an unknown Track Alias is
-// buffered until its alias is registered (§11.4.2 MAY buffer), since the first
+// buffered until its alias is registered (§3.1.3.1 MAY buffer), since the first
 // Groups often arrive before SUBSCRIBE_OK is read.
 func TestDemuxParksStreamsUntilAliasKnown(t *testing.T) {
 	t.Parallel()
@@ -231,7 +231,7 @@ func TestDemuxParksStreamsUntilAliasKnown(t *testing.T) {
 const parkLimitForTest = 8
 
 // TestDemuxParkingIsBounded: parked streams hold flow control, so parking is
-// bounded and the rest are abandoned (§11.4.2: buffer "for a brief period").
+// bounded and the rest are abandoned (§3.1.3.1: buffer "for a brief period").
 func TestDemuxParkingIsBounded(t *testing.T) {
 	t.Parallel()
 
@@ -298,7 +298,7 @@ func TestDemuxParkingIsBounded(t *testing.T) {
 		go func() { _ = d.Run(ctx, sub) }()
 
 		// Register then unregister: the subscription has been cancelled, so
-		// §11.1 wants late Objects discarded quickly rather than treated as
+		// §3.1.3 wants late Objects discarded quickly rather than treated as
 		// belonging to an unknown alias.
 		d.HandleTrack(alias, func(*session.IncomingSubgroupStream) {})
 		d.HandleTrack(alias, nil)

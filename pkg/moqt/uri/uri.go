@@ -1,14 +1,14 @@
 // Package uri parses and validates "moqt" URIs and their fragment identifiers
-// as defined by draft-ietf-moq-transport-20 §3.1.1 and §3.1.2.
+// as defined by draft-ietf-moq-transport-22 §6.1 and §6.1.1.
 //
 //	moqt-URI = "moqt" "://" authority path-abempty [ "?" query ]
 //
 // A parsed [URI] exposes everything the connection-setup paths need:
-// [URI.HostPort] for dialing (applying the §3.1.3 default port of 443),
+// [URI.HostPort] for dialing (applying the §6.1.2 default port of 443),
 // [URI.Authority] and [URI.PathAndQuery] for the AUTHORITY / PATH Setup
-// Options carried on a native-QUIC connection (§3.1.5 / §10.3.1), and
+// Options carried on a native-QUIC connection (§6.2.2 / §9.1), and
 // [URI.HTTPSURL] for the https URL a WebTransport client connects to
-// (§3.1.4). Fragments are parsed and validated but, per §3.1.2, are processed
+// (§6.2.1). Fragments are parsed and validated but, per §6.1.1, are processed
 // locally by the client and never transmitted to the server.
 //
 // The package depends only on the standard library so it can be used from any
@@ -22,14 +22,14 @@ import (
 	"strings"
 )
 
-// Scheme is the URI scheme defined for MOQT servers (§3.1.1).
+// Scheme is the URI scheme defined for MOQT servers (§6.1).
 const Scheme = "moqt"
 
-// DefaultPort is used when the authority omits an explicit port (§3.1.3:
+// DefaultPort is used when the authority omits an explicit port (§6.1.2:
 // "If the port is omitted in the URI, a default port of 443 is used").
 const DefaultPort = "443"
 
-// URI is a parsed, validated "moqt" URI (§3.1.1).
+// URI is a parsed, validated "moqt" URI (§6.1).
 type URI struct {
 	// Authority is the host[:port] exactly as supplied (no default port
 	// filled in). The host subcomponent is guaranteed non-empty.
@@ -50,12 +50,12 @@ type URI struct {
 	RawQuery string
 
 	// Fragment is the parsed fragment identifier, or nil when the URI carried
-	// none. Per §3.1.2 the fragment is processed locally and never sent to
+	// none. Per §6.1.1 the fragment is processed locally and never sent to
 	// the server.
 	Fragment *Fragment
 }
 
-// Fragment is a parsed moqt URI fragment identifier (§3.1.2):
+// Fragment is a parsed moqt URI fragment identifier (§6.1.1):
 //
 //	moqt://example.com/app#<type>:<value>
 type Fragment struct {
@@ -68,7 +68,7 @@ type Fragment struct {
 	Value string
 }
 
-// Parse parses and validates a "moqt" URI per §3.1.1 / §3.1.2. It returns an
+// Parse parses and validates a "moqt" URI per §6.1 / §6.1.1. It returns an
 // error when the scheme is not "moqt", the URI is not hierarchical, the
 // authority has an empty host, or a present fragment does not match the
 // "type:value" grammar.
@@ -87,7 +87,7 @@ func Parse(raw string) (*URI, error) {
 	}
 	host := u.Hostname()
 	if host == "" {
-		// §3.1.1: "The authority portion MUST NOT contain an empty host
+		// §6.1: "The authority portion MUST NOT contain an empty host
 		// portion."
 		return nil, fmt.Errorf("uri: %q has an empty host", raw)
 	}
@@ -102,13 +102,13 @@ func Parse(raw string) (*URI, error) {
 		Port:      port,
 		// EscapedPath, not Path: the struct carries the RAW path-abempty
 		// component. url.URL.Path is percent-DECODED — using it would turn
-		// "/a%3Fb" into "/a?b", making the PATH Setup Option (§3.1.5, §10.3.1.2)
+		// "/a%3Fb" into "/a?b", making the PATH Setup Option (§6.2.2, §9.1.2)
 		// ambiguous and String()/HTTPSURL() emit invalid URIs.
 		Path:     u.EscapedPath(),
 		RawQuery: u.RawQuery,
 	}
 
-	// A '#' in the raw URI introduces a fragment component (§3.1.2). When
+	// A '#' in the raw URI introduces a fragment component (§6.1.1). When
 	// present it MUST match the "type:value" grammar, so a present-but-empty
 	// or colon-less fragment is an error rather than silently ignored.
 	if strings.IndexByte(raw, '#') >= 0 {
@@ -122,22 +122,22 @@ func Parse(raw string) (*URI, error) {
 	return out, nil
 }
 
-// parseFragment validates the "type:value" grammar of §3.1.2 against the
+// parseFragment validates the "type:value" grammar of §6.1.1 against the
 // (percent-decoded) fragment text.
 func parseFragment(frag string) (*Fragment, error) {
 	typ, val, ok := strings.Cut(frag, ":")
 	if !ok {
-		return nil, fmt.Errorf("uri: fragment %q missing \"type:value\" colon (§3.1.2)", frag)
+		return nil, fmt.Errorf("uri: fragment %q missing \"type:value\" colon (§6.1.1)", frag)
 	}
 	if !validFragmentType(typ) {
 		return nil, fmt.Errorf(
-			"uri: fragment type %q must be a non-empty run of ASCII [a-z0-9-] (§3.1.2)", typ)
+			"uri: fragment type %q must be a non-empty run of ASCII [a-z0-9-] (§6.1.1)", typ)
 	}
 	return &Fragment{Type: typ, Value: val}, nil
 }
 
 // validFragmentType reports whether s is a non-empty run of ASCII lowercase
-// letters, digits, and hyphens (§3.1.2).
+// letters, digits, and hyphens (§6.1.1).
 func validFragmentType(s string) bool {
 	if s == "" {
 		return false
@@ -155,14 +155,14 @@ func validFragmentType(s string) bool {
 	return true
 }
 
-// HostPort returns the "host:port" string for dialing, applying the §3.1.3
+// HostPort returns the "host:port" string for dialing, applying the §6.1.2
 // default port of 443 when the URI omitted one.
 func (u *URI) HostPort() string {
 	return net.JoinHostPort(u.Host, u.Port)
 }
 
 // PathAndQuery returns the path-abempty with the query appended, the value to
-// carry in the PATH Setup Option (§3.1.5 / §10.3.1.2). It is empty when the
+// carry in the PATH Setup Option (§6.2.2 / §9.1.2). It is empty when the
 // URI has neither a path nor a query.
 func (u *URI) PathAndQuery() string {
 	if u.RawQuery == "" {
@@ -172,9 +172,9 @@ func (u *URI) PathAndQuery() string {
 }
 
 // HTTPSURL converts the moqt URI to the https URL a WebTransport client
-// connects to (§3.1.4): the scheme is replaced with https and the authority,
+// connects to (§6.2.1): the scheme is replaced with https and the authority,
 // path, and query are preserved. The fragment is omitted because it is
-// processed locally and never sent to the server (§3.1.2).
+// processed locally and never sent to the server (§6.1.1).
 func (u *URI) HTTPSURL() string {
 	var b strings.Builder
 	b.WriteString("https://")

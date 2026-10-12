@@ -11,7 +11,7 @@ import (
 // REQUEST_UPDATE_OK reports LARGEST_OBJECT from what its SUBSCRIBE_OK or
 // PUBLISH already reported, not only from Objects it wrote itself: "If Objects
 // have been published on this Track the Publisher MUST include this parameter"
-// (§10.2.17). A larger Object written later wins; a smaller one does not.
+// (§9.20.17). A larger Object written later wins; a smaller one does not.
 func TestPublicationUpdateOKCarriesAnnouncedLargest(t *testing.T) {
 	check := func(t *testing.T, ok *message.RequestOK, err error, group, object uint64) {
 		t.Helper()

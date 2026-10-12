@@ -7,7 +7,7 @@ import (
 )
 
 // AliasType identifies the serialization and processing behavior of a Token
-// per §10.2.2.
+// per §8.9.
 type AliasType uint64
 
 const (
@@ -43,7 +43,7 @@ func (a AliasType) String() string {
 	return fmt.Sprintf("AliasType(0x%X)", uint64(a))
 }
 
-// Token is the Token structure from §10.2.2.
+// Token is the Token structure from §8.9.
 //
 // Wire format (within the outer KindBytes length-prefixed parameter value):
 //
@@ -143,7 +143,7 @@ func (t *Token) Parse(raw []byte) error {
 		return fmt.Errorf("moqt/message: unknown token alias type 0x%X", at)
 	}
 
-	// DELETE and USE_ALIAS carry only an Alias (§10.2.2).
+	// DELETE and USE_ALIAS carry only an Alias (§8.9).
 	if n := r.Remaining(); n > 0 {
 		return fmt.Errorf("moqt/message: %d trailing bytes after token alias", n)
 	}
@@ -151,14 +151,14 @@ func (t *Token) Parse(raw []byte) error {
 }
 
 // AuthorizationTokenParam builds a typed AUTHORIZATION_TOKEN parameter
-// (§10.2.2) from a Token. The Token is serialised to bytes and stored as a
+// (§9.20.2) from a Token. The Token is serialised to bytes and stored as a
 // KindBytes parameter.
 func AuthorizationTokenParam(t Token) Parameter {
 	return BytesParam(ParamAuthorizationToken, t.Bytes())
 }
 
 // TokensFromParam extracts and parses all AUTHORIZATION_TOKEN parameters from
-// ps. The spec allows the parameter to be repeated within a message (§10.2.2:
+// ps. The spec allows the parameter to be repeated within a message (§8.9:
 // "The AUTHORIZATION TOKEN parameter MAY be repeated within a message as long
 // as the combination of Token Type and Token Value are unique after resolving
 // any aliases"). Returns an error if any Token is malformed.

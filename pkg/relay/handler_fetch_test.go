@@ -16,8 +16,8 @@ import (
 )
 
 // TestFetch_DatagramObjectRoundTrips: an Object published as a datagram is
-// served by FETCH with its payload and the Datagram bit set (§11.4.4.1); FETCH
-// Objects carry no status (§11.2.1.1).
+// served by FETCH with its payload and the Datagram bit set (§11.4.1.1); FETCH
+// Objects carry no status (§11.1.1).
 func TestFetch_DatagramObjectRoundTrips(t *testing.T) {
 	t.Parallel()
 	pubSess, subSess, publisherAlias := publishAndCache(t)
@@ -91,7 +91,7 @@ func TestFetch_DatagramObjectRoundTrips(t *testing.T) {
 }
 
 // TestFetch_StatusMarkersNotServed: cached End-of-Group status markers are not
-// served by FETCH, while a zero-length Normal Object is (§11.2.1.1).
+// served by FETCH, while a zero-length Normal Object is (§11.1.1).
 func TestFetch_StatusMarkersNotServed(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -150,7 +150,7 @@ func TestFetch_StatusMarkersNotServed(t *testing.T) {
 }
 
 // TestFetch_WholeGroupEndForm: a LOCATION_FILTER without EndObject covers the
-// whole End Group (§5.1.2): a mid-group start is valid, FETCH_OK's EndLocation
+// whole End Group (§9.20.9): a mid-group start is valid, FETCH_OK's EndLocation
 // is capped to the watermark, and Objects run to the group's end.
 func TestFetch_WholeGroupEndForm(t *testing.T) {
 	t.Parallel()
@@ -225,7 +225,7 @@ func TestFetch_FromCacheAscending(t *testing.T) {
 }
 
 // TestFetch_FromCacheDescending: with GroupOrder descending, groups arrive in
-// reverse while Objects within a group stay ascending (§10.2.8, §11.4.4).
+// reverse while Objects within a group stay ascending (§9.20.8, §11.4.1).
 func TestFetch_FromCacheDescending(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -258,7 +258,7 @@ func TestFetch_FromCacheDescending(t *testing.T) {
 	}
 }
 
-// TestFetch_RejectsStartBeyondLargest pins §10.13: FETCH whose
+// TestFetch_RejectsStartBeyondLargest pins §3.2: FETCH whose
 // StartLocation is strictly greater than the relay's LargestObject is
 // REQUEST_ERROR / InvalidRange.
 func TestFetch_RejectsStartBeyondLargest(t *testing.T) {
@@ -283,7 +283,7 @@ func TestFetch_RejectsStartBeyondLargest(t *testing.T) {
 }
 
 // TestFetch_RejectsEmptyTrack: a FETCH of a known track with no Objects yet is
-// refused INVALID_RANGE (§10.13).
+// refused INVALID_RANGE (§3.2).
 func TestFetch_RejectsEmptyTrack(t *testing.T) {
 	t.Parallel()
 	pubSess, _, _ := publishAndCache(t)
@@ -301,7 +301,7 @@ func TestFetch_RejectsEmptyTrack(t *testing.T) {
 
 // TestSubscribe_FillCurrentGroup: a Next Object SUBSCRIBE with FILL_PARAMETERS
 // StartGroup=1 gets a fill fetch stream with the current group, keyed to the
-// SUBSCRIBE's Request ID (§5.1.3, §5.1.6).
+// SUBSCRIBE's Request ID (§3.4, §3.5).
 func TestSubscribe_FillCurrentGroup(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -329,7 +329,7 @@ func TestSubscribe_FillCurrentGroup(t *testing.T) {
 	}
 	t.Cleanup(func() { subStream.Close() })
 
-	// §10.2.17: the relay MUST include LARGEST_OBJECT now that objects are
+	// §9.20.17: the relay MUST include LARGEST_OBJECT now that objects are
 	// cached — it is what the subscriber sizes the fill against.
 	lp, hasLargest := subStream.OK.Parameters.Find(message.ParamLargestObject)
 	if !hasLargest {
@@ -347,7 +347,7 @@ func TestSubscribe_FillCurrentGroup(t *testing.T) {
 	if !isFetch {
 		t.Fatalf("got %T, want *IncomingFetchStream — the fill must arrive on a fetch stream", ds)
 	}
-	// §5.1.3: the initial fill carries the SUBSCRIBE's Request ID.
+	// §3.4: the initial fill carries the SUBSCRIBE's Request ID.
 	if fs.Header.RequestID != subMsg.RequestID {
 		t.Errorf("fill FETCH_HEADER Request ID = %d, want the SUBSCRIBE's %d",
 			fs.Header.RequestID, subMsg.RequestID)
@@ -365,7 +365,7 @@ func TestSubscribe_FillCurrentGroup(t *testing.T) {
 }
 
 // TestSubscribe_FillWholeTrack: a zero-length LOCATION_FILTER inside
-// FILL_PARAMETERS fills the whole track up to Largest Object (§5.1.3, §5.1.6);
+// FILL_PARAMETERS fills the whole track up to Largest Object (§3.4, §3.5);
 // an omitted one would inherit the subscription's filter instead.
 func TestSubscribe_FillWholeTrack(t *testing.T) {
 	t.Parallel()
@@ -384,7 +384,7 @@ func TestSubscribe_FillWholeTrack(t *testing.T) {
 			message.NextObjectFilter(),
 			message.FillParametersParam(message.Parameters{
 				// Zero-length: "the fill range is the entire track up to
-				// Largest Object" (§5.1.3).
+				// Largest Object" (§3.4).
 				message.UnfilteredFilter(),
 			}),
 		},
@@ -412,7 +412,7 @@ func TestSubscribe_FillWholeTrack(t *testing.T) {
 }
 
 // TestSubscribe_FillInheritsSubscriptionFilter: with no LOCATION_FILTER inside
-// FILL_PARAMETERS the fill range is the subscription's own (§5.1.3), which for a
+// FILL_PARAMETERS the fill range is the subscription's own (§3.4), which for a
 // Next Object filter is empty, so no fill stream opens.
 func TestSubscribe_FillInheritsSubscriptionFilter(t *testing.T) {
 	t.Parallel()
@@ -442,13 +442,13 @@ func TestSubscribe_FillInheritsSubscriptionFilter(t *testing.T) {
 	defer cancel()
 	if ds, err := subSess.AcceptDataStream(ctx); err == nil {
 		t.Fatalf("got a %T; inheriting the Next Object filter makes the fill "+
-			"range empty, so §5.1.3 says open no stream", ds)
+			"range empty, so §3.4 says open no stream", ds)
 	}
 }
 
 // TestSubscribe_RequestUpdateOpensSecondFill: FILL_PARAMETERS on a
 // REQUEST_UPDATE opens a second fill fetch stream keyed to the update's own
-// Request ID, without cancelling the first (§5.1.3).
+// Request ID, without cancelling the first (§3.4).
 func TestSubscribe_RequestUpdateOpensSecondFill(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -477,7 +477,7 @@ func TestSubscribe_RequestUpdateOpensSecondFill(t *testing.T) {
 		t.Fatalf("initial fill Request ID = %d, want the SUBSCRIBE's %d", first, subMsg.RequestID)
 	}
 
-	// A second fill over a wider range. §10.2.15: FILL_PARAMETERS is not
+	// A second fill over a wider range. §9.20.15: FILL_PARAMETERS is not
 	// retained as subscription state, so it has to be re-sent to ask again.
 	if _, err := subStream.Update(t.Context(), message.Parameters{
 		message.FillParametersParam(message.Parameters{message.RelativeStartFilter(2)}),
@@ -488,13 +488,13 @@ func TestSubscribe_RequestUpdateOpensSecondFill(t *testing.T) {
 	second := acceptFillStream(t, subSess)
 	if second == subMsg.RequestID {
 		t.Errorf("the REQUEST_UPDATE's fill reused the SUBSCRIBE's Request ID %d; "+
-			"§5.1.3 keys it to the REQUEST_UPDATE that opened it", second)
+			"§3.4 keys it to the REQUEST_UPDATE that opened it", second)
 	}
 }
 
 // TestSubscribe_FillNotOpenedWhileForwardPaused: FILL_PARAMETERS while Forward
 // State is 0 opens no fill stream, nor does resuming without re-sending it
-// (§5.1.3.1).
+// (§3.4.1).
 func TestSubscribe_FillNotOpenedWhileForwardPaused(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -518,7 +518,7 @@ func TestSubscribe_FillNotOpenedWhileForwardPaused(t *testing.T) {
 	t.Cleanup(func() { subStream.Close() })
 
 	if ds, ok := tryAcceptDataStream(t, subSess, 500*time.Millisecond); ok {
-		t.Fatalf("got a %T while Forward State is 0; §5.1.3.1 opens no fill there", ds)
+		t.Fatalf("got a %T while Forward State is 0; §3.4.1 opens no fill there", ds)
 	}
 
 	// Resume forwarding without re-sending FILL_PARAMETERS: still no fill.
@@ -528,8 +528,8 @@ func TestSubscribe_FillNotOpenedWhileForwardPaused(t *testing.T) {
 		t.Fatalf("REQUEST_UPDATE: %v", err)
 	}
 	if ds, ok := tryAcceptDataStream(t, subSess, 500*time.Millisecond); ok {
-		t.Fatalf("got a %T on resume; §5.1.3.1 requires FILL_PARAMETERS to be "+
-			"re-sent, and §10.2.15 says it is not retained as subscription state", ds)
+		t.Fatalf("got a %T on resume; §3.4.1 requires FILL_PARAMETERS to be "+
+			"re-sent, and §9.20.15 says it is not retained as subscription state", ds)
 	}
 }
 
@@ -556,7 +556,7 @@ func acceptFillStream(t *testing.T, sess *session.Session) uint64 {
 }
 
 // TestSubscribe_NoFillParametersOpensNoStream: a SUBSCRIBE without
-// FILL_PARAMETERS opens no fetch stream (§10.2.15).
+// FILL_PARAMETERS opens no fetch stream (§9.20.15).
 func TestSubscribe_NoFillParametersOpensNoStream(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -589,7 +589,7 @@ func TestFetch_PartialRangeCarriesPriority(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
 
-	// The inherited §12.4 default is pinned by TestDefaultPriority_Subgroup.
+	// The inherited §10.4 default is pinned by TestDefaultPriority_Subgroup.
 	publishObjects(t, pubSess, publisherAlias, 7, 2)
 	time.Sleep(50 * time.Millisecond)
 
@@ -608,7 +608,7 @@ func TestFetch_PartialRangeCarriesPriority(t *testing.T) {
 }
 
 // TestFetch_OKEndLocationCappedToWatermark: FETCH_OK's inclusive EndLocation is
-// capped at Largest Object when the request reaches past it (§10.14).
+// capped at Largest Object when the request reaches past it (§9.12).
 func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -629,7 +629,7 @@ func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 	if ok.EndLocation != want {
 		t.Fatalf("FETCH_OK.EndLocation = %+v, want %+v", ok.EndLocation, want)
 	}
-	// §10.14: reaching Largest Object is not reaching the Track's end.
+	// §9.12: reaching Largest Object is not reaching the Track's end.
 	if ok.EndOfTrack {
 		t.Error("FETCH_OK End Of Track = true on a Track no END_OF_TRACK ended")
 	}
@@ -637,7 +637,7 @@ func TestFetch_OKEndLocationCappedToWatermark(t *testing.T) {
 
 // TestFetch_OKEndOfTrack: once an END_OF_TRACK Object ended the track, a FETCH
 // whose End Location is that Object says End Of Track; one ending earlier does
-// not (§10.14).
+// not (§9.12).
 func TestFetch_OKEndOfTrack(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -667,7 +667,7 @@ func TestFetch_OKEndOfTrack(t *testing.T) {
 
 // TestSubscribe_FillOpensNoStreamOnEmptyTrack: on a track with no Objects the
 // fill range is empty, so no fill stream opens and SUBSCRIBE_OK has no
-// LARGEST_OBJECT (§5.1.3).
+// LARGEST_OBJECT (§3.4).
 func TestSubscribe_FillOpensNoStreamOnEmptyTrack(t *testing.T) {
 	t.Parallel()
 	pubSess, _, _ := publishAndCache(t) // track published, no objects written
@@ -686,7 +686,7 @@ func TestSubscribe_FillOpensNoStreamOnEmptyTrack(t *testing.T) {
 	}
 	t.Cleanup(func() { subStream.Close() })
 
-	// Precondition, and the reason no fill can be served: §10.2.17 only obliges
+	// Precondition, and the reason no fill can be served: §9.20.17 only obliges
 	// the publisher to send LARGEST_OBJECT once objects exist.
 	if _, ok := subStream.OK.Parameters.Find(message.ParamLargestObject); ok {
 		t.Fatal("SUBSCRIBE_OK carried LARGEST_OBJECT for a track with no objects")
@@ -695,12 +695,12 @@ func TestSubscribe_FillOpensNoStreamOnEmptyTrack(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 	if ds, err := subSess.AcceptDataStream(ctx); err == nil {
-		t.Fatalf("got a %T for an empty track; §5.1.3 says open no fill stream", ds)
+		t.Fatalf("got a %T for an empty track; §3.4 says open no fill stream", ds)
 	}
 }
 
 // TestSubscribe_FillRelativeStartClampsAtOrigin: a relative fill start before
-// group 0 clamps to {0,0} rather than failing (§5.1.2).
+// group 0 clamps to {0,0} rather than failing (§9.20.9).
 func TestSubscribe_FillRelativeStartClampsAtOrigin(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -748,7 +748,7 @@ func TestSubscribe_FillRelativeStartClampsAtOrigin(t *testing.T) {
 
 // TestFetch_ObjectIDDeltaEncoding: on the wire, Objects 0, 1 and 5 of one group
 // encode as absolute 0, delta omitted, delta 4 — no +1 without a Group ID Delta
-// (§11.4.4.1).
+// (§11.4.1.1).
 func TestFetch_ObjectIDDeltaEncoding(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, nil)
@@ -763,7 +763,7 @@ func TestFetch_ObjectIDDeltaEncoding(t *testing.T) {
 		if err != nil {
 			return
 		}
-		// Subgroup deltas (§11.4.2, +1 applies): IDs 0, 1, then 5.
+		// Subgroup deltas (§11.3.1, +1 applies): IDs 0, 1, then 5.
 		for _, d := range []uint64{0, 0, 3} {
 			_ = sg.WriteObject(&message.SubgroupObject{ObjectIDDelta: d, Payload: []byte("x")})
 		}
@@ -771,7 +771,7 @@ func TestFetch_ObjectIDDeltaEncoding(t *testing.T) {
 	}()
 	// The relay caches before it forwards, so the subscriber holding all
 	// three objects means the cache does too. The ID gap makes the relay
-	// reset and reopen the live stream (§11.4.3), so follow it across streams.
+	// reset and reopen the live stream (§11.3.2), so follow it across streams.
 	var live *session.IncomingSubgroupStream
 	for got := 0; got < 3; {
 		if live == nil {

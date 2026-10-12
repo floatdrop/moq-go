@@ -50,7 +50,7 @@ func (s *Session) controlRecvLoop() {
 				return
 			}
 			if errors.Is(err, io.EOF) {
-				// Peer closed the control stream cleanly. §3.3 forbids
+				// Peer closed the control stream cleanly. §6.3 forbids
 				// this during the session lifetime; treat it as a
 				// protocol violation.
 				_ = s.Close(moqt.SessionProtocolViolation, "peer closed control stream")
@@ -63,9 +63,9 @@ func (s *Session) controlRecvLoop() {
 			if s.sessionDoneAlready() {
 				return
 			}
-			// Every violation dispatchControl can report is a §3.5
+			// Every violation dispatchControl can report is a §12.2
 			// PROTOCOL_VIOLATION: the only messages it accepts after SETUP are
-			// GOAWAY (§10.4), a duplicate SETUP, and anything table 5 in §10
+			// GOAWAY (§9.2), a duplicate SETUP, and anything table 5 in §9
 			// disallows outright. A rule mandating a different close code would
 			// need the handler to carry it out of here.
 			_ = s.Close(moqt.SessionProtocolViolation, err.Error())
@@ -84,7 +84,7 @@ func (s *Session) sessionDoneAlready() bool {
 }
 
 // dispatchControl handles a single control-stream message after SETUP. Per
-// table 5 in §10, only GOAWAY is valid on the control stream after SETUP for
+// table 5 in §9, only GOAWAY is valid on the control stream after SETUP for
 // the messages in scope; anything else is a protocol violation.
 func (s *Session) dispatchControl(msg message.Message) error {
 	switch m := msg.(type) {

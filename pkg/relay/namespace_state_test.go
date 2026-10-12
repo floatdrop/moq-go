@@ -18,8 +18,8 @@ import (
 )
 
 // NAMESPACE / NAMESPACE_DONE state is per namespace, not per publisher, and
-// NAMESPACE_DONE never precedes its NAMESPACE (§10.18, §10.19);
-// TRACK_NAMESPACE_PREFIX updates follow §10.9.2.
+// NAMESPACE_DONE never precedes its NAMESPACE (§9.17, §4.2);
+// TRACK_NAMESPACE_PREFIX updates follow §9.5.2.
 
 // TestNamespace_SecondPublisherKeepsNamespaceAlive: two publishers of one
 // namespace announce it once, and it is done only when both have withdrawn.
@@ -40,7 +40,7 @@ func TestNamespace_SecondPublisherKeepsNamespaceAlive(t *testing.T) {
 }
 
 // TestNamespace_ReplayedNamespaceGetsDone: a namespace announced to a
-// subscriber from the relay's existing state (§6.1) gets its NAMESPACE_DONE
+// subscriber from the relay's existing state (§4.2) gets its NAMESPACE_DONE
 // when its publisher withdraws.
 func TestNamespace_ReplayedNamespaceGetsDone(t *testing.T) {
 	t.Parallel()
@@ -67,7 +67,7 @@ func sendPrefixUpdate(t *testing.T, sess *session.Session, stream session.Stream
 
 // TestNamespace_PrefixUpdateReconciles: after a TRACK_NAMESPACE_PREFIX update,
 // namespaces the new prefix drops are done before the REQUEST_OK and ones it
-// adds are announced after, relative to the new prefix (§10.9.2).
+// adds are announced after, relative to the new prefix (§9.5.2).
 func TestNamespace_PrefixUpdateReconciles(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -89,9 +89,9 @@ func TestNamespace_PrefixUpdateReconciles(t *testing.T) {
 }
 
 // TestNamespace_PrefixUpdateOverlapRejected: an updated prefix overlapping
-// another subscription of the session is PREFIX_OVERLAP (§10.2.20); the failed
-// update ends the request (§10.9.1), freeing its prefix once the requester FINs
-// (§3.3.2).
+// another subscription of the session is PREFIX_OVERLAP (§9.20.20); the failed
+// update ends the request (§9.5.1), freeing its prefix once the requester FINs
+// (§6.4.2.2).
 func TestNamespace_PrefixUpdateOverlapRejected(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -106,12 +106,12 @@ func TestNamespace_PrefixUpdateOverlapRejected(t *testing.T) {
 		t.Fatalf("got %T %+v, want REQUEST_ERROR PREFIX_OVERLAP", m, m)
 	}
 	requireStreamEnds(t, msgs)
-	_ = nsSub.Stream.Close() // FIN back, as §3.3.2 asks
+	_ = nsSub.Stream.Close() // FIN back, as §6.4.2.2 asks
 	requirePrefixReusable(t, subSess, "video")
 }
 
 // TestNamespace_StopSendingEndsSubscription: a subscriber may cancel with
-// STOP_SENDING alone (§3.3.3). The relay's next write fails; that must end the
+// STOP_SENDING alone (§6.4.2.3). The relay's next write fails; that must end the
 // subscription — release its prefix — not leave it queuing messages forever.
 func TestNamespace_StopSendingEndsSubscription(t *testing.T) {
 	t.Parallel()
@@ -138,7 +138,7 @@ func requireStreamEnds(t *testing.T, msgs <-chan message.Message) {
 			t.Fatalf("got %T after the refusal, want the stream closed", m)
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("the stream stayed open after a failed update (§10.9.1)")
+		t.Fatal("the stream stayed open after a failed update (§9.5.1)")
 	}
 }
 
@@ -161,7 +161,7 @@ func requirePrefixReusable(t *testing.T, sess *session.Session, fields ...string
 }
 
 // TestSubscribeTracks_PrefixUpdateApplies: a SUBSCRIBE_TRACKS prefix update
-// changes which later PUBLISHes are forwarded (§10.9.2).
+// changes which later PUBLISHes are forwarded (§9.5.2).
 func TestSubscribeTracks_PrefixUpdateApplies(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -438,7 +438,7 @@ func TestNamespace_LargeSeedNotReset(t *testing.T) {
 }
 
 // TestNamespace_BlockedSubscriberReset: a SUBSCRIBE_NAMESPACE subscriber that
-// stops reading has its stream reset once its queue reaches the bound (§10.19).
+// stops reading has its stream reset once its queue reaches the bound (§4.2.2).
 func TestNamespace_BlockedSubscriberReset(t *testing.T) {
 	t.Parallel()
 	store := discovery.NewMemoryStore()

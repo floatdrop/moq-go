@@ -30,7 +30,7 @@ func TestHandshakeExchangesPeerOptions(t *testing.T) {
 }
 
 // TestGreaseRoundTrip: a GREASE SETUP option from WithGrease reaches the peer,
-// which ignores it (§14: unknown SETUP option types MUST be ignored).
+// which ignores it (§13: unknown SETUP option types MUST be ignored).
 func TestGreaseRoundTrip(t *testing.T) {
 	aSess, bSess := openPairWithOpts(t,
 		[]session.Option{session.WithImplementation("grease-test/client"), session.WithGrease()},
@@ -78,7 +78,7 @@ func TestHandshakeFailFastCancelsSibling(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// PATH and AUTHORITY setup options (§10.3.1.1, §10.3.1.2)
+// PATH and AUTHORITY setup options (§9.1.1, §9.1.2)
 // ---------------------------------------------------------------------------
 
 // pathAndAuthority holds one well-formed PATH and AUTHORITY option each.
@@ -96,7 +96,7 @@ type webTransportConn struct{ session.Conn }
 func (webTransportConn) IsWebTransport() bool { return true }
 
 // TestClientSendsPathAndAuthority: WithPath and WithAuthority arrive under
-// their §15.4 codepoints (a wrong key would be silently ignored, §10.3).
+// their §16.4 codepoints (a wrong key would be silently ignored, §9.1).
 func TestClientSendsPathAndAuthority(t *testing.T) {
 	_, serverSess := openPairWithOpts(t,
 		[]session.Option{session.WithPath("/relay?room=1"), session.WithAuthority("relay.example:4433")},
@@ -121,7 +121,7 @@ func TestClientSendsPathAndAuthority(t *testing.T) {
 
 // TestClientRejectsServerSentPathAndAuthority: PATH and AUTHORITY MUST NOT
 // come from a server, and a client receiving one closes the session
-// (§10.3.1.1, §10.3.1.2). The server is hand-rolled: a moq-go one refuses.
+// (§9.1.1, §9.1.2). The server is hand-rolled: a moq-go one refuses.
 func TestClientRejectsServerSentPathAndAuthority(t *testing.T) {
 	for _, tt := range pathAndAuthority {
 		t.Run(tt.name, func(t *testing.T) {
@@ -150,7 +150,7 @@ func TestClientRejectsServerSentPathAndAuthority(t *testing.T) {
 }
 
 // TestServerRejectsPathOrAuthorityOverWebTransport: either option "received
-// while WebTransport is used" closes the session (§10.3.1.1, §10.3.1.2).
+// while WebTransport is used" closes the session (§9.1.1, §9.1.2).
 func TestServerRejectsPathOrAuthorityOverWebTransport(t *testing.T) {
 	for _, tt := range pathAndAuthority {
 		t.Run(tt.name, func(t *testing.T) {
@@ -166,7 +166,7 @@ func TestServerRejectsPathOrAuthorityOverWebTransport(t *testing.T) {
 			if err == nil {
 				_ = sess.Close(moqt.SessionNoError, "test cleanup")
 				t.Fatalf(
-					"server accepted a %s option over WebTransport; §10.3.1 requires the session be closed",
+					"server accepted a %s option over WebTransport; §9.1 requires the session be closed",
 					tt.name)
 			}
 			if !strings.Contains(err.Error(), "WebTransport") {
@@ -176,7 +176,7 @@ func TestServerRejectsPathOrAuthorityOverWebTransport(t *testing.T) {
 	}
 }
 
-// TestRefusesToSendPathOrAuthority: the send side of §10.3.1.1/§10.3.1.2. A
+// TestRefusesToSendPathOrAuthority: the send side of §9.1.1/§9.1.2. A
 // server, a WebTransport client, or a value that is not RFC 3986 (one
 // net/url lets through) fails the open instead of dropping the option.
 func TestRefusesToSendPathOrAuthority(t *testing.T) {
@@ -213,7 +213,7 @@ func TestRefusesToSendPathOrAuthority(t *testing.T) {
 
 // TestServerClosesMalformedPathOrAuthority: a value that is not RFC 3986
 // closes the session with MALFORMED_PATH / MALFORMED_AUTHORITY
-// (§10.3.1.1, §10.3.1.2); a well-formed pair still opens.
+// (§9.1.1, §9.1.2); a well-formed pair still opens.
 func TestServerClosesMalformedPathOrAuthority(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -254,7 +254,7 @@ func TestServerClosesMalformedPathOrAuthority(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Streams that arrive before the control stream (§3.3: SHOULD be buffered)
+// Streams that arrive before the control stream (§6.3: SHOULD be buffered)
 // ---------------------------------------------------------------------------
 
 // TestDataStreamBeforeControlStream: a subgroup stream opened before the
@@ -429,7 +429,7 @@ func TestHandshakeSkipsPaddingAndAbortedStreams(t *testing.T) {
 }
 
 // TestHandshakeFailsOnStreamFINedBeforeType: a uni stream FINed before a whole
-// type varint closes the session as a PROTOCOL_VIOLATION (§3.3); only a reset
+// type varint closes the session as a PROTOCOL_VIOLATION (§6.3); only a reset
 // is skipped.
 func TestHandshakeFailsOnStreamFINedBeforeType(t *testing.T) {
 	for name, prefix := range map[string][]byte{

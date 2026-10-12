@@ -22,25 +22,25 @@ func recordRedundant(entry *registry.TrackEntry, info registry.ObjectInfo, dup *
 	return entry.RecordDuplicate(info)
 }
 
-// checkDuplicate compares dup, a copy that lost the §9.3 dedup claim, with the
+// checkDuplicate compares dup, a copy that lost the §7.3 dedup claim, with the
 // first copy in c. A different Forwarding Preference, Subgroup ID, Priority or
-// Payload (§9.1), or different Immutable Properties (§2.4.2, §12.7; one copy
+// Payload (§7.1), or different Immutable Properties (§12.1, §10.7; one copy
 // having them and the other not counts), makes the track malformed: the error
-// wraps [session.ErrMalformedTrack]. Mutable Properties may differ (§9.1).
+// wraps [session.ErrMalformedTrack]. Mutable Properties may differ (§7.1).
 //
 // Normal becoming End of Group or End of Track is the existing-to-not-existing
-// change §9.1 allows, and the reverse a late Object (§2.1). Only a Normal
-// Object has a Payload or Properties (§11.2.1.1, §11.2.1.2), so those are
+// change §7.1 allows, and the reverse a late Object (§2.1.2). Only a Normal
+// Object has a Payload or Properties (§11.1.1, §11.1.2), so those are
 // compared only when both copies are Normal.
 //
 // A copy an announced gap says does not exist is compared too, when the
 // first copy is cached: §2.1 excuses its arrival, not a different content.
 //
 // On a difference the first copy is removed from the cache: it triggered the
-// Malformed Track status too, and such Objects MUST NOT be cached (§2.4.2).
+// Malformed Track status too, and such Objects MUST NOT be cached (§12.1).
 //
 // Limitation: nothing is compared when the first copy is not in the cache:
-// evicted, expired (§12.3), or not yet put there by a concurrent contributor.
+// evicted, expired (§10.3), or not yet put there by a concurrent contributor.
 func checkDuplicate(c *cache.ObjectCache, dup *cache.CachedObject) error {
 	first, ok := c.Get(dup.GroupID, dup.ObjectID)
 	if !ok || first.IsRangeMarker() {
@@ -64,7 +64,7 @@ func checkDuplicate(c *cache.ObjectCache, dup *cache.CachedObject) error {
 		return nil
 	}
 	c.Delete(dup.GroupID, dup.ObjectID)
-	return fmt.Errorf("%w: a duplicate of Object %d in Group %d has a different %s (§9.1, §2.4.2)",
+	return fmt.Errorf("%w: a duplicate of Object %d in Group %d has a different %s (§7.1, §12.1)",
 		session.ErrMalformedTrack, dup.ObjectID, dup.GroupID, field)
 }
 

@@ -27,7 +27,7 @@ func TestFetchRoundTrip(t *testing.T) {
 	fetchMsg := &message.Fetch{
 		Namespace: ns,
 		Name:      []byte("video"),
-		// §5.1.2: groups 1 through 2, inclusive.
+		// §3.3.1: groups 1 through 2, inclusive.
 		Parameters: message.Parameters{message.AbsoluteRangeFilter(message.Location{Group: 1}, 1)},
 	}
 
@@ -214,10 +214,10 @@ func TestFetchRejected(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestFetchOKEndBeforeStartClosesSession: an End Location before the FETCH's
-// Start closes the session with PROTOCOL_VIOLATION (§10.14); End == Start is a
+// Start closes the session with PROTOCOL_VIOLATION (§9.12); End == Start is a
 // one-Object range. A Start relative to the Largest Object is comparable too,
-// since a FETCH's End defaults to it (§5.1.2) and FETCH_OK's End never passes
-// it (§10.14): the Next Object and relative StartGroup 0 start past it, except
+// since a FETCH's End defaults to it (§9.20.9) and FETCH_OK's End never passes
+// it (§9.12): the Next Object and relative StartGroup 0 start past it, except
 // when End is {0, 0} ("no content yet").
 func TestFetchOKEndBeforeStartClosesSession(t *testing.T) {
 	t.Parallel()
@@ -260,7 +260,7 @@ func TestFetchOKEndBeforeStartClosesSession(t *testing.T) {
 }
 
 // TestFetchObjectInvalidFlagsCloseSession: Serialization Flags of 128 and
-// above other than the End of Range values are a PROTOCOL_VIOLATION (§11.4.4),
+// above other than the End of Range values are a PROTOCOL_VIOLATION (§11.4.1),
 // decided on the flags alone: whatever follows them, a whole object, a reset
 // or a Payload Length too large to read, is never parsed as their fields.
 func TestFetchObjectInvalidFlagsCloseSession(t *testing.T) {

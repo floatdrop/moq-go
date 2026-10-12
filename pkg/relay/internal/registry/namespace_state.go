@@ -11,7 +11,7 @@ import (
 
 // A SUBSCRIBE_NAMESPACE subscriber's view of the namespaces announced to it.
 //
-// §10.18: NAMESPACE_DONE is per namespace, not per source, so each subscriber
+// §9.17: NAMESPACE_DONE is per namespace, not per source, so each subscriber
 // counts the sources (local PUBLISH_NAMESPACEs and Discovery's remote relays)
 // of each namespace under its prefix: NAMESPACE on a count's 0→1,
 // NAMESPACE_DONE on its 1→0. Counts change only under the registry lock, which
@@ -114,7 +114,7 @@ func (r *NamespaceRegistry) RemoteNamespace(ns wire.TrackNamespace, relayAddr st
 	r.removeSourceLocked(ns)
 }
 
-// UpdatePrefix applies a TRACK_NAMESPACE_PREFIX update (§10.9.2) to e and
+// UpdatePrefix applies a TRACK_NAMESPACE_PREFIX update (§9.5.2) to e and
 // queues ok, the update's REQUEST_OK, in order with e's other messages.
 //
 // For a SUBSCRIBE_NAMESPACE, namespaces no longer covered are done before ok
@@ -155,7 +155,7 @@ func (e *SubscriberEntry) Enqueue(m message.Message) {
 }
 
 // Finish queues m as the last message of the request, after which the writer
-// FINs the stream (§10.9.1, for a failed REQUEST_UPDATE). The owner then waits
+// FINs the stream (§9.5.1, for a failed REQUEST_UPDATE). The owner then waits
 // for [SubscriberEntry.WriterDone] and unregisters e.
 func (e *SubscriberEntry) Finish(m message.Message) {
 	e.push(m, true)
@@ -164,7 +164,7 @@ func (e *SubscriberEntry) Finish(m message.Message) {
 func (e *SubscriberEntry) enqueue(m message.Message) { e.push(m, false) }
 
 // maxQueuedMessages and maxUnsentWait bound a namespace subscription's queue
-// (§10.19: a blocked response stream "MAY" be reset). The relay counts a
+// (§4.2.2: a blocked response stream "MAY" be reset). The relay counts a
 // stream as blocked when at least maxQueuedMessages are unsent and the oldest
 // has waited longer than maxUnsentWait. A slow subscriber still draining a
 // large seed can therefore be reset. The check runs only when a message is
@@ -231,7 +231,7 @@ func (e *SubscriberEntry) blockedLocked(now time.Time) bool {
 // owner runs it once, for the subscription's lifetime. It takes one message
 // at a time, so what it has not sent stays counted by the queue bound (see
 // maxQueuedMessages). After a failed write it also stops reading the stream,
-// so a peer's STOP_SENDING-only cancel (§3.3.3) ends the subscription.
+// so a peer's STOP_SENDING-only cancel (§6.4.2.3) ends the subscription.
 func (e *SubscriberEntry) RunWriter() {
 	defer close(e.writerDone)
 	for {
@@ -279,7 +279,7 @@ func (e *SubscriberEntry) RunWriter() {
 // WriterDone is closed once RunWriter has returned.
 func (e *SubscriberEntry) WriterDone() <-chan struct{} { return e.writerDone }
 
-// PublishSkipped queues a PUBLISH_SKIPPED (§10.21) for the track (ns, name) on
+// PublishSkipped queues a PUBLISH_SKIPPED (§9.19) for the track (ns, name) on
 // a SUBSCRIBE_TRACKS subscriber, its suffix relative to the prefix in force at
 // that point of the stream. It reports false, queuing nothing, when an update
 // moved the prefix off ns.
@@ -344,12 +344,12 @@ func (r *NamespaceRegistry) ReplaceRemote(ads []discovery.NamespaceInfo) {
 }
 
 // namespaceMessage is the NAMESPACE announcing ns to a subscriber of prefix
-// (§10.17).
+// (§9.16).
 func namespaceMessage(ns, prefix wire.TrackNamespace) *message.Namespace {
 	return &message.Namespace{TrackNamespaceSuffix: suffixAfter(ns, prefix)}
 }
 
-// namespaceDoneMessage is the NAMESPACE_DONE counterpart (§10.18).
+// namespaceDoneMessage is the NAMESPACE_DONE counterpart (§9.17).
 func namespaceDoneMessage(ns, prefix wire.TrackNamespace) *message.NamespaceDone {
 	return &message.NamespaceDone{TrackNamespaceSuffix: suffixAfter(ns, prefix)}
 }

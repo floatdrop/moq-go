@@ -9,7 +9,7 @@ import (
 )
 
 // SubgroupHandler handles one inbound SUBGROUP_HEADER stream that a [Demux]
-// routed to it by §11.1 Track Alias. It is invoked synchronously — usually by
+// routed to it by §3.1.3 Track Alias. It is invoked synchronously — usually by
 // [Demux.Run], but also by [Demux.HandleTrack], which hands over any streams
 // parked before the handler existed on the goroutine that registers it. Those
 // two can therefore overlap: a handler holding per-track state of its own must
@@ -18,15 +18,15 @@ import (
 type SubgroupHandler func(*IncomingSubgroupStream)
 
 // FetchHandler handles one inbound FETCH_HEADER stream that a [Demux] routed to
-// it by Request ID (§10.1). Invoked synchronously by [Demux.Run].
+// it by Request ID (§6.4.2.1). Invoked synchronously by [Demux.Run].
 type FetchHandler func(*IncomingFetchStream)
 
 // Demux routes the data streams accepted from a [Session] to per-track and
 // per-request handlers, replacing the hand-rolled "AcceptDataStream loop +
 // type-switch + Track-Alias match" a subscriber otherwise writes.
 //
-// Subgroup streams are dispatched by their §11.1 Track Alias — the value a
-// subscriber gets from [Subscription.TrackAlias]; FETCH streams by their §11.4.4
+// Subgroup streams are dispatched by their §3.1.3 Track Alias — the value a
+// subscriber gets from [Subscription.TrackAlias]; FETCH streams by their §11.4.1
 // Request ID — the ID the subscriber's FETCH was assigned. A FETCH stream with
 // no registered handler is passed to the OnUnknown callback; an unmatched
 // subgroup stream is parked instead, for the reasons below.
@@ -46,7 +46,7 @@ type FetchHandler func(*IncomingFetchStream)
 // one CDN it did worse — two streams reset on arrival and the subscription
 // then delivered nothing for the rest of the run.
 //
-// §11.4.2 says exactly what the choice is — "if an endpoint receives a
+// §3.1.3.1 says exactly what the choice is — "if an endpoint receives a
 // subgroup with an unknown Track Alias, it MAY abandon the stream, or choose
 // to buffer it for a brief period to handle reordering with the control
 // message that establishes the Track Alias" — and abandoning was measured to
@@ -75,20 +75,20 @@ type Demux struct {
 // parkLimit is how many subgroup streams may wait for one Track Alias at once,
 // and parkTotalLimit how many may wait across all of them. The window being
 // covered is a single control-message round trip, so a few Groups' worth is
-// the right order; past either bound a stream is reset, which is §11.4.2's
+// the right order; past either bound a stream is reset, which is §3.1.3.1's
 // other option ("MAY abandon the stream").
 //
-// Both are counts, where §11.4.2 says "for a brief period" — time. Nothing
+// Both are counts, where §3.1.3.1 says "for a brief period" — time. Nothing
 // here evicts on a timer: with fewer than parkLimit streams for an alias that
 // is never claimed, they wait until [Demux.Run] returns. What the counts bound
 // is how much can be pinned open at once, which is the part that matters for
-// the deadlock §11.4.2 warns about.
+// the deadlock §3.1.3.1 warns about.
 //
 // parkTotalLimit exists because per-alias bounding alone is not a bound: a
 // peer opening subgroup streams for many bogus aliases would park parkLimit of
 // each. A parked stream is header-parsed and then unread, so its body sits in
 // the transport's receive buffers and consumes the CONNECTION-level window —
-// and §11.4.2 continues, past the sentence quoted on [Demux]: "To prevent
+// and §3.1.3.1 continues, past the sentence quoted on [Demux]: "To prevent
 // deadlocks, endpoints MUST allocate connection flow control to the control
 // streams before allocating it to any data streams. Otherwise, a receiver
 // might wait for a control message containing a Track Alias to release flow
@@ -124,7 +124,7 @@ func (d *Demux) HandleTrack(alias uint64, h SubgroupHandler) (released int) {
 	d.mu.Lock()
 	if h == nil {
 		delete(d.subgroup, alias)
-		// §11.1: "Objects can arrive after a subscription has been
+		// §3.1.3: "Objects can arrive after a subscription has been
 		// cancelled. Subscribers SHOULD retain sufficient state to quickly
 		// discard these unwanted Objects, rather than treating them as
 		// belonging to an unknown Track Alias." Retiring the alias is that
@@ -173,7 +173,7 @@ func (d *Demux) HandleFetch(requestID uint64, h FetchHandler) {
 // It does NOT see subgroup streams. One whose Track Alias has no handler is
 // parked (see [Demux]) rather than reported, because at that point it is far
 // more likely to be early than unwanted. One arriving for an alias that was
-// registered and then unregistered is reset immediately, per §11.1.
+// registered and then unregistered is reset immediately, per §3.1.3.
 func (d *Demux) OnUnknown(f func(DataStream)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -185,7 +185,7 @@ func (d *Demux) OnUnknown(f func(DataStream)) {
 func (d *Demux) parkLocked(s *IncomingSubgroupStream) bool {
 	alias := s.Header.TrackAlias
 	if _, retired := d.retired[alias]; retired {
-		return false // §11.1: discard promptly, do not buffer.
+		return false // §3.1.3: discard promptly, do not buffer.
 	}
 	if d.parkedN >= parkTotalLimit {
 		return false // see parkTotalLimit.
@@ -209,7 +209,7 @@ func (d *Demux) dropParkedLocked(alias uint64) {
 
 // discardParked resets everything still waiting for an alias nobody claimed,
 // so a stream does not sit open holding its flow control for the life of the
-// session. §3.3.4 asks for a relevant code, and a subscriber winding down is
+// session. §12.5 asks for a relevant code, and a subscriber winding down is
 // not an implementation fault: reporting one would have a peer's metrics blame
 // this end for a normal end of run.
 func (d *Demux) discardParked() {
@@ -255,7 +255,7 @@ func (d *Demux) dispatch(ds DataStream) {
 		h := d.subgroup[s.Header.TrackAlias]
 		if h == nil {
 			// Early, not unwanted — unless the alias is retired or the
-			// park is full, in which case §11.4.2's other option applies.
+			// park is full, in which case §3.1.3.1's other option applies.
 			parked := d.parkLocked(s)
 			d.mu.Unlock()
 			if !parked {

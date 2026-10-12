@@ -91,7 +91,7 @@ func TestRankByAffinitySubsetOrderStable(t *testing.T) {
 }
 
 // TestNewUpstreamPoolFanInPassthrough: UpstreamFanIn is kept verbatim; zero or
-// negative means unbounded, the full fan-in of §9.5.
+// negative means unbounded, the full fan-in of §7.6.
 func TestNewUpstreamPoolFanInPassthrough(t *testing.T) {
 	t.Parallel()
 
@@ -105,7 +105,7 @@ func TestNewUpstreamPoolFanInPassthrough(t *testing.T) {
 }
 
 // TestResolveUpstreamsSkipsGoingAwayRelay: a pooled session whose relay sent
-// GOAWAY (§10.4) takes no UpstreamFanIn slot; resolution falls through to the
+// GOAWAY (§9.2) takes no UpstreamFanIn slot; resolution falls through to the
 // next-ranked relay.
 func TestResolveUpstreamsSkipsGoingAwayRelay(t *testing.T) {
 	t.Parallel()

@@ -139,7 +139,7 @@ func subscribe(ctx context.Context, addr string, opts subscribeOptions) error {
 	// Group's stream is open. Groups do overlap: §2.3.1 has it that "the
 	// amount of time elapsed between publishing an Object in Group ID N and
 	// in a Group ID > N, or even which will be published first, is not
-	// defined", and §13.5 that a publisher "prioritizes and transmits streams
+	// defined", and §15.5 that a publisher "prioritizes and transmits streams
 	// out of order". Reading them one at a time would order arrivals by
 	// stream completion rather than by when their bytes landed, which
 	// silently answers the two questions this tool exists to ask: reordering
@@ -396,7 +396,7 @@ func subscribeCatalog(
 	watch *catalogWatch,
 ) (cleanup func(), err error) {
 	// The Next Object filter alone cannot surface a catalog already behind the
-	// live edge, so pair it with a fill (§5.1.3) covering the current group.
+	// live edge, so pair it with a fill (§3.4) covering the current group.
 	// draft-20 replaced draft-19's Relative Joining FETCH with this.
 	sub := &message.Subscribe{
 		Namespace: wire.Namespace(namespace),
@@ -423,7 +423,7 @@ func subscribeCatalog(
 	})
 
 	// The fill arrives on a unidirectional fetch stream whose FETCH_HEADER
-	// carries the SUBSCRIBE's Request ID, not a FETCH's (§5.1.3).
+	// carries the SUBSCRIBE's Request ID, not a FETCH's (§3.4).
 	//
 	// Spawned like the others, and for a sharper reason than symmetry: the fill
 	// stream stays open until the relay has finished serving the fill range. An
@@ -437,7 +437,7 @@ func subscribeCatalog(
 	return func() {}, nil
 }
 
-// readCatalogFetch drains the catalog fill fetch stream (§5.1.3).
+// readCatalogFetch drains the catalog fill fetch stream (§3.4).
 func readCatalogFetch(ctx context.Context, s *session.IncomingFetchStream, watch *catalogWatch) {
 	for {
 		obj, err := s.ReadDecoded()

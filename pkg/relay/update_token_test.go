@@ -13,10 +13,10 @@ import (
 )
 
 // A REQUEST_UPDATE's AUTHORIZATION_TOKEN "conveys information to authorize
-// the sender to perform the operation carrying the parameter" (§10.2.2), so it
+// the sender to perform the operation carrying the parameter" (§9.20.2), so it
 // goes through the TokenVerifier on every request an update can modify, not
 // only the namespace subscriptions (see TestNamespaceUpdate_TokenVerified). A
-// denial fails the update, with what §10.9.1 requires of a failed one.
+// denial fails the update, with what §9.5.1 requires of a failed one.
 
 // badTokenRelay starts a relay whose TokenVerifier denies the token "bad"
 // with EXPIRED_AUTH_TOKEN, returning a client session on it.
@@ -37,7 +37,7 @@ func badTokenRelay(t *testing.T) *session.Session {
 }
 
 // requireUpdateFailed requires PUBLISH_DONE UPDATE_FAILED next on stream
-// (§10.9.1: "the publisher MUST also terminate the subscription").
+// (§9.5.1: "the publisher MUST also terminate the subscription").
 func requireUpdateFailed(t *testing.T, stream session.Stream) {
 	t.Helper()
 	next := relaytest.ReadNextMessage(t, stream, time.After(2*time.Second))
@@ -62,7 +62,7 @@ func TestRequestUpdate_TokenVerified_Subscribe(t *testing.T) {
 
 // TestRequestUpdate_TokenVerified_ForwardedPublish: the same for the
 // subscription a SUBSCRIBE_TRACKS holder accepted from a forwarded PUBLISH,
-// which it can modify like a SUBSCRIBE (§10.9).
+// which it can modify like a SUBSCRIBE (§9.5).
 func TestRequestUpdate_TokenVerified_ForwardedPublish(t *testing.T) {
 	t.Parallel()
 	subSess := badTokenRelay(t)
@@ -78,7 +78,7 @@ func TestRequestUpdate_TokenVerified_ForwardedPublish(t *testing.T) {
 }
 
 // TestRequestUpdate_TokenVerified_Fetch: a denied update to a FETCH gets the
-// verifier's code and ends the request; its data stream is reset (§10.9.1),
+// verifier's code and ends the request; its data stream is reset (§9.5.1),
 // which the in-process transport cannot show once the stream was read to its
 // FIN.
 func TestRequestUpdate_TokenVerified_Fetch(t *testing.T) {
@@ -105,7 +105,7 @@ func TestRequestUpdate_TokenVerified_Fetch(t *testing.T) {
 
 // TestRequestUpdate_TokenVerified_PublishNamespace: a denied update to a
 // PUBLISH_NAMESPACE gets the verifier's code, and the relay closes the request
-// stream (§10.9.1).
+// stream (§9.5.1).
 func TestRequestUpdate_TokenVerified_PublishNamespace(t *testing.T) {
 	t.Parallel()
 	pubSess := badTokenRelay(t)

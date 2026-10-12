@@ -12,7 +12,7 @@ import (
 // ErrUnsupportedMandatoryTrackProperty is returned when Track Properties
 // (received in SUBSCRIBE_OK, FETCH_OK, TRACK_STATUS_OK, or an inbound
 // PUBLISH) contain a Mandatory Track Property (range 0x4000–0x7FFF per
-// §2.5.1) that this endpoint does not understand. The caller MUST NOT
+// §3.7) that this endpoint does not understand. The caller MUST NOT
 // process or forward the track.
 //
 // For outbound requests (Subscribe, Fetch, TrackStatus) the session layer
@@ -28,23 +28,23 @@ type ErrUnsupportedMandatoryTrackProperty struct {
 
 func (e *ErrUnsupportedMandatoryTrackProperty) Error() string {
 	return fmt.Sprintf(
-		"moqt/session: unsupported mandatory track property 0x%X in %s (§2.5.1 — UNSUPPORTED_EXTENSION)",
+		"moqt/session: unsupported mandatory track property 0x%X in %s (§3.7 — UNSUPPORTED_EXTENSION)",
 		e.PropertyType, e.Context,
 	)
 }
 
 // ErrMalformedTrackProperties is wrapped by the error [ValidateTrackProperties]
 // returns when raw Track Properties do not parse: a Key-Value-Pair that
-// "cannot be parsed" makes the track malformed (§12.7, §2.4.2). A request is
+// "cannot be parsed" makes the track malformed (§10.7, §12.1). A request is
 // refused with INTERNAL_ERROR (see [TrackPropertiesRejectCode]).
 var ErrMalformedTrackProperties = errors.New("moqt/session: malformed track properties")
 
 // ErrTrackPropertiesNotAllowed is returned, and nothing sent, when asked to
-// send a REQUEST_OK with Track Properties where §10.5 says they are empty.
+// send a REQUEST_OK with Track Properties where §9.3 says they are empty.
 var ErrTrackPropertiesNotAllowed = errors.New("moqt/session: track properties not allowed in this REQUEST_OK")
 
 // ValidateTrackProperties parses raw Track Properties bytes and checks for
-// unknown Mandatory Track Properties (range 0x4000–0x7FFF per §2.5.1).
+// unknown Mandatory Track Properties (range 0x4000–0x7FFF per §3.7).
 //
 // knownMandatory is the set of Mandatory Track Property types this endpoint
 // supports. Every mandatory property found in raw that is not in this set
@@ -63,7 +63,7 @@ func ValidateTrackProperties(
 	if err != nil {
 		return nil, fmt.Errorf("%w in %s: %w", ErrMalformedTrackProperties, context, err)
 	}
-	// §12.7: Mandatory Track Properties inside Immutable Properties count.
+	// §10.7: Mandatory Track Properties inside Immutable Properties count.
 	all, err := message.ExpandImmutable(pairs)
 	if err != nil {
 		return nil, fmt.Errorf("%w in %s: %w", ErrMalformedTrackProperties, context, err)
@@ -78,8 +78,8 @@ func ValidateTrackProperties(
 }
 
 // CheckTrackProperties validates raw Track Properties: a value the draft makes
-// session-fatal closes the session (§12.5, §12.6), and against the types
-// configured with [WithKnownMandatoryTrackProperties] (§2.5.1) it returns
+// session-fatal closes the session (§10.5, §10.6), and against the types
+// configured with [WithKnownMandatoryTrackProperties] (§3.7) it returns
 // *ErrUnsupportedMandatoryTrackProperty or an error wrapping
 // [ErrMalformedTrackProperties]; see [TrackPropertiesRejectCode]. It is for
 // callers that bypass [Request.AcceptPublish] and the outbound openers, which
@@ -92,7 +92,7 @@ func (s *Session) CheckTrackProperties(raw []byte, context string) error {
 // the draft makes session-fatal (see [message.CheckTrackPropertyValues])
 // closes the session with PROTOCOL_VIOLATION. Then, against the session's
 // configured set of known mandatory track property types, an unknown one is
-// refused (§2.5.1). Without WithKnownMandatoryTrackProperties none is known,
+// refused (§3.7). Without WithKnownMandatoryTrackProperties none is known,
 // so every Mandatory Track Property is refused: an endpoint that does not
 // understand one "MUST NOT process or forward that track".
 func (s *Session) validateTrackProperties(raw []byte, context string) error {
@@ -106,8 +106,8 @@ func (s *Session) validateTrackProperties(raw []byte, context string) error {
 // checkTrackPropertyValues closes the session with PROTOCOL_VIOLATION when
 // Track Properties received in context hold a value the draft makes
 // session-fatal (see [message.CheckTrackPropertyValues]): "If an endpoint
-// receives a value outside this range, it MUST close the session" (§12.5,
-// §12.6). Immutable Properties are searched when they parse (§12.7); Track
+// receives a value outside this range, it MUST close the session" (§10.5,
+// §10.6). Immutable Properties are searched when they parse (§10.7); Track
 // Properties that do not parse are left to the caller.
 func (s *Session) checkTrackPropertyValues(raw []byte, context string) error {
 	pairs, parseErr := message.ParseTrackProperties(raw)
@@ -124,8 +124,8 @@ func (s *Session) checkTrackPropertyValues(raw []byte, context string) error {
 
 // TrackPropertiesRejectCode is the REQUEST_ERROR code for a Track Properties
 // validation error on a PUBLISH or SUBSCRIBE: UNSUPPORTED_EXTENSION for an
-// unknown Mandatory Track Property (§2.5.1), else INTERNAL_ERROR.
-// MALFORMED_TRACK is defined only "In response to a FETCH" (§10.6.2).
+// unknown Mandatory Track Property (§3.7), else INTERNAL_ERROR.
+// MALFORMED_TRACK is defined only "In response to a FETCH" (§12.3).
 func TrackPropertiesRejectCode(err error) moqt.RequestErrorCode {
 	if _, ok := errors.AsType[*ErrUnsupportedMandatoryTrackProperty](err); ok {
 		return moqt.RequestUnsupportedExtension

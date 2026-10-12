@@ -125,7 +125,7 @@ func TestPublishRejected(t *testing.T) {
 }
 
 // TestPublicationDone verifies Publication.Done writes a PUBLISH_DONE whose
-// §10.12 Stream Count reflects the subgroups opened via the handle, with the
+// §9.9 Stream Count reflects the subgroups opened via the handle, with the
 // given code and reason, and then FINs the request stream.
 func TestPublicationDone(t *testing.T) {
 	cli, srv := openPair(t)
@@ -214,7 +214,7 @@ func TestPublicationDone(t *testing.T) {
 }
 
 // TestRequestAcceptPublish verifies AcceptPublish registers the publisher's
-// Track Alias (§11.1) and replies REQUEST_OK so the client's Publish succeeds.
+// Track Alias (§3.1.3) and replies REQUEST_OK so the client's Publish succeeds.
 func TestRequestAcceptPublish(t *testing.T) {
 	cli, srv := openPair(t)
 	ctx := t.Context()
@@ -285,7 +285,7 @@ func TestOpenPublish_SuccessDeliversPublish(t *testing.T) {
 		t.Fatalf("OpenPublish: %v", openErr)
 	}
 	defer stream.Close()
-	// Client Request IDs are even (§10.1); the first allocation is 0.
+	// Client Request IDs are even (§6.4.2.1); the first allocation is 0.
 	if m.RequestID%2 != 0 {
 		t.Fatalf("client Request ID %d is not even", m.RequestID)
 	}
@@ -341,7 +341,7 @@ func TestOpenPublish_ExhaustedCreditReturnsErrNoStreamCredit(t *testing.T) {
 		t.Fatalf("OpenPublish #1 err = %v, want ErrNoStreamCredit", err)
 	}
 
-	// §6.1: a blocked attempt MUST NOT consume a Request ID. The next
+	// §3.6.3: a blocked attempt MUST NOT consume a Request ID. The next
 	// successful allocation (via a plain AllocRequestID) must be exactly
 	// firstID+2, proving the blocked OpenPublish left the sequence untouched.
 	if got := client.AllocRequestID(); got != firstID+2 {

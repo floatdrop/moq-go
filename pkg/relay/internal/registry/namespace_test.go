@@ -53,7 +53,7 @@ func TestNamespaceRegistry_RegisterUnregisterSubscriber(t *testing.T) {
 	}
 }
 
-// TestNamespaceRegistry_MatchPublishers covers the §9.5 prefix rule: a
+// TestNamespaceRegistry_MatchPublishers covers the §7.6 prefix rule: a
 // publisher matches a SUBSCRIBE whose namespace is the publisher's exact
 // namespace OR an extension of it.
 func TestNamespaceRegistry_MatchPublishers(t *testing.T) {
@@ -167,7 +167,7 @@ func TestNamespaceRegistry_RemoveSession(t *testing.T) {
 }
 
 // TestNamespaceRegistry_DuplicateRegistrationsAreSeparate documents the
-// §9.3 behaviour: two publishers for the exact same namespace from the
+// §7.3 behaviour: two publishers for the exact same namespace from the
 // same session produce two distinct entries that must be removed
 // individually. The registry does not deduplicate.
 func TestNamespaceRegistry_DuplicateRegistrationsAreSeparate(t *testing.T) {
@@ -239,7 +239,7 @@ func (s *stallingStream) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// TestSubscriberEntry_WriterEndsAfterQueueReset: when the §10.19 queue bound
+// TestSubscriberEntry_WriterEndsAfterQueueReset: when the §4.2.2 queue bound
 // resets the stream while a write is in progress and that write completes
 // anyway, the writer still ends rather than parking on the emptied queue.
 func TestSubscriberEntry_WriterEndsAfterQueueReset(t *testing.T) {

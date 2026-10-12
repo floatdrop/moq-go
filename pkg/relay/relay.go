@@ -76,7 +76,7 @@ type Config struct {
 
 	// KnownMandatoryTrackProperties lists the Mandatory Track Property types
 	// (0x4000–0x7FFF) the relay may forward; a track carrying any other is
-	// refused with UNSUPPORTED_EXTENSION (§2.5.1). Empty (the default)
+	// refused with UNSUPPORTED_EXTENSION (§3.7). Empty (the default)
 	// refuses every Mandatory Track Property. Set it here rather than with
 	// session.WithKnownMandatoryTrackProperties in SessionOptions, which
 	// overrides this field.
@@ -100,9 +100,9 @@ type Config struct {
 	// concurrent use.
 	Metrics Metrics
 
-	// MaxFilterRanges is the MAX_FILTER_RANGES (§10.3.1.6) budget this relay
+	// MaxFilterRanges is the MAX_FILTER_RANGES (§9.1.6) budget this relay
 	// advertises in SETUP: the largest total number of Range Filter ranges
-	// (§5.1.4) it will accept across every Range Filter parameter on one
+	// (§3.3.2) it will accept across every Range Filter parameter on one
 	// SUBSCRIBE or FETCH. Over-budget requests are answered INVALID_FILTER.
 	//
 	// Zero means: use [DefaultMaxFilterRanges]. A negative value advertises 0,
@@ -164,7 +164,7 @@ type Config struct {
 	MaxDropsBeforeReset int
 
 	// MaxSubscriptionsPerSession bounds the number of concurrently-active
-	// SUBSCRIBE requests a single session may hold (§13.1, subscription
+	// SUBSCRIBE requests a single session may hold (§15.1, subscription
 	// amplification), counting a TRACK_STATUS while the relay forwards it
 	// upstream. Excess requests are rejected with REQUEST_ERROR
 	// EXCESSIVE_LOAD before any state is mutated. Zero (the default) means
@@ -173,14 +173,14 @@ type Config struct {
 
 	// MaxNamespaceRequestsPerSession bounds the number of concurrently-active
 	// namespace-state requests (PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE,
-	// SUBSCRIBE_TRACKS) a single session may hold (§13.7.1, relay state
+	// SUBSCRIBE_TRACKS) a single session may hold (§15.7.1, relay state
 	// maintenance). Excess requests are rejected with REQUEST_ERROR
 	// EXCESSIVE_LOAD. Zero (the default) means unlimited.
 	MaxNamespaceRequestsPerSession int
 
 	// MaxRendezvousTimeout caps how long the relay holds a SUBSCRIBE that
 	// carries RENDEZVOUS_TIMEOUT for a track with no publisher, waiting for
-	// one to appear (§10.2.6: "The relay MAY use a shorter timeout than
+	// one to appear (§9.20.6: "The relay MAY use a shorter timeout than
 	// requested by the subscriber"). What is left of the hold is forwarded
 	// on the relay's upstream SUBSCRIBEs to other relays, so the cap bounds
 	// theirs too. Zero means: use the default of 30s. A negative value holds
@@ -222,7 +222,7 @@ type Config struct {
 	Dialer func(ctx context.Context, relayAddr string) (session.Conn, error)
 
 	// UpstreamFanIn optionally bounds how many remote relays a cross-relay
-	// upstream SUBSCRIBE fans into for one namespace. §9.5 requires a relay to
+	// upstream SUBSCRIBE fans into for one namespace. §7.6 requires a relay to
 	// subscribe to every publisher that advertised the namespace, so the zero
 	// value (the default) does exactly that — full fan-in, no data loss in any
 	// topology. Like the other limits on this struct, zero means "no limit," and
@@ -235,7 +235,7 @@ type Config struct {
 	// few upstreams per namespace, collapsing the relay-to-relay stream count
 	// from a full O(n²) mesh toward a tree (N is the redundancy width: 1 is a
 	// pure tree, 2 keeps one backup upstream). This is a deliberate deviation
-	// from §9.5's "subscribe to all," sound only where the advertisers are
+	// from §7.6's "subscribe to all," sound only where the advertisers are
 	// redundant sources of the same objects — which the relay's fanout already
 	// dedups — never where different relays hold distinct objects for the track.
 	//
@@ -251,7 +251,7 @@ const (
 	defaultMaxRendezvousTimeout = 30 * time.Second
 )
 
-// DefaultMaxFilterRanges is the MAX_FILTER_RANGES (§10.3.1.6) budget a relay
+// DefaultMaxFilterRanges is the MAX_FILTER_RANGES (§9.1.6) budget a relay
 // advertises when [Config.MaxFilterRanges] is left at zero.
 //
 // Sixteen ranges across all of a request's Range Filters. The uses this exists
@@ -466,7 +466,7 @@ func (r *Relay) Addr() net.Addr { return r.listener.Addr() }
 func (r *Relay) Authorizer() Authorizer { return r.cfg.Authorizer }
 
 // Run serves the relay until ctx is cancelled or the Listener fails fatally,
-// then performs the full §10.4 graceful shutdown — GOAWAY, [Config.GoawayTimeout]
+// then performs the full §9.2 graceful shutdown — GOAWAY, [Config.GoawayTimeout]
 // grace period, force-close — and returns only once that drain has finished. It
 // returns [Relay.Start]'s error. This is the entry point a binary driven by
 // [os/signal.NotifyContext] wants; Start and Stop remain available for callers
@@ -604,7 +604,7 @@ func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
 	// Start documents cancelling its ctx as terminating live sessions, and a
 	// handler ending does not close its session: left open, a relay-scoped
 	// reader on one of its request streams, and with it Stop, would wait on
-	// it. NO_ERROR (§3.5): no GOAWAY was sent, so none ran out.
+	// it. NO_ERROR (§12.2): no GOAWAY was sent, so none ran out.
 	closeSess := func() { _ = sess.Close(moqt.SessionNoError, "relay: stopped") }
 	stop := context.AfterFunc(ctx, closeSess)
 	r.serveSession(ctx, sess, LegLocal)
@@ -698,7 +698,7 @@ func (r *Relay) Stop(ctx context.Context) error {
 		//    upstream dials too — starting a cross-relay subscription while
 		//    draining is pointless — but leave the established upstream sessions
 		//    running: dropping them is "unsubscribing from upstream publishers",
-		//    which §3.6 puts after the downstream GOAWAY (step 6). They are in
+		//    which §6.6.1 puts after the downstream GOAWAY (step 6). They are in
 		//    the snapshot below, so they get GOAWAY'd / force-closed like
 		//    accepted ones.
 		if err := r.listener.Close(); err != nil && !isShutdownErr(err) {
@@ -757,7 +757,7 @@ func (r *Relay) Stop(ctx context.Context) error {
 
 		// 6. Now that every downstream subscriber has had its GOAWAY and the
 		//    grace period is over, unsubscribe from upstream publishers by
-		//    cancelling the pool's base context. §3.6: "When the server is a
+		//    cancelling the pool's base context. §6.6.1: "When the server is a
 		//    subscriber, it SHOULD send a GOAWAY message to downstream
 		//    subscribers prior to unsubscribing from upstream publishers."
 		if r.upstreams != nil {
@@ -769,7 +769,7 @@ func (r *Relay) Stop(ctx context.Context) error {
 
 		// 7. Force-close anything still standing, with GOAWAY_TIMEOUT
 		//    only where it is true: "the peer took too long to close the
-		//    session in response to a GOAWAY" (§3.5). A session sent no
+		//    session in response to a GOAWAY" (§12.2). A session sent no
 		//    GOAWAY, or cut short by ctx, is closed with NO_ERROR. Closing
 		//    an already-closed session is a no-op via Session's internal
 		//    closeOnce.
@@ -830,7 +830,7 @@ func (r *Relay) drainStraggler(stopCtx context.Context, s *session.Session) {
 			return // peer drained within the grace period
 		case <-stopCtx.Done():
 			// Cut short, as Stop's bulk drain is: the grace period did not
-			// run out, so NO_ERROR (§3.5).
+			// run out, so NO_ERROR (§12.2).
 		}
 	}
 	_ = s.Close(shutdownCloseCode(goawayExpired), "relay shutdown")
@@ -838,7 +838,7 @@ func (r *Relay) drainStraggler(stopCtx context.Context, s *session.Session) {
 
 // shutdownCloseCode is the code a shutdown force-closes a session with:
 // GOAWAY_TIMEOUT when the relay sent it a GOAWAY and the grace period ran out
-// (§3.5), NO_ERROR otherwise.
+// (§12.2), NO_ERROR otherwise.
 func shutdownCloseCode(goawayExpired bool) moqt.SessionErrorCode {
 	if goawayExpired {
 		return moqt.SessionGoawayTimeout

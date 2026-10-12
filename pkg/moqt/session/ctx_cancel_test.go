@@ -95,7 +95,7 @@ func TestAcceptDataStreamCtxCancel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenUniStream: %v", err)
 	}
-	// 0x05 is the FETCH_HEADER type (§11.4.4); the Request ID that must
+	// 0x05 is the FETCH_HEADER type (§11.4.1); the Request ID that must
 	// follow never arrives.
 	go func() { _, _ = stream.Write([]byte{0x05}) }()
 
@@ -121,7 +121,7 @@ func TestAcceptDataStreamCtxCancel(t *testing.T) {
 
 // TestSessionErrPublishedBeforeDone pins the <-Done(); Err() contract: the
 // close cause is visible (and race-free under -race) the moment Done fires,
-// and carries the actual §3.5 code and reason — not the transport close
+// and carries the actual §12.2 code and reason — not the transport close
 // result, which is nil in the common case.
 func TestSessionErrPublishedBeforeDone(t *testing.T) {
 	t.Parallel()

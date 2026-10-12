@@ -13,7 +13,7 @@ import (
 // TestRelay_SecondResponseCloses: the relay sends no REQUEST_UPDATE on a
 // forwarded PUBLISH, so a REQUEST_OK or REQUEST_ERROR the subscriber sends
 // after its PUBLISH_OK is a second response, and the relay closes the session
-// (§5.1).
+// (§3.1).
 func TestRelay_SecondResponseCloses(t *testing.T) {
 	t.Parallel()
 	for _, resp := range []message.Message{&message.RequestOK{}, &message.RequestError{}} {
@@ -44,7 +44,7 @@ func TestRelay_SecondResponseCloses(t *testing.T) {
 
 // TestRelay_StrayResponseCloses: on a request stream the relay answered, the
 // requester has nothing to answer, since only it sends REQUEST_UPDATE there
-// (§10.9), so a REQUEST_OK or REQUEST_ERROR from it is a protocol violation
+// (§9.5), so a REQUEST_OK or REQUEST_ERROR from it is a protocol violation
 // and the relay closes the session. On a PUBLISH, the relay's subscriber side
 // may send one, but has not.
 func TestRelay_StrayResponseCloses(t *testing.T) {

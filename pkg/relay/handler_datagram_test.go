@@ -82,7 +82,7 @@ func TestDatagram_PublisherToSubscriberSingleDatagram(t *testing.T) {
 }
 
 // TestDatagram_FilterDropsBelowStart: an AbsoluteStart {0, 2} filter drops
-// earlier datagrams (§5.1.2).
+// earlier datagrams (§3.3.1).
 func TestDatagram_FilterDropsBelowStart(t *testing.T) {
 	t.Parallel()
 
@@ -160,7 +160,7 @@ func TestDatagram_FilterDropsBelowStart(t *testing.T) {
 }
 
 // TestDatagram_UnknownAliasDroppedSilently: a datagram with an unknown Track
-// Alias is dropped without closing the session (§11.3).
+// Alias is dropped without closing the session (§3.1.3.1).
 func TestDatagram_UnknownAliasDroppedSilently(t *testing.T) {
 	t.Parallel()
 
@@ -234,7 +234,7 @@ func TestDatagram_UnknownAliasDroppedSilently(t *testing.T) {
 }
 
 // TestDatagram_PausedSubscriptionReceivesNothing: FORWARD=0 stops datagrams
-// and FORWARD=1 restores them (§9.2).
+// and FORWARD=1 restores them (§7.2).
 func TestDatagram_PausedSubscriptionReceivesNothing(t *testing.T) {
 	t.Parallel()
 

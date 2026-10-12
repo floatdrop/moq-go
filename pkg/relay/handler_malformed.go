@@ -9,21 +9,21 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
 
-// endMalformedTrack handles a malformed track (§2.4.2) detected in an Object
+// endMalformedTrack handles a malformed track (§12.1) detected in an Object
 // src sent on entry's track: every downstream subscription ends with
 // PUBLISH_DONE MALFORMED_TRACK, every downstream fetch stream is reset with
 // MALFORMED_TRACK, and only the upstream subscriptions on src are cancelled,
-// so a redundant publisher (§9.3) keeps serving. An upstream FETCH ends with
+// so a redundant publisher (§7.3) keeps serving. An upstream FETCH ends with
 // the downstream fetch stream it fills: its data stream gets STOP_SENDING
 // MALFORMED_TRACK when it is on src, else CANCELLED, and its request stream
 // is cancelled with CANCELLED. Callers never cache the Object. Open subgroup
-// streams are reset now, since PUBLISH_DONE waits for them (§10.12).
+// streams are reset now, since PUBLISH_DONE waits for them (§9.9).
 //
 // Downstreams are terminated before the upstream is cancelled: the first
 // termination wins, and the upstream's teardown would use its own code.
 //
 // Interpretation: the upstream subscription's cancel and the upstream FETCH
-// data stream's STOP_SENDING also use MALFORMED_TRACK, which §3.3.4 defines
+// data stream's STOP_SENDING also use MALFORMED_TRACK, which §12.5 defines
 // for the downstream direction.
 func (h *sessionHandler) endMalformedTrack(
 	ctx context.Context,
@@ -58,7 +58,7 @@ func (h *sessionHandler) endMalformedTrack(
 
 // malformedTrackCause is what a fetch stream on a malformed track is cancelled
 // with: the detection error, wrapping [session.ErrMalformedTrack], and the
-// session that sent the Object, whose FETCH is cancelled (§2.4.2: "MUST
+// session that sent the Object, whose FETCH is cancelled (§12.1: "MUST
 // cancel any corresponding subscription or fetches for that Track from that
 // publisher").
 type malformedTrackCause struct {

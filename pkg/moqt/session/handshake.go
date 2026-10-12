@@ -13,7 +13,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// handshake performs the SETUP exchange (§3.3): each side writes SETUP on its
+// handshake performs the SETUP exchange (§6.3): each side writes SETUP on its
 // own control stream and reads the peer's, in parallel under an errgroup. Both
 // directions are bridged to the context with context.AfterFunc, so a peer
 // that stalls mid-SETUP cannot block past cancellation.
@@ -102,7 +102,7 @@ const maxEarlyDataStreams = 32
 
 // acceptControlStream returns the peer's control stream. Data streams that
 // arrive first are held, with their type bytes replayed, for AcceptDataStream
-// (§3.3: "the data SHOULD be buffered"). A padding stream is discarded and one
+// (§6.3: "the data SHOULD be buffered"). A padding stream is discarded and one
 // reset before its type is skipped; one FINed before its type fails the
 // handshake. The first other stream is returned, with its leading bytes
 // replayed, for the SETUP parse to judge.
@@ -118,10 +118,10 @@ func (s *Session) acceptControlStream(ctx context.Context) (ReceiveStream, error
 		stop()
 		switch {
 		case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
-			// FIN before a whole type: no valid stream of any kind (§3.3).
+			// FIN before a whole type: no valid stream of any kind (§6.3).
 			return nil, fmt.Errorf("read stream type: %w", err)
 		case err != nil:
-			// Reset before its type: skipped, as after setup (§11.4.1).
+			// Reset before its type: skipped, as after setup (§11.3.2).
 			stream.CancelRead(uint64(moqt.StreamResetInternalError))
 			if ctx.Err() != nil {
 				return nil, ctx.Err()

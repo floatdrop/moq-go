@@ -278,7 +278,7 @@ func TestParametersSortedOnEncode(t *testing.T) {
 	}
 }
 
-// TestBareParameterLiteralPanicsOnEncode locks in the §10.2 "loud" behaviour:
+// TestBareParameterLiteralPanicsOnEncode locks in the §9.20 "loud" behaviour:
 // a Parameter built as a bare struct literal carries no value kind, so encoding
 // it panics rather than silently emitting varint(0). The constructors set the
 // kind, so a constructor-built parameter with the same value encodes cleanly.

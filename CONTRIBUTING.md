@@ -79,12 +79,12 @@ in `STATUS.md`.
 ## Spec-driven changes
 
 Protocol behavior is driven by specific, pinned IETF draft versions — currently
-`draft-ietf-moq-transport-20`, `draft-ietf-moq-loc-04`,
+`draft-ietf-moq-transport-22`, `draft-ietf-moq-loc-04`,
 `draft-ietf-moq-msf-01`, and `draft-ietf-moq-cmsf-01` (see the links in
 `README.md`). These are the source of truth when implementing or changing wire
 behavior.
 
-- Cite the relevant draft section in comments (e.g. `§10.1`, `§11.4.2`) when you
+- Cite the relevant draft section in comments (e.g. `§6.4.2.1`, `§11.3.1`) when you
   implement or change protocol behavior.
 - Pin to the draft version the code targets. The datatracker links track moving
   drafts and may be ahead of what's implemented, so confirm the section against

@@ -12,8 +12,8 @@ import (
 
 // TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit: with no bidi
 // stream credit for a forwarded PUBLISH, the relay sends PUBLISH_SKIPPED with
-// the namespace suffix and track name on the SUBSCRIBE_TRACKS stream (§6.1,
-// §10.21).
+// the namespace suffix and track name on the SUBSCRIBE_TRACKS stream (§3.6.3,
+// §9.19).
 func TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 	t.Parallel()
 	primary, teardown := connectRelay(t, relay.Config{})
@@ -44,7 +44,7 @@ func TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 	defer pubStream.Close()
 
 	// The subscriber reads the PUBLISH_SKIPPED via the session helper that
-	// implements the §6.1 subscriber role.
+	// implements the §3.6.3 subscriber role.
 	type result struct {
 		pb  *message.PublishSkipped
 		err error
@@ -72,7 +72,7 @@ func TestPublishSkipped_EmittedWhenSubscriberOutOfStreamCredit(t *testing.T) {
 }
 
 // TestPublishSkipped_NotStickyAcrossRePublish: PUBLISH_SKIPPED covers one
-// PUBLISH only (§6.1); a re-PUBLISH of the track is attempted again, and
+// PUBLISH only (§3.6.3); a re-PUBLISH of the track is attempted again, and
 // skipped again while credit is still exhausted.
 func TestPublishSkipped_NotStickyAcrossRePublish(t *testing.T) {
 	t.Parallel()
@@ -111,7 +111,7 @@ func TestPublishSkipped_NotStickyAcrossRePublish(t *testing.T) {
 	_ = pubStream1.Close()
 	time.Sleep(100 * time.Millisecond)
 
-	// Second publication of the SAME track. Per §6.1 the earlier skip
+	// Second publication of the SAME track. Per §3.6.3 the earlier skip
 	// does not persist, so the relay re-attempts the forward — still no credit,
 	// so a SECOND PUBLISH_SKIPPED reaches the subscriber's stream.
 	pubStream2 := pub()
@@ -125,7 +125,7 @@ func TestPublishSkipped_NotStickyAcrossRePublish(t *testing.T) {
 
 // TestPublishSkipped_StickyAcrossPrefixMoveAndBack: the relay "MUST NOT send a
 // PUBLISH for a Track for a given SUBSCRIBE_TRACKS after PUBLISH_SKIPPED has
-// been sent, scoped to a single PUBLISH" (§6.1). A TRACK_NAMESPACE_PREFIX
+// been sent, scoped to a single PUBLISH" (§3.6.3). A TRACK_NAMESPACE_PREFIX
 // update that moves the subscription away and back is not a new PUBLISH, so
 // the skipped track is neither offered nor skipped again.
 func TestPublishSkipped_StickyAcrossPrefixMoveAndBack(t *testing.T) {

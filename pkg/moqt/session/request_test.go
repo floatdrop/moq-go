@@ -171,7 +171,7 @@ func TestAcceptRequestUnblocksOnSessionClose(t *testing.T) {
 }
 
 // TestAcceptRequestDuplicateID: a reused Request ID makes AcceptRequest return
-// ErrDuplicateRequestID, for an INVALID_REQUEST_ID close (§10.1).
+// ErrDuplicateRequestID, for an INVALID_REQUEST_ID close (§6.4.2.1).
 func TestAcceptRequestDuplicateID(t *testing.T) {
 	ctx := t.Context()
 	client, server := openPair(t)
@@ -240,7 +240,7 @@ func TestAcceptRequestDuplicateID(t *testing.T) {
 	requireClosedCode(t, server, moqt.SessionInvalidRequestID)
 }
 
-// TestAcceptRequestOutOfOrderID verifies §10.1's receiver rules under
+// TestAcceptRequestOutOfOrderID verifies §6.4.2.1's receiver rules under
 // cross-stream delivery reordering: an ID below the high-water mark is NOT a
 // violation the first time it arrives — the peer allocates in +2 increments,
 // but requests ride separate QUIC streams and can be delivered out of order —
@@ -383,7 +383,7 @@ func TestAcceptRequestMonotonicHappyPath(t *testing.T) {
 
 // TestAcceptRequestParityViolation_ServerReceivesOddID verifies that when the
 // server calls AcceptRequest and the client sends a SUBSCRIBE with an odd
-// Request ID (which only servers may generate per §10.1), AcceptRequest
+// Request ID (which only servers may generate per §6.4.2.1), AcceptRequest
 // returns ErrRequestIDParityViolation with ExpectedEven=true.
 func TestAcceptRequestParityViolation_ServerReceivesOddID(t *testing.T) {
 	client, server := openPair(t)
@@ -435,7 +435,7 @@ func TestAcceptRequestParityViolation_ServerReceivesOddID(t *testing.T) {
 
 // TestAcceptRequestParityViolation_ClientReceivesEvenID verifies that when the
 // client calls AcceptRequest and the server sends a PUBLISH with an even
-// Request ID (which only clients may generate per §10.1), AcceptRequest
+// Request ID (which only clients may generate per §6.4.2.1), AcceptRequest
 // returns ErrRequestIDParityViolation with ExpectedEven=false.
 func TestAcceptRequestParityViolation_ClientReceivesEvenID(t *testing.T) {
 	client, server := openPair(t)
@@ -556,7 +556,7 @@ func TestAcceptRequestParityHappyPath(t *testing.T) {
 // TestRejectErrorCancelsReadSide verifies that RejectError writes
 // REQUEST_ERROR, cancels the read side (CancelRead), and FINs the send
 // direction. After rejection, the client's writes to the stream must fail
-// because the server stopped reading (§3.3.3).
+// because the server stopped reading (§6.4.2.3).
 func TestRejectErrorCancelsReadSide(t *testing.T) {
 	client, server := openPair(t)
 	ctx := t.Context()

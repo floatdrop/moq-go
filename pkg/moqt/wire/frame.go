@@ -7,7 +7,7 @@ import (
 )
 
 // MaxControlMessagePayload is the largest payload that fits in a control
-// message's 16-bit Length field (§10).
+// message's 16-bit Length field (§9).
 const MaxControlMessagePayload = 0xFFFF
 
 // ReadFrame reads a single MoQT control-message frame (Type + Length + Payload)

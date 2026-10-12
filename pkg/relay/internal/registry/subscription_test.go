@@ -68,15 +68,15 @@ func TestSubscription_TerminateLatch(t *testing.T) {
 	}
 }
 
-// TestSubscription_ForwardState covers the §9.2 Forward flag round-trip.
-// A fresh upstream subscription starts at Forward State 1: per §10.2.18 a
+// TestSubscription_ForwardState covers the §7.2 Forward flag round-trip.
+// A fresh upstream subscription starts at Forward State 1: per §9.20.18 a
 // SUBSCRIBE (or accepted PUBLISH) without the FORWARD parameter implies 1,
 // and the relay's upstream requests never carry FORWARD.
 func TestSubscription_ForwardState(t *testing.T) {
 	t.Parallel()
 	sub := registry.NewUpstreamSub(1, nil, nil, nil, 0, 0)
 	if got := sub.ForwardState(); got != 1 {
-		t.Fatalf("initial ForwardState = %d, want 1 (§10.2.18 default)", got)
+		t.Fatalf("initial ForwardState = %d, want 1 (§9.20.18 default)", got)
 	}
 	sub.SetForwardState(0)
 	if got := sub.ForwardState(); got != 0 {
@@ -114,7 +114,7 @@ func TestDownstreamSub_AccessorsRoundTrip(t *testing.T) {
 	if sub.GetFilter() != nil {
 		t.Fatal("initial filter not nil")
 	}
-	// §10.2.7: SUBSCRIBER_PRIORITY defaults to 128 (mid-range); GROUP_ORDER
+	// §9.20.7: SUBSCRIBER_PRIORITY defaults to 128 (mid-range); GROUP_ORDER
 	// is left at its zero value (treated as Ascending) until the peer sets it.
 	if sub.Priority != 128 || sub.GroupOrder != 0 {
 		t.Fatalf("default priority/group-order = %d/%d, want 128/0",
@@ -137,14 +137,14 @@ func TestDownstreamSub_AccessorsRoundTrip(t *testing.T) {
 	}
 }
 
-// TestDownstreamSub_EffectiveStreamPriority pins the full §7.2 composite key:
+// TestDownstreamSub_EffectiveStreamPriority pins the full §5.1.2 composite key:
 //
-//   - Subscriber: the SUBSCRIBER_PRIORITY value, defaulting to 128 (§10.2.7)
+//   - Subscriber: the SUBSCRIBER_PRIORITY value, defaulting to 128 (§9.20.7)
 //     when the subscriber never set one.
 //   - Publisher: the per-subgroup publisher byte, passed through verbatim.
 //   - GroupKey: the Group ID for Ascending order; its bitwise complement for
-//     Descending so higher Group IDs schedule first (§7.2 rule 3).
-//   - Subgroup: the Subgroup ID, passed through verbatim (§7.2 rule 4).
+//     Descending so higher Group IDs schedule first (§5.1.2 rule 3).
+//   - Subgroup: the Subgroup ID, passed through verbatim (§5.1.2 rule 4).
 func TestDownstreamSub_EffectiveStreamPriority(t *testing.T) {
 	t.Parallel()
 

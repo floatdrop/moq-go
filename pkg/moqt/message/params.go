@@ -10,13 +10,13 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// ParamID is a MoQT Message Parameter type ID (§10.2). Distinct from
+// ParamID is a MoQT Message Parameter type ID (§9.20). Distinct from
 // SetupOption because the two code spaces overlap (parameter 0x03 vs option
 // 0x03 are both AUTHORIZATION_TOKEN but in different contexts with different
 // parse rules) and from session/request error codes which overlap numerically.
 type ParamID uint64
 
-// Parameter wire type IDs from §10.2.
+// Parameter wire type IDs from §9.20.
 const (
 	ParamObjectDeliveryTimeout   ParamID = 0x02
 	ParamAuthorizationToken      ParamID = 0x03
@@ -30,9 +30,9 @@ const (
 	ParamLocationFilter          ParamID = 0x21
 	ParamGroupOrder              ParamID = 0x22
 	ParamFillParameters          ParamID = 0x23
-	// Range Filter parameters (§5.1.4, §10.2.10-14), see rangefilter.go. All
+	// Range Filter parameters (§3.3.2, §9.20.10-14), see rangefilter.go. All
 	// five are length-prefixed (KindBytes) whatever their type parity: Message
-	// Parameter encodings are per definition (§10.2), not Key-Value-Pairs.
+	// Parameter encodings are per definition (§9.20), not Key-Value-Pairs.
 	ParamSubgroupFilter       ParamID = 0x25
 	ParamObjectIDFilter       ParamID = 0x26
 	ParamPriorityFilter       ParamID = 0x27
@@ -91,7 +91,7 @@ func (p ParamID) String() string {
 	return fmt.Sprintf("ParamID(%#x)", uint64(p))
 }
 
-// ParamKind describes a parameter's value encoding (§10.2).
+// ParamKind describes a parameter's value encoding (§9.20).
 type ParamKind uint8
 
 const (
@@ -131,7 +131,7 @@ var paramKinds = map[ParamID]ParamKind{
 
 // kindOf returns the registered kind for a parameter type, or an error if the
 // type is unknown. Unknown parameters are a session-level PROTOCOL_VIOLATION
-// per §10.2.
+// per §9.20.
 func kindOf(t ParamID) (ParamKind, error) {
 	k, ok := paramKinds[t]
 	if !ok {
@@ -140,7 +140,7 @@ func kindOf(t ParamID) (ParamKind, error) {
 	return k, nil
 }
 
-// Parameter is a single MoQT message parameter (§10.2). Exactly one of the
+// Parameter is a single MoQT message parameter (§9.20). Exactly one of the
 // value fields holds data, determined by the value kind the Parameter was
 // constructed with (see [ParamKind] and the constructors below).
 type Parameter struct {
@@ -179,7 +179,7 @@ func LocationParam(t ParamID, g, o uint64) Parameter {
 // value (bool for FORWARD, an enum for GROUP_ORDER, time.Duration for the
 // millisecond-valued timeouts, etc.).
 
-// ObjectDeliveryTimeoutParam builds OBJECT_DELIVERY_TIMEOUT (§10.2.4): the
+// ObjectDeliveryTimeoutParam builds OBJECT_DELIVERY_TIMEOUT (§9.20.4): the
 // maximum duration the publisher holds a single object before declaring
 // failure.
 func ObjectDeliveryTimeoutParam(d time.Duration) Parameter {
@@ -187,7 +187,7 @@ func ObjectDeliveryTimeoutParam(d time.Duration) Parameter {
 	return VarintParam(ParamObjectDeliveryTimeout, uint64(d/time.Millisecond))
 }
 
-// RendezvousTimeoutParam builds RENDEZVOUS_TIMEOUT (§10.2.6): how long the
+// RendezvousTimeoutParam builds RENDEZVOUS_TIMEOUT (§9.20.6): how long the
 // subscriber is willing to wait for a publisher to become available. A zero
 // duration tells the relay to respond immediately with DOES_NOT_EXIST when
 // no publisher exists.
@@ -196,13 +196,13 @@ func RendezvousTimeoutParam(d time.Duration) Parameter {
 	return VarintParam(ParamRendezvousTimeout, uint64(d/time.Millisecond))
 }
 
-// SubgroupDeliveryTimeoutParam builds SUBGROUP_DELIVERY_TIMEOUT (§10.2.3).
+// SubgroupDeliveryTimeoutParam builds SUBGROUP_DELIVERY_TIMEOUT (§9.20.3).
 func SubgroupDeliveryTimeoutParam(d time.Duration) Parameter {
 	//nolint:gosec // G115: d is a non-negative timeout Duration; whole ms fits a varint.
 	return VarintParam(ParamSubgroupDeliveryTimeout, uint64(d/time.Millisecond))
 }
 
-// FillTimeoutParam builds FILL_TIMEOUT (§10.2.5): the maximum total duration
+// FillTimeoutParam builds FILL_TIMEOUT (§9.20.5): the maximum total duration
 // a relay should spend waiting for upstream sources to provide objects that
 // are not immediately available. A zero duration means the subscriber only
 // wants objects that are immediately available.
@@ -211,7 +211,7 @@ func FillTimeoutParam(d time.Duration) Parameter {
 	return VarintParam(ParamFillTimeout, uint64(d/time.Millisecond))
 }
 
-// ExpiresParam builds EXPIRES (§10.2.16): the time after which the sender
+// ExpiresParam builds EXPIRES (§9.20.16): the time after which the sender
 // will terminate the subscription. Zero means the subscription does not
 // expire (or expires at an unknown time).
 func ExpiresParam(d time.Duration) Parameter {
@@ -219,13 +219,13 @@ func ExpiresParam(d time.Duration) Parameter {
 	return VarintParam(ParamExpires, uint64(d/time.Millisecond))
 }
 
-// LargestObjectParam builds LARGEST_OBJECT (§10.2.17): the largest Location
+// LargestObjectParam builds LARGEST_OBJECT (§9.20.17): the largest Location
 // {Group, Object} observed in the track by the sender.
 func LargestObjectParam(group, object uint64) Parameter {
 	return LocationParam(ParamLargestObject, group, object)
 }
 
-// ForwardParam builds FORWARD (§10.2.18). The wire value is restricted to
+// ForwardParam builds FORWARD (§9.20.18). The wire value is restricted to
 // 0/1 per the spec, so the helper takes a bool.
 func ForwardParam(forward bool) Parameter {
 	var v uint8
@@ -235,15 +235,15 @@ func ForwardParam(forward bool) Parameter {
 	return ByteParam(ParamForward, v)
 }
 
-// SubscriberPriorityParam builds SUBSCRIBER_PRIORITY (§10.2.7). Lower numbers
+// SubscriberPriorityParam builds SUBSCRIBER_PRIORITY (§9.20.7). Lower numbers
 // get higher priority; the implicit default when omitted is 128.
 func SubscriberPriorityParam(priority uint8) Parameter {
 	return ByteParam(ParamSubscriberPriority, priority)
 }
 
-// LocationFilterParam builds LOCATION_FILTER (§10.2.9) from a typed
+// LocationFilterParam builds LOCATION_FILTER (§9.20.9) from a typed
 // LocationFilter. The filter is serialised to bytes and stored as a
-// length-prefixed KindBytes parameter per §10.2.9.
+// length-prefixed KindBytes parameter per §9.20.9.
 func LocationFilterParam(f *LocationFilter) Parameter {
 	return BytesParam(ParamLocationFilter, f.Bytes())
 }
@@ -260,7 +260,7 @@ func LocationFilterFromParam(ps Parameters) (*LocationFilter, error) {
 	return ParseLocationFilter(p.Bytes)
 }
 
-// GroupOrder is the value of the GROUP_ORDER parameter (§10.2.8). The spec
+// GroupOrder is the value of the GROUP_ORDER parameter (§9.20.8). The spec
 // restricts the wire value to Ascending or Descending; anything else is a
 // session-level PROTOCOL_VIOLATION.
 type GroupOrder uint8
@@ -270,20 +270,20 @@ const (
 	GroupOrderDescending GroupOrder = 0x2
 )
 
-// GroupOrderParam builds GROUP_ORDER (§10.2.8).
+// GroupOrderParam builds GROUP_ORDER (§9.20.8).
 func GroupOrderParam(order GroupOrder) Parameter {
 	return ByteParam(ParamGroupOrder, uint8(order))
 }
 
-// NewGroupRequestParam builds NEW_GROUP_REQUEST (§10.2.19): the largest known
+// NewGroupRequestParam builds NEW_GROUP_REQUEST (§9.20.19): the largest known
 // Group ID plus 1, or 0 if the subscriber has no Group information.
 func NewGroupRequestParam(largestGroupPlusOne uint64) Parameter {
 	return VarintParam(ParamNewGroupRequest, largestGroupPlusOne)
 }
 
-// TrackNamespacePrefixParam builds TRACK_NAMESPACE_PREFIX (§10.2.20): a
+// TrackNamespacePrefixParam builds TRACK_NAMESPACE_PREFIX (§9.20.20): a
 // namespace prefix used for namespace subscription updates. The value is a
-// TrackNamespace structure serialized per §2.4.1.
+// TrackNamespace structure serialized per §8.7.
 func TrackNamespacePrefixParam(prefix wire.TrackNamespace) Parameter {
 	// Serialize the TrackNamespace to bytes
 	var buf []byte
@@ -293,7 +293,7 @@ func TrackNamespacePrefixParam(prefix wire.TrackNamespace) Parameter {
 }
 
 // TrackNamespacePrefixFromParam decodes a TRACK_NAMESPACE_PREFIX value
-// (§10.2.20). A value that is not exactly one Track Namespace is an error.
+// (§9.20.20). A value that is not exactly one Track Namespace is an error.
 func TrackNamespacePrefixFromParam(p Parameter) (wire.TrackNamespace, error) {
 	r := wire.NewReader(p.Bytes)
 	prefix, err := r.TrackNamespace()
@@ -323,7 +323,7 @@ func (ps Parameters) Find(t ParamID) (Parameter, bool) {
 }
 
 // FindAll returns every parameter with the given type, in list order. Range
-// Filter parameters (§5.1.4) legitimately repeat within one message (multiple
+// Filter parameters (§3.3.2) legitimately repeat within one message (multiple
 // SetIDs / Property Types), so callers that handle them must iterate all
 // occurrences rather than rely on [Parameters.Find]'s first-only result.
 func (ps Parameters) FindAll(t ParamID) []Parameter {
@@ -337,7 +337,7 @@ func (ps Parameters) FindAll(t ParamID) []Parameter {
 }
 
 // IsRangeFilterParam reports whether t is one of the five Range Filter
-// parameter types (§5.1.4, 0x25-0x29).
+// parameter types (§3.3.2, 0x25-0x29).
 func IsRangeFilterParam(t ParamID) bool {
 	return t >= ParamSubgroupFilter && t <= ParamTrackPropertyFilter
 }
@@ -359,7 +359,7 @@ func (ps Parameters) append(w *wire.Writer) {
 }
 
 // errParamTypeOverflow is a parameter Type delta taking the Type past 2^64-1:
-// a PROTOCOL_VIOLATION (§10.2), unlike a value that does not parse.
+// a PROTOCOL_VIOLATION (§9.20), unlike a value that does not parse.
 var errParamTypeOverflow = errors.New("moqt/message: parameter type delta overflow")
 
 // parse reads a Number-of-Parameters varint followed by that many parameters
@@ -369,7 +369,7 @@ func (ps *Parameters) parse(r *wire.Reader) error {
 	if err != nil {
 		return err
 	}
-	// count is untrusted (up to 2^64-1, §1.4.1): cap the preallocation by the
+	// count is untrusted (up to 2^64-1, §8.1): cap the preallocation by the
 	// remaining bytes, since each parameter takes at least one.
 	//nolint:gosec // G115: Reader.Remaining() = len(buf)-off is always >= 0.
 	out := make(Parameters, 0, min(count, uint64(r.Remaining())))

@@ -8,7 +8,7 @@ import (
 )
 
 // SubgroupIDMode is the 2-bit SUBGROUP_ID_MODE sub-field of the
-// SUBGROUP_HEADER Type byte (bits 1-2, §11.4.2). It controls whether and
+// SUBGROUP_HEADER Type byte (bits 1-2, §11.3.1). It controls whether and
 // how the Subgroup ID is transmitted in the header.
 type SubgroupIDMode uint8
 
@@ -22,17 +22,17 @@ const (
 	SubgroupIDImplicitFirstObject SubgroupIDMode = 0b01
 	// SubgroupIDExplicit: Subgroup ID is present in the header.
 	SubgroupIDExplicit SubgroupIDMode = 0b10
-	// 0b11 is reserved (§11.4.2); receiving it MUST cause a session-level
+	// 0b11 is reserved (§11.3.1); receiving it MUST cause a session-level
 	// PROTOCOL_VIOLATION, and constructing it is a programmer error.
 )
 
 // SubgroupHeader is the alias-bearing prefix of a SUBGROUP_HEADER stream
-// (§11.4.2). The flag fields correspond directly to the bits of the wire
+// (§11.3.1). The flag fields correspond directly to the bits of the wire
 // Type byte; Type() encodes them and DecodeSubgroupHeaderType parses them
 // back.
 type SubgroupHeader struct {
 	// Properties: when true, every Object on this stream carries an
-	// Object Properties structure (§11.2.1.2). Wire bit 0.
+	// Object Properties structure (§11.1.2). Wire bit 0.
 	Properties bool
 	// SubgroupIDMode controls how the Subgroup ID is conveyed (wire
 	// bits 1-2).
@@ -57,10 +57,10 @@ type SubgroupHeader struct {
 	ReplayingSubgroup bool
 
 	// TrackAlias identifies the track this subgroup belongs to within
-	// the publisher → subscriber direction of the session (§11.1).
+	// the publisher → subscriber direction of the session (§3.1.3).
 	TrackAlias uint64
 
-	// GroupID is the Group ID of this subgroup (§11.4.2). Always present
+	// GroupID is the Group ID of this subgroup (§11.3.1). Always present
 	// on the wire after TrackAlias.
 	GroupID uint64
 
@@ -78,7 +78,7 @@ type SubgroupHeader struct {
 	PublisherPriority uint8
 }
 
-// Wire-byte bit layout (§11.4.2): 0b0XX1XXXX where bit 4 is always set
+// Wire-byte bit layout (§11.3.1): 0b0XX1XXXX where bit 4 is always set
 // and bit 7 is always clear.
 const (
 	subgroupBitProperties      uint64 = 0x01 // bit 0
@@ -90,7 +90,7 @@ const (
 	subgroupBitFirstObject     uint64 = 0x40 // bit 6
 )
 
-// Type returns the wire Type byte encoding the flag fields (§11.4.2).
+// Type returns the wire Type byte encoding the flag fields (§11.3.1).
 // The mandatory bit-4 sanity bit is always set. SubgroupIDMode is masked
 // to 2 bits — callers that pass an out-of-range value get the bottom
 // two bits.
@@ -117,7 +117,7 @@ func (h SubgroupHeader) Type() uint64 {
 	return t
 }
 
-// DecodeSubgroupHeaderType parses a wire Type byte (§11.4.2) into the
+// DecodeSubgroupHeaderType parses a wire Type byte (§11.3.1) into the
 // flag fields of a SubgroupHeader. TrackAlias is left zero — the header
 // parser reads it from the following varint. Returns an error if t is
 // not a valid SUBGROUP_HEADER Type (i.e. IsSubgroupHeaderType(t) is
@@ -136,7 +136,7 @@ func DecodeSubgroupHeaderType(t uint64) (SubgroupHeader, error) {
 }
 
 // IsSubgroupHeaderType reports whether t is one of the valid SUBGROUP_HEADER
-// type values per §11.4.2: the four ranges 0x10..0x1F, 0x30..0x3F, 0x50..0x5F,
+// type values per §11.3.1: the four ranges 0x10..0x1F, 0x30..0x3F, 0x50..0x5F,
 // 0x70..0x7F, excluding values where SUBGROUP_ID_MODE (bits 1-2) is 0b11.
 func IsSubgroupHeaderType(t uint64) bool {
 	if t > 0x7F {
@@ -155,8 +155,8 @@ func IsSubgroupHeaderType(t uint64) bool {
 
 // IsReservedSubgroupHeaderType reports whether t looks like a SUBGROUP_HEADER
 // type byte (bit 4 set, bit 7 clear) but has the reserved SUBGROUP_ID_MODE
-// value 0b11 in bits 1-2. Per §11.4.2, receiving such a value MUST close the
-// session with a PROTOCOL_VIOLATION. §3.4 also requires closing the session on
+// value 0b11 in bits 1-2. Per §11.3.1, receiving such a value MUST close the
+// session with a PROTOCOL_VIOLATION. §6.4.1 also requires closing the session on
 // a truly unknown stream type; this lets the caller report the reserved mode
 // distinctly from an unknown type.
 func IsReservedSubgroupHeaderType(t uint64) bool {
@@ -171,7 +171,7 @@ func IsReservedSubgroupHeaderType(t uint64) bool {
 	return t&subgroupModeMask == subgroupModeMask
 }
 
-// WriteSubgroupHeader writes the full SUBGROUP_HEADER wire encoding (§11.4.2):
+// WriteSubgroupHeader writes the full SUBGROUP_HEADER wire encoding (§11.3.1):
 // Type, Track Alias, Group ID, optional Subgroup ID (when
 // SubgroupIDMode == SubgroupIDExplicit), and optional Publisher Priority (when
 // InlinePriority == true).
@@ -189,7 +189,7 @@ func WriteSubgroupHeader(w io.Writer, h SubgroupHeader) error {
 	return err
 }
 
-// ReadSubgroupHeader reads a complete SUBGROUP_HEADER from r (§11.4.2).
+// ReadSubgroupHeader reads a complete SUBGROUP_HEADER from r (§11.3.1).
 // The caller must have already read the leading Type varint via
 // ReadDataStreamType and verified it with IsSubgroupHeaderType; pass that
 // raw type value as typ. ReadSubgroupHeader decodes the flag fields from typ
@@ -225,7 +225,7 @@ func ReadSubgroupHeader(r io.Reader, typ uint64) (SubgroupHeader, error) {
 	}
 
 	if h.InlinePriority {
-		// Publisher Priority is a single byte (§11.4.2).
+		// Publisher Priority is a single byte (§11.3.1).
 		var buf [1]byte
 		if _, err := io.ReadFull(r, buf[:]); err != nil {
 			return SubgroupHeader{}, fmt.Errorf("moqt/message: SUBGROUP_HEADER publisher priority: %w", err)

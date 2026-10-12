@@ -9,16 +9,16 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// ErrInvalidFilter marks a malformed Range Filter (§5.1.4). The session/relay
-// layer maps it to REQUEST_ERROR with code INVALID_FILTER (§10.6, 0x36). It is
+// ErrInvalidFilter marks a malformed Range Filter (§3.3.2). The session/relay
+// layer maps it to REQUEST_ERROR with code INVALID_FILTER (§12.3, 0x36). It is
 // returned for a delta that overflows 2^64-1, an out-of-range PRIORITY value
-// (§10.2.12), an odd Property Type on the Object/Track Property filters
-// (§10.2.13/§10.2.14), and — at the session layer — a duplicate
+// (§9.20.12), an odd Property Type on the Object/Track Property filters
+// (§9.20.13/§9.20.14), and — at the session layer — a duplicate
 // (Type, SetID, Property Type) combination or a total range count exceeding the
-// negotiated MAX_FILTER_RANGES (§10.3.1.6).
-var ErrInvalidFilter = errors.New("moqt/message: invalid range filter (INVALID_FILTER §5.1.4)")
+// negotiated MAX_FILTER_RANGES (§9.1.6).
+var ErrInvalidFilter = errors.New("moqt/message: invalid range filter (INVALID_FILTER §3.3.2)")
 
-// Range is one inclusive [Start, End] band of a Range Filter (§5.1.4). Open
+// Range is one inclusive [Start, End] band of a Range Filter (§3.3.2). Open
 // marks the final, open-ended range — its End is omitted on the wire and it
 // matches any value >= Start. End is ignored when Open is set.
 type Range struct {
@@ -27,10 +27,10 @@ type Range struct {
 	Open  bool
 }
 
-// RangeFilter is one Range Filter parameter (§5.1.4): SUBGROUP_FILTER (0x25),
+// RangeFilter is one Range Filter parameter (§3.3.2): SUBGROUP_FILTER (0x25),
 // OBJECTID_FILTER (0x26), PRIORITY_FILTER (0x27), OBJECT_PROPERTY_FILTER (0x28),
 // or TRACK_PROPERTY_FILTER (0x29). Type is the parameter ID; SetID groups
-// filters for AND/OR combination (§5.1.4); PropertyType is meaningful only for
+// filters for AND/OR combination (§3.3.2); PropertyType is meaningful only for
 // the Object/Track Property filters (0x28/0x29) and is 0 otherwise. Ranges is
 // the ordered, non-overlapping set of value bands the filter selects.
 type RangeFilter struct {
@@ -41,13 +41,13 @@ type RangeFilter struct {
 }
 
 // hasPropertyType reports whether this filter type carries a Property Type
-// prefix on the wire — only the Object/Track Property filters do (§5.1.4).
+// prefix on the wire — only the Object/Track Property filters do (§8.6).
 func (f *RangeFilter) hasPropertyType() bool {
 	return f.Type == ParamObjectPropertyFilter || f.Type == ParamTrackPropertyFilter
 }
 
 // Append serialises the filter's value blob to w: SetID, optional Property
-// Type, then the delta-encoded Ranges (§5.1.4 — Start delta from the prior
+// Type, then the delta-encoded Ranges (§8.6 — Start delta from the prior
 // Range's End or 0, End delta from the current Start; the final End is omitted
 // for an Open range). It assumes a validated filter; a mid-list Open range
 // would truncate the blob, so call [RangeFilter.Validate] first.
@@ -75,7 +75,7 @@ func (f *RangeFilter) Bytes() []byte {
 	return w.Bytes()
 }
 
-// RangeFilterParam builds the message Parameter (§10.2) carrying f. The value
+// RangeFilterParam builds the message Parameter (§9.20) carrying f. The value
 // is a length-prefixed blob (KindBytes) for all five filter types, see the
 // note in params.go.
 func RangeFilterParam(f *RangeFilter) Parameter {
@@ -83,7 +83,7 @@ func RangeFilterParam(f *RangeFilter) Parameter {
 }
 
 // ParseRangeFilter decodes a Range Filter parameter's value blob (raw) for
-// parameter type t (§5.1.4), resolving the delta-encoded Ranges to absolute
+// parameter type t (§8.6), resolving the delta-encoded Ranges to absolute
 // [Start, End] bands. The open-ended final range is detected when the blob is
 // exhausted immediately after a Start. Any delta that overflows 2^64-1 is
 // rejected with [ErrInvalidFilter]. Per-type value checks (PRIORITY bound, odd
@@ -136,9 +136,9 @@ func ParseRangeFilter(t ParamID, raw []byte) (*RangeFilter, error) {
 	return f, nil
 }
 
-// Validate applies the §5.1.4 per-filter value checks that need no session
+// Validate applies the §3.3.2 per-filter value checks that need no session
 // state: the Object/Track Property filters require an even Property Type
-// (§10.2.13/§10.2.14), PRIORITY_FILTER values must fit 8 bits (§10.2.12), and
+// (§9.20.13/§9.20.14), PRIORITY_FILTER values must fit 8 bits (§9.20.12), and
 // only the final Range may be open-ended (a mid-list Open cannot round-trip).
 // Duplicate-combination and MAX_FILTER_RANGES checks need session state and
 // live in [RangeFiltersFromParams] / [RangeFilterSet.Validate].
@@ -151,7 +151,7 @@ func (f *RangeFilter) Validate() error {
 			return fmt.Errorf("%w: only the final range may be open-ended", ErrInvalidFilter)
 		}
 		if f.Type == ParamPriorityFilter && (rg.Start > 255 || (!rg.Open && rg.End > 255)) {
-			return fmt.Errorf("%w: PRIORITY value exceeds 255 (§10.2.12)", ErrInvalidFilter)
+			return fmt.Errorf("%w: PRIORITY value exceeds 255 (§9.20.12)", ErrInvalidFilter)
 		}
 	}
 	return nil
@@ -174,9 +174,9 @@ func (f *RangeFilter) matchValue(v uint64) bool {
 	return false
 }
 
-// RangeFilterSet is the collection of Range Filters (§5.1.4) on one request,
+// RangeFilterSet is the collection of Range Filters (§3.3.2) on one request,
 // grouped by SetID. A value passes a group when it satisfies every filter in
-// that group (AND); it passes the set when it passes any group (OR) — §5.1.4's
+// that group (AND); it passes the set when it passes any group (OR) — §3.3.2's
 // "SetID=0 OR SetID=1 OR ...". A nil or empty set imposes no restriction. Build
 // it with [RangeFiltersFromParams].
 type RangeFilterSet struct {
@@ -198,11 +198,11 @@ type filterKey struct {
 	propTy PropertyType
 }
 
-// RangeFiltersFromParams extracts every Range Filter parameter (§5.1.4) from ps,
+// RangeFiltersFromParams extracts every Range Filter parameter (§3.3.2) from ps,
 // validates each, rejects a duplicate (Type, SetID, Property Type) combination
-// (§5.1.4), and groups them by SetID. Returns (nil, nil) when ps carries no
+// (§3.3.2), and groups them by SetID. Returns (nil, nil) when ps carries no
 // range filters, matching [LocationFilterFromParam]. A zero-length parameter
-// is no filter (§5.1.4). The MAX_FILTER_RANGES limit is enforced separately by
+// is no filter (§3.3.2). The MAX_FILTER_RANGES limit is enforced separately by
 // [RangeFilterSet.Validate].
 func RangeFiltersFromParams(ps Parameters) (*RangeFilterSet, error) {
 	filters, err := parseRangeFilters(ps)
@@ -212,7 +212,7 @@ func RangeFiltersFromParams(ps Parameters) (*RangeFilterSet, error) {
 	return buildRangeFilterSet(filters)
 }
 
-// Update applies a REQUEST_UPDATE's Range Filter parameters to s (§5.1.4):
+// Update applies a REQUEST_UPDATE's Range Filter parameters to s (§3.3.2):
 // Length 0 removes a filter, non-zero replaces it, omitted leaves it. A
 // zero-length parameter carries no SetID, so filters are replaced by Parameter
 // Type: every existing filter of a type the update carries is dropped. Returns
@@ -256,7 +256,7 @@ func parseRangeFilters(ps Parameters) ([]RangeFilter, error) {
 }
 
 // buildRangeFilterSet rejects a duplicate (Type, SetID, Property Type)
-// combination (§5.1.4) and groups filters by SetID; nil for no filters.
+// combination (§3.3.2) and groups filters by SetID; nil for no filters.
 func buildRangeFilterSet(filters []RangeFilter) (*RangeFilterSet, error) {
 	if len(filters) == 0 {
 		return nil, nil //nolint:nilnil // no filters: (nil set, nil error) is the documented contract.
@@ -290,7 +290,7 @@ func buildRangeFilterSet(filters []RangeFilter) (*RangeFilterSet, error) {
 	return set, nil
 }
 
-// Validate enforces the MAX_FILTER_RANGES setup option (§10.3.1.6): a limit of
+// Validate enforces the MAX_FILTER_RANGES setup option (§9.1.6): a limit of
 // 0 prohibits range filters entirely, and the total number of Ranges across all
 // filters must not exceed maxFilterRanges. Returns [ErrInvalidFilter] on breach.
 // A nil set (no filters) is always valid.
@@ -310,7 +310,7 @@ func (s *RangeFilterSet) Validate(maxFilterRanges uint64) error {
 }
 
 // propertyValue returns the first value of property t in pairs: the mutable
-// one when [ExpandImmutable] also found it in Immutable Properties (§12.7).
+// one when [ExpandImmutable] also found it in Immutable Properties (§10.7).
 // Validate admits only even (varint) Property Types.
 func propertyValue(pairs []wire.KVPair, t PropertyType) (uint64, bool) {
 	for _, kv := range pairs {
@@ -375,7 +375,7 @@ func (g *rangeGroup) matchTrack(props []wire.KVPair) bool {
 
 // MatchesObject reports whether an object with the given Subgroup ID, Object ID,
 // Publisher Priority, and Object-Properties blob passes the set's object-scoped
-// filters (§5.1.4): OR over SetID of (AND of the group's SUBGROUP/OBJECTID/
+// filters (§3.3.2): OR over SetID of (AND of the group's SUBGROUP/OBJECTID/
 // PRIORITY/OBJECT_PROPERTY filters). A nil/empty set matches everything.
 //
 // This ignores TRACK_PROPERTY filters, so it is exact for SUBSCRIBE/FETCH (which
@@ -388,7 +388,7 @@ func (s *RangeFilterSet) MatchesObject(subgroupID, objectID uint64, priority uin
 
 // MatchesObjectInSets is [RangeFilterSet.MatchesObject] with per-SetID track
 // gating: group i is eligible only when trackPass[i] is true (nil trackPass =
-// all groups eligible). This implements the exact §5.1.4 semantics
+// all groups eligible). This implements the exact §3.3.2 semantics
 // OR_i(trackPass[i] AND objectFilters_i) for the mixed object+track-in-one-SetID
 // case, where a naive MatchesTrack() && MatchesObject() would be wrong.
 func (s *RangeFilterSet) MatchesObjectInSets(
@@ -433,7 +433,7 @@ func (s *RangeFilterSet) TrackPassPerGroup(trackProps []byte) []bool {
 }
 
 // MatchesTrack reports whether a track with the given Track Properties passes
-// the set's TRACK_PROPERTY filters (§5.1.4 / §10.2.14) — the PUBLISH-forwarding
+// the set's TRACK_PROPERTY filters (§3.3.2 / §9.20.14) — the PUBLISH-forwarding
 // gate for SUBSCRIBE_TRACKS: OR over SetID of (AND of the group's track-property
 // filters). A group with no track filter passes vacuously, so a set with only
 // object filters matches every track; a nil set matches everything.

@@ -53,9 +53,9 @@ type Suite struct {
 //   - A send stream's Context ends once it is closed. It does not track
 //     acknowledgement: quic-go cancels it when Close queues the FIN.
 //   - CancelWrite unblocks the peer's Read rather than leaving it parked.
-//   - A send stream's Context also ends on the peer's STOP_SENDING (§3.3.3).
+//   - A send stream's Context also ends on the peer's STOP_SENDING (§6.4.2.3).
 //   - OpenStream reports an exhausted peer limit as ErrNoStreamCredit. This
-//     one is a documented MUST on the interface, and PUBLISH_SKIPPED (§10.21)
+//     one is a documented MUST on the interface, and PUBLISH_SKIPPED (§9.19)
 //     is built on it: the relay reacts to the sentinel instead of blocking.
 //     An adapter returning the raw transport error would make the relay hang
 //     where the spec says to send PUBLISH_SKIPPED.
@@ -200,13 +200,13 @@ func RunSuite(t *testing.T, s Suite) {
 		if !errors.Is(err, session.ErrNoStreamCredit) {
 			t.Errorf("OpenStream past the peer's limit = %v, want session.ErrNoStreamCredit — "+
 				"the adapter must map its transport's stream-limit error onto the sentinel, "+
-				"or PUBLISH_SKIPPED (§10.21) cannot detect the condition", err)
+				"or PUBLISH_SKIPPED (§9.19) cannot detect the condition", err)
 		}
 	})
 }
 
 // runStopSendingSubtests pins that a send stream's Context ends when the peer
-// sends STOP_SENDING, the only cancel signal after a requester's FIN (§3.3.3).
+// sends STOP_SENDING, the only cancel signal after a requester's FIN (§6.4.2.3).
 func runStopSendingSubtests(t *testing.T, s Suite) {
 	t.Helper()
 	for _, tc := range []struct {

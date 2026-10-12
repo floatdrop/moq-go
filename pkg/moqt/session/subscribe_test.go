@@ -232,14 +232,14 @@ func TestSubscribe_ContextCancelUnblocksResponseWait(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Duplicate Track Alias detection (§11.1)
+// Duplicate Track Alias detection (§3.1.3)
 // ---------------------------------------------------------------------------
 
 // TestRegisterInboundTrackAlias verifies the Session.RegisterInboundTrackAlias
-// method directly: same alias + same track is counted (§5.1 lets concurrent
+// method directly: same alias + same track is counted (§3.1 lets concurrent
 // subscriptions to one Track share an alias), and stays registered until each
 // registration is released; same alias + different track closes the session
-// with DUPLICATE_TRACK_ALIAS and returns *ErrDuplicateTrackAlias (§11.1).
+// with DUPLICATE_TRACK_ALIAS and returns *ErrDuplicateTrackAlias (§3.1.3).
 func TestRegisterInboundTrackAlias(t *testing.T) {
 	cli, _ := openPair(t)
 
@@ -292,7 +292,7 @@ func TestRegisterInboundTrackAlias(t *testing.T) {
 
 // TestDuplicateTrackAliasCloses: a SUBSCRIBE_OK or PUBLISH that reuses the
 // Track Alias of a different Track with an Established subscription closes the
-// session with DUPLICATE_TRACK_ALIAS (§11.1), whichever message bound it
+// session with DUPLICATE_TRACK_ALIAS (§3.1.3), whichever message bound it
 // first.
 func TestDuplicateTrackAliasCloses(t *testing.T) {
 	const alias = uint64(7)
@@ -429,8 +429,8 @@ func establishOnAlias(
 }
 
 // TestAliasReleasedWhenTerminated: a Subscription or IncomingPublication
-// releases its Track Alias once the subscription is Terminated (§5.1), so the
-// publisher may then use it for a different Track (§11.1) without the session
+// releases its Track Alias once the subscription is Terminated (§3.1), so the
+// publisher may then use it for a different Track (§3.1.3) without the session
 // closing with DUPLICATE_TRACK_ALIAS.
 func TestAliasReleasedWhenTerminated(t *testing.T) {
 	const alias = uint64(7)
@@ -475,7 +475,7 @@ func TestAliasReleasedWhenTerminated(t *testing.T) {
 
 // TestCloseAfterPublisherFinFINs: once the publisher has ended the
 // subscription with PUBLISH_DONE and its FIN, Close FINs this side rather than
-// resetting it (§3.3.2: the requester SHOULD FIN), whether the FIN was read
+// resetting it (§6.4.2.2: the requester SHOULD FIN), whether the FIN was read
 // through the handle or by its broker.
 func TestCloseAfterPublisherFinFINs(t *testing.T) {
 	for _, served := range []bool{false, true} {
@@ -496,8 +496,8 @@ func TestCloseAfterPublisherFinFINs(t *testing.T) {
 }
 
 // TestAcceptPublishWriteFailureReleasesAlias: a PUBLISH whose REQUEST_OK
-// cannot be written never becomes Established (§5.1), so its alias is free for
-// a different Track (§11.1).
+// cannot be written never becomes Established (§3.1), so its alias is free for
+// a different Track (§3.1.3).
 func TestAcceptPublishWriteFailureReleasesAlias(t *testing.T) {
 	const alias = uint64(7)
 	cli, srv := openPair(t)
@@ -527,9 +527,9 @@ func TestAcceptPublishWriteFailureReleasesAlias(t *testing.T) {
 }
 
 // TestAliasReleasedOncePerSubscription: two subscriptions to one Track share an
-// alias (§5.1). Terminating one twice releases only its own registration, so
+// alias (§3.1). Terminating one twice releases only its own registration, so
 // the other keeps the alias Established and a different Track reusing it still
-// closes the session (§11.1).
+// closes the session (§3.1.3).
 func TestAliasReleasedOncePerSubscription(t *testing.T) {
 	const alias = uint64(7)
 	cli, srv := openPair(t)
@@ -552,7 +552,7 @@ func TestAliasReleasedOncePerSubscription(t *testing.T) {
 }
 
 // TestSubscribeSameTrackAliasShared verifies that subscribing to the same
-// track twice with the same alias succeeds: §5.1 lets concurrent
+// track twice with the same alias succeeds: §3.1 lets concurrent
 // subscriptions to one Track share an alias.
 func TestSubscribeSameTrackAliasShared(t *testing.T) {
 	cli, srv := openPair(t)
@@ -850,7 +850,7 @@ func TestIncomingSubgroupStreamTrackKey(t *testing.T) {
 }
 
 // TestSharedTrackAliasTakesLatestProperties: a second subscription sharing an
-// alias (§5.1) replaces the cached Track Properties (§2.5), so its
+// alias (§3.1) replaces the cached Track Properties (§8.4), so its
 // DEFAULT_PUBLISHER_PRIORITY is what inheriting subgroups get.
 func TestSharedTrackAliasTakesLatestProperties(t *testing.T) {
 	cli, _ := openPair(t)

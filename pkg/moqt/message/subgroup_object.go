@@ -9,11 +9,11 @@ import (
 )
 
 // ErrIDOverflow reports a Group or Object ID reconstructed from a delta outside
-// 0..2^64-1, a session-level PROTOCOL_VIOLATION (§11.4.2, §11.4.4.1).
+// 0..2^64-1, a session-level PROTOCOL_VIOLATION (§11.3.1, §11.4.1.1).
 var ErrIDOverflow = errors.New("moqt/message: Group or Object ID outside 0..2^64-1")
 
 // NextSubgroupObjectID returns prev + delta + 1, the next Object ID on a
-// Subgroup stream (§11.4.2), or [ErrIDOverflow] past 2^64-1.
+// Subgroup stream (§11.3.1), or [ErrIDOverflow] past 2^64-1.
 func NextSubgroupObjectID(prev, delta uint64) (uint64, error) {
 	id, carry := bits.Add64(prev, delta, 1)
 	if carry != 0 {
@@ -22,7 +22,7 @@ func NextSubgroupObjectID(prev, delta uint64) (uint64, error) {
 	return id, nil
 }
 
-// Object Status values for objects with an empty payload (§11.2.1.1).
+// Object Status values for objects with an empty payload (§11.1.1).
 const (
 	ObjectStatusNormal     uint64 = 0x0 // a normal object (carries a payload)
 	ObjectStatusEndOfGroup uint64 = 0x3 // last object in the Group
@@ -30,7 +30,7 @@ const (
 )
 
 // SubgroupObject represents a single object serialized on a SUBGROUP_HEADER
-// stream after the SubgroupHeader (§11.4.2, Figure 26).
+// stream after the SubgroupHeader (§11.3.1, Figure 27).
 type SubgroupObject struct {
 	// ObjectIDDelta is always present on the wire. For the first object in
 	// the stream it is the absolute Object ID; for subsequent objects it is
@@ -38,7 +38,7 @@ type SubgroupObject struct {
 	ObjectIDDelta uint64
 
 	// Properties is present when SubgroupHeader.Properties == true.
-	// Encoded as a length-prefixed blob (§11.2.1.2).
+	// Encoded as a length-prefixed blob (§11.1.2).
 	// Must be non-nil (even if empty) when the header has Properties == true.
 	Properties []byte
 
@@ -47,7 +47,7 @@ type SubgroupObject struct {
 	Payload []byte
 
 	// ObjectStatus is only written when len(Payload) == 0.
-	// Values: 0x0 Normal, 0x3 EndOfGroup, 0x4 EndOfTrack (§11.2.1.1).
+	// Values: 0x0 Normal, 0x3 EndOfGroup, 0x4 EndOfTrack (§11.1.1).
 	ObjectStatus uint64
 }
 
@@ -55,7 +55,7 @@ type SubgroupObject struct {
 // The hasProperties parameter indicates whether the parent SubgroupHeader
 // had the Properties bit set, which determines if Properties are included.
 func (o *SubgroupObject) Append(w *wire.Writer, hasProperties bool) {
-	// Object ID Delta is always present (§11.4.2)
+	// Object ID Delta is always present (§11.3.1)
 	w.Varint(o.ObjectIDDelta)
 
 	// Properties are present only if the stream header has Properties == true
@@ -79,7 +79,7 @@ func (o *SubgroupObject) Append(w *wire.Writer, hasProperties bool) {
 // had the Properties bit set, which determines if Properties are included.
 //
 // io.EOF is returned only for a stream that ends before the object's first
-// byte; a FIN mid-Object (§11.4) is io.ErrUnexpectedEOF.
+// byte; a FIN mid-Object (§11.3) is io.ErrUnexpectedEOF.
 func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
 	delta, err := r.Varint()
 	if err != nil {
@@ -134,8 +134,8 @@ func (o *SubgroupObject) Validate() error {
 		default:
 			return fmt.Errorf("moqt/message: invalid object status 0x%X", o.ObjectStatus)
 		}
-		// §11.2.1.2: no properties on a non-Normal status; a Properties Length
-		// of 0 carries none (§11.4.2).
+		// §11.1.2: no properties on a non-Normal status; a Properties Length
+		// of 0 carries none (§11.3.1).
 		if o.ObjectStatus != ObjectStatusNormal && len(o.Properties) > 0 {
 			return fmt.Errorf("moqt/message: object status 0x%X carries properties", o.ObjectStatus)
 		}
@@ -156,7 +156,7 @@ func (o *SubgroupObject) IsEndOfTrack() bool {
 
 // IsTerminal reports whether this object is a terminal status object
 // (EndOfGroup or EndOfTrack) after which no further objects may appear on the
-// same Subgroup stream (§11.4.3); a later object is a malformed track (§2.4.2).
+// same Subgroup stream (§11.3.2); a later object is a malformed track (§12.1).
 func (o *SubgroupObject) IsTerminal() bool {
 	return o.IsEndOfGroup() || o.IsEndOfTrack()
 }

@@ -71,21 +71,21 @@ type TrackRef struct {
 type ResetCause uint8
 
 const (
-	// ResetCauseGap is a §11.4.3 reopen: the object to forward was not known
+	// ResetCauseGap is a §11.3.2 reopen: the object to forward was not known
 	// to be "the next Object" after the last one written, so the current
 	// outbound stream was reset and a fresh one opened. That is correct
 	// behaviour, but it usually follows an earlier drop, or Objects arriving
 	// from several upstreams, and a subscriber sees the hole.
 	ResetCauseGap ResetCause = iota
 
-	// ResetCauseDeliveryTimeout is §8: an object sat unsent past the
+	// ResetCauseDeliveryTimeout is §5.2: an object sat unsent past the
 	// resolved publisher/subscriber delivery timeout, so
 	// [session.OutgoingSubgroupStream] reset this one stream with
 	// DELIVERY_TIMEOUT. The subscription survives; the rest of that
 	// subgroup does not.
 	ResetCauseDeliveryTimeout
 
-	// ResetCauseTooFarBehind is the §3.3.4 TOO_FAR_BEHIND verdict: an
+	// ResetCauseTooFarBehind is the §12.5 TOO_FAR_BEHIND verdict: an
 	// object waited in the send queue longer than [Config.MaxFanoutLag],
 	// so the subscription was terminated rather than allowed to trail the
 	// live edge indefinitely.
@@ -96,7 +96,7 @@ const (
 	// was terminated with EXCESSIVE_LOAD.
 	ResetCauseExcessiveLoad
 
-	// ResetCauseInboundReset is §11.4.3 propagation: the upstream stream
+	// ResetCauseInboundReset is §11.3.2 propagation: the upstream stream
 	// feeding this subgroup was reset (or its session went away), so the
 	// corresponding downstream stream is reset rather than FIN'd.
 	ResetCauseInboundReset
@@ -106,9 +106,9 @@ const (
 	// scheduling.
 	ResetCauseWriteError
 
-	// ResetCauseProperties is a reopen to carry Object Properties (§2.5):
-	// the outbound stream's SUBGROUP_HEADER had PROPERTIES clear (§11.4.2),
-	// taken from another upstream of the same Subgroup (§9.3), so a fresh
+	// ResetCauseProperties is a reopen to carry Object Properties (§8.4):
+	// the outbound stream's SUBGROUP_HEADER had PROPERTIES clear (§11.3.1),
+	// taken from another upstream of the same Subgroup (§7.3), so a fresh
 	// stream with the bit set was opened. Objects already written survive
 	// the reset only where RESET_STREAM_AT is in use (see
 	// [session.OutgoingSubgroupStream.MarkReliable]); elsewhere the unacked
@@ -173,7 +173,7 @@ type Metrics interface {
 
 	// ObjectReceived is called once for each object read off an inbound
 	// subgroup stream and won by this contributor — objects discarded as
-	// §9.3 duplicates of a redundant upstream are not counted. Compared
+	// §7.3 duplicates of a redundant upstream are not counted. Compared
 	// against ObjectForwarded it separates "the relay never got it" from
 	// "the relay got it and shed it".
 	ObjectReceived(t TrackRef, subgroup uint64)
@@ -186,7 +186,7 @@ type Metrics interface {
 	ObjectForwarded(t TrackRef, subgroup uint64)
 
 	// ObjectDropped is called when a downstream subscriber's bounded send
-	// queue overflows and the object is dropped (§8 slow-reader pressure).
+	// queue overflows and the object is dropped (§5.2 slow-reader pressure).
 	// The subgroup is reported because it is how a layered publisher marks
 	// what is disposable: shedding an enhancement layer is the design
 	// working, and shedding the base layer is the picture breaking.

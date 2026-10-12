@@ -20,26 +20,26 @@ import (
 var testHookBeforeForwardClaim atomic.Pointer[func(track.FullTrackName)]
 
 // forwardTrack is a SUBSCRIBE_TRACKS subscriber's [registry.SubscriberEntry.ForwardTrack]:
-// it sends the subscriber a PUBLISH for te (§6.1) with the current
-// SUBSCRIBE_TRACKS parameters (§10.20.1) and serves the resulting
+// it sends the subscriber a PUBLISH for te (§3.6) with the current
+// SUBSCRIBE_TRACKS parameters (§3.6.2) and serves the resulting
 // subscription. At most one PUBLISH per track, and none for a track the
 // subscriber publishes, already receives, or is SUBSCRIBing to.
 func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.SubscriberEntry, *registry.TrackEntry) {
 	return func(sub *registry.SubscriberEntry, te *registry.TrackEntry) {
 		if goingAway(h.sess) {
-			return // §10.4: no new PUBLISH on a session with a GOAWAY
+			return // §9.2: no new PUBLISH on a session with a GOAWAY
 		}
 		fullName := te.FullName
 		if !fullName.Namespace.HasPrefix(sub.Prefix()) {
 			return // a TRACK_NAMESPACE_PREFIX update moved the subscription away
 		}
-		// §5.1.4: PUBLISHes that fail the Range Filters are not forwarded.
+		// §3.3.2: PUBLISHes that fail the Range Filters are not forwarded.
 		tp := sub.TracksParams()
 		if !tp.RangeFilters.MatchesTrack(te.GetProperties()) {
 			return
 		}
-		// §6.1: "excluding tracks published by the subscriber". Relay policy,
-		// not §6.1: nor a track it receives on its own SUBSCRIBE. The in-flight
+		// §3.6: "excluding tracks published by the subscriber". Relay policy,
+		// not §3.6: nor a track it receives on its own SUBSCRIBE. The in-flight
 		// check comes before HasDownstreamOn, as the SUBSCRIBE registers its
 		// downstream before it stops being in flight; and before the claim, so
 		// the held forward's replay does not find the claim still taken.
@@ -64,18 +64,18 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 			return
 		}
 		var properties []byte
-		if includeProperties(tp.Params) { // §10.2.21
+		if includeProperties(tp.Params) { // §9.20.21
 			properties = te.GetProperties()
 		}
 		fwd := &message.Publish{
 			Namespace: fullName.Namespace,
 			Name:      fullName.Name,
-			// §11.1: aliases are per session.
+			// §3.1.3: aliases are per session.
 			TrackAlias:      h.sess.AllocOutboundTrackAlias(),
 			Parameters:      publishParamsForSubscriber(tp, te),
 			TrackProperties: properties,
 		}
-		// §6.1: without bidi-stream credit, send PUBLISH_SKIPPED instead.
+		// §3.6.3: without bidi-stream credit, send PUBLISH_SKIPPED instead.
 		stream, err := h.sess.OpenPublish(fwd)
 		if err != nil {
 			if errors.Is(err, session.ErrNoStreamCredit) {
@@ -94,7 +94,7 @@ func (h *sessionHandler) forwardTrack(ctx context.Context) func(*registry.Subscr
 
 // serveForwardedPublish serves the subscription a forwarded PUBLISH opened,
 // as a downstream on te registered before PUBLISH_OK, since objects may flow
-// before it (§10.11). A REQUEST_ERROR ends it; otherwise it
+// before it (§9.8). A REQUEST_ERROR ends it; otherwise it
 // is served like a SUBSCRIBE's.
 func (h *sessionHandler) serveForwardedPublish(
 	ctx context.Context,
@@ -110,7 +110,7 @@ func (h *sessionHandler) serveForwardedPublish(
 	// handleSubscribeTracks already refused parameters this would reject.
 	_ = installSubscribeParams(sub, params)
 	// The Group Order the PUBLISH stated (see publishParamsForSubscriber), so
-	// the subscription's fills follow what it was told (§10.20.1).
+	// the subscription's fills follow what it was told (§3.6.2).
 	if p, ok := fwd.Parameters.Find(message.ParamGroupOrder); ok {
 		sub.SetGroupOrder(p.Byte)
 	}
@@ -125,10 +125,10 @@ func (h *sessionHandler) serveForwardedPublish(
 	ref := h.trackRef(fullName)
 	h.metrics.SubscriptionOpened(ref)
 	defer h.metrics.SubscriptionClosed(ref)
-	// §5.1.1: once the subscriber cancels, or the session ends, reset the
+	// §3.1.2: once the subscriber cancels, or the session ends, reset the
 	// streams still open for it.
 	defer sub.Cancel()
-	// §9.2: a forwarding subscriber resumes a paused upstream.
+	// §7.2: a forwarding subscriber resumes a paused upstream.
 	if sub.ForwardState() == 1 {
 		h.propagateForwardUpstream(ctx, fullName)
 	}
@@ -136,13 +136,13 @@ func (h *sessionHandler) serveForwardedPublish(
 	if _, err := h.sess.AwaitPublishOK(ctx, stream); err != nil {
 		h.log.LogAttrs(ctx, slog.LevelDebug, "forwarded PUBLISH refused",
 			slog.String("name", string(fullName.Name)), slog.String("err", err.Error()))
-		// §5.1, §5.1.1: the subscriber's REQUEST_ERROR terminates the
+		// §3.1, §3.1.2: the subscriber's REQUEST_ERROR terminates the
 		// subscription, so no PUBLISH_DONE follows.
 		sub.EndRefused()
 		return
 	}
-	// §10.20.1: each forwarded subscription gets its own fill fetch stream,
-	// named by the PUBLISH's Request ID (§10.1; §5.1.3 names only SUBSCRIBE
+	// §3.6.2: each forwarded subscription gets its own fill fetch stream,
+	// named by the PUBLISH's Request ID (§6.4.2.1; §3.4 names only SUBSCRIBE
 	// and REQUEST_UPDATE).
 	// The registration snapshot, which the live filter is anchored on; see
 	// maybeServeFill.
@@ -150,7 +150,7 @@ func (h *sessionHandler) serveForwardedPublish(
 		h.log.LogAttrs(ctx, slog.LevelDebug, "fill fetch stream not opened",
 			slog.String("err", err.Error()))
 	}
-	// §10.2.19
+	// §9.20.19
 	if p, ok := params.Find(message.ParamNewGroupRequest); ok {
 		h.propagateNewGroupUpstream(ctx, fullName, p.Varint)
 	}
@@ -174,7 +174,7 @@ type inflightSubscribe struct {
 // When the last SUBSCRIBE for key ends, the forwards held back are offered
 // again: forwardTrack declines them if a SUBSCRIBE registered its downstream,
 // and sends them if none did, since the track is then received no other way
-// (§10.20).
+// (§3.6).
 func (h *sessionHandler) beginSubscribe(key track.Key) (end func()) {
 	h.subscribingMu.Lock()
 	defer h.subscribingMu.Unlock()

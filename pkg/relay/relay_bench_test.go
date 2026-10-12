@@ -138,7 +138,7 @@ func benchFanout(b *testing.B, subCount, payloadSize int) {
 	// Open one subgroup AFTER all subscribers are established so runFanout's
 	// first-object snapshot already includes every downstream sub. All
 	// Object IDs are consecutive (delta 0), so the relay keeps a single
-	// outbound subgroup per subscriber (no §11.4.3 reopen).
+	// outbound subgroup per subscriber (no §11.3.2 reopen).
 	pubSg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 		SubgroupIDMode: message.SubgroupIDImplicitZero,
 		TrackAlias:     benchPubAlias,
@@ -180,7 +180,7 @@ func benchFanout(b *testing.B, subCount, payloadSize int) {
 // doneCh. If firstCh is non-nil it is signalled exactly once, after the first
 // object arrives — used by the fanout benchmark to confirm runFanout's
 // per-subscriber setup is complete before the timer starts. It tolerates
-// §11.4.3 stream reopens by accepting another data stream when the current one
+// §11.3.2 stream reopens by accepting another data stream when the current one
 // ends before the count is reached.
 func benchSubscriberReader(
 	ctx context.Context,

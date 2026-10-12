@@ -12,7 +12,7 @@ transport-agnostic session library, a reference relay that runs standalone or as
 several instances routing across each other, media packaging libraries, and demo
 publisher/subscriber CLIs.
 
-- [Media over QUIC Transport (MoQT)](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) — `draft-ietf-moq-transport-20`
+- [Media over QUIC Transport (MoQT)](https://datatracker.ietf.org/doc/draft-ietf-moq-transport/) — `draft-ietf-moq-transport-22`
 - [Low Overhead Media Container (LOC)](https://datatracker.ietf.org/doc/draft-ietf-moq-loc/) — `draft-ietf-moq-loc-04`
 - [MoQ Streaming Format (MSF)](https://datatracker.ietf.org/doc/draft-ietf-moq-msf/) — `draft-ietf-moq-msf-01`
 - [CMAF-compliant MSF (CMSF)](https://datatracker.ietf.org/doc/draft-ietf-moq-cmsf/) — `draft-ietf-moq-cmsf-01`
@@ -77,7 +77,7 @@ if err != nil {
 	return err
 }
 // Done ends the publication gracefully (PUBLISH_DONE, then FIN). pub.Close()
-// cancels it instead (§3.3.3).
+// cancels it instead (§6.4.2.3).
 defer pub.Done(moqt.PublishDoneTrackEnded, "")
 
 // Publish assigned the Track Alias; the returned Publication carries it, so
@@ -88,7 +88,7 @@ sg, _ := pub.OpenSubgroup(message.SubgroupHeader{
 	SubgroupIDMode: message.SubgroupIDImplicitZero,
 	GroupID:        0,
 })
-// WriteObjectAt takes absolute Object IDs and computes the §11.4.2 delta
+// WriteObjectAt takes absolute Object IDs and computes the §11.3.1 delta
 // encoding for you; WriteObject is the lower-level form that takes the delta.
 _ = sg.WriteObjectAt(0, &message.SubgroupObject{Payload: []byte("hello")})
 _ = sg.Close()
@@ -244,7 +244,7 @@ CI runs on every push and pull request
 `go test ./...`, `go test -race ./...`, `golangci-lint run`, a `govulncheck`
 scan, and the interop suite. The interop run is not redundant with `go test`:
 the unit tests round-trip through our own codec, so a wire-encoding regression
-(e.g. emitting QUIC varints instead of the §1.4.1 leading-ones encoding) passes
+(e.g. emitting QUIC varints instead of the §8.1 leading-ones encoding) passes
 every unit test yet breaks interop — only a run against an independent
 implementation catches it.
 

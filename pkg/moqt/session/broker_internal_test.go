@@ -64,7 +64,7 @@ func TestBrokerUpdate_OKAnswersOldest(t *testing.T) {
 	}
 }
 
-// TestBrokerUpdate_ErrorFailsAllPending pins the §10.9 coalescing rule: a
+// TestBrokerUpdate_ErrorFailsAllPending pins the §9.5 coalescing rule: a
 // peer may answer N pipelined REQUEST_UPDATEs with a single REQUEST_ERROR,
 // so one error must fail every in-flight Update, not just the oldest.
 func TestBrokerUpdate_ErrorFailsAllPending(t *testing.T) {
@@ -170,7 +170,7 @@ func (s *recordingBrokerStream) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// TestBrokerUpdate_ConsumesFreshRequestIDs pins §10.1: REQUEST_UPDATE is a
+// TestBrokerUpdate_ConsumesFreshRequestIDs pins §6.4.2.1: REQUEST_UPDATE is a
 // request message that consumes a Request ID, so every update the broker
 // sends must carry a fresh, strictly increasing ID from this endpoint's
 // space — reusing the original request's ID is a duplicate the peer must

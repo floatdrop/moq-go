@@ -165,7 +165,7 @@ func TestAcceptRequestUnknownAliasIsSessionError(t *testing.T) {
 
 // TestAcceptRequestRegisterPersistsWhenAliasingProhibited verifies that with
 // no negotiated cache budget (maxSize=0) a REGISTER is an overflow fault per
-// §10.3.1.3.
+// §9.1.3.
 func TestAcceptRequestRegisterProhibitedIsOverflow(t *testing.T) {
 	client, server := openPair(t) // maxSize 0
 
@@ -306,7 +306,7 @@ func TestTokenCacheAccessor(t *testing.T) {
 	}
 }
 
-// TestProcessFollowupTokensRegistersAlias pins the §10.2.2 REQUEST_UPDATE
+// TestProcessFollowupTokensRegistersAlias pins the §8.9 REQUEST_UPDATE
 // token path: an alias REGISTERed on a follow-up REQUEST_UPDATE (routed
 // through ProcessFollowupTokens by whoever reads follow-ups directly) must
 // enter the cache exactly like a first-message REGISTER, so a later
@@ -344,7 +344,7 @@ func TestProcessFollowupTokensRegistersAlias(t *testing.T) {
 
 	// Client sends REQUEST_UPDATE carrying a REGISTER token; the server
 	// reads the follow-up directly and routes it through
-	// ProcessFollowupTokens, then acks per §10.9.
+	// ProcessFollowupTokens, then acks per §9.5.
 	updDone := make(chan error, 1)
 	go func() {
 		_, err := client.UpdateRequest(t.Context(), clientStream, message.Parameters{
@@ -427,7 +427,7 @@ func TestVerifyRequestTokensPreservesVerifierSentinel(t *testing.T) {
 }
 
 // TestAcceptRequestUndecodableTokenIsKeyValueFormattingError: an undecodable
-// Token, including an unknown Alias Type, is KEY_VALUE_FORMATTING_ERROR (§10.2.2).
+// Token, including an unknown Alias Type, is KEY_VALUE_FORMATTING_ERROR (§8.9).
 func TestAcceptRequestUndecodableTokenIsKeyValueFormattingError(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -14,8 +14,8 @@ import (
 )
 
 // A subscriber that cancels its SUBSCRIBE gets the subscription's open
-// streams reset: §5.1.1 "It MUST reset any open streams associated with the
-// SUBSCRIBE", and §5.1.3.1 "When the subscription is cancelled, the publisher
+// streams reset: §3.1.2 "It MUST reset any open streams associated with the
+// SUBSCRIBE", and §3.4.1 "When the subscription is cancelled, the publisher
 // MUST reset any open fill fetch streams".
 
 // readEnd reads next until it fails, returning that error, or fails the test

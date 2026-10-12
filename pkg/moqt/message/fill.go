@@ -8,7 +8,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// fillParamsAllowed is Table 6 of §10.2.15: the only parameters that may
+// fillParamsAllowed is Table 7 of §9.20.15: the only parameters that may
 // appear inside FILL_PARAMETERS. Note TRACK_PROPERTY_FILTER (0x29) is absent —
 // a fill is scoped to Objects, so only the Object-scoped filters carry over.
 var fillParamsAllowed = []ParamID{
@@ -22,14 +22,14 @@ var fillParamsAllowed = []ParamID{
 	ParamObjectPropertyFilter,
 }
 
-// FillParametersParam builds FILL_PARAMETERS (§10.2.15) from the parameters
+// FillParametersParam builds FILL_PARAMETERS (§9.20.15) from the parameters
 // that apply to the fill fetch stream. Its presence on a SUBSCRIBE or
 // REQUEST_UPDATE is what asks the publisher to open a fill fetch stream
-// (§5.1.3) — an empty inner list still requests one, filling the whole track
+// (§3.4) — an empty inner list still requests one, filling the whole track
 // up to Largest Object.
 //
 // The value is a nested parameter sequence: it is a separate parameter scope,
-// so a type may appear both here and in the enclosing message (§10.2.15).
+// so a type may appear both here and in the enclosing message (§9.20.15).
 func FillParametersParam(inner Parameters) Parameter {
 	var w wire.Writer
 	inner.append(&w)
@@ -37,20 +37,20 @@ func FillParametersParam(inner Parameters) Parameter {
 }
 
 // FillParametersFromParam extracts and parses FILL_PARAMETERS from a parameter
-// list. ok is false when the parameter is absent, which per §5.1.3 means no
+// list. ok is false when the parameter is absent, which per §3.4 means no
 // fill fetch stream is requested — distinct from a present-but-empty list.
 //
-// An inner parameter outside Table 6 is an error the caller MUST map to a
-// session-level PROTOCOL_VIOLATION (§10.2.15).
+// An inner parameter outside Table 7 is an error the caller MUST map to a
+// session-level PROTOCOL_VIOLATION (§9.20.15).
 func FillParametersFromParam(ps Parameters) (inner Parameters, ok bool, err error) {
 	p, found := ps.Find(ParamFillParameters)
 	if !found {
 		return nil, false, nil
 	}
 	if err := inner.parse(wire.NewReader(p.Bytes)); err != nil {
-		// §10.2: an unknown parameter, or a Type past 2^64-1, is a
+		// §9.20: an unknown parameter, or a Type past 2^64-1, is a
 		// PROTOCOL_VIOLATION here as in any message; anything else is a
-		// value that does not parse (§1.4.3).
+		// value that does not parse (§8.3).
 		if errors.Is(err, ErrUnknownParameter) || errors.Is(err, errParamTypeOverflow) {
 			return nil, true, fmt.Errorf("moqt/message: FILL_PARAMETERS: %w", err)
 		}
@@ -59,17 +59,17 @@ func FillParametersFromParam(ps Parameters) (inner Parameters, ok bool, err erro
 	for _, ip := range inner {
 		if !slices.Contains(fillParamsAllowed, ip.Type) {
 			return nil, true, fmt.Errorf(
-				"moqt/message: %s not allowed inside FILL_PARAMETERS (PROTOCOL_VIOLATION §10.2.15)", ip.Type)
+				"moqt/message: %s not allowed inside FILL_PARAMETERS (PROTOCOL_VIOLATION §9.20.15)", ip.Type)
 		}
 	}
-	// A separate message's parameters (§10.2.15): §10.2's duplicate rule applies.
+	// A separate message's parameters (§9.20.15): §9.20's duplicate rule applies.
 	if t, dup := inner.firstDuplicate(); dup {
-		return nil, true, fmt.Errorf("moqt/message: duplicate %s inside FILL_PARAMETERS (PROTOCOL_VIOLATION §10.2)", t)
+		return nil, true, fmt.Errorf("moqt/message: duplicate %s inside FILL_PARAMETERS (PROTOCOL_VIOLATION §9.20)", t)
 	}
 	return inner, true, nil
 }
 
-// IncludePropertiesParam builds INCLUDE_PROPERTIES (§10.2.21): whether the
+// IncludePropertiesParam builds INCLUDE_PROPERTIES (§9.20.21): whether the
 // response should carry Track Properties. The default is 1, so this is only
 // worth sending to suppress them.
 func IncludePropertiesParam(include bool) Parameter {
@@ -80,7 +80,7 @@ func IncludePropertiesParam(include bool) Parameter {
 	return ByteParam(ParamIncludeProperties, v)
 }
 
-// IncludePropertiesFromParam reads INCLUDE_PROPERTIES (§10.2.21) from a
+// IncludePropertiesFromParam reads INCLUDE_PROPERTIES (§9.20.21) from a
 // parameter list, defaulting to true when absent. A value outside {0, 1} is an
 // error the caller MUST map to a session-level PROTOCOL_VIOLATION.
 func IncludePropertiesFromParam(ps Parameters) (bool, error) {
@@ -95,6 +95,6 @@ func IncludePropertiesFromParam(ps Parameters) (bool, error) {
 		return true, nil
 	default:
 		return false, fmt.Errorf(
-			"moqt/message: INCLUDE_PROPERTIES value %d outside {0,1} (PROTOCOL_VIOLATION §10.2.21)", p.Byte)
+			"moqt/message: INCLUDE_PROPERTIES value %d outside {0,1} (PROTOCOL_VIOLATION §9.20.21)", p.Byte)
 	}
 }

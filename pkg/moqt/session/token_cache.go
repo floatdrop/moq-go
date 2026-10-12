@@ -11,15 +11,15 @@ import (
 type tokenCacheEntry struct {
 	tokenType uint64
 	value     []byte
-	size      uint64 // 16 + len(value), per §10.3.1.3
+	size      uint64 // 16 + len(value), per §9.1.3
 }
 
-// TokenCache is a per-session, per-direction alias cache per §10.2.2.
+// TokenCache is a per-session, per-direction alias cache per §8.9.
 //
 // Client and server each maintain independent caches (separate alias spaces).
 // The cache is thread-safe.
 //
-// Cache size accounting per §10.3.1.3:
+// Cache size accounting per §9.1.3:
 //   - Token size = 16 bytes + len(TokenValue)
 //   - Total = Σ(registered token sizes) − Σ(deregistered token sizes)
 //   - maxSize = 0 prohibits alias registration (default when MAX_AUTH_TOKEN_CACHE_SIZE
@@ -32,7 +32,7 @@ type TokenCache struct {
 }
 
 // NewTokenCache creates a cache with the given maximum byte size.
-// maxSize=0 prohibits alias registration (the default per §10.3.1.3).
+// maxSize=0 prohibits alias registration (the default per §9.1.3).
 func NewTokenCache(maxSize uint64) *TokenCache {
 	return &TokenCache{
 		maxSize: maxSize,
@@ -40,13 +40,13 @@ func NewTokenCache(maxSize uint64) *TokenCache {
 	}
 }
 
-// Register adds alias → (tokenType, value) to the cache per §10.2.2 REGISTER.
+// Register adds alias → (tokenType, value) to the cache per §8.9 REGISTER.
 //
 // Returns:
 //   - moqt.SessionDuplicateAuthTokenAlias if alias is already registered.
 //   - moqt.SessionAuthTokenCacheOverflow if adding would exceed maxSize.
 //
-// Per §10.2.2: even if the message fails for other reasons, a REGISTER that
+// Per §8.9: even if the message fails for other reasons, a REGISTER that
 // does not cause a session error MUST be stored. The caller is responsible for
 // applying that rule (i.e. call Register before validating the message).
 func (c *TokenCache) Register(alias, tokenType uint64, value []byte) error {
@@ -82,7 +82,7 @@ func (c *TokenCache) Register(alias, tokenType uint64, value []byte) error {
 	return nil
 }
 
-// Delete removes alias from the cache per §10.2.2 DELETE.
+// Delete removes alias from the cache per §8.9 DELETE.
 // Returns moqt.SessionUnknownAuthTokenAlias if alias is not registered.
 func (c *TokenCache) Delete(alias uint64) error {
 	c.mu.Lock()
@@ -99,7 +99,7 @@ func (c *TokenCache) Delete(alias uint64) error {
 	return nil
 }
 
-// Resolve returns the (tokenType, value) for alias per §10.2.2 USE_ALIAS.
+// Resolve returns the (tokenType, value) for alias per §8.9 USE_ALIAS.
 // Returns moqt.SessionUnknownAuthTokenAlias if alias is not registered.
 // The returned value slice is a copy owned by the caller.
 func (c *TokenCache) Resolve(alias uint64) (tokenType uint64, value []byte, err error) {

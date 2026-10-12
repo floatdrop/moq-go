@@ -18,14 +18,14 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// Malformed tracks (§2.4.2): the relay ends downstream subscriptions with
+// Malformed tracks (§12.1): the relay ends downstream subscriptions with
 // PUBLISH_DONE MALFORMED_TRACK, resets fetch streams, and cancels its own
-// subscription upstream. An unknown Mandatory Track Property (§2.5.1) refuses
+// subscription upstream. An unknown Mandatory Track Property (§3.7) refuses
 // the track with REQUEST_ERROR UNSUPPORTED_EXTENSION, or resets a fetch stream
 // the relay already answered.
 
 // mandatoryProps carries the unknown Mandatory Track Property 0x4000. As Object
-// Properties it makes the track malformed (§2.5.1).
+// Properties it makes the track malformed (§3.7).
 func mandatoryProps() []byte {
 	return message.AppendTrackProperties(trackProp(message.MandatoryTrackPropertyMin, 1))
 }
@@ -129,7 +129,7 @@ func priorGap(typ message.PropertyType, n uint64) []byte {
 
 // TestRelay_MalformedObjectEndsTrack: each kind of malformed Object ends the
 // downstream subscription with MALFORMED_TRACK and cancels the upstream one
-// (§2.4.2).
+// (§12.1).
 func TestRelay_MalformedObjectEndsTrack(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -147,7 +147,7 @@ func TestRelay_MalformedObjectEndsTrack(t *testing.T) {
 			_ = sg.WriteObject(&message.SubgroupObject{Properties: mandatoryProps(), Payload: []byte("x")})
 			_ = sg.Close()
 		}},
-		// §2.4.2 condition 4: an Object after the final Object in the Group.
+		// §12.1 condition 4: an Object after the final Object in the Group.
 		{"Object after END_OF_GROUP", func(t *testing.T, pubSess *session.Session, alias uint64) {
 			sg, err := pubSess.OpenSubgroup(message.SubgroupHeader{
 				SubgroupIDMode: message.SubgroupIDExplicit, TrackAlias: alias, GroupID: 1,
@@ -160,28 +160,28 @@ func TestRelay_MalformedObjectEndsTrack(t *testing.T) {
 			_ = sg.WriteObject(&message.SubgroupObject{Payload: []byte("x")})
 			_ = sg.Close()
 		}},
-		// §12.8: two Prior Group ID Gap values in one Group.
+		// §10.8: two Prior Group ID Gap values in one Group.
 		{"different group gaps in a Group", func(t *testing.T, pubSess *session.Session, alias uint64) {
 			sendGapObjects(t, pubSess, alias, []gapObject{
 				{5, 0, 0, priorGap(message.PropertyPriorGroupIDGap, 2)},
 				{5, 1, 1, priorGap(message.PropertyPriorGroupIDGap, 1)},
 			})
 		}},
-		// §2.4.2 item 1: a Subgroup's Publisher Priority changes.
+		// §12.1 item 1: a Subgroup's Publisher Priority changes.
 		{"priority changes in a Subgroup", func(t *testing.T, pubSess *session.Session, alias uint64) {
 			sendStreams(t, pubSess, alias, []testStream{
 				{group: 1, priority: 1, objects: []uint64{0}, open: true},
 				{group: 1, priority: 2, objects: []uint64{1}, open: true},
 			})
 		}},
-		// §2.4.2 item 2: an Object past the last one before a Subgroup's FIN.
+		// §12.1 item 2: an Object past the last one before a Subgroup's FIN.
 		{"Object past a Subgroup's FIN", func(t *testing.T, pubSess *session.Session, alias uint64) {
 			sendStreams(t, pubSess, alias, []testStream{
 				{group: 1, objects: []uint64{0, 1}},
 				{group: 1, objects: []uint64{2}, open: true},
 			})
 		}},
-		// §2.4.2 item 4: an Object past an END_OF_GROUP.
+		// §12.1 item 4: an Object past an END_OF_GROUP.
 		{"Object past END_OF_GROUP", func(t *testing.T, pubSess *session.Session, alias uint64) {
 			sendStreams(t, pubSess, alias, []testStream{
 				{group: 1, objects: []uint64{2}, status: message.ObjectStatusEndOfGroup},
@@ -204,7 +204,7 @@ func TestRelay_MalformedObjectEndsTrack(t *testing.T) {
 				}
 			}
 		}},
-		// §2.4.2 item 5: an Object past the END_OF_TRACK.
+		// §12.1 item 5: an Object past the END_OF_TRACK.
 		{"Object past END_OF_TRACK", func(t *testing.T, pubSess *session.Session, alias uint64) {
 			sendStreams(t, pubSess, alias, []testStream{
 				{group: 1, objects: []uint64{2}, status: message.ObjectStatusEndOfTrack},
@@ -250,7 +250,7 @@ func TestRelay_MalformedObjectEndsTrack(t *testing.T) {
 }
 
 // TestRelay_MalformedObjectEndsTrackWithStreamsOpen: PUBLISH_DONE is not held
-// back by another idle outbound stream (§10.12); the relay resets it.
+// back by another idle outbound stream (§9.9); the relay resets it.
 func TestRelay_MalformedObjectEndsTrackWithStreamsOpen(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -297,8 +297,8 @@ func TestRelay_MalformedObjectEndsTrackWithStreamsOpen(t *testing.T) {
 }
 
 // TestRelay_PublishTrackPropertiesRejected: a PUBLISH with an unknown Mandatory
-// Track Property is UNSUPPORTED_EXTENSION (§2.5.1); one whose Track Properties
-// do not parse is INTERNAL_ERROR (MALFORMED_TRACK answers only a FETCH, §10.6.2).
+// Track Property is UNSUPPORTED_EXTENSION (§3.7); one whose Track Properties
+// do not parse is INTERNAL_ERROR (MALFORMED_TRACK answers only a FETCH, §12.3).
 func TestRelay_PublishTrackPropertiesRejected(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -344,7 +344,7 @@ func TestRelay_PublishKnownMandatoryPropertyAccepted(t *testing.T) {
 
 // TestRelay_UpstreamSubscribeOKTrackPropertiesRejected: the relay refuses the
 // downstream SUBSCRIBE when the upstream SUBSCRIBE_OK carries an unknown
-// Mandatory Track Property (§2.5.1) or malformed Track Properties.
+// Mandatory Track Property (§3.7) or malformed Track Properties.
 func TestRelay_UpstreamSubscribeOKTrackPropertiesRejected(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -379,7 +379,7 @@ func TestRelay_UpstreamSubscribeOKTrackPropertiesRejected(t *testing.T) {
 
 // TestRelay_UpstreamMandatoryPropertyWinsOverOtherFailure: with one publisher
 // answering an unknown Mandatory Track Property and another refusing, the
-// subscriber gets UNSUPPORTED_EXTENSION in either order (§2.5.1).
+// subscriber gets UNSUPPORTED_EXTENSION in either order (§3.7).
 func TestRelay_UpstreamMandatoryPropertyWinsOverOtherFailure(t *testing.T) {
 	t.Parallel()
 	for _, mandatoryFirst := range []bool{true, false} {
@@ -418,12 +418,12 @@ func TestRelay_UpstreamMandatoryPropertyWinsOverOtherFailure(t *testing.T) {
 }
 
 // TestRelay_UpstreamFetchOKUnknownMandatoryPropertyResetsStream: an upstream
-// FETCH_OK with an unknown Mandatory Track Property (§2.5.1), or Track
+// FETCH_OK with an unknown Mandatory Track Property (§3.7), or Track
 // Properties that do not parse, resets the downstream fetch stream the relay
 // already answered; no Object reaches the subscriber, not even cached ones.
-// The request stream is reset with the data stream's code (§3.3.3):
+// The request stream is reset with the data stream's code (§6.4.2.3):
 // INTERNAL_ERROR, or MALFORMED_TRACK for Properties that do not parse, which
-// make the track malformed (§12.7, §2.4.2).
+// make the track malformed (§10.7, §12.1).
 func TestRelay_UpstreamFetchOKUnknownMandatoryPropertyResetsStream(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -443,8 +443,8 @@ func TestRelay_UpstreamFetchOKUnknownMandatoryPropertyResetsStream(t *testing.T)
 
 // TestRelay_UpstreamFetchMalformedObjectResetsStream: an upstream FETCH
 // response Object with a Mandatory Track Property as an Object Property makes
-// the track malformed (§2.5.1, §2.4.2): the downstream FETCH's data stream and
-// request stream are reset with MALFORMED_TRACK (§3.3.3).
+// the track malformed (§3.7, §12.1): the downstream FETCH's data stream and
+// request stream are reset with MALFORMED_TRACK (§6.4.2.3).
 func TestRelay_UpstreamFetchMalformedObjectResetsStream(t *testing.T) {
 	t.Parallel()
 	refusedFetchResetsStream(t, nil, mandatoryProps(),
@@ -573,7 +573,7 @@ func refusedFetchResetsStream(
 
 // TestRelay_EndSignalsAgree: an END_OF_GROUP status at 2 and a FIN after Object
 // 1 on a stream with END_OF_GROUP set end the Group at the same place
-// (§11.2.1.1, §11.4.2, §9.1), so the track goes on.
+// (§11.1.1, §11.3.1, §7.1), so the track goes on.
 func TestRelay_EndSignalsAgree(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -615,7 +615,7 @@ func TestRelay_EndSignalsAgree(t *testing.T) {
 }
 
 // malformedPriorityStreams makes the track on alias malformed: two streams of
-// Subgroup 0 of Group 1 with different Publisher Priorities (§2.4.2 item 1).
+// Subgroup 0 of Group 1 with different Publisher Priorities (§12.1 item 1).
 func malformedPriorityStreams(t *testing.T, pubSess *session.Session, alias uint64) {
 	t.Helper()
 	sendStreams(t, pubSess, alias, []testStream{
@@ -651,7 +651,7 @@ func awaitResets(t *testing.T, resets <-chan streamReset, code moqt.StreamResetC
 }
 
 // TestRelay_MalformedTrackCancelsUpstreamFetch: a malformed live Object from
-// the publisher an upstream FETCH is waiting on cancels that FETCH (§2.4.2:
+// the publisher an upstream FETCH is waiting on cancels that FETCH (§12.1:
 // "MUST cancel any corresponding subscription or fetches for that Track from
 // that publisher"), its data stream with MALFORMED_TRACK, and resets the
 // downstream fetch stream it was filling with MALFORMED_TRACK, not after
@@ -742,7 +742,7 @@ func TestRelay_MalformedTrackCancelsUpstreamFetch(t *testing.T) {
 
 // TestRelay_MalformedTrackResetsCachedFetch: a FETCH served from the cache is
 // reset with MALFORMED_TRACK when the track is found malformed while its
-// stream is written (§2.4.2: "reset any fetch streams with Status Code
+// stream is written (§12.1: "reset any fetch streams with Status Code
 // MALFORMED_TRACK").
 func TestRelay_MalformedTrackResetsCachedFetch(t *testing.T) {
 	t.Parallel()
@@ -776,9 +776,9 @@ func TestRelay_MalformedTrackResetsCachedFetch(t *testing.T) {
 	awaitResets(t, resets, moqt.StreamResetMalformedTrack, fetchStreamReset, requestStreamReset)
 }
 
-// TestRelay_MalformedTrackResetsFillStream: a fill fetch stream (§5.1.3) is a
+// TestRelay_MalformedTrackResetsFillStream: a fill fetch stream (§3.4) is a
 // fetch stream too, reset with MALFORMED_TRACK when the track is found
-// malformed while it is written (§2.4.2).
+// malformed while it is written (§12.1).
 func TestRelay_MalformedTrackResetsFillStream(t *testing.T) {
 	t.Parallel()
 	l := newPipeListener()

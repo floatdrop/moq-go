@@ -2,7 +2,7 @@ package message
 
 import "github.com/floatdrop/moq-go/pkg/moqt/wire"
 
-// TrackStatus is the TRACK_STATUS message (§10.15). It queries the status
+// TrackStatus is the TRACK_STATUS message (§9.13). It queries the status
 // of a track without creating a subscription. The message format is identical
 // to SUBSCRIBE, but subscriber-specific parameters (like SUBSCRIBER_PRIORITY)
 // must not be included.
@@ -38,7 +38,7 @@ func (m *TrackStatus) Parse(r *wire.Reader) error {
 	return m.Parameters.parse(r)
 }
 
-// TrackStatusOK is the TRACK_STATUS_OK response (§10.15). Per the spec,
+// TrackStatusOK is the TRACK_STATUS_OK response (§9.13). Per the spec,
 // TRACK_STATUS_OK is a REQUEST_OK (type 0x07) sent in response to TRACK_STATUS.
 // It carries the same parameters and Track Properties as SUBSCRIBE_OK, but
 // without a Track Alias since no subscription is created.
@@ -47,7 +47,7 @@ func (m *TrackStatus) Parse(r *wire.Reader) error {
 // that wraps RequestOK for clarity at call sites.
 type TrackStatusOK = RequestOK
 
-// Validate enforces the §2.4.1 Full Track Name size limit; ParsePayload
+// Validate enforces the §8.7 Full Track Name size limit; ParsePayload
 // invokes it automatically after decoding a TRACK_STATUS frame.
 func (m *TrackStatus) Validate() error {
 	return validateFullTrackName(m.Namespace, m.Name)

@@ -9,7 +9,7 @@ import (
 )
 
 // TestFetch_StitchesEvictedRangeFromUpstream: a FETCH of groups 0..9 when the
-// cache holds 5..9 is stitched from an upstream FETCH of 0..4 (§9.4).
+// cache holds 5..9 is stitched from an upstream FETCH of 0..4 (§7.4).
 //
 //	upstream U  ── PUBLISH_NAMESPACE ──▶ relay
 //	            ◀─ SUBSCRIBE (on-demand) ─ relay     (U replies OK, pushes 5..9)
@@ -65,7 +65,7 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 				// upstream subscription uses the Next Object filter, so the relay
 				// may not cache the upstream's first pushed group) — honouring the
 				// requested range keeps the answer gapless whatever it is.
-				// draft-20 carries the range in LOCATION_FILTER (§5.1.2), and the
+				// draft-20 carries the range in LOCATION_FILTER (§3.3.1), and the
 				// relay always sends the absolute four-field form.
 				f, ferr := message.LocationFilterFromParam(m.Parameters)
 				if ferr != nil || f == nil {

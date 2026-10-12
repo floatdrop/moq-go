@@ -88,7 +88,7 @@ func TestSubgroupHeaderRoundTrip(t *testing.T) {
 
 func TestSubgroupHeaderTypeBaselines(t *testing.T) {
 	// Sanity-check that the encoder produces the four published baseline
-	// Type bytes from §11.4.2. InlinePriority and ReplayingSubgroup are
+	// Type bytes from §11.3.1. InlinePriority and ReplayingSubgroup are
 	// inverted relative to the wire bits, so a zero SubgroupHeader maps to
 	// 0x70 (DEFAULT_PRIORITY+FIRST_OBJECT both set on the wire).
 	cases := []struct {
@@ -172,7 +172,7 @@ func TestIsSubgroupHeaderType(t *testing.T) {
 
 func TestIsReservedSubgroupHeaderType(t *testing.T) {
 	// Values that look like SUBGROUP_HEADER (bit 4 set, bit 7 clear) but
-	// have SUBGROUP_ID_MODE bits 1-2 == 0b11 (reserved per §11.4.2).
+	// have SUBGROUP_ID_MODE bits 1-2 == 0b11 (reserved per §11.3.1).
 	reserved := []uint64{
 		0x16, // 0b0001_0110
 		0x17, // 0b0001_0111

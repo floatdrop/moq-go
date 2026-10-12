@@ -13,7 +13,7 @@ import (
 // read and discarded.
 //
 // This is the canonical "hold a long-lived request stream open" primitive
-// for MoQT consumers. §6.1, §6.2, and §10.7 all model the request stream as
+// for MoQT consumers. §4.2, §4.1, and §9.6 all model the request stream as
 // a subscription-lifetime keepalive: post-OK there are no further wire
 // messages, but the stream must stay open as long as the requester still
 // wants the subscription. Both the relay's session handlers and end
@@ -27,7 +27,7 @@ import (
 //
 // DrainAndWait is concurrency-safe in the trivial sense that the inner
 // goroutine is owned by this call; do not invoke it concurrently with other
-// readers of the same Stream. In particular it discards §10.9 responses, so
+// readers of the same Stream. In particular it discards §9.5 responses, so
 // it cannot be combined with Update on the same stream — when a request
 // needs both a lifetime keepalive AND updates or follow-up handling, run
 // [RequestBroker.Serve] (via the handle's Broker method) instead.

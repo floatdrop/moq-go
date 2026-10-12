@@ -177,7 +177,7 @@ func awaitPeerAndFetchCatalog(t *testing.T, sess *session.Session, selfID, wantI
 	ns := wire.Namespace("room", wantID)
 	// Next Object for the live edge, plus a fill covering the current group —
 	// draft-20's replacement for the SUBSCRIBE + Relative Joining FETCH pair
-	// (§5.1.3, §5.1.6). The fill rides the same request, so a catalog already
+	// (§3.4, §3.5). The fill rides the same request, so a catalog already
 	// behind the live edge still arrives.
 	subMsg := &message.Subscribe{
 		Namespace: ns, Name: []byte("catalog"),

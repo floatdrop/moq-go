@@ -11,7 +11,7 @@ import (
 
 // TestFanout_LagWindowResetsSlowSubscriber: once a queued Object has waited
 // longer than MaxFanoutLag the relay resets the stream and ends the
-// subscription (§8). The synchronous pipe lets Objects age while the
+// subscription (§5.2). The synchronous pipe lets Objects age while the
 // subscriber stalls.
 func TestFanout_LagWindowResetsSlowSubscriber(t *testing.T) {
 	const lag = 100 * time.Millisecond

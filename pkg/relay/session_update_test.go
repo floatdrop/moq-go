@@ -14,7 +14,7 @@ import (
 )
 
 // TestRequestUpdate_PriorityChangeReturnsOK: a well-formed REQUEST_UPDATE on a
-// SUBSCRIBE gets exactly one REQUEST_OK (§10.9).
+// SUBSCRIBE gets exactly one REQUEST_OK (§9.5).
 func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 	t.Parallel()
 
@@ -42,7 +42,7 @@ func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 	}
 	defer subStream.Close()
 
-	// UpdateRequest allocates the update's own Request ID (§10.1).
+	// UpdateRequest allocates the update's own Request ID (§6.4.2.1).
 	ok, err := subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.SubscriberPriorityParam(42)})
 	if err != nil {
@@ -54,8 +54,8 @@ func TestRequestUpdate_PriorityChangeReturnsOK(t *testing.T) {
 }
 
 // TestRequestUpdate_MalformedRejectedWithUpdateFailed: a request-scoped
-// malformed update (an overflowing AbsoluteRange, §5.1.2) gets REQUEST_ERROR,
-// then PUBLISH_DONE UPDATE_FAILED (§10.9.1).
+// malformed update (an overflowing AbsoluteRange, §9.20.9) gets REQUEST_ERROR,
+// then PUBLISH_DONE UPDATE_FAILED (§9.5.1).
 func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 	t.Parallel()
 
@@ -83,11 +83,11 @@ func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 	}
 	defer subStream.Close()
 
-	// An invalid Range Filter is refused per request (§5.1.4).
+	// An invalid Range Filter is refused per request (§3.3.2).
 	_, err = subSess.UpdateRequest(t.Context(), subStream, message.Parameters{badRangeFilter()})
 	requireRejectedWithCode(t, err, moqt.RequestInvalidFilter)
 
-	// §10.9: the failed update is followed by a PUBLISH_DONE with
+	// §9.5: the failed update is followed by a PUBLISH_DONE with
 	// UPDATE_FAILED on the same stream.
 	deadline := time.After(2 * time.Second)
 	next := relaytest.ReadNextMessage(t, subStream, deadline)
@@ -102,7 +102,7 @@ func TestRequestUpdate_MalformedRejectedWithUpdateFailed(t *testing.T) {
 }
 
 // TestRequestUpdate_InvalidGroupOrderClosesSession: an out-of-range GROUP_ORDER
-// in a REQUEST_UPDATE closes the session (§10.2.8).
+// in a REQUEST_UPDATE closes the session (§9.20.8).
 func TestRequestUpdate_InvalidGroupOrderClosesSession(t *testing.T) {
 	t.Parallel()
 
@@ -129,17 +129,17 @@ func TestRequestUpdate_InvalidGroupOrderClosesSession(t *testing.T) {
 	}
 	defer subStream.Close()
 
-	// 0x05 is neither Ascending (0x1) nor Descending (0x2): §10.2.8 mandates a
+	// 0x05 is neither Ascending (0x1) nor Descending (0x2): §9.20.8 mandates a
 	// session close, not a REQUEST_ERROR.
 	_, _ = subSess.UpdateRequest(t.Context(), subStream,
 		message.Parameters{message.ByteParam(message.ParamGroupOrder, 0x05)})
 
-	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER REQUEST_UPDATE (§10.2.8)")
+	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER REQUEST_UPDATE (§9.20.8)")
 }
 
 // TestRequestUpdate_ForwardPauseAndResume: FORWARD=0 pauses delivery and
 // FORWARD=1 resumes it; Objects published while paused are not delivered
-// (§9.2).
+// (§7.2).
 func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 	t.Parallel()
 
@@ -260,7 +260,7 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 		t.Fatal("no object delivered within 2s of Forward State 1 (resume failed)")
 	}
 
-	// The Forward 0→1 flip ran the §9.2 upstream propagation path, which must
+	// The Forward 0→1 flip ran the §7.2 upstream propagation path, which must
 	// not wedge the update-dispatch loop: a third update still gets REQUEST_OK.
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
@@ -271,7 +271,7 @@ func TestRequestUpdate_ForwardPauseAndResume(t *testing.T) {
 }
 
 // TestRequestUpdate_FetchValidUpdateReturnsOK: a well-formed REQUEST_UPDATE on
-// a FETCH gets exactly one REQUEST_OK (§10.9).
+// a FETCH gets exactly one REQUEST_OK (§9.5).
 func TestRequestUpdate_FetchValidUpdateReturnsOK(t *testing.T) {
 	t.Parallel()
 	pubSess, _, publisherAlias := publishAndCache(t)
@@ -323,7 +323,7 @@ func TestRequestUpdate_FetchValidUpdateReturnsOK(t *testing.T) {
 }
 
 // TestRequestUpdate_InvalidRequestIDClosesSession: a REQUEST_UPDATE whose
-// Request ID has the wrong parity for its sender closes the session (§10.1).
+// Request ID has the wrong parity for its sender closes the session (§6.4.2.1).
 func TestRequestUpdate_InvalidRequestIDClosesSession(t *testing.T) {
 	t.Parallel()
 
@@ -351,16 +351,16 @@ func TestRequestUpdate_InvalidRequestIDClosesSession(t *testing.T) {
 	defer subStream.Close()
 
 	// Raw wrong-parity update: the subscriber is a client (even IDs), so an
-	// odd ID violates §10.1 and the relay must close the whole session.
+	// odd ID violates §6.4.2.1 and the relay must close the whole session.
 	if err := message.Marshal(subStream, &message.RequestUpdate{RequestID: 3}); err != nil {
 		t.Fatalf("write REQUEST_UPDATE: %v", err)
 	}
 
-	requireSessionClosed(t, subSess, "wrong-parity REQUEST_UPDATE (§10.1)")
+	requireSessionClosed(t, subSess, "wrong-parity REQUEST_UPDATE (§6.4.2.1)")
 }
 
 // TestRequestUpdateOK_CarriesLargestObject: REQUEST_UPDATE_OK carries
-// LARGEST_OBJECT once Objects were published, and omits it before (§10.2.17).
+// LARGEST_OBJECT once Objects were published, and omits it before (§9.20.17).
 func TestRequestUpdateOK_CarriesLargestObject(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -395,7 +395,7 @@ func TestRequestUpdateOK_CarriesLargestObject(t *testing.T) {
 }
 
 // The ParamScope tests: a REQUEST_UPDATE parameter outside the update's scope
-// (§10.2.1), or an unknown one (§10.2), closes the session.
+// (§9.20.1), or an unknown one (§9.20), closes the session.
 
 // sendUpdateRaw writes a REQUEST_UPDATE on stream from a goroutine, without
 // awaiting a reply.
@@ -428,7 +428,7 @@ func TestRelay_ParamScopeSubscribeUpdate(t *testing.T) {
 }
 
 // TestRelay_ParamScopeNamespaceUpdate: FORWARD on a SUBSCRIBE_NAMESPACE
-// (§10.2.18).
+// (§9.20.18).
 func TestRelay_ParamScopeNamespaceUpdate(t *testing.T) {
 	t.Parallel()
 	sess, teardown := connectRelay(t, relay.Config{})
@@ -444,7 +444,7 @@ func TestRelay_ParamScopeNamespaceUpdate(t *testing.T) {
 	requireSessionClosed(t, sess, "FORWARD in a SUBSCRIBE_NAMESPACE update")
 }
 
-// TestRelay_ParamScopeFetchUpdate: LOCATION_FILTER on a FETCH (§10.2.9).
+// TestRelay_ParamScopeFetchUpdate: LOCATION_FILTER on a FETCH (§9.20.9).
 func TestRelay_ParamScopeFetchUpdate(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, nil)
@@ -475,7 +475,7 @@ func TestRelay_ParamScopeFetchUpdate(t *testing.T) {
 }
 
 // TestRelay_MalformedUpdateClosesSession: a REQUEST_UPDATE whose Length does
-// not match its body closes the session (§10).
+// not match its body closes the session (§9).
 func TestRelay_MalformedUpdateClosesSession(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)

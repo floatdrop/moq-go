@@ -136,7 +136,7 @@ func TestMemoryStore_UnpublishTrack(t *testing.T) {
 	}
 }
 
-// TestMemoryStore_FindNamespacePrefixMatch pins §6.1 / §9.5 prefix
+// TestMemoryStore_FindNamespacePrefixMatch pins §4.2 / §7.6 prefix
 // matching semantics: a query for ["a","b","c"] matches stored
 // prefixes ["a"], ["a","b"], ["a","b","c"]; ["a","b","c","d"] does NOT.
 func TestMemoryStore_FindNamespacePrefixMatch(t *testing.T) {

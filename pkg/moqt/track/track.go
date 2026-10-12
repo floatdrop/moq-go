@@ -17,7 +17,7 @@ type FullTrackName struct {
 }
 
 // Key is a canonical, comparable representation of a Full Track Name. The
-// namespace is wire-encoded (length-prefixed tuples per §2.4.1) so distinct
+// namespace is wire-encoded (length-prefixed tuples per §8.7) so distinct
 // tuple lists never collide — e.g. namespace ("a","b") with name "c" and
 // namespace ("a") with name "bc" map to different Keys even though a naive
 // byte concatenation would tie them.

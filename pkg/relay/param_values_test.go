@@ -12,9 +12,9 @@ import (
 // TestRelay_SessionFatalParamValuesClose: a request carrying a value the draft
 // makes session-fatal closes the relay's session, on every path the relay
 // serves: GROUP_ORDER outside {1, 2} on PUBLISH and FETCH and inside
-// FILL_PARAMETERS (§10.2.8), a DYNAMIC_GROUPS or DEFAULT_PUBLISHER_GROUP_ORDER
-// Track Property out of range (§12.5, §12.6), and a LOCATION_FILTER whose end Group overflows
-// (§5.1.2, which the relay used to answer per request), on an opener and in a
+// FILL_PARAMETERS (§9.20.8), a DYNAMIC_GROUPS or DEFAULT_PUBLISHER_GROUP_ORDER
+// Track Property out of range (§10.5, §10.6), and a LOCATION_FILTER whose end Group overflows
+// (§3.3.1, which the relay used to answer per request), on an opener and in a
 // REQUEST_UPDATE.
 func TestRelay_SessionFatalParamValuesClose(t *testing.T) {
 	t.Parallel()

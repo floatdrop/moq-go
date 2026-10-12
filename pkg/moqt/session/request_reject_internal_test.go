@@ -19,7 +19,7 @@ type cancelRecordingStream struct {
 func (s *cancelRecordingStream) CancelRead(code uint64) { s.readCodes = append(s.readCodes, code) }
 
 // TestRejectStopsSendingWithCancelled: once its REQUEST_ERROR is written, a
-// rejected request stops reading with CANCELLED, the relevant code (§3.3.4:
+// rejected request stops reading with CANCELLED, the relevant code (§12.5:
 // "The stream was cancelled by either endpoint"), not INTERNAL_ERROR.
 func TestRejectStopsSendingWithCancelled(t *testing.T) {
 	t.Parallel()

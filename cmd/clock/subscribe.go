@@ -24,11 +24,11 @@ func subscribe(ctx context.Context, addr string) error {
 	defer sess.Close(moqt.SessionNoError, "bye")
 	slog.InfoContext(ctx, "connected, sending SUBSCRIBE")
 
-	// §5.1.6 "join a Track at the current Group": the Next Object filter
+	// §3.5 "join a Track at the current Group": the Next Object filter
 	// delivers only objects strictly after the current Largest Object, so the
 	// live edge alone stays invisible until the next group lands. Pairing it
 	// with FILL_PARAMETERS whose Location filter has StartGroup=1 fills the
-	// current group from its start on a fill fetch stream (§5.1.3) — for the
+	// current group from its start on a fill fetch stream (§3.4) — for the
 	// clock that's exactly the latest timestamp the relay has cached.
 	//
 	// draft-20 replaced draft-19's Relative Joining FETCH with this.
@@ -48,7 +48,7 @@ func subscribe(ctx context.Context, addr string) error {
 	}
 	defer sub.Close()
 
-	// §10.2.17: the relay echoes LARGEST_OBJECT here when it has cached
+	// §9.20.17: the relay echoes LARGEST_OBJECT here when it has cached
 	// state — log it so the demo shows what the fill resolved against.
 	if p, found := sub.OK.Parameters.Find(message.ParamLargestObject); found {
 		slog.InfoContext(ctx, "SUBSCRIBE_OK", "alias", sub.TrackAlias(),
@@ -140,7 +140,7 @@ func (l *latestSeen) record(group, object uint64) bool {
 }
 
 // readSubgroup drains a live SUBGROUP_HEADER stream via the session-layer
-// decoder, which resolves §11.4.2 ObjectID deltas into absolute IDs.
+// decoder, which resolves §11.3.1 ObjectID deltas into absolute IDs.
 func readSubgroup(s *session.IncomingSubgroupStream, latest *latestSeen) {
 	for {
 		obj, err := s.ReadDecoded()
@@ -155,7 +155,7 @@ func readSubgroup(s *session.IncomingSubgroupStream, latest *latestSeen) {
 }
 
 // readFetch drains a FETCH_HEADER stream, letting the session-layer
-// decoder reconstruct absolute (Group, Object) IDs from §11.4.4 deltas
+// decoder reconstruct absolute (Group, Object) IDs from §11.4.1 deltas
 // and passing each through latest.record before logging. We don't set
 // s.GroupOrder — the fill covers a single group, so its order does not
 // matter, and ascending, IncomingFetchStream.ReadDecoded's default, is fine.
@@ -168,7 +168,7 @@ func readFetch(s *session.IncomingFetchStream, latest *latestSeen) {
 			}
 			return
 		}
-		// Skip §11.4.4.2 absence markers — for the clock demo we
+		// Skip §11.4.1.2 absence markers — for the clock demo we
 		// only want real payloads.
 		if obj.IsEndOfRange() {
 			continue

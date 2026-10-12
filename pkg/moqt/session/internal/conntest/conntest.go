@@ -55,7 +55,7 @@ func TLSConfig(t *testing.T, nextProtos ...string) *tls.Config {
 // SendDatagramUntilReceived sends payload repeatedly until recv yields a
 // datagram or the deadline passes, and returns what arrived.
 //
-// Datagrams are unreliable by definition (§11.3), so a test that sent once and
+// Datagrams are unreliable by definition (§11.2), so a test that sent once and
 // asserted receipt would be asserting something the transport never promised —
 // and would fail occasionally against a correct implementation, which is the
 // worst kind of test. Retrying removes the loss lottery without weakening

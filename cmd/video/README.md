@@ -3,7 +3,7 @@
 Streams a local video file to a relay as a CMSF broadcast
 ([draft-ietf-moq-cmsf-01](https://datatracker.ietf.org/doc/draft-ietf-moq-cmsf/):
 CMAF packaging on top of MSF `draft-ietf-moq-msf-01` and MoQ Transport
-`draft-ietf-moq-transport-20`), and measures what comes back out.
+`draft-ietf-moq-transport-22`), and measures what comes back out.
 
 It exists to answer one question about a suspected delivery fault: **is
 the transport at fault, or the encoder feeding it?** Every byte the
@@ -73,7 +73,7 @@ digest    211deb6c63d4dcaf14bfa31e5b62b6682d0c2b0b085c54253df1118cff7c96d0
   MoQ, not a fault; it is here because a player that ignores it shows
   artefacts.
 - **latency** — send to receive, per Object, from a producer-defined
-  Object Property the publisher stamps (type `0x3800`, in the range §2.5
+  Object Property the publisher stamps (type `0x3800`, in the range §8.4
   reserves for application-specific use, which IANA will never allocate
   and a relay must forward unchanged). Only
   meaningful with both ends on one machine, since it subtracts two
@@ -209,7 +209,7 @@ Both tracks live under `-ns`:
 
 The catalog is published once at start (§5: a catalog Object SHOULD be
 published only when track availability changes), so a subscriber that
-connects later backfills it with a fill fetch stream (§5.1.3). The publisher
+connects later backfills it with a fill fetch stream (§3.4). The publisher
 closes with the §11.3 terminator catalog, which is what ends the
 subscriber's run and triggers its report.
 

@@ -45,7 +45,7 @@ func TestSessionHandler_FailedRejectWriteKeepsTheSessionAlive(t *testing.T) {
 	// First SUBSCRIBE: denied by policy, and the relay's REQUEST_ERROR write
 	// fails. The client cannot be told the reason, but it must be told the
 	// request is over — RejectError resets the stream when it cannot send the
-	// error (§3.3.3), so this call ends because the relay ended it, not
+	// error (§6.4.2.3), so this call ends because the relay ended it, not
 	// because the deadline below expired.
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()

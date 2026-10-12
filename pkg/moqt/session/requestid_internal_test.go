@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestCheckPeerRequestID pins the §10.1 receiver rules: parity by role,
+// TestCheckPeerRequestID pins the §6.4.2.1 receiver rules: parity by role,
 // duplicates are fatal, and cross-stream delivery reordering is tolerated —
 // an ID below the high-water mark is claimable exactly once.
 func TestCheckPeerRequestID(t *testing.T) {

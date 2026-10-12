@@ -14,9 +14,9 @@ import (
 )
 
 // A TRACK_NAMESPACE_PREFIX update changes what a namespace subscription
-// covers, so it is authorized like the subscription itself (§10.19, §10.20:
+// covers, so it is authorized like the subscription itself (§4.2.1, §3.6:
 // "The publisher MUST ensure the subscriber is authorized to perform this
-// namespace subscription"), with the update's own tokens (§10.2.2).
+// namespace subscription"), with the update's own tokens (§9.20.2).
 
 // prefixAuthorizer admits namespace subscriptions under allowed only.
 type prefixAuthorizer struct {
@@ -50,7 +50,7 @@ func (a *prefixAuthorizer) AuthorizeSubscribeTracks(
 
 // TestNamespaceUpdate_PrefixOutsideAuthorizationRefused: a SUBSCRIBE_NAMESPACE
 // cannot widen itself past what the Authorizer admits; the refused update ends
-// the request (§10.9.1) without announcing the namespace.
+// the request (§9.5.1) without announcing the namespace.
 func TestNamespaceUpdate_PrefixOutsideAuthorizationRefused(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{
@@ -198,7 +198,7 @@ func (a *tokenRecorder) AuthorizeSubscribeTracks(
 // TestNamespaceUpdate_AuthorizerSeesLatestTokens: a prefix update is
 // authorized with the tokens of the latest request or update that carried
 // any, since a parameter absent from REQUEST_UPDATE "remains unchanged"
-// (§10.9). A DELETE only retires an alias, so it replaces nothing (§10.2.2).
+// (§9.5). A DELETE only retires an alias, so it replaces nothing (§8.9).
 func TestNamespaceUpdate_AuthorizerSeesLatestTokens(t *testing.T) {
 	t.Parallel()
 	for _, tracks := range []bool{false, true} {

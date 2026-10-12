@@ -20,17 +20,17 @@ import (
 
 // fwdObject pairs a SubgroupObject with its absolute Object ID: filtering
 // punches holes in the forwarded sequence, so the writer re-encodes the
-// §11.4.2 ObjectIDDelta against its own outbound stream.
+// §11.3.1 ObjectIDDelta against its own outbound stream.
 type fwdObject struct {
 	obj        *message.SubgroupObject
 	absID      uint64
-	enqueuedAt time.Time // stamped in publish; used for the §8 lag window
+	enqueuedAt time.Time // stamped in publish; used for the §5.2 lag window
 
-	// maxCacheAge is the upstream's MAX_CACHE_DURATION (§12.3), zero for no
+	// maxCacheAge is the upstream's MAX_CACHE_DURATION (§10.3), zero for no
 	// limit: the Object is not forwarded once older than that.
 	maxCacheAge time.Duration
 
-	// first marks the subgroup's true first object (§11.4.2 FIRST_OBJECT);
+	// first marks the subgroup's true first object (§11.3.1 FIRST_OBJECT);
 	// only an outbound stream beginning with it sets the bit.
 	first bool
 
@@ -70,7 +70,7 @@ type subgroupWriterSet struct {
 	gen uint64
 
 	// lowest is the lowest Object ID forwarded, if forwarded. Objects are
-	// published in ascending order (§2.2), so a FIRST_OBJECT claim (§11.4.2)
+	// published in ascending order (§2.2), so a FIRST_OBJECT claim (§11.3.1)
 	// for a higher ID is wrong, whether or not a given subscriber got the
 	// lower one. A new set starts from the ledger's
 	// ([registry.TrackEntry.LowestForwarded]), so it holds across contributors
@@ -87,7 +87,7 @@ type subgroupWriterSet struct {
 
 	// cleanFrom is the lowest Object ID from which a contributor that ended
 	// cleanly delivered every Object, if sawClean: 0 for one whose stream
-	// starts the Subgroup (§11.4.2 FIRST_OBJECT), else its first Object's
+	// starts the Subgroup (§11.3.1 FIRST_OBJECT), else its first Object's
 	// (see [subgroupWriterSet.outcome]). resetCode is a reset contributor's
 	// code, used when none ended cleanly.
 	cleanFrom uint64
@@ -95,9 +95,9 @@ type subgroupWriterSet struct {
 	resetCode moqt.StreamResetCode
 
 	// pubTimeouts points at firstTimeouts once the Subgroup's first Object
-	// was forwarded: the publisher's §8 delivery timeouts for the Subgroup,
+	// was forwarded: the publisher's §5.2 delivery timeouts for the Subgroup,
 	// "the Object Property when present on the first object of the subgroup,
-	// and the Track Property otherwise" (§12.1, §12.2). A replay stream (a
+	// and the Track Property otherwise" (§10.1, §10.2). A replay stream (a
 	// joiner's, or one reopened after a gap) starts past that Object, so its
 	// session cannot find the override itself (see
 	// [session.OutgoingSubgroupStream.WriteObjectReceivedAt]). Set once, and
@@ -142,7 +142,7 @@ func (s *subgroupWriterSet) leave(reset bool, code moqt.StreamResetCode, covers 
 }
 
 // outcome reports whether the merged streams end with a reset, and with which
-// code, once every contributor has left. §11.4.3: "If a sender closes the
+// code, once every contributor has left. §11.3.2: "If a sender closes the
 // stream before delivering all such objects to the QUIC stream, it MUST reset
 // the stream." A clean contributor delivered every Object from cleanFrom on,
 // so they FIN only if every Object forwarded below cleanFrom was followed by
@@ -154,7 +154,7 @@ func (s *subgroupWriterSet) leave(reset bool, code moqt.StreamResetCode, covers 
 // Deviation: lowest also counts what the ledger saw forwarded through an
 // earlier set of the Subgroup, released when its last contributor left, whose
 // run is forgotten; so a contributor arriving after that resets unless it
-// covers from lowest, even if it did continue the earlier run, where §11.4.3
+// covers from lowest, even if it did continue the earlier run, where §11.3.2
 // says a sender that "has delivered all objects in a Subgroup ... MUST close
 // the stream with a FIN".
 //
@@ -186,9 +186,9 @@ func (s *subgroupWriterSet) outcome() (reset bool, code moqt.StreamResetCode) {
 //
 // Any other is dropped, and each stream it would have gone on is marked
 // incomplete as [subgroupWriter.admit] would mark it, so it resets rather
-// than FIN (§11.4.3). Deviation: §9.4 says a relay "MUST NOT reorder or drop
+// than FIN (§11.3.2). Deviation: §7.4 says a relay "MUST NOT reorder or drop
 // objects received on a multi-object stream"; the relay drops such an Object
-// rather than risk forwarding a duplicate it can no longer detect (§9.3). A
+// rather than risk forwarding a duplicate it can no longer detect (§7.3). A
 // Subgroup whose Object IDs are not consecutive (its Group split across
 // Subgroups) has no unbroken run, so there a redundant copy resets too.
 // Callers hold sg.Mu.
@@ -219,13 +219,13 @@ func (s *subgroupWriterSet) admitAgedOut(
 	return false
 }
 
-// resolveImplicitSubgroupID handles §11.4.2 SUBGROUP_ID_MODE 0b01 (Subgroup ID
+// resolveImplicitSubgroupID handles §11.3.1 SUBGROUP_ID_MODE 0b01 (Subgroup ID
 // = first Object ID): it reads the first object and rewrites hdr to the
 // explicit form. The returned pending object must be processed as the
 // stream's first. Other modes return (nil, true).
 //
 // ok=false means the stream ended first; the caller just returns. A malformed
-// first Object ends the track (§2.4.2).
+// first Object ends the track (§12.1).
 func (h *sessionHandler) resolveImplicitSubgroupID(
 	ctx context.Context,
 	entry *registry.TrackEntry,
@@ -264,12 +264,12 @@ func (h *sessionHandler) resolveImplicitSubgroupID(
 }
 
 // A subgroup stream can arrive before the SUBSCRIBE_OK binding its Track Alias
-// (§11.1). §11.4.2 lets the receiver "abandon the stream, or choose to buffer
+// (§3.1.3). §3.1.3.1 lets the receiver "abandon the stream, or choose to buffer
 // it for a brief period"; the relay leaves it unread for up to earlyAliasWait,
 // then abandons it.
 //
 // The deadline also breaks a flow-control deadlock: the bundled transports do
-// not reserve connection credit for control streams (§11.4.2), so unread
+// not reserve connection credit for control streams (§3.1.3.1), so unread
 // early data can hold back the SUBSCRIBE_OK itself. maxEarlyStreams caps the
 // waiting streams per session; past it they are abandoned at once.
 const (
@@ -284,7 +284,7 @@ var testHookEarlyStreamWaiting atomic.Pointer[func(alias uint64)]
 
 // resolveInboundTrack returns what stream's Track Alias is bound to, waiting
 // within the bounds above. An unresolved alias abandons the stream and reports
-// false: EXCESSIVE_LOAD (§3.3.4) past maxEarlyStreams, else INTERNAL_ERROR.
+// false: EXCESSIVE_LOAD (§12.5) past maxEarlyStreams, else INTERNAL_ERROR.
 func (h *sessionHandler) resolveInboundTrack(
 	ctx context.Context,
 	stream *session.IncomingSubgroupStream,
@@ -316,10 +316,10 @@ func (h *sessionHandler) resolveInboundTrack(
 // runFanout forwards one inbound subgroup stream to every downstream
 // subscriber, remapping the Track Alias per subscriber.
 //
-// §9.3: inbound streams carrying the same (GroupID, SubgroupID) share one
+// §7.3: inbound streams carrying the same (GroupID, SubgroupID) share one
 // outbound writer per subscriber (§2.2: a Subgroup is not split across
 // streams), and [registry.TrackEntry.ClaimDelivered] drops duplicate objects
-// (§9.3) and ones an announced gap says do not exist (§2.1, §9.1). Each writer is a [subgroupWriter] goroutine behind a bounded queue.
+// (§7.3) and ones an announced gap says do not exist (§2.1.2, §7.1). Each writer is a [subgroupWriter] goroutine behind a bounded queue.
 // The inbound FIN-vs-reset reaches the outbound streams only when the last
 // contributor leaves.
 func (h *sessionHandler) runFanout(ctx context.Context, stream *session.IncomingSubgroupStream) {
@@ -340,9 +340,9 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		return
 	}
 
-	// §11.4.2: a header without a Priority byte inherits the alias's
-	// DEFAULT_PUBLISHER_PRIORITY (§12.4). Resolve it once so the cache, FETCH,
-	// PRIORITY_FILTER and §7.2 scheduling see it; the outbound header still
+	// §11.3.1: a header without a Priority byte inherits the alias's
+	// DEFAULT_PUBLISHER_PRIORITY (§10.4). Resolve it once so the cache, FETCH,
+	// PRIORITY_FILTER and §5.1.2 scheduling see it; the outbound header still
 	// omits the byte (see openWriterForSub for the exception).
 	if !hdr.InlinePriority {
 		hdr.PublisherPriority = in.DefaultPublisherPriority
@@ -351,7 +351,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	// One TrackRef per stream: it allocates, and is reported per object.
 	ref := h.trackRef(entry.FullName)
 
-	// §12.3: a MAX_CACHE_DURATION of 0 limits only serving from the cache.
+	// §10.3: a MAX_CACHE_DURATION of 0 limits only serving from the cache.
 	var liveMaxAge time.Duration
 	if in.HasMaxCacheDuration {
 		liveMaxAge = in.MaxCacheDuration
@@ -375,7 +375,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	if created {
 		// Under sg.Mu so a concurrent contributor's joiner scan can't
 		// double-open. The stream is drained even with no subscribers, so its
-		// Objects still reach the cache (§9.1) and any later joiner.
+		// Objects still reach the cache (§7.1) and any later joiner.
 		initialSubs, gen := entry.CopyDownstreamWithGen()
 		pubTimeouts := entry.DeliveryTimeouts()
 		lowest, forwarded := entry.LowestForwarded(hdr.GroupID, hdr.SubgroupID)
@@ -393,7 +393,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 	}
 
 	// This contributor's termination, applied outbound only if it is the last
-	// to leave the Subgroup (§9.3).
+	// to leave the Subgroup (§7.3).
 	var (
 		inboundReset     bool
 		inboundResetCode = moqt.StreamResetCancelled
@@ -418,7 +418,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 				continue
 			}
 			wReset, wCode := reset, code
-			// §11.4.3: a group now outside the subscription's range is
+			// §11.3.2: a group now outside the subscription's range is
 			// reset, not FIN'd.
 			if !wReset && registry.GroupOutOfRange(hdr.GroupID, w.sub.GetFilter()) {
 				wReset, wCode = true, moqt.StreamResetCancelled
@@ -435,14 +435,14 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// last is the last Object read, which a FIN ends the Subgroup after.
 		last *message.SubgroupObject
 		// pos counts every Object read, dedup losers included: each is an
-		// Object between its neighbours (§11.4.3).
+		// Object between its neighbours (§11.3.2).
 		pos = inboundPos{src: stream}
 		// terminalSeen: an EndOfGroup/EndOfTrack was read on this inbound
-		// stream; any later object makes the track malformed (§11.4.3,
-		// §2.4.2).
+		// stream; any later object makes the track malformed (§11.3.2,
+		// §12.1).
 		terminalSeen bool
 	)
-	// malformed ends the track for an Object read from stream (§2.4.2); the
+	// malformed ends the track for an Object read from stream (§12.1); the
 	// Object is neither cached nor forwarded.
 	malformed := func(err error) {
 		stream.Cancel(moqt.StreamResetMalformedTrack)
@@ -473,7 +473,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		isTrueFirst := firstObj && !hdr.ReplayingSubgroup
 		firstObj = false
 		pos.seq++
-		objectID := stream.ObjectID() // resolved by ReadObject (§11.4.2)
+		objectID := stream.ObjectID() // resolved by ReadObject (§11.3.1)
 		if !covers {
 			coverFrom, covers = objectID, true
 		}
@@ -482,8 +482,8 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// iteration acts on it, so it can be set now.
 		terminalSeen = obj.IsTerminal()
 
-		// §9.3: the first upstream to deliver {GroupID, ObjectID} forwards it,
-		// unless an announced gap says it does not exist (§2.1, §9.1). Outside
+		// §7.3: the first upstream to deliver {GroupID, ObjectID} forwards it,
+		// unless an announced gap says it does not exist (§2.1.2, §7.1). Outside
 		// sg.Mu, so dedup losers never touch the writer set.
 		info := registry.ObjectInfo{
 			Group:    hdr.GroupID,
@@ -572,14 +572,14 @@ func (s *subgroupWriterSet) forward(
 	maxCacheAge time.Duration,
 ) {
 	first := s.claimFirst(objectID, claimed)
-	// §8: the first Object's Properties settle the publisher's timeouts for
+	// §5.2: the first Object's Properties settle the publisher's timeouts for
 	// the Subgroup.
 	if first && s.pubTimeouts == nil {
 		s.firstTimeouts = entry.DeliveryTimeouts().ApplyObjectProperties(obj.Properties)
 		s.pubTimeouts = &s.firstTimeouts
 	}
 
-	// §5.1.2 filters run before enqueue, so a miss takes no queue slot.
+	// §3.3.1 filters run before enqueue, so a miss takes no queue slot.
 	for _, w := range s.writers {
 		if w == nil {
 			continue
@@ -600,7 +600,7 @@ func (s *subgroupWriterSet) forward(
 // inboundEnded handles err, which ended the reads of stream (whose header is
 // hdr, and whose last Object read was last, nil if none), and reports whether
 // the stream counts as reset, and with which code, for the Subgroup's FIN
-// (§9.3).
+// (§7.3).
 func (h *sessionHandler) inboundEnded(
 	ctx context.Context,
 	entry *registry.TrackEntry,
@@ -612,7 +612,7 @@ func (h *sessionHandler) inboundEnded(
 	switch {
 	case errors.Is(err, io.EOF):
 		// Clean end of stream; the last contributor will FIN. It ends the
-		// Subgroup after the last Object read (§2.4.2).
+		// Subgroup after the last Object read (§12.1).
 		if last == nil {
 			return false, 0
 		}
@@ -664,14 +664,14 @@ func (h *sessionHandler) openWriterForSub(
 	}
 	subHdr := hdr
 	subHdr.TrackAlias = sub.TrackAlias
-	// A subscriber without Track Properties (§10.2.21) cannot inherit
-	// DEFAULT_PUBLISHER_PRIORITY (§12.4), so the priority is written out.
+	// A subscriber without Track Properties (§9.20.21) cannot inherit
+	// DEFAULT_PUBLISHER_PRIORITY (§10.4), so the priority is written out.
 	if !sub.IncludesProperties() {
 		subHdr.InlinePriority = true
 	}
 	// cancelIO unblocks a writer wedged on a subscriber that stopped
 	// reading (see [joinWriters]), and resets the open stream of one that
-	// cancelled (§5.1.1).
+	// cancelled (§3.1.2).
 	ioCtx, cancelIO := context.WithCancel(ctx)
 	w := &subgroupWriter{
 		sub:                 sub,
@@ -686,7 +686,7 @@ func (h *sessionHandler) openWriterForSub(
 		ref:                 ref,
 		maxDropsBeforeReset: h.maxDropsBeforeReset,
 		maxLag:              h.maxFanoutLag,
-		// §8: kept apart, since the §12.1/§12.2 first-object override
+		// §5.2: kept apart, since the §10.1/§10.2 first-object override
 		// applies to the publisher's half alone.
 		pubTimeouts: pubTimeouts,
 		subTimeouts: sub.GetDeliveryTimeouts(),
@@ -699,19 +699,19 @@ func (h *sessionHandler) openWriterForSub(
 // onto outbound subgroup streams on the subscriber's session.
 //
 //   - An Object that is not the next Object resets the stream and opens a
-//     fresh one (§11.4.3, see [isNextObject]).
+//     fresh one (§11.3.2, see [isNextObject]).
 //   - A clean inbound EOF FINs the stream; an inbound error resets it.
 //   - A full inbox drops the object. An object that waited longer than
 //     maxLag resets with TOO_FAR_BEHIND and terminates the subscription
-//     (§3.3.4); the optional maxDropsBeforeReset cap does so with
+//     (§12.5); the optional maxDropsBeforeReset cap does so with
 //     EXCESSIVE_LOAD.
-//   - An elapsed §8 delivery timeout resets only that stream with
-//     DELIVERY_TIMEOUT; the subscription survives (§3.3.4).
+//   - An elapsed §5.2 delivery timeout resets only that stream with
+//     DELIVERY_TIMEOUT; the subscription survives (§12.5).
 type subgroupWriter struct {
 	sub *registry.DownstreamSub
 	// ctx bounds every blocking stream operation; cancelIO resets the
 	// in-flight stream, unwedging a writer blocked on a stalled subscriber.
-	// The subscriber's cancellation calls it too (§5.1.1), until unwatchSub.
+	// The subscriber's cancellation calls it too (§3.1.2), until unwatchSub.
 	ctx        context.Context
 	cancelIO   context.CancelFunc
 	unwatchSub func() bool
@@ -726,7 +726,7 @@ type subgroupWriter struct {
 	ref                 TrackRef
 	maxDropsBeforeReset int
 	maxLag              time.Duration
-	// pubTimeouts and subTimeouts are the §8 delivery-timeout halves, resolved
+	// pubTimeouts and subTimeouts are the §5.2 delivery-timeout halves, resolved
 	// per outbound stream; zero disables a dimension. run replaces
 	// pubTimeouts with [fwdObject.pubTimeouts] once that is set.
 	pubTimeouts message.DeliveryTimeouts
@@ -737,11 +737,11 @@ type subgroupWriter struct {
 	drops            int
 	closed           bool                 // set under dropsMu inside close
 	inboundReset     bool                 // set under dropsMu inside close
-	inboundResetCode moqt.StreamResetCode // §3.3.4 reset code when inboundReset; set inside close
+	inboundResetCode moqt.StreamResetCode // §12.5 reset code when inboundReset; set inside close
 	// incomplete records that this subscription skipped an Object after its
 	// Start Location (filter, Forward State 0, overflow, expiry, or an Object
 	// dropped as aged out of the dedup window), so its streams end with a
-	// reset, not a FIN (§11.4.3), with incompleteCode: EXCESSIVE_LOAD after any
+	// reset, not a FIN (§11.3.2), with incompleteCode: EXCESSIVE_LOAD after any
 	// overflow, else the first recorded (INTERNAL_ERROR for an aged-out drop,
 	// else CANCELLED). Set under dropsMu.
 	//
@@ -758,7 +758,7 @@ type subgroupWriter struct {
 	// past the filtered Objects read after it; zero once the relay drops
 	// one. Only touched by admit and publish, under sg.Mu.
 	lastPos inboundPos
-	// withProps: the streams run opens set PROPERTIES (§11.4.2). Only
+	// withProps: the streams run opens set PROPERTIES (§11.3.1). Only
 	// touched by run.
 	withProps bool
 }
@@ -780,9 +780,9 @@ func (w *subgroupWriter) admit(
 		return true, follows
 	}
 	w.skip(v, objectID)
-	// §11.4.3: an Object that "did not pass the subscriber's filters" does
+	// §11.3.2: an Object that "did not pass the subscriber's filters" does
 	// not separate the ones either side of it. Forward State is one of them
-	// (§5.1.5).
+	// (§3.3.3).
 	if follows {
 		w.lastPos = pos
 	}
@@ -795,14 +795,14 @@ func (w *subgroupWriter) skip(v registry.ForwardVerdict, objectID uint64) {
 	switch v {
 	case registry.SkipObject, registry.SkipPaused:
 		// The stream stays open for later Objects, but the Subgroup is now
-		// incomplete (§11.4.3).
+		// incomplete (§11.3.2).
 		w.markIncomplete(moqt.StreamResetCancelled)
 	case registry.SkipGroup, registry.SkipEnded:
 		// No further Object will pass: reset once the queue is written
-		// (§11.4.3), so a PUBLISH_DONE waiting on the streams can follow.
+		// (§11.3.2), so a PUBLISH_DONE waiting on the streams can follow.
 		w.close(true, moqt.StreamResetCancelled)
 	case registry.SkipBeforeStart:
-		// §11.4.3 allows a FIN after omitting these, unless a REQUEST_UPDATE
+		// §11.3.2 allows a FIN after omitting these, unless a REQUEST_UPDATE
 		// raised the Start past an admitted Object.
 		if w.hasAdmitted && objectID > w.lastAdmitted {
 			w.markIncomplete(moqt.StreamResetCancelled)
@@ -821,7 +821,7 @@ func (w *subgroupWriter) markIncomplete(code moqt.StreamResetCode) {
 
 func (w *subgroupWriter) markIncompleteLocked(code moqt.StreamResetCode) {
 	// The subscriber expects its own filter's omissions, not the relay's
-	// load (§3.3.4).
+	// load (§12.5).
 	if !w.incomplete || code == moqt.StreamResetExcessiveLoad {
 		w.incomplete = true
 		w.incompleteCode = code
@@ -874,13 +874,13 @@ func (w *subgroupWriter) publish(fwd fwdObject) {
 	}
 }
 
-// lagging reports whether fwd waited in the queue longer than the §8 lag
+// lagging reports whether fwd waited in the queue longer than the §5.2 lag
 // window allows.
 func (w *subgroupWriter) lagging(fwd fwdObject) bool {
 	return w.maxLag > 0 && time.Since(fwd.enqueuedAt) > w.maxLag
 }
 
-// expired reports whether fwd is older than its MAX_CACHE_DURATION (§12.3).
+// expired reports whether fwd is older than its MAX_CACHE_DURATION (§10.3).
 // Deviation: the age runs from when the relay finished reading the Object,
 // not from "the beginning of the Object".
 func expired(fwd fwdObject) bool {
@@ -889,7 +889,7 @@ func expired(fwd fwdObject) bool {
 
 // dropExpired handles an Object skipped by [subgroupWriter.expired]. A
 // header-only stream may claim FIRST_OBJECT for it, so it is reset and the
-// next Object opens a replay stream (§11.4.2).
+// next Object opens a replay stream (§11.3.1).
 func (w *subgroupWriter) dropExpired(hasWritten bool) {
 	w.markIncomplete(moqt.StreamResetCancelled)
 	if hasWritten || w.out == nil {
@@ -903,7 +903,7 @@ func (w *subgroupWriter) dropExpired(hasWritten bool) {
 }
 
 // closeOut FINs or resets the current outbound stream and reports it closed
-// to the subscription, whose PUBLISH_DONE waits on its streams (§10.12).
+// to the subscription, whose PUBLISH_DONE waits on its streams (§9.9).
 func (w *subgroupWriter) closeOut(fin bool, code moqt.StreamResetCode) {
 	if w.out == nil {
 		return
@@ -943,8 +943,8 @@ func (w *subgroupWriter) run() {
 	w.withProps = w.hdr.Properties
 
 	// reopen resets the current outbound stream (if any) and opens a fresh
-	// one, for the lazy first open, after a §11.4.3 gap, and to carry Object
-	// Properties the old header could not. first sets the §11.4.2
+	// one, for the lazy first open, after a §11.3.2 gap, and to carry Object
+	// Properties the old header could not. first sets the §11.3.1
 	// FIRST_OBJECT bit; otherwise the stream is a replay. All its blocking
 	// I/O is bounded by w.ctx.
 	reopen := func(first bool) bool {
@@ -966,7 +966,7 @@ func (w *subgroupWriter) run() {
 				"sub_id", w.sub.ID, "err", err.Error())
 			return false
 		}
-		// §8: WithDeliveryTimeouts returns a copy; the bridge must cancel it.
+		// §5.2: WithDeliveryTimeouts returns a copy; the bridge must cancel it.
 		fresh = fresh.WithDeliveryTimeouts(w.pubTimeouts, w.subTimeouts)
 		w.out = fresh
 		w.unbridge = context.AfterFunc(w.ctx, func() {
@@ -974,7 +974,7 @@ func (w *subgroupWriter) run() {
 		})
 		hasWritten = false
 		w.applyPriority()
-		// §11.4.3: keep the new stream's header reliable across resets.
+		// §11.3.2: keep the new stream's header reliable across resets.
 		w.out.MarkReliable()
 		return true
 	}
@@ -982,7 +982,7 @@ func (w *subgroupWriter) run() {
 		if w.unbridge != nil {
 			w.unbridge()
 		}
-		// Guard: an unreported stream would hold PUBLISH_DONE forever (§10.12).
+		// Guard: an unreported stream would hold PUBLISH_DONE forever (§9.9).
 		w.closeOut(false, moqt.StreamResetCancelled)
 	}()
 
@@ -1012,7 +1012,7 @@ func (w *subgroupWriter) run() {
 			continue
 		}
 
-		// §8: the Subgroup's timeouts, for the streams reopen opens below.
+		// §5.2: the Subgroup's timeouts, for the streams reopen opens below.
 		if fwd.pubTimeouts != nil {
 			w.pubTimeouts = *fwd.pubTimeouts
 		}
@@ -1035,7 +1035,7 @@ func (w *subgroupWriter) run() {
 			}
 		}
 
-		// §12.3: "MUST NOT start forwarding" an expired Object. Checked after
+		// §10.3: "MUST NOT start forwarding" an expired Object. Checked after
 		// the open above, which can block.
 		if expired(fwd) {
 			w.dropExpired(hasWritten)
@@ -1043,18 +1043,18 @@ func (w *subgroupWriter) run() {
 			continue
 		}
 
-		// Re-encode ObjectIDDelta against this outbound stream (§11.4.2).
+		// Re-encode ObjectIDDelta against this outbound stream (§11.3.1).
 		out := *fwd.obj
 		if !hasWritten {
 			out.ObjectIDDelta = fwd.absID
 		} else {
 			out.ObjectIDDelta = fwd.absID - prevID - 1
 		}
-		// §8 measures OBJECT_DELIVERY_TIMEOUT from when the object was
+		// §5.2 measures OBJECT_DELIVERY_TIMEOUT from when the object was
 		// received. Deviation: enqueuedAt is stamped after the whole object
 		// was read, not at its first byte, so the timeout is lenient.
 		if err := w.out.WriteObjectReceivedAt(fwd.enqueuedAt, &out); err != nil {
-			// The stream is already reset with DELIVERY_TIMEOUT (§3.3.4);
+			// The stream is already reset with DELIVERY_TIMEOUT (§12.5);
 			// resetting again would overwrite that code.
 			if errors.Is(err, session.ErrDeliveryTimeout) {
 				w.log.Debug("fanout: delivery timeout, abandoning subgroup stream",
@@ -1075,7 +1075,7 @@ func (w *subgroupWriter) run() {
 		prevID = fwd.absID
 		hasWritten = true
 		dropped = false
-		// §11.4.3: a later reset still delivers what was written.
+		// §11.3.2: a later reset still delivers what was written.
 		w.out.MarkReliable()
 	}
 
@@ -1087,7 +1087,7 @@ func (w *subgroupWriter) run() {
 	w.dropsMu.Unlock()
 
 	if lagExceeded || dropCapped {
-		// Slow reader: reset and terminate the subscription. §3.3.4:
+		// Slow reader: reset and terminate the subscription. §12.5:
 		// TOO_FAR_BEHIND for the lag window, EXCESSIVE_LOAD for the drop cap.
 		resetCode := moqt.StreamResetTooFarBehind
 		cause := ResetCauseTooFarBehind
@@ -1121,7 +1121,7 @@ func (w *subgroupWriter) run() {
 	}
 
 	if inboundReset {
-		// §11.4.3: "A relay might immediately reset the corresponding
+		// §11.3.2: "A relay might immediately reset the corresponding
 		// downstream stream".
 		w.metrics.SubgroupStreamReset(w.ref, w.hdr.SubgroupID, ResetCauseInboundReset)
 		w.closeOut(false, inboundResetCode)
@@ -1129,7 +1129,7 @@ func (w *subgroupWriter) run() {
 	}
 
 	if incomplete {
-		// §11.4.3: FIN only after "all objects in a Subgroup".
+		// §11.3.2: FIN only after "all objects in a Subgroup".
 		w.closeOut(false, incompleteCode)
 		return
 	}
@@ -1138,9 +1138,9 @@ func (w *subgroupWriter) run() {
 }
 
 // reopenCause reports whether fwd needs a fresh outbound stream after one
-// whose last Object is prevID, and why. §11.4.3: only "the next Object" may go
-// on an existing stream. And the header is the first contributor's (§9.3), so
-// a later one's Object Properties, which MUST be forwarded (§2.5), turn
+// whose last Object is prevID, and why. §11.3.2: only "the next Object" may go
+// on an existing stream. And the header is the first contributor's (§7.3), so
+// a later one's Object Properties, which MUST be forwarded (§8.4), turn
 // PROPERTIES on for this and every later stream.
 func (w *subgroupWriter) reopenCause(
 	fwd fwdObject,
@@ -1162,13 +1162,13 @@ func (w *subgroupWriter) reopenCause(
 	return 0, false
 }
 
-// isNextObject reports whether fwd is "the next Object" (§11.4.3) on a stream
+// isNextObject reports whether fwd is "the next Object" (§11.3.2) on a stream
 // whose last Object is prevID. Of the draft's ways to tell, the relay uses:
 // the Object ID is one greater; fwd follows the last Object on its inbound
-// stream; or its Prior Object ID Gap (§12.9) says the IDs between do not
+// stream; or its Prior Object ID Gap (§10.9) says the IDs between do not
 // exist. Knowing from the cache or the subscriber's filters that they are in
 // other Subgroups or filtered out is not used (a choice). A gap that also
-// covers prevID says prevID no longer exists (§2.1), which shows nothing about
+// covers prevID says prevID no longer exists (§2.1.2), which shows nothing about
 // the order.
 func isNextObject(fwd fwdObject, prevID uint64, dropped bool) bool {
 	if fwd.absID == prevID+1 {
@@ -1184,7 +1184,7 @@ func isNextObject(fwd fwdObject, prevID uint64, dropped bool) bool {
 	return ok && fwd.absID-gap == prevID+1
 }
 
-// openCounted opens a subgroup stream, counting it for the §10.12 Stream
+// openCounted opens a subgroup stream, counting it for the §9.9 Stream
 // Count; it fails once the subscription has terminated.
 func (w *subgroupWriter) openCounted(hdr message.SubgroupHeader) (*session.OutgoingSubgroupStream, error) {
 	if !w.sub.BeginStream() {
@@ -1195,7 +1195,7 @@ func (w *subgroupWriter) openCounted(hdr message.SubgroupHeader) (*session.Outgo
 	return out, err
 }
 
-// applyPriority sets the §7.2 effective priority on the current outbound
+// applyPriority sets the §5.1.2 effective priority on the current outbound
 // stream. It runs on each (re)open, so a SUBSCRIBER_PRIORITY change applies
 // from the next stream.
 func (w *subgroupWriter) applyPriority() {

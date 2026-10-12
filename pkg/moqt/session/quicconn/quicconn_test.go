@@ -39,7 +39,7 @@ func newLoopbackConnsWithLimit(t *testing.T, clientBidiLimit int64) (client, ser
 	quicCfg := &quic.Config{
 		MaxIdleTimeout:  5 * time.Second,
 		KeepAlivePeriod: 1 * time.Second,
-		// §11.3 objects travel as QUIC datagrams, and quic-go refuses
+		// §11.2 objects travel as QUIC datagrams, and quic-go refuses
 		// SendDatagram unless both peers advertised support in their transport
 		// parameters. The relay enables this in production (relaynet's
 		// defaultQUICConfig), so leaving it off here made the loopback harness
@@ -297,7 +297,7 @@ func TestListener_AcceptYieldsSessionConn(t *testing.T) {
 // TestDatagramRoundTripOverQUIC covers Conn.SendDatagram and
 // Conn.ReceiveDatagram on the real transport.
 //
-// §11.3 objects can travel as datagrams, and the relay forwards them
+// §11.2 objects can travel as datagrams, and the relay forwards them
 // (handler_datagram.go), but every existing datagram test runs over the
 // in-process sessiontest pipe — which delivers them as ordinary buffered
 // writes. Nothing exercised the adapter that ships, so the two methods sat at

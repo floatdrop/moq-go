@@ -39,8 +39,8 @@ func TestSubscribe_NoMatchingPublisher_RejectsDoesNotExist(t *testing.T) {
 }
 
 // TestSubscribe_ServedFromExistingUpstream: a SUBSCRIBE to an already
-// published track is answered from the existing upstream (§9.4). Its Track
-// Alias is the relay's own (§11.1), so its value is not pinned here.
+// published track is answered from the existing upstream (§7.4). Its Track
+// Alias is the relay's own (§3.1.3), so its value is not pinned here.
 func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -51,7 +51,7 @@ func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 	})
 
 	subReq := subscribeCam1(t, dialAnotherClient(t, pubSess))
-	// §9.6: the relay treats Track Properties opaquely, so they round-trip
+	// §7.7: the relay treats Track Properties opaquely, so they round-trip
 	// verbatim.
 	if got, want := subReq.OK.TrackProperties, opaqueProps("hello props"); !bytes.Equal(got, want) {
 		t.Fatalf("TrackProperties = %x, want %x", got, want)
@@ -59,7 +59,7 @@ func TestSubscribe_ServedFromExistingUpstream(t *testing.T) {
 }
 
 // TestSubscribe_NoAliasCollisionWhenAlsoPublishing: the relay's outbound alias
-// space is independent of the aliases a session PUBLISHes with (§11.1), so
+// space is independent of the aliases a session PUBLISHes with (§3.1.3), so
 // both starting at 0 is no collision.
 func TestSubscribe_NoAliasCollisionWhenAlsoPublishing(t *testing.T) {
 	t.Parallel()
@@ -94,7 +94,7 @@ func TestSubscribe_InstallsPriorityAndGroupOrder(t *testing.T) {
 	)
 }
 
-// TestSubscribe_InvalidGroupOrderRejected pins the §10.2.8 rule: GROUP_ORDER
+// TestSubscribe_InvalidGroupOrderRejected pins the §9.20.8 rule: GROUP_ORDER
 // values other than 0x1 (Ascending) and 0x2 (Descending) are a session-level
 // PROTOCOL_VIOLATION, so a SUBSCRIBE carrying one closes the whole session.
 func TestSubscribe_InvalidGroupOrderRejected(t *testing.T) {
@@ -107,7 +107,7 @@ func TestSubscribe_InvalidGroupOrderRejected(t *testing.T) {
 		Name:       []byte("cam1"),
 		Parameters: message.Parameters{message.ByteParam(message.ParamGroupOrder, 0x05)},
 	})
-	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER SUBSCRIBE (§10.2.8)")
+	requireSessionClosed(t, subSess, "out-of-range GROUP_ORDER SUBSCRIBE (§9.20.8)")
 }
 
 // subscribedThenPublisherLeft subscribes a client to video/cam1 and then ends
@@ -123,7 +123,7 @@ func subscribedThenPublisherLeft(t *testing.T) *session.Subscription {
 
 // TestSubscribe_PublisherDisappears_EmitsPublishDone: when the publisher's
 // session ends, each downstream subscriber gets PUBLISH_DONE TRACK_ENDED
-// (§10.12).
+// (§9.9).
 func TestSubscribe_PublisherDisappears_EmitsPublishDone(t *testing.T) {
 	t.Parallel()
 	sub := subscribedThenPublisherLeft(t)

@@ -26,8 +26,8 @@ func (staleStore) Withdraw(context.Context, string) error                       
 // TestCrossRelay_DrainingUpstreamRelayAnswersGoingAway: a SUBSCRIBE whose only
 // candidate is a relay reached through the upstream pool that has sent GOAWAY
 // is refused with GOING_AWAY, as with a draining local publisher: "The
-// endpoint has received a GOAWAY and MAY reject new requests" (§10.6.2). The
-// relay sends that relay no request (§10.4), so no answer of its own exists.
+// endpoint has received a GOAWAY and MAY reject new requests" (§12.3). The
+// relay sends that relay no request (§9.2), so no answer of its own exists.
 //
 // A local publisher answering DOES_NOT_EXIST alongside does not change that:
 // the draining relay's publisher may still have the track.
@@ -104,7 +104,7 @@ func testDrainingUpstreamRelay(t *testing.T, localRefuser bool) {
 // TestRendezvous_UpstreamGoingAwayKeepsHold: a publisher answering the relay's
 // SUBSCRIBE with GOING_AWAY, as an upstream relay draining does before its
 // GOAWAY arrives, leaves the track without a publisher yet, so a
-// RENDEZVOUS_TIMEOUT hold goes on (§10.2.6). Passing the code on is covered by
+// RENDEZVOUS_TIMEOUT hold goes on (§9.20.6). Passing the code on is covered by
 // TestSubscribe_UpstreamRejects_PropagatesRejection.
 func TestRendezvous_UpstreamGoingAwayKeepsHold(t *testing.T) {
 	t.Parallel()

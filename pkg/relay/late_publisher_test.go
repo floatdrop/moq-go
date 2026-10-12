@@ -14,7 +14,7 @@ import (
 )
 
 // A PUBLISH_NAMESPACE matching existing subscriptions gets a SUBSCRIBE for each
-// (§9.5).
+// (§7.6).
 
 // acceptedSubscribe is one SUBSCRIBE a test publisher accepted.
 type acceptedSubscribe struct {
@@ -221,7 +221,7 @@ func TestRelay_LatePublisherReleasedWhenSubscriberLeavesMidSubscribe(t *testing.
 	}
 }
 
-// TestRelay_WithdrawnPublishNamespaceGetsNoMoreSubscribes: §9.5 "When a
+// TestRelay_WithdrawnPublishNamespaceGetsNoMoreSubscribes: §7.6 "When a
 // publisher wants to stop new subscriptions for a published namespace, it
 // cancels the request". SUBSCRIBEs for existing tracks stop with it.
 func TestRelay_WithdrawnPublishNamespaceGetsNoMoreSubscribes(t *testing.T) {
@@ -300,8 +300,8 @@ func TestRelay_PublishNamespaceDuringPendingSubscribe(t *testing.T) {
 
 // TestRelay_LatePublishNamespaceSubscribesItsOwnDownstream: a session receiving
 // the track that then PUBLISH_NAMESPACEs its namespace is SUBSCRIBEd for it
-// like any other covering publisher (§9.5); a self-subscription is "identical
-// to subscriptions initiated by other endpoints" (§5.1).
+// like any other covering publisher (§7.6); a self-subscription is "identical
+// to subscriptions initiated by other endpoints" (§3.1).
 func TestRelay_LatePublishNamespaceSubscribesItsOwnDownstream(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)
@@ -366,7 +366,7 @@ func requireNoSubscribeRequest(t *testing.T, reqs <-chan *session.Request) {
 
 // TestRelay_LatePublisherResumedWhenForwardChangesMidSubscribe: a subscriber
 // switching to Forward=1 while the late publisher's Forward=0 SUBSCRIBE is
-// pending gets that upstream resumed once registered (§9.2).
+// pending gets that upstream resumed once registered (§7.2).
 func TestRelay_LatePublisherResumedWhenForwardChangesMidSubscribe(t *testing.T) {
 	t.Parallel()
 	video := ns("video")
@@ -479,7 +479,7 @@ func TestRelay_LatePublisherResubscribedForNextSubscriber(t *testing.T) {
 }
 
 // TestRelay_WithdrawnSkippedPublisherNotAsked: a skipped publisher that
-// withdrew its PUBLISH_NAMESPACE is not subscribed later (§9.5).
+// withdrew its PUBLISH_NAMESPACE is not subscribed later (§7.6).
 func TestRelay_WithdrawnSkippedPublisherNotAsked(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)
@@ -529,7 +529,7 @@ func latePublisherAnswering(
 }
 
 // TestRelay_RetryableLatePublisherRefusalIsRetried: a refusal with a non-zero
-// Retry Interval (§10.6.2) is not remembered past it; the next subscriber
+// Retry Interval (§9.4.2) is not remembered past it; the next subscriber
 // after the interval asks again.
 func TestRelay_RetryableLatePublisherRefusalIsRetried(t *testing.T) {
 	t.Parallel()
@@ -551,7 +551,7 @@ func TestRelay_RetryableLatePublisherRefusalIsRetried(t *testing.T) {
 
 // TestRelay_MandatoryPropertyLatePublisherNotReasked: a late publisher whose
 // SUBSCRIBE_OK carries an unknown Mandatory Track Property is cancelled
-// (§2.5.1) and, like a refusal, not asked again per subscriber.
+// (§3.7) and, like a refusal, not asked again per subscriber.
 func TestRelay_MandatoryPropertyLatePublisherNotReasked(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)

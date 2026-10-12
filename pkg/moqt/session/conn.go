@@ -24,7 +24,7 @@ type SendStream interface {
 	io.Closer
 
 	// CancelWrite resets the stream with the given application error code
-	// (§3.3.4 of draft-ietf-moq-transport-20) and unblocks any in-flight
+	// (§12.5 of draft-ietf-moq-transport-22) and unblocks any in-flight
 	// Write with an error. The session layer relies on this to unwedge its
 	// control-send loop on shutdown.
 	CancelWrite(code uint64)
@@ -33,34 +33,34 @@ type SendStream interface {
 	// direction ends: Close (FIN), CancelWrite, or the peer's STOP_SENDING.
 	// It does not track acknowledgement. While the send direction is open, a
 	// done Context means STOP_SENDING, which is how a responder sees a
-	// requester that already FINned cancel the request (§3.3.3). It matches
+	// requester that already FINned cancel the request (§6.4.2.3). It matches
 	// quic.SendStream.Context.
 	Context() context.Context
 }
 
-// StreamPriority is the composite §7.2 scheduling key for a single
+// StreamPriority is the composite §5.1.2 scheduling key for a single
 // schedulable subgroup stream. The transport schedules the stream whose
 // StreamPriority compares lowest (via [StreamPriority.Less]) first under
-// congestion, which reproduces the four-rule §7.2 ordering: a lower value in
+// congestion, which reproduces the four-rule §5.1.2 ordering: a lower value in
 // every field is higher priority (0 is highest), matching the MoQT
 // priority-number convention.
 //
 // The fields are compared lexicographically:
 //
-//  1. Subscriber — the request's SUBSCRIBER_PRIORITY (§7.2 rule 1, primary).
-//  2. Publisher  — the subgroup's PublisherPriority byte (§7.2 rule 2).
+//  1. Subscriber — the request's SUBSCRIBER_PRIORITY (§5.1.2 rule 1, primary).
+//  2. Publisher  — the subgroup's PublisherPriority byte (§5.1.2 rule 2).
 //  3. GroupKey   — the Group ID with the subscription's GROUP_ORDER applied
-//     (§7.2 rule 3). The relay sets it to the Group ID for
+//     (§5.1.2 rule 3). The relay sets it to the Group ID for
 //     Ascending order and to its bitwise complement for
 //     Descending, so that the same "lower is higher priority"
 //     comparison yields the requested direction.
-//  4. Subgroup   — the Subgroup ID (§7.2 rule 4): the lowest Subgroup ID in
+//  4. Subgroup   — the Subgroup ID (§5.1.2 rule 4): the lowest Subgroup ID in
 //     a group is scheduled first.
 //
 // Rules 3 and 4 only define an ordering "in response to the same request"
-// (§7.2); a lexicographic comparison across streams of different
+// (§5.1.2); a lexicographic comparison across streams of different
 // subscriptions that share Subscriber+Publisher is therefore
-// implementation-defined, which §7.2 explicitly permits.
+// implementation-defined, which §5.1.2 explicitly permits.
 type StreamPriority struct {
 	Subscriber uint8
 	Publisher  uint8
@@ -70,7 +70,7 @@ type StreamPriority struct {
 
 // PrioritizedSendStream is optionally implemented by [SendStream]
 // implementations that expose a per-stream scheduling priority knob to the
-// underlying transport (§7 / §7.2 of draft-ietf-moq-transport-20).
+// underlying transport (§5.1 / §5.1.2 of draft-ietf-moq-transport-22).
 //
 // Implementations translate the [StreamPriority] into whatever shape their
 // transport accepts (e.g. an HTTP/3 PRIORITY_UPDATE urgency field, a QUIC
@@ -84,7 +84,7 @@ type StreamPriority struct {
 // back to the transport's default scheduling. None of the bundled adapters
 // (quicconn, wtconn, sessiontest) implement it yet — quic-go exposes no public
 // per-stream priority API (quic-go#437) and webtransport-go follows suit — but
-// the relay pushes the full §7.2 priority through anyway so it lights up once a
+// the relay pushes the full §5.1.2 priority through anyway so it lights up once a
 // transport adds the knob.
 type PrioritizedSendStream interface {
 	// SetSendPriority sets the transport-level scheduling priority for
@@ -101,7 +101,7 @@ type PrioritizedSendStream interface {
 // the stream as reliably delivered, so a subsequent CancelWrite (reset) still
 // delivers that prefix.
 //
-// §11.4.3 uses this on data streams: "When RESET_STREAM_AT is used, the
+// §11.3.2 uses this on data streams: "When RESET_STREAM_AT is used, the
 // reliable_size SHOULD include the stream header so the receiver can identify
 // the corresponding subscription [...]". A relay that resets a partially-sent
 // Subgroup MAY set the boundary to the last Object it delivered so the receiver
@@ -118,7 +118,7 @@ type ReliableResetStream interface {
 
 // DeliveryTrackingSendStream is optionally implemented by [SendStream]
 // implementations whose transport reports when the peer has acknowledged the
-// stream, which §8 SUBGROUP_DELIVERY_TIMEOUT needs.
+// stream, which §5.2 SUBGROUP_DELIVERY_TIMEOUT needs.
 //
 // None of the bundled adapters implement it (quic-go exposes no such API), so
 // on them SUBGROUP_DELIVERY_TIMEOUT is not enforced. Resetting on the timer
@@ -182,7 +182,7 @@ type Conn interface {
 	// (RFC 9221). The payload must fit within the negotiated
 	// max_datagram_frame_size; if it is too large the implementation returns
 	// an error without sending. MoQT requires DATAGRAM support to be
-	// negotiated during the QUIC handshake (§3.1).
+	// negotiated during the QUIC handshake (§6.2).
 	SendDatagram(payload []byte) error
 
 	// ReceiveDatagram blocks until a QUIC DATAGRAM frame arrives from the

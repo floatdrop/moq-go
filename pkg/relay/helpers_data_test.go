@@ -77,7 +77,7 @@ func tryAcceptDataStream(t *testing.T, sess *session.Session, d time.Duration) (
 // subgroupRead is one subgroup stream as a subscriber read it to its end.
 type subgroupRead struct {
 	header   message.SubgroupHeader
-	ids      []uint64 // absolute Object IDs (§11.4.2)
+	ids      []uint64 // absolute Object IDs (§11.3.1)
 	payloads []string
 	end      error // io.EOF for a FIN, otherwise a reset
 	err      error // no subgroup stream was accepted
@@ -141,7 +141,7 @@ func readUntilEnd(t *testing.T, subSess *session.Session) (ids []uint64, end err
 // [readSubgroups] emits it.
 type objEvent struct {
 	stream int    // 1-based index of the outbound stream it arrived on
-	absID  uint64 // §11.4.2 delta resolved to an absolute Object ID
+	absID  uint64 // §11.3.1 delta resolved to an absolute Object ID
 	err    error  // non-nil marks a stream end (io.EOF = FIN, else reset) or accept error
 }
 

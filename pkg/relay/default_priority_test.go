@@ -13,8 +13,8 @@ import (
 )
 
 // A DEFAULT_PRIORITY subgroup or datagram inherits the Publisher Priority of
-// the message that established the subscription (§11.4.2, §11.3.1): the
-// DEFAULT_PUBLISHER_PRIORITY Track Property, or 128 when omitted (§12.4).
+// the message that established the subscription (§11.3.1, §11.2.1): the
+// DEFAULT_PUBLISHER_PRIORITY Track Property, or 128 when omitted (§10.4).
 // Checked through the cache (FETCH spells the priority out) and the
 // PRIORITY_FILTER forward decision.
 
@@ -107,7 +107,7 @@ func TestDefaultPriority_Subgroup(t *testing.T) {
 }
 
 // TestDefaultPriority_Datagram: a cached DEFAULT_PRIORITY datagram is served
-// with the track's DEFAULT_PUBLISHER_PRIORITY (§11.3.1).
+// with the track's DEFAULT_PUBLISHER_PRIORITY (§11.2.1).
 func TestDefaultPriority_Datagram(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, defaultPriorityProp(200))
@@ -218,7 +218,7 @@ func TestDefaultPriority_UpstreamSubscribeAliasWindow(t *testing.T) {
 }
 
 // TestDefaultPriority_PerPublisher: with two publishers of one track, each
-// subgroup inherits from the PUBLISH that bound its own alias (§11.4.2).
+// subgroup inherits from the PUBLISH that bound its own alias (§11.3.1).
 func TestDefaultPriority_PerPublisher(t *testing.T) {
 	t.Parallel()
 	pubA, aliasA := newCam1Publisher(t, defaultPriorityProp(200))

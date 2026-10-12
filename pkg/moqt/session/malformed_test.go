@@ -14,7 +14,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Malformed request-stream messages (§10): a Length that disagrees with the
+// Malformed request-stream messages (§9): a Length that disagrees with the
 // Message Body, or an unknown type, closes the session with
 // PROTOCOL_VIOLATION at every read point — the opener, its response, and a
 // follow-up. A frame cut short by the stream ending stays scoped to its stream.
@@ -37,7 +37,7 @@ func writeShort(w io.Writer, m message.Message) error {
 
 func TestMalformedOpenerClosesSession(t *testing.T) {
 	t.Parallel()
-	longName := bytes.Repeat([]byte("n"), 4097) // §2.4.1: over 4,096 bytes
+	longName := bytes.Repeat([]byte("n"), 4097) // §8.7: over 4,096 bytes
 	cases := []struct {
 		name  string
 		write func(io.Writer) error
@@ -67,8 +67,8 @@ func TestMalformedOpenerClosesSession(t *testing.T) {
 }
 
 // TestTruncatedOpenerResetsOnlyStream: a stream ending or reset before its
-// first frame is complete is the peer giving up on that request (§3.3.2,
-// §3.3.3), not a Length mismatch: AcceptRequest moves on to the next request.
+// first frame is complete is the peer giving up on that request (§6.4.2.2,
+// §6.4.2.3), not a Length mismatch: AcceptRequest moves on to the next request.
 func TestTruncatedOpenerResetsOnlyStream(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -187,7 +187,7 @@ func TestMalformedPublishSkippedClosesSession(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Malformed Tracks (§2.4.2): the read returns ErrMalformedTrack and the
+// Malformed Tracks (§12.1): the read returns ErrMalformedTrack and the
 // session stays up; cancelling the subscription is left to the caller.
 // ---------------------------------------------------------------------------
 
@@ -205,7 +205,7 @@ func requireMalformedTrack(t *testing.T, err error, sess *session.Session) {
 
 // TestSubgroupObjectMalformedProperties: the checks use the Object's absolute
 // ID — Object 4, delta-encoded as 0 after Object 3, with a Prior Object ID
-// Gap of 5 is malformed (§12.9); Object 3 with a gap of 3 is not.
+// Gap of 5 is malformed (§10.9); Object 3 with a gap of 3 is not.
 func TestSubgroupObjectMalformedProperties(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -305,7 +305,7 @@ func TestFetchObjectMalformedProperties(t *testing.T) {
 	wg.Wait()
 }
 
-// TestImplicitSubgroupIDSurvivesMalformedFirstObject: §11.4.2 SUBGROUP_ID_MODE
+// TestImplicitSubgroupIDSurvivesMalformedFirstObject: §11.3.1 SUBGROUP_ID_MODE
 // 0b01 makes the Subgroup ID the stream's first Object ID. It stays so for a
 // caller that reads on after that first Object was reported malformed.
 func TestImplicitSubgroupIDSurvivesMalformedFirstObject(t *testing.T) {

@@ -26,7 +26,7 @@ func TestPublishNamespace_AcceptedAndRegistered(t *testing.T) {
 		t.Fatalf("PublishNamespace: %v", err)
 	}
 
-	// Close cancels the request (§6.2 withdrawal); the relay's handler should
+	// Close cancels the request (§4.1 withdrawal); the relay's handler should
 	// unregister cleanly. The session itself remains alive.
 	if err := stream.Close(); err != nil {
 		t.Fatalf("stream.Close: %v", err)
@@ -34,7 +34,7 @@ func TestPublishNamespace_AcceptedAndRegistered(t *testing.T) {
 }
 
 // TestSubscribeNamespace_AcceptedAndDeliversInitialNamespaces verifies the
-// §6.1 catch-up rule: a subscriber that joins after publishers have already
+// §4.2 catch-up rule: a subscriber that joins after publishers have already
 // announced MUST receive a NAMESPACE for every matching publisher.
 func TestSubscribeNamespace_AcceptedAndDeliversInitialNamespaces(t *testing.T) {
 	t.Parallel()
@@ -141,14 +141,14 @@ func TestSubscribeTracks_AcceptedWithoutForwarding(t *testing.T) {
 		t.Fatalf("SubscribeTracks: %v", err)
 	}
 
-	// Close cancels the subscription (§6.1); the handler must exit cleanly.
+	// Close cancels the subscription (§3.6); the handler must exit cleanly.
 	if err := subStream.Close(); err != nil {
 		t.Fatalf("subStream.Close: %v", err)
 	}
 }
 
 // TestNamespaceStreams_AnswerRequestUpdate: a REQUEST_UPDATE on a
-// PUBLISH_NAMESPACE or SUBSCRIBE_NAMESPACE stream gets REQUEST_OK (§10.9).
+// PUBLISH_NAMESPACE or SUBSCRIBE_NAMESPACE stream gets REQUEST_OK (§9.5).
 func TestNamespaceStreams_AnswerRequestUpdate(t *testing.T) {
 	t.Parallel()
 
@@ -182,16 +182,16 @@ func TestNamespaceStreams_AnswerRequestUpdate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	if _, err := pubSess.UpdateRequest(ctx, nsPub.Stream, nil); err != nil {
-		t.Fatalf("PUBLISH_NAMESPACE REQUEST_UPDATE unanswered (§10.9): %v", err)
+		t.Fatalf("PUBLISH_NAMESPACE REQUEST_UPDATE unanswered (§9.5): %v", err)
 	}
 	if _, err := subSess.UpdateRequest(ctx, nsSub.Stream, nil); err != nil {
-		t.Fatalf("SUBSCRIBE_NAMESPACE REQUEST_UPDATE unanswered (§10.9): %v", err)
+		t.Fatalf("SUBSCRIBE_NAMESPACE REQUEST_UPDATE unanswered (§9.5): %v", err)
 	}
 }
 
 // TestRelay_PrefixOverlap: within a session, a SUBSCRIBE_NAMESPACE or
 // SUBSCRIBE_TRACKS whose prefix overlaps an established one of the same type is
-// PREFIX_OVERLAP; the two types have independent spaces (§10.19, §10.20).
+// PREFIX_OVERLAP; the two types have independent spaces (§4.2, §3.6).
 func TestRelay_PrefixOverlap(t *testing.T) {
 	t.Parallel()
 

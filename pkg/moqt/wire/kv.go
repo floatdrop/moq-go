@@ -6,11 +6,11 @@ import (
 	"slices"
 )
 
-// KVPair is a MoQT Key-Value-Pair (§1.4.3). When Type is even, IntVal carries
+// KVPair is a MoQT Key-Value-Pair (§8.3). When Type is even, IntVal carries
 // the value (encoded as a single varint). When Type is odd, ByteVal carries the
 // value (length-prefixed bytes).
 //
-// KVPairs are used for SETUP Options (§10.3.1); they appear delta-encoded by
+// KVPairs are used for SETUP Options (§9.1); they appear delta-encoded by
 // Type within a list, with the running "previous type" starting at zero.
 type KVPair struct {
 	Type    uint64
@@ -22,7 +22,7 @@ type KVPair struct {
 // rather than a varint (Type even).
 func (p KVPair) IsBytes() bool { return p.Type&1 == 1 }
 
-// MaxKVPairValueBytes is the per-pair byte-value cap from §1.4.3.
+// MaxKVPairValueBytes is the per-pair byte-value cap from §8.3.
 const MaxKVPairValueBytes = 0xFFFF
 
 // KVPair appends a single KVPair using prev as the running previous Type, and
@@ -41,7 +41,7 @@ func (w *Writer) KVPair(p KVPair, prev uint64) uint64 {
 // Pairs are sorted by Type before encoding so callers do not need to order them.
 // The sort is stable: pairs of one Type keep the caller's order, which a
 // repeated option can depend on: which SETUP REGISTERs fit the peer's cache
-// depends on their order (§10.3.1.3, §10.3.1.4).
+// depends on their order (§9.1.3, §9.1.4).
 func (w *Writer) KVPairs(pairs []KVPair) {
 	slices.SortStableFunc(pairs, func(a, b KVPair) int { return cmp.Compare(a.Type, b.Type) })
 	var prev uint64
@@ -96,7 +96,7 @@ func (r *Reader) kvPair(prev uint64, copyBytes bool) (KVPair, uint64, error) {
 }
 
 // KVPairsRemaining reads KVPairs until the reader is empty. This is used for
-// SETUP, where Setup Options span the entire control-message payload (§10.3).
+// SETUP, where Setup Options span the entire control-message payload (§9.1).
 func (r *Reader) KVPairsRemaining() ([]KVPair, error) {
 	var (
 		pairs []KVPair

@@ -123,7 +123,7 @@ func TestCrossRelay_LocalPublisherFailureFallsBackToDiscovery(t *testing.T) {
 }
 
 // TestCrossRelay_MultiRemoteFanIn: with two remote relays advertising a
-// namespace, relay A subscribes to both (§9.5) and delivers each Object once (§9.3,
+// namespace, relay A subscribes to both (§7.6) and delivers each Object once (§7.3,
 // §2.1).
 func TestCrossRelay_MultiRemoteFanIn(t *testing.T) {
 	t.Parallel()

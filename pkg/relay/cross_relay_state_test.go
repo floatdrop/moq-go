@@ -18,7 +18,7 @@ import (
 // watermark, PUBLISH_DONE codes, and the GOAWAY on shutdown.
 
 // TestCrossRelay_GoawayPrecedesUpstreamTeardown: on Stop the relay sends GOAWAY
-// before it unsubscribes from upstream publishers (§3.6). Reliably fails a
+// before it unsubscribes from upstream publishers (§6.6.1). Reliably fails a
 // wrong ordering only at GOMAXPROCS=1.
 func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 	t.Parallel()
@@ -88,7 +88,7 @@ func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 	case <-peer.GoawayReceived():
 	case <-peer.Done():
 		t.Fatal("upstream session was torn down without ever receiving a GOAWAY;" +
-			" §3.6 requires the GOAWAY first")
+			" §6.6.1 requires the GOAWAY first")
 	case <-time.After(5 * time.Second):
 		t.Fatal("upstream peer received no GOAWAY")
 	}
@@ -98,7 +98,7 @@ func TestCrossRelay_GoawayPrecedesUpstreamTeardown(t *testing.T) {
 }
 
 // TestCrossRelay_FetchBackfillsPublishOnceTrack: relay A's LARGEST_OBJECT
-// includes the one its upstream sent in SUBSCRIBE_OK (§10.2.17, §9.4), so a
+// includes the one its upstream sent in SUBSCRIBE_OK (§9.20.17, §7.4), so a
 // track published once, like an MSF catalog, can be FETCHed from A later.
 func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 	t.Parallel()
@@ -123,7 +123,7 @@ func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 		t.Fatalf("cross-relay Subscribe: %v", err)
 	}
 
-	// §10.2.17: "If Objects have been published on this Track the Publisher MUST
+	// §9.20.17: "If Objects have been published on this Track the Publisher MUST
 	// include this parameter." A is the publisher for this subscriber, and B has
 	// told it Objects exist.
 	if _, ok := subReq.OK.Parameters.Find(message.ParamLargestObject); !ok {
@@ -133,8 +133,8 @@ func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 
 	// A FETCH is the only way this subscriber can reach content published
 	// before it arrived. A's own cache is empty, as its upstream uses the Next
-	// Object filter, so answering means stitching from B (§9.4). StartGroup=1
-	// is the relative one-field form (§5.1.2): the current group up to the
+	// Object filter, so answering means stitching from B (§7.4). StartGroup=1
+	// is the relative one-field form (§9.20.9): the current group up to the
 	// Largest Object.
 	fetchReq, err := subSess.Fetch(ctx, &message.Fetch{
 		Namespace: ns("video"),
@@ -161,7 +161,7 @@ func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 }
 
 // TestCrossRelay_PublishDoneCodeCrossesRelays: a PUBLISH_DONE code about the
-// track reaches a subscriber two relays away unchanged (§10.12).
+// track reaches a subscriber two relays away unchanged (§9.9).
 func TestCrossRelay_PublishDoneCodeCrossesRelays(t *testing.T) {
 	t.Parallel()
 	store := discovery.NewMemoryStore()

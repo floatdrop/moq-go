@@ -14,8 +14,8 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// AUTHORIZATION TOKEN setup option (§10.3.1.4), which carries tokens like the
-// message parameter of the same name (§10.2.2).
+// AUTHORIZATION TOKEN setup option (§9.1.4), which carries tokens like the
+// message parameter of the same name (§9.20.2).
 
 // tokenOption encodes tok as an AUTHORIZATION TOKEN setup option.
 func tokenOption(tok message.Token) wire.KVPair {
@@ -108,7 +108,7 @@ func TestSetupTokens(t *testing.T) {
 	t.Run("REGISTER over the cache size is used as a value", func(t *testing.T) {
 		t.Parallel()
 		// No MAX_AUTH_TOKEN_CACHE_SIZE: the default 0 prohibits aliases, so
-		// the option is treated as USE_VALUE, not a cache overflow (§10.3.1.4).
+		// the option is treated as USE_VALUE, not a cache overflow (§9.1.4).
 		_, srv, _, err := openWithClientOptions(
 			t,
 			nil,
@@ -136,15 +136,15 @@ func TestSetupTokenViolations(t *testing.T) {
 		opts []wire.KVPair
 		want moqt.SessionErrorCode
 	}{
-		// §10.2.2: DELETE or USE_ALIAS in SETUP is a PROTOCOL_VIOLATION.
+		// §9.1.4: DELETE or USE_ALIAS in SETUP is a PROTOCOL_VIOLATION.
 		{"DELETE", []wire.KVPair{tokenOption(message.Token{AliasType: message.AliasTypeDelete, TokenAlias: 1})},
 			moqt.SessionProtocolViolation},
 		{"USE_ALIAS", []wire.KVPair{tokenOption(message.Token{AliasType: message.AliasTypeUseAlias, TokenAlias: 1})},
 			moqt.SessionProtocolViolation},
-		// §10.2.2: an undecodable Token is a KEY_VALUE_FORMATTING_ERROR.
+		// §8.9: an undecodable Token is a KEY_VALUE_FORMATTING_ERROR.
 		{"undecodable", []wire.KVPair{{Type: uint64(message.SetupOptionAuthorizationToken), ByteVal: []byte{0x09}}},
 			moqt.SessionKeyValueFormattingError},
-		// §10.2.2: registering an Alias twice is DUPLICATE_AUTH_TOKEN_ALIAS.
+		// §8.9: registering an Alias twice is DUPLICATE_AUTH_TOKEN_ALIAS.
 		{"duplicate REGISTER", []wire.KVPair{tokenOption(register(1, "a")), tokenOption(register(1, "b"))},
 			moqt.SessionDuplicateAuthTokenAlias},
 	}
@@ -163,7 +163,7 @@ func TestSetupTokenViolations(t *testing.T) {
 
 // ---------------------------------------------------------------------------
 // Send side: a REGISTER the peer's MAX_AUTH_TOKEN_CACHE_SIZE cannot hold is
-// used as a value, so the sender purges it (§10.3.1.4).
+// used as a value, so the sender purges it (§9.1.4).
 // ---------------------------------------------------------------------------
 
 // register builds a REGISTER token of Token Type 1.
@@ -208,7 +208,7 @@ func TestSetupTokensSent(t *testing.T) {
 // TestSetupTokensHeldMatchesPeerWithManyTokens: with more SETUP tokens than
 // a small sort keeps in order, among other options, the peer still receives
 // them in the order given, so the REGISTERs the sender believes held are those
-// the peer's cache holds (§10.3.1.3, §10.3.1.4). Varied sizes make which ones
+// the peer's cache holds (§9.1.3, §9.1.4). Varied sizes make which ones
 // fit depend on that order.
 func TestSetupTokensHeldMatchesPeerWithManyTokens(t *testing.T) {
 	// Other options interleaved as a caller might pass them, so the SETUP
@@ -247,7 +247,7 @@ func TestSetupTokensDefaultCacheIsZero(t *testing.T) {
 }
 
 // TestSetupTokenRefused: the client refuses to send a SETUP token the server
-// must close on (DELETE, USE_ALIAS, a repeated alias; §10.2.2).
+// must close on (DELETE, USE_ALIAS, a repeated alias; §9.1.4).
 func TestSetupTokenRefused(t *testing.T) {
 	for name, toks := range map[string][]message.Token{
 		"DELETE":          {{AliasType: message.AliasTypeDelete, TokenAlias: 1}},

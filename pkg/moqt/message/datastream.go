@@ -9,7 +9,7 @@ import (
 
 // UnknownDataStreamTypeError is returned when the leading Type of an inbound
 // data uni-stream is not one of the recognized data-stream types. It is
-// session-fatal (§3.4): session.AcceptDataStream closes the session with
+// session-fatal (§6.4.1): session.AcceptDataStream closes the session with
 // PROTOCOL_VIOLATION before returning it.
 type UnknownDataStreamTypeError struct {
 	Type uint64
@@ -22,7 +22,7 @@ func (e *UnknownDataStreamTypeError) Error() string {
 // ReservedSubgroupIDModeError is returned when the leading Type of an inbound
 // data uni-stream matches the SUBGROUP_HEADER pattern (bit 4 set, bit 7 clear)
 // but carries the reserved SUBGROUP_ID_MODE value 0b11 in bits 1-2. Per
-// §11.4.2, this MUST be treated as a session-level PROTOCOL_VIOLATION.
+// §11.3.1, this MUST be treated as a session-level PROTOCOL_VIOLATION.
 type ReservedSubgroupIDModeError struct {
 	Type uint64
 }
@@ -35,7 +35,7 @@ func (e *ReservedSubgroupIDModeError) Error() string {
 }
 
 // ReadDataStreamType reads the leading Type varint that prefixes every MoQT
-// uni-stream data header (SUBGROUP_HEADER §11.4.2, FETCH_HEADER §11.4.4,
+// uni-stream data header (SUBGROUP_HEADER §11.3.1, FETCH_HEADER §11.4.1,
 // padding §11.5.1, ...). A dispatcher uses this together with type predicates
 // such as IsSubgroupHeaderType to decide how to consume the remainder of the
 // stream.

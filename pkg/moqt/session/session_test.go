@@ -166,7 +166,7 @@ func TestDuplicateGoawayClosesPeerSession(t *testing.T) {
 
 	// Bypass the SendGoaway guard via the test-only SendControl export to
 	// push two GOAWAYs through the outbound channel directly. The peer must
-	// terminate the session on the second one (§10.4).
+	// terminate the session on the second one (§9.2).
 	g := &message.Goaway{Timeout: 100}
 	if err := session.SendControl(server, g); err != nil {
 		t.Fatalf("first sendControl: %v", err)
@@ -183,7 +183,7 @@ func TestDuplicateGoawayClosesPeerSession(t *testing.T) {
 }
 
 // TestSendGoawayClientRejectsURI: a client's GOAWAY carries an empty New
-// Session URI (§10.4); a server's may carry one.
+// Session URI (§9.2); a server's may carry one.
 func TestSendGoawayClientRejectsURI(t *testing.T) {
 	client, server := openPair(t)
 
@@ -232,8 +232,8 @@ func TestCloseTerminatesBothSides(t *testing.T) {
 }
 
 // TestControlStreamViolationsCloseTheSession: after SETUP only GOAWAY is valid
-// on the control stream (§10, Table 5); anything else closes the session with
-// PROTOCOL_VIOLATION (§3.5) and a reason naming the rule.
+// on the control stream (§9, Table 5); anything else closes the session with
+// PROTOCOL_VIOLATION (§12.2) and a reason naming the rule.
 func TestControlStreamViolationsCloseTheSession(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -96,7 +96,7 @@ func TestReasonPhraseRoundTrip(t *testing.T) {
 	}
 }
 
-// TestReasonPhraseWriterTruncates covers the send side of the §1.4.4 cap, which
+// TestReasonPhraseWriterTruncates covers the send side of the §8.5 cap, which
 // the Reader has always enforced and the Writer did not.
 //
 // The asymmetry was reachable, not theoretical: REQUEST_ERROR and PUBLISH_ERROR
@@ -213,7 +213,7 @@ func TestTrackNamespaceTooManyFieldsRejected(t *testing.T) {
 // TestKVPairsKeepOrderWithinAType: KVPairs sorts by Type for the delta
 // encoding but keeps pairs of one Type in the caller's order, however many
 // there are. Which of a SETUP's AUTHORIZATION TOKEN REGISTERs fit the peer's
-// cache depends on their order (§10.3.1.3, §10.3.1.4), so it must survive.
+// cache depends on their order (§9.1.3, §9.1.4), so it must survive.
 func TestKVPairsKeepOrderWithinAType(t *testing.T) {
 	var pairs []KVPair
 	for i := range 40 {
@@ -334,9 +334,9 @@ func (p *plainReader) Read(b []byte) (int, error) { return p.r.Read(b) }
 
 // TestStreamReaderVarint verifies that StreamReader.Varint decodes the same
 // values as Writer.Varint encodes, across encoded lengths up to the 9-byte form
-// that carries a full 64-bit value (§1.4.1).
+// that carries a full 64-bit value (§8.1).
 func TestStreamReaderVarint(t *testing.T) {
-	// Each §1.4.1 length class adds 7 value bits: the first and last value of
+	// Each §8.1 length class adds 7 value bits: the first and last value of
 	// every class, 1 through 9 bytes.
 	cases := []uint64{0, math.MaxUint64}
 	for bits := 7; bits <= 56; bits += 7 {
@@ -581,7 +581,7 @@ func TestTrackNamespace_HasPrefix(t *testing.T) {
 	}
 }
 
-// TestReaderHugeLengthRejected: a §1.4.1 length >= 2^63 does not fit an int and
+// TestReaderHugeLengthRejected: a §8.1 length >= 2^63 does not fit an int and
 // must yield ErrShortBuffer, not a panic.
 func TestReaderHugeLengthRejected(t *testing.T) {
 	for _, n := range []uint64{1 << 63, 1<<64 - 1} {

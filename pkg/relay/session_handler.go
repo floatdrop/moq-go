@@ -30,7 +30,7 @@ import (
 // spawned by the dispatch loop and tracked via wg for a clean join on teardown.
 type sessionHandler struct {
 	// nsPrefixes / trackPrefixes are this session's established
-	// SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS prefixes, for §10.19 / §10.20
+	// SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS prefixes, for §4.2 / §3.6
 	// PREFIX_OVERLAP. The two types have independent overlap spaces.
 	nsPrefixes, trackPrefixes prefixSet
 
@@ -55,10 +55,10 @@ type sessionHandler struct {
 	sendQueueSize       int
 	maxDropsBeforeReset int
 	maxFanoutLag        time.Duration
-	// maxRendezvous caps RENDEZVOUS_TIMEOUT (§10.2.6); 0 holds no SUBSCRIBE.
+	// maxRendezvous caps RENDEZVOUS_TIMEOUT (§9.20.6); 0 holds no SUBSCRIBE.
 	maxRendezvous time.Duration
 
-	// limiter enforces the §13.1 / §13.7.1 per-session resource caps.
+	// limiter enforces the §15.1 / §15.7.1 per-session resource caps.
 	limiter sessionLimiter
 
 	// wg tracks per-request goroutines spawned by the dispatch loop.
@@ -77,7 +77,7 @@ type sessionHandler struct {
 	// not by this handler's run). Used for work whose lifetime must outlive
 	// this session — e.g. the reader of an on-demand upstream stream, which
 	// serves every downstream subscriber of the track, not just the one on
-	// this session (§9.4 aggregation).
+	// this session (§7.4 aggregation).
 	relayGo func(func())
 }
 
@@ -139,7 +139,7 @@ func (h *sessionHandler) trackRef(name track.FullTrackName) TrackRef {
 }
 
 // saveLargestLocation folds a LARGEST_OBJECT parameter the upstream sent into
-// the track's watermark. §10.2.17: a relay advertises the largest of the
+// the track's watermark. §9.20.17: a relay advertises the largest of the
 // values received in SUBSCRIBE_OK, PUBLISH or REQUEST_UPDATE_OK and the
 // Objects it received.
 //
@@ -153,12 +153,12 @@ func saveLargestLocation(entry *registry.TrackEntry, ps message.Parameters) {
 	}
 }
 
-// logInboundGoaway records the peer's GOAWAY (§10.4). The relay does not close
+// logInboundGoaway records the peer's GOAWAY (§9.2). The relay does not close
 // the session: enforcing the Timeout is the sender's job. It only stops
 // initiating requests to the peer (see [goingAway]).
 //
 // Deviation: the relay neither migrates its subscriptions to NewSessionURI nor
-// closes the session once none remain (§9.4.1, §3.6); downstream clients
+// closes the session once none remain (§7.4.1, §6.6.1); downstream clients
 // re-subscribe when the session ends.
 func (h *sessionHandler) logInboundGoaway(ctx context.Context) {
 	g := h.sess.PeerGoaway()
@@ -170,7 +170,7 @@ func (h *sessionHandler) logInboundGoaway(ctx context.Context) {
 }
 
 // goingAway reports whether sess has a GOAWAY in either direction, so the
-// relay initiates no new request on it (§10.4): having received one, an
+// relay initiates no new request on it (§9.2): having received one, an
 // endpoint "SHOULD NOT initiate new requests to the peer"; having sent one,
 // it "SHOULD avoid initiating requests unless required by migration". Every
 // relay-initiated SUBSCRIBE, FETCH and PUBLISH checks this first.
@@ -178,7 +178,7 @@ func goingAway(sess *session.Session) bool { return sess.PeerGoaway() != nil || 
 
 // subIDCounter allocates process-globally unique subscription IDs. It MUST
 // be global, not per-handler: a TrackEntry aggregates subscriptions from
-// many sessions (§9.4), and the registry removes by ID — two handlers'
+// many sessions (§7.4), and the registry removes by ID — two handlers'
 // per-handler counters would collide, so one subscriber unsubscribing would
 // silently delete another session's subscription from the same track.
 var subIDCounter atomic.Uint64
@@ -227,7 +227,7 @@ func (h *sessionHandler) run(ctx context.Context) error {
 		dataErr = h.runDataLoop(runCtx)
 		cancel() // wake sibling loops if the data loop dies first
 	})
-	// Datagrams are OPTIONAL (§11.3): a transport or peer without DATAGRAM
+	// Datagrams are OPTIONAL (§11.2): a transport or peer without DATAGRAM
 	// support fails ReceiveDatagram on the first call, which must not take down
 	// SUBSCRIBE/PUBLISH handling. So the datagram loop neither cancels its
 	// siblings nor promotes its error as a session fault — it just stops.
@@ -322,11 +322,11 @@ func (h *sessionHandler) runDataLoop(ctx context.Context) error {
 //  4. Update [registry.TrackRegistry] / [registry.NamespaceRegistry] as appropriate.
 //
 // Two cross-cutting policies are shared across the per-type handlers:
-// verifyRequest applies the §10.2.2 token-verification pre-step, and
-// namespaceRequest folds in the §13.7.1 per-session cap for the three
-// namespace-state requests (the §13.1 subscription cap is inline on SUBSCRIBE).
+// verifyRequest applies the §9.20.2 token-verification pre-step, and
+// namespaceRequest folds in the §15.7.1 per-session cap for the three
+// namespace-state requests (the §15.1 subscription cap is inline on SUBSCRIBE).
 //
-// Any other first message is a §3.3 PROTOCOL_VIOLATION that
+// Any other first message is a §6.3 PROTOCOL_VIOLATION that
 // [session.Session.AcceptRequest] handles before dispatch.
 func (h *sessionHandler) requestMux(ctx context.Context) *session.RequestMux {
 	mux := session.NewRequestMux()
@@ -335,7 +335,7 @@ func (h *sessionHandler) requestMux(ctx context.Context) *session.RequestMux {
 		if !h.verifyRequest(ctx, req) {
 			return
 		}
-		// §13.1: bound concurrent subscriptions per session.
+		// §15.1: bound concurrent subscriptions per session.
 		if !h.limiter.acquireSub() {
 			h.rejectExcessiveLoad(ctx, req, "subscription")
 			return
@@ -373,7 +373,7 @@ func (h *sessionHandler) requestMux(ctx context.Context) *session.RequestMux {
 	return mux
 }
 
-// verifyRequest runs the per-request dispatch log and the §10.2.2 token
+// verifyRequest runs the per-request dispatch log and the §9.20.2 token
 // verification shared by every known request type. It returns false — after
 // replying REQUEST_ERROR with the mapped code — when the request's resolved
 // AUTHORIZATION_TOKEN is denied; the session stays up (a denial is per-request).
@@ -389,7 +389,7 @@ func (h *sessionHandler) verifyRequest(ctx context.Context, req *session.Request
 
 // namespaceRequest wraps a namespace-state handler (PUBLISH_NAMESPACE,
 // SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) with the shared token verification and
-// the §13.7.1 per-session cap, spawning fn under the limiter when admitted.
+// the §15.7.1 per-session cap, spawning fn under the limiter when admitted.
 func (h *sessionHandler) namespaceRequest(ctx context.Context, req *session.Request, fn func()) {
 	if !h.verifyRequest(ctx, req) {
 		return
@@ -428,7 +428,7 @@ func (h *sessionHandler) rejectAuth(ctx context.Context, req *session.Request, k
 // guess, since the relay cannot predict when a per-session cap frees up.
 const excessiveLoadRetry = time.Second
 
-// retryIntervalAfter is a Retry Interval (§10.6.2) inviting a retry after d
+// retryIntervalAfter is a Retry Interval (§9.4.2) inviting a retry after d
 // plus up to 50% jitter, encoded as milliseconds plus one.
 //
 //nolint:unparam // callers pass separate policy constants, equal only today.
@@ -438,7 +438,7 @@ func retryIntervalAfter(d time.Duration) uint64 {
 }
 
 // rejectExcessiveLoad rejects a request that exceeds a per-session resource cap
-// (§13.1 / §13.7.1) with REQUEST_ERROR EXCESSIVE_LOAD and FINs the bidi stream.
+// (§15.1 / §15.7.1) with REQUEST_ERROR EXCESSIVE_LOAD and FINs the bidi stream.
 // what names the limit category for the log/reason. The reject happens before
 // any registry mutation, so no cleanup is needed.
 func (h *sessionHandler) rejectExcessiveLoad(ctx context.Context, req *session.Request, what string) {
@@ -485,7 +485,7 @@ func tokenDenial(denyErr error) (moqt.RequestErrorCode, string) {
 
 // refuseUpdateTokens is the REQUEST_ERROR refusing a REQUEST_UPDATE whose
 // AUTHORIZATION_TOKENs the TokenVerifier denies, or nil: they authorize "the
-// operation carrying the parameter" (§10.2.2) as an opener's do.
+// operation carrying the parameter" (§9.20.2) as an opener's do.
 func (h *sessionHandler) refuseUpdateTokens(ctx context.Context, toks []session.ResolvedToken) *message.RequestError {
 	err := h.sess.VerifyTokens(ctx, toks)
 	if err == nil {
@@ -496,7 +496,7 @@ func (h *sessionHandler) refuseUpdateTokens(ctx context.Context, toks []session.
 }
 
 // handleFollowupRequestID validates a peer REQUEST_UPDATE's Request ID —
-// §10.1: an update consumes an ID from the sender's space, and the readers
+// §6.4.2.1: an update consumes an ID from the sender's space, and the readers
 // that parse follow-ups directly bypass AcceptRequest's checking. A
 // wrong-parity or duplicate ID is session-fatal (INVALID_REQUEST_ID);
 // returns false when the session was closed, in which case the caller's
@@ -514,7 +514,7 @@ func (h *sessionHandler) handleFollowupRequestID(ctx context.Context, upd *messa
 
 // handleRequestUpdateLimit charges one credit on lim for a received
 // REQUEST_UPDATE and enforces the per-stream MAX_REQUEST_UPDATES limit
-// (§10.3.1.7). Exceeding it is session-fatal (TOO_MANY_REQUEST_UPDATES);
+// (§9.1.7). Exceeding it is session-fatal (TOO_MANY_REQUEST_UPDATES);
 // returns false when the session was closed, in which case the caller's read
 // loop should stop. The caller invokes lim.Responded once it has written the
 // mandated REQUEST_OK/REQUEST_ERROR.
@@ -530,7 +530,7 @@ func (h *sessionHandler) handleRequestUpdateLimit(ctx context.Context, lim *sess
 }
 
 // handleFollowupTokens routes a follow-up message's AUTHORIZATION_TOKEN
-// parameters through the session token cache — §10.2.2 allows REQUEST_UPDATE
+// parameters through the session token cache — §9.20.2 allows REQUEST_UPDATE
 // to REGISTER or DELETE aliases, and the readers that parse follow-ups
 // directly bypass AcceptRequest's processing. It returns the resolved tokens,
 // and ok false when a token fault closed the session, in which case the
@@ -556,12 +556,12 @@ func (h *sessionHandler) handleFollowupTokens(
 }
 
 // errRequestCancelled is the cancellation cause of a context bound to a
-// request its peer cancelled (§3.3.3); see [ctxResetCode].
+// request its peer cancelled (§6.4.2.3); see [ctxResetCode].
 var errRequestCancelled = errors.New("relay: request cancelled")
 
-// ctxResetCode is the §3.3.4 code for a stream reset because ctx ended:
+// ctxResetCode is the §12.5 code for a stream reset because ctx ended:
 // CANCELLED for a cancelled request, MALFORMED_TRACK for a fetch stream of a
-// malformed track (§2.4.2), SESSION_CLOSED otherwise.
+// malformed track (§12.1), SESSION_CLOSED otherwise.
 func ctxResetCode(ctx context.Context) moqt.StreamResetCode {
 	switch cause := context.Cause(ctx); {
 	case errors.Is(cause, errRequestCancelled):
@@ -579,11 +579,11 @@ func ctxResetCode(ctx context.Context) moqt.StreamResetCode {
 // StreamResetSessionClosed to unblock the parse). A follow-up that cannot be
 // read — any non-EOF error — resets the read side with
 // StreamResetInternalError so the peer learns reads stopped; a malformed one
-// also closes the session (§10), as does a REQUEST_OK or REQUEST_ERROR, since
-// the relay sends no REQUEST_UPDATE on the streams it reads this way (§10.9).
+// also closes the session (§9), as does a REQUEST_OK or REQUEST_ERROR, since
+// the relay sends no REQUEST_UPDATE on the streams it reads this way (§9.5).
 //
 // It reports fin when the requester ended its side with a FIN, which is not a
-// cancellation (§3.3.2); see [awaitRequestEnd].
+// cancellation (§6.4.2.2); see [awaitRequestEnd].
 func readRequestStream(
 	ctx context.Context,
 	sess *session.Session,
@@ -605,22 +605,22 @@ func readRequestStream(
 				if !eof {
 					stream.CancelRead(uint64(moqt.StreamResetInternalError))
 				}
-				// §10, §10.2: a malformed message MUST close the session.
+				// §9, §9.20: a malformed message MUST close the session.
 				if errors.Is(err, message.ErrMalformedMessage) {
 					_ = sess.Close(moqt.SessionProtocolViolation, err.Error())
 				}
 				done <- eof
 				return
 			}
-			// §10.4: a second GOAWAY, or one with a URI from a client,
+			// §9.2: a second GOAWAY, or one with a URI from a client,
 			// closed the session.
 			if g, ok := m.(*message.Goaway); ok && goaways.Received(sess, g) != nil {
 				done <- false
 				return
 			}
-			// §10.9: the relay sends no REQUEST_UPDATE on these streams, so
+			// §9.5: the relay sends no REQUEST_UPDATE on these streams, so
 			// a REQUEST_OK or REQUEST_ERROR answers nothing: on a forwarded
-			// PUBLISH it is a second response (§5.1).
+			// PUBLISH it is a second response (§3.1).
 			switch m.(type) {
 			case *message.RequestOK, *message.RequestError:
 				_ = sess.Close(moqt.SessionProtocolViolation,
@@ -645,7 +645,7 @@ func readRequestStream(
 }
 
 // isPeerStateNotify reports a PUBLISH_STATE_NOTIFY from the requester of a
-// request the relay is answering, and closes the session for it (§10.10: "is
+// request the relay is answering, and closes the session for it (§9.10: "is
 // sent only by the publisher").
 func (h *sessionHandler) isPeerStateNotify(m message.Message) bool {
 	if _, ok := m.(*message.PublishStateNotify); !ok {
@@ -657,8 +657,8 @@ func (h *sessionHandler) isPeerStateNotify(m message.Message) bool {
 }
 
 // awaitRequestEnd keeps a request whose requester FINned its side alive until
-// it really ends (§3.3.2: a FIN "is not a request cancellation"). The send
-// Context ends on the requester's STOP_SENDING (§3.3.3) or when the relay ends
+// it really ends (§6.4.2.2: a FIN "is not a request cancellation"). The send
+// Context ends on the requester's STOP_SENDING (§6.4.2.3) or when the relay ends
 // its own side.
 func awaitRequestEnd(ctx context.Context, stream session.Stream) {
 	select {
@@ -668,14 +668,14 @@ func awaitRequestEnd(ctx context.Context, stream session.Stream) {
 }
 
 // serveFetchObjects is the response tail of the FETCH handler: stream the
-// stitched range, FIN, and park in the §10.9 follow-up loop until the
+// stitched range, FIN, and park in the §9.5 follow-up loop until the
 // requester resets or FINs the request stream. kind tags log lines.
 //
-// A cancel before the FIN (the requester's STOP_SENDING, §3.3.3) resets both
-// streams with CANCELLED. §5.2: the publisher "MUST reset the bidi request
+// A cancel before the FIN (the requester's STOP_SENDING, §6.4.2.3) resets both
+// streams with CANCELLED. §3.2.4: the publisher "MUST reset the bidi request
 // stream and unidirectional data stream associated with the FETCH". A data
-// stream reset because the track must not be forwarded (§2.4.2, §2.5.1) ends
-// the request too: the relay cancels it with the same code (§3.3.3).
+// stream reset because the track must not be forwarded (§12.1, §3.7) ends
+// the request too: the relay cancels it with the same code (§6.4.2.3).
 func (h *sessionHandler) serveFetchObjects(
 	ctx context.Context,
 	req *session.Request,
@@ -691,7 +691,7 @@ func (h *sessionHandler) serveFetchObjects(
 	fetchCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	stop := context.AfterFunc(req.Stream.Context(), func() { cancel(errRequestCancelled) })
-	// §2.4.2: a relay that detects a malformed track MUST "reset any fetch
+	// §12.1: a relay that detects a malformed track MUST "reset any fetch
 	// streams with Status Code MALFORMED_TRACK"; see endMalformedTrack.
 	remove := entry.AddFetch(cancel)
 	out, refused, code := h.streamFetchRange(fetchCtx, kind, nil, requestID, entry, fullName,
@@ -707,7 +707,7 @@ func (h *sessionHandler) serveFetchObjects(
 		case !refused:
 			return
 		}
-		// §3.3.3: "RESET_STREAM for a direction they are sending and
+		// §6.4.2.3: "RESET_STREAM for a direction they are sending and
 		// STOP_SENDING for a direction they are receiving".
 		req.Stream.CancelRead(uint64(code))
 		req.Stream.CancelWrite(uint64(code))
@@ -718,15 +718,15 @@ func (h *sessionHandler) serveFetchObjects(
 }
 
 // streamFetchRange opens a unidirectional fetch stream, writes the stitched
-// range to it, and FINs. It is the shared body of a FETCH response (§10.13)
-// and of a fill fetch stream (§5.1.3), which differ only in what opens them
-// and in what happens afterwards — a FETCH parks in the §10.9 follow-up loop,
+// range to it, and FINs. It is the shared body of a FETCH response (§9.11)
+// and of a fill fetch stream (§3.4), which differ only in what opens them
+// and in what happens afterwards — a FETCH parks in the §9.5 follow-up loop,
 // a fill is simply done.
 //
 // It returns the FINed stream, or nil when the stream could not be opened, the
 // write failed, or the track must not be forwarded; the stream is then already
-// reset. refused reports the last case, a malformed track (§2.4.2) or an
-// upstream refusal (§2.5.1), and, when refused, code the data stream was reset
+// reset. refused reports the last case, a malformed track (§12.1) or an
+// upstream refusal (§3.7), and, when refused, code the data stream was reset
 // with.
 func (h *sessionHandler) streamFetchRange(
 	ctx context.Context,
@@ -748,19 +748,19 @@ func (h *sessionHandler) streamFetchRange(
 	}
 	if sub != nil {
 		// A fill stream's subscription holds its PUBLISH_DONE until the
-		// stream closes (§10.12).
+		// stream closes (§9.9).
 		defer sub.StreamClosed()
 	}
 	// ctx ending resets the stream rather than completing it: CANCELLED when
 	// its cause is errRequestCancelled (a fill's cancelled subscription,
-	// §5.1.3.1, or a cancelled FETCH, §5.2), MALFORMED_TRACK for a malformed
-	// track (§2.4.2; callers register ctx's cancel with
-	// [registry.TrackEntry.AddFetch]), else SESSION_CLOSED (§3.3.4).
+	// §3.4.1, or a cancelled FETCH, §3.2.4), MALFORMED_TRACK for a malformed
+	// track (§12.1; callers register ctx's cancel with
+	// [registry.TrackEntry.AddFetch]), else SESSION_CLOSED (§12.5).
 	cancelOut := func() { out.Cancel(ctxResetCode(ctx)) }
 	unwatch := context.AfterFunc(ctx, cancelOut)
 	defer unwatch()
 	// ctxEnded resets the stream for ctx, before the deferred StreamClosed
-	// (§10.12), and reports it.
+	// (§9.9), and reports it.
 	ctxEnded := func() (*session.OutgoingFetchStream, bool, moqt.StreamResetCode) {
 		cancelOut()
 		c := ctxResetCode(ctx)
@@ -768,16 +768,16 @@ func (h *sessionHandler) streamFetchRange(
 	}
 
 	// Gather cached objects, asking an upstream about what the cache cannot
-	// vouch for (§10.13).
+	// vouch for (§3.2.2).
 	objs, refusal := h.stitchedFetchObjects(ctx, entry, fullName, start, end, order, fillTimeout)
 	if ctx.Err() != nil {
 		return ctxEnded()
 	}
 	if refusal != nil {
-		// §2.5.1: with FETCH_OK (or SUBSCRIBE_OK) already sent, only a
+		// §3.7: with FETCH_OK (or SUBSCRIBE_OK) already sent, only a
 		// reset is left (an interpretation: no Object was forwarded yet).
-		// Unparseable Track Properties (§12.7, §2.4.2) and a malformed upstream
-		// Object (§2.4.2) reset with MALFORMED_TRACK.
+		// Unparseable Track Properties (§10.7, §12.1) and a malformed upstream
+		// Object (§12.1) reset with MALFORMED_TRACK.
 		code = moqt.StreamResetInternalError
 		if errors.Is(refusal, session.ErrMalformedTrackProperties) || errors.Is(refusal, session.ErrMalformedTrack) {
 			code = moqt.StreamResetMalformedTrack
@@ -788,11 +788,11 @@ func (h *sessionHandler) streamFetchRange(
 		return nil, true, code
 	}
 
-	// §5.1.4: drop objects that fail the request's Range Filters. §11.4.4.2
+	// §3.3.2: drop objects that fail the request's Range Filters. §11.4.1.2
 	// end-of-range markers are not objects and are always kept — they carry no
 	// Subgroup ID, Priority or Properties, so matching one against a filter
 	// tests zero values and drops it, turning the span into a plain gap that
-	// §10.13 reads as authoritative non-existence.
+	// §3.2.2 reads as authoritative non-existence.
 	if rangeFilters != nil {
 		objs = slices.DeleteFunc(objs, func(o *cache.CachedObject) bool {
 			return !o.IsRangeMarker() &&

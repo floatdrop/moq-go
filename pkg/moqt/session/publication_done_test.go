@@ -86,7 +86,7 @@ func subgroupHeader(group uint64) message.SubgroupHeader {
 
 // TestPublicationDoneResetsOpenSubgroups: Done resets the subgroups still open
 // with CANCELLED, since PUBLISH_DONE MUST NOT be sent "until it has closed all
-// streams it will ever open" (§10.12), leaves a FINished one alone, counts both
+// streams it will ever open" (§9.9), leaves a FINished one alone, counts both
 // in the Stream Count, and refuses further writes.
 func TestPublicationDoneResetsOpenSubgroups(t *testing.T) {
 	cli, srv := openPair(t)
@@ -143,7 +143,7 @@ func TestPublicationDoneResetsOpenSubgroups(t *testing.T) {
 // TestPublicationDoneKeepsFINOfDeliveryTimeoutCopy: a subgroup FINished
 // through the copy WithDeliveryTimeouts returns is as finished as one closed
 // directly, so Done does not reset it: a publisher that delivered every Object
-// "MUST close the stream with a FIN" (§11.4.3).
+// "MUST close the stream with a FIN" (§11.3.2).
 func TestPublicationDoneKeepsFINOfDeliveryTimeoutCopy(t *testing.T) {
 	cli, srv := openPair(t)
 	sub, pub := subscribePair(t, cli, srv)
@@ -181,10 +181,10 @@ func TestPublicationDoneKeepsFINOfDeliveryTimeoutCopy(t *testing.T) {
 }
 
 // TestPublicationDoneStreamCountExact: however OpenSubgroup races Done, the
-// Stream Count is "the number of data streams the publisher opened" (§10.12):
+// Stream Count is "the number of data streams the publisher opened" (§9.9):
 // every OpenSubgroup that returned a stream. The subscriber never sees more;
 // it can see fewer, when Done's reset loses a header it already wrote, which
-// §10.12 has subscribers allow for.
+// §9.9 has subscribers allow for.
 func TestPublicationDoneStreamCountExact(t *testing.T) {
 	cli, srv := openPair(t)
 	sub, pub := subscribePair(t, cli, srv)
@@ -278,7 +278,7 @@ func (s *reliableRecStream) CancelWrite(code uint64) {
 // TestPublicationDoneResetKeepsHeaderReliable: before Done resets an open
 // subgroup it marks what was written as reliable, so over RESET_STREAM_AT the
 // header still reaches the subscriber, which can then "accurately account for
-// reset data streams when handling PUBLISH_DONE" (§11.4.3).
+// reset data streams when handling PUBLISH_DONE" (§11.3.2).
 func TestPublicationDoneResetKeepsHeaderReliable(t *testing.T) {
 	cliConn, rawSrv := sessiontest.NewConnPair()
 	srvConn := &reliableRecConn{Conn: rawSrv}

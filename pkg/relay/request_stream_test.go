@@ -13,10 +13,10 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/internal/relaytest"
 )
 
-// Request stream lifecycle at the relay. A FIN is not a cancellation (§3.3.2);
-// after a FIN the cancel is STOP_SENDING (§3.3.3). Only the request's sender
-// may send REQUEST_UPDATE (§10.9), and only the publisher PUBLISH_STATE_NOTIFY
-// (§10.10).
+// Request stream lifecycle at the relay. A FIN is not a cancellation (§6.4.2.2);
+// after a FIN the cancel is STOP_SENDING (§6.4.2.3). Only the request's sender
+// may send REQUEST_UPDATE (§9.5), and only the publisher PUBLISH_STATE_NOTIFY
+// (§9.10).
 
 // TestRelay_SubscriberFINKeepsSubscription: a subscriber that FINs its side of
 // the SUBSCRIBE stream still receives objects, and its later STOP_SENDING is
@@ -63,7 +63,7 @@ func TestRelay_SubscriberFINKeepsSubscription(t *testing.T) {
 }
 
 // TestRelay_PublishNamespaceFINStaysAdvertised: a FIN'd PUBLISH_NAMESPACE is
-// not withdrawn (§6.2), so SUBSCRIBEs still reach its publisher.
+// not withdrawn (§4.1), so SUBSCRIBEs still reach its publisher.
 func TestRelay_PublishNamespaceFINStaysAdvertised(t *testing.T) {
 	t.Parallel()
 	video := ns("video")
@@ -147,7 +147,7 @@ func TestRelay_FetchRequesterFINCompletesRequest(t *testing.T) {
 }
 
 // TestRelay_SubscribeNamespaceFINKeepsSubscription: a FIN'd SUBSCRIBE_NAMESPACE
-// still hears about a later publisher (§6.1).
+// still hears about a later publisher (§4.2).
 func TestRelay_SubscribeNamespaceFINKeepsSubscription(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -175,7 +175,7 @@ func TestRelay_SubscribeNamespaceFINKeepsSubscription(t *testing.T) {
 }
 
 // TestRelay_SubscribeTracksFINKeepsSubscription: the same for SUBSCRIBE_TRACKS
-// (§6.1) — a FIN'd subscriber still gets PUBLISH for a later track.
+// (§3.6) — a FIN'd subscriber still gets PUBLISH for a later track.
 func TestRelay_SubscribeTracksFINKeepsSubscription(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -220,7 +220,7 @@ func TestRelay_SubscribeTracksFINKeepsSubscription(t *testing.T) {
 }
 
 // TestRelay_PublishNamespaceStopSendingAfterFINWithdraws: STOP_SENDING after a
-// FIN withdraws the namespace (§3.3.3); subscribers get NAMESPACE_DONE.
+// FIN withdraws the namespace (§6.4.2.3); subscribers get NAMESPACE_DONE.
 func TestRelay_PublishNamespaceStopSendingAfterFINWithdraws(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -252,7 +252,7 @@ func TestRelay_PublishNamespaceStopSendingAfterFINWithdraws(t *testing.T) {
 }
 
 // TestRelay_SubscriberPublishStateNotifyClosesSession: PUBLISH_STATE_NOTIFY
-// from the subscriber closes the session (§10.10).
+// from the subscriber closes the session (§9.10).
 func TestRelay_SubscriberPublishStateNotifyClosesSession(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)
@@ -270,7 +270,7 @@ func TestRelay_SubscriberPublishStateNotifyClosesSession(t *testing.T) {
 
 // TestRelay_UpstreamRequestUpdateOnSubscribeClosesSession: on the relay's own
 // upstream SUBSCRIBE the publisher is not the request's sender, so its
-// REQUEST_UPDATE is a PROTOCOL_VIOLATION (§10.9).
+// REQUEST_UPDATE is a PROTOCOL_VIOLATION (§9.5).
 func TestRelay_UpstreamRequestUpdateOnSubscribeClosesSession(t *testing.T) {
 	t.Parallel()
 	video := ns("video")
@@ -297,7 +297,7 @@ func TestRelay_UpstreamRequestUpdateOnSubscribeClosesSession(t *testing.T) {
 }
 
 // TestRelay_PublisherRequestUpdateOnPublishIsAllowed: the publisher of an
-// accepted PUBLISH may send REQUEST_UPDATE (§10.9); the relay declines it
+// accepted PUBLISH may send REQUEST_UPDATE (§9.5); the relay declines it
 // without closing the session.
 func TestRelay_PublisherRequestUpdateOnPublishIsAllowed(t *testing.T) {
 	t.Parallel()

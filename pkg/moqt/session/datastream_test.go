@@ -104,7 +104,7 @@ func TestAcceptDataStreamReturnsTransportError(t *testing.T) {
 // a uni-stream whose leading Type byte matches the SUBGROUP_HEADER pattern but
 // carries the reserved SUBGROUP_ID_MODE 0b11, AcceptDataStream returns
 // *message.ReservedSubgroupIDModeError (not *message.UnknownDataStreamTypeError).
-// Per §11.4.2, the caller MUST close the session with PROTOCOL_VIOLATION.
+// Per §11.3.1, the caller MUST close the session with PROTOCOL_VIOLATION.
 func TestAcceptDataStreamReservedSubgroupIDMode(t *testing.T) {
 	client, server := openPair(t)
 
@@ -156,7 +156,7 @@ func TestAcceptDataStreamReservedSubgroupIDMode(t *testing.T) {
 }
 
 // TestAcceptDataStreamUnknownTypeClosesSession: an unknown stream type closes
-// the session (§3.4), which AcceptDataStream does itself.
+// the session (§6.4.1), which AcceptDataStream does itself.
 func TestAcceptDataStreamUnknownTypeClosesSession(t *testing.T) {
 	client, server := openPair(t)
 
@@ -179,7 +179,7 @@ func TestAcceptDataStreamUnknownTypeClosesSession(t *testing.T) {
 }
 
 // TestAcceptDataStreamSkipsAbortedHeaders: a data stream ended or reset before
-// its header is complete is skipped, not an error (§11.4.1).
+// its header is complete is skipped, not an error (§11.3.2).
 func TestAcceptDataStreamSkipsAbortedHeaders(t *testing.T) {
 	client, server := openPair(t)
 	conn := session.SessionConn(client)
@@ -228,7 +228,7 @@ func TestAcceptDataStreamSkipsAbortedHeaders(t *testing.T) {
 
 // TestFINMidObjectClosesSession: a data stream FINed inside a serialized
 // Object is io.ErrUnexpectedEOF, not io.EOF, and closes the session with
-// PROTOCOL_VIOLATION (§11.4).
+// PROTOCOL_VIOLATION (§11.3).
 func TestFINMidObjectClosesSession(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -285,7 +285,7 @@ func TestFINMidObjectClosesSession(t *testing.T) {
 }
 
 // TestSubgroupStreamResetMidObjectKeepsSession: a reset mid-object is
-// cancellation (§11.4.1), not a malformed stream, and leaves the session up.
+// cancellation (§11.3.2), not a malformed stream, and leaves the session up.
 func TestSubgroupStreamResetMidObjectKeepsSession(t *testing.T) {
 	client, server := openPair(t)
 	go func() {
@@ -308,7 +308,7 @@ func TestSubgroupStreamResetMidObjectKeepsSession(t *testing.T) {
 }
 
 // TestSubgroupObjectIDOverflowClosesSession: an Object ID past 2^64-1 closes
-// the session with PROTOCOL_VIOLATION rather than wrapping (§11.4.2).
+// the session with PROTOCOL_VIOLATION rather than wrapping (§11.3.1).
 func TestSubgroupObjectIDOverflowClosesSession(t *testing.T) {
 	client, server := openPair(t)
 	go func() {
@@ -336,11 +336,11 @@ func TestSubgroupObjectIDOverflowClosesSession(t *testing.T) {
 }
 
 // TestFetchIDOverflowClosesSession: a computed Group or Object ID below 0 or
-// past 2^64-1 closes the session with PROTOCOL_VIOLATION (§11.4.4.1).
+// past 2^64-1 closes the session with PROTOCOL_VIOLATION (§11.4.1.1).
 func TestFetchIDOverflowClosesSession(t *testing.T) {
 	const maxID = uint64(math.MaxUint64)
 	both := message.FetchFlagGroupIDDelta | message.FetchFlagObjectIDDelta
-	// A first object may not reference a prior one for anything (§11.4.4).
+	// A first object may not reference a prior one for anything (§11.4.1).
 	firstFlags := both | message.FetchFlagPriority | uint64(message.FetchSubgroupIDExplicit)
 	tests := []struct {
 		name   string
@@ -402,7 +402,7 @@ func TestFetchIDOverflowClosesSession(t *testing.T) {
 }
 
 // TestSubgroupInvalidObjectClosesSession: properties on a non-Normal status
-// Object (§11.2.1.2) and an unknown Object Status (§11.2.1.1) close the session.
+// Object (§11.1.2) and an unknown Object Status (§11.1.1) close the session.
 func TestSubgroupInvalidObjectClosesSession(t *testing.T) {
 	tests := []struct {
 		name  string

@@ -49,7 +49,7 @@ func scan[T any](s *Scanner, dst *T, read func() (T, error)) {
 	*dst = v
 }
 
-// Varint reads a leading-ones varint (§1.4.1) into dst.
+// Varint reads a leading-ones varint (§8.1) into dst.
 func (s *Scanner) Varint(dst *uint64) { scan(s, dst, s.r.Varint) }
 
 // UInt8 reads a single byte into dst.
@@ -58,10 +58,10 @@ func (s *Scanner) UInt8(dst *uint8) { scan(s, dst, s.r.UInt8) }
 // VarintBytes reads a varint-length-prefixed byte slice into dst.
 func (s *Scanner) VarintBytes(dst *[]byte) { scan(s, dst, s.r.VarintBytes) }
 
-// ReasonPhrase reads a §1.4.4 reason phrase into dst.
+// ReasonPhrase reads a §8.5 reason phrase into dst.
 func (s *Scanner) ReasonPhrase(dst *string) { scan(s, dst, s.r.ReasonPhrase) }
 
-// TrackNamespace reads a §2.4.1 track namespace into dst.
+// TrackNamespace reads a §8.7 track namespace into dst.
 func (s *Scanner) TrackNamespace(dst *TrackNamespace) { scan(s, dst, s.r.TrackNamespace) }
 
 // KVPairsRemaining reads delta-encoded KV pairs to end-of-buffer into dst.

@@ -15,7 +15,7 @@ import (
 )
 
 // The relay's per-track cache as seen by FETCH: size-based eviction, and
-// MAX_CACHE_DURATION (§12.3), after which the relay must not start forwarding
+// MAX_CACHE_DURATION (§10.3), after which the relay must not start forwarding
 // an Object, from the cache, from a live subscriber's queue, or from an upstream
 // FETCH it passes through.
 
@@ -127,7 +127,7 @@ func findElem(elems []fetchElem, group uint64) (fetchElem, bool) {
 }
 
 // TestRelay_MaxCacheDurationNotServedFromCache: a FETCH is not served an Object
-// whose MAX_CACHE_DURATION elapsed (§12.3). This relay reads a present 0 as
+// whose MAX_CACHE_DURATION elapsed (§10.3). This relay reads a present 0 as
 // "never serve from the cache", unlike an absent one, while still forwarding
 // live Objects.
 func TestRelay_MaxCacheDurationNotServedFromCache(t *testing.T) {
@@ -188,8 +188,8 @@ func TestRelay_MaxCacheDurationDropsStaleQueuedObject(t *testing.T) {
 }
 
 // TestRelay_MaxCacheDurationSkippedHeadClearsFirstObject: a stream whose
-// expired first Object was skipped must not claim FIRST_OBJECT (§11.4.2), and
-// must end in a reset, not a FIN (§11.4.3).
+// expired first Object was skipped must not claim FIRST_OBJECT (§11.3.1), and
+// must end in a reset, not a FIN (§11.3.2).
 func TestRelay_MaxCacheDurationSkippedHeadClearsFirstObject(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, maxCacheDurationProp())
@@ -240,7 +240,7 @@ func TestRelay_MaxCacheDurationSkippedHeadClearsFirstObject(t *testing.T) {
 }
 
 // TestRelay_MaxCacheDurationPerUpstream: an Object is bound by the
-// MAX_CACHE_DURATION of the upstream it arrived on (§12.3), not another
+// MAX_CACHE_DURATION of the upstream it arrived on (§10.3), not another
 // publisher's.
 func TestRelay_MaxCacheDurationPerUpstream(t *testing.T) {
 	t.Parallel()
@@ -259,8 +259,8 @@ func TestRelay_MaxCacheDurationPerUpstream(t *testing.T) {
 }
 
 // TestRelay_MaxCacheDurationExpiredObjectIsUnknown: an expired Object's state
-// is unknown (§12.3), so FETCH reports it with an End of Unknown Range marker,
-// not a gap (§11.4.4).
+// is unknown (§10.3), so FETCH reports it with an End of Unknown Range marker,
+// not a gap (§11.4.1).
 func TestRelay_MaxCacheDurationExpiredObjectIsUnknown(t *testing.T) {
 	t.Parallel()
 	pubA, aliasA := newCam1Publisher(t, maxCacheDurationProp())
@@ -337,7 +337,7 @@ func TestRelay_MaxCacheDurationExpiresDuringFetch(t *testing.T) {
 }
 
 // TestRelay_MaxCacheDurationBoundsStitchedObject: an Object received through
-// an upstream FETCH is bound by that FETCH's MAX_CACHE_DURATION (§12.3: "any
+// an upstream FETCH is bound by that FETCH's MAX_CACHE_DURATION (§10.3: "any
 // individual Object received through this subscription or fetch"). One the
 // upstream sent, then held its stream open past the duration, is not
 // forwarded but marked unknown. A present 0, which the cache reads as "never

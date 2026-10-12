@@ -10,7 +10,7 @@ import (
 )
 
 // TestTrackStatus_ReturnsLargestObject: TRACK_STATUS_OK carries the track's
-// LARGEST_OBJECT (§10.2.17) once Objects were forwarded.
+// LARGEST_OBJECT (§9.20.17) once Objects were forwarded.
 func TestTrackStatus_ReturnsLargestObject(t *testing.T) {
 	t.Parallel()
 
@@ -39,7 +39,7 @@ func TestTrackStatus_ReturnsLargestObject(t *testing.T) {
 }
 
 // TestTrackStatus_OmitsLargestObjectBeforeAnyObjects: a known track with no
-// Objects yet gets no LARGEST_OBJECT (§10.2.17), not {0, 0}.
+// Objects yet gets no LARGEST_OBJECT (§9.20.17), not {0, 0}.
 func TestTrackStatus_OmitsLargestObjectBeforeAnyObjects(t *testing.T) {
 	t.Parallel()
 
@@ -78,7 +78,7 @@ func TestTrackStatus_OmitsLargestObjectBeforeAnyObjects(t *testing.T) {
 // TestTrackStatus_AnswersPublishedTrackWithNothingYet: a PUBLISHed track
 // with no Track Properties and no Objects is one SUBSCRIBE accepts, and the
 // relay "treats [TRACK_STATUS] identically as if it had received a SUBSCRIBE"
-// (§10.15), so it answers TRACK_STATUS_OK rather than DOES_NOT_EXIST.
+// (§9.13), so it answers TRACK_STATUS_OK rather than DOES_NOT_EXIST.
 func TestTrackStatus_AnswersPublishedTrackWithNothingYet(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil)
@@ -99,7 +99,7 @@ func TestTrackStatus_AnswersPublishedTrackWithNothingYet(t *testing.T) {
 }
 
 // TestRelay_TrackStatusRequestUpdateClosesSession: a REQUEST_UPDATE on a
-// TRACK_STATUS stream closes the session (§10.15, §10.9).
+// TRACK_STATUS stream closes the session (§9.13, §9.5).
 func TestRelay_TrackStatusRequestUpdateClosesSession(t *testing.T) {
 	t.Parallel()
 	l := newPipeListener()

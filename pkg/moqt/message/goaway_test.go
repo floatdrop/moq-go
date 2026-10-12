@@ -33,7 +33,7 @@ func TestGoawayOversizedURIRejected(t *testing.T) {
 }
 
 // TestGoawayHugeURILengthRejected: a 2^63 URI length is a valid varint
-// (§1.4.1) that overflows int; Parse must error, not panic.
+// (§8.1) that overflows int; Parse must error, not panic.
 func TestGoawayHugeURILengthRejected(t *testing.T) {
 	w := wire.NewWriter(nil)
 	w.Varint(1 << 63)

@@ -24,7 +24,7 @@ var ErrDeliveryTimeout = errors.New("moqt/session: object delivery timeout excee
 // ErrObjectIDNotIncreasing is returned by
 // [OutgoingSubgroupStream.WriteObjectAt] when the supplied absolute Object ID
 // is not strictly greater than the previous object's on the same stream. The
-// §11.4.2 delta encoding is (currentID - previousID - 1), so Object IDs within
+// §11.3.1 delta encoding is (currentID - previousID - 1), so Object IDs within
 // a subgroup MUST strictly increase; WriteObjectAt rejects a violation instead
 // of emitting an underflowed delta. Nothing is written and the stream stays
 // usable.
@@ -61,7 +61,7 @@ type OutgoingSubgroupStream struct {
 
 	dst SendStream
 
-	// pubTimeouts and subTimeouts are the two halves §8 resolves separately:
+	// pubTimeouts and subTimeouts are the two halves §5.2 resolves separately:
 	// the publisher's Track Property values (possibly overridden by the first
 	// object's Object Properties) and the subscriber's Message Parameter
 	// values. They are kept apart until the first object arrives because the
@@ -74,19 +74,19 @@ type OutgoingSubgroupStream struct {
 	objectTimeout   time.Duration // resolved; 0 = disabled
 	subgroupTimeout time.Duration // resolved; 0 = disabled
 
-	// sawFirstObject gates the §12.1/§12.2 first-object delivery-timeout
+	// sawFirstObject gates the §10.1/§10.2 first-object delivery-timeout
 	// override: only the first object of the subgroup may override the
 	// Track-level timeouts, so the override is applied at most once.
 	sawFirstObject bool
 
 	// Encoder state for WriteObjectAt: the running absolute Object ID so each
-	// call only has to apply the §11.4.2 delta. encHavePrev is false until the
+	// call only has to apply the §11.3.1 delta. encHavePrev is false until the
 	// first object is written (its delta is the absolute ID).
 	encPrevObject uint64
 	encHavePrev   bool
 
 	// Set by [Publication.OpenSubgroup]: onObject is told each written
-	// object's Location, paused reports a Forward State of 0 (§11.4.3), ended
+	// object's Location, paused reports a Forward State of 0 (§11.3.2), ended
 	// reports that the publication ended (Done), and onEnd is told when the
 	// stream is FINished or reset.
 	onObject func(group, object uint64)
@@ -95,10 +95,10 @@ type OutgoingSubgroupStream struct {
 	onEnd    func()
 }
 
-// WithDeliveryTimeouts returns a shallow copy of s configured with the §8
+// WithDeliveryTimeouts returns a shallow copy of s configured with the §5.2
 // delivery timeouts. Zero values disable the corresponding timeout.
 //
-// The two halves are supplied separately because §8 does not treat them
+// The two halves are supplied separately because §5.2 does not treat them
 // symmetrically: "the publisher's value is the Object Property when present on
 // the first object of the subgroup, and the Track Property otherwise. If both
 // the publisher's value and the subscriber's value are non-zero, the smaller
@@ -128,7 +128,7 @@ func (s *OutgoingSubgroupStream) WithDeliveryTimeouts(
 // The hasProperties flag is taken from the stored SubgroupHeader automatically.
 //
 // OBJECT_DELIVERY_TIMEOUT is measured from the moment this call is made, which
-// is the correct §8 reading for an original publisher handing over an object as
+// is the correct §5.2 reading for an original publisher handing over an object as
 // it is produced. A relay — which received the object earlier, and may have
 // spent the interval blocked on some other subscriber — must use
 // [OutgoingSubgroupStream.WriteObjectReceivedAt] instead, or the object's age
@@ -138,7 +138,7 @@ func (s *OutgoingSubgroupStream) WriteObject(obj *message.SubgroupObject) error 
 }
 
 // WriteObjectReceivedAt is [OutgoingSubgroupStream.WriteObject] with the
-// object's §8 receipt time supplied by the caller: "the time at which the last
+// object's §5.2 receipt time supplied by the caller: "the time at which the last
 // header byte of every object has been either received from the upstream
 // subscription, or provided by the original publisher application".
 //
@@ -151,7 +151,7 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	receivedAt time.Time,
 	obj *message.SubgroupObject,
 ) error {
-	// §12.1/§12.2: the first object of a subgroup may carry
+	// §10.1/§10.2: the first object of a subgroup may carry
 	// OBJECT/SUBGROUP_DELIVERY_TIMEOUT as Object Properties that override the
 	// Track-level values for this subgroup; the same properties on any later
 	// object "is ignored". The override applies to the publisher's half only,
@@ -161,7 +161,7 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	//
 	// "First object of the subgroup", not "first object on this stream": the two
 	// diverge whenever a stream does not begin at the subgroup's start — a
-	// subscriber that joined mid-subgroup, or a §11.4.3 gap-reopen. §11.4.2's
+	// subscriber that joined mid-subgroup, or a §11.3.2 gap-reopen. §11.3.1's
 	// FIRST_OBJECT bit is exactly that distinction, and ReplayingSubgroup is its
 	// inverse, so a replay stream must not treat whatever object it happens to
 	// start with as carrying the subgroup's override.
@@ -172,11 +172,11 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	}
 	s.sawFirstObject = true
 
-	// §10.12: Done reset the stream before PUBLISH_DONE.
+	// §9.9: Done reset the stream before PUBLISH_DONE.
 	if s.ended != nil && s.ended() {
 		return ErrPublicationEnded
 	}
-	// §5.1: no Objects while the Forward State is 0; §11.4.3: reset.
+	// §3.1.1: no Objects while the Forward State is 0; §11.3.2: reset.
 	if s.paused != nil && s.paused() {
 		s.Cancel(moqt.StreamResetCancelled)
 		return ErrForwardPaused
@@ -192,7 +192,7 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	if err != nil {
 		return err
 	}
-	// §11.4.2: delta + 1 after the first.
+	// §11.3.1: delta + 1 after the first.
 	objectID := obj.ObjectIDDelta
 	if s.encHavePrev {
 		objectID = s.encPrevObject + obj.ObjectIDDelta + 1
@@ -204,7 +204,7 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	return nil
 }
 
-// WriteObjectAt writes obj with its §11.4.2 ObjectIDDelta computed from the
+// WriteObjectAt writes obj with its §11.3.1 ObjectIDDelta computed from the
 // absolute objectID and the stream's running previous Object ID — the encoding
 // mirror of [IncomingSubgroupStream.ReadDecoded]. The caller supplies absolute
 // Object IDs (the way applications think about them); obj.ObjectIDDelta is
@@ -236,7 +236,7 @@ func (s *OutgoingSubgroupStream) WriteObjectAt(objectID uint64, obj *message.Sub
 // WriteObject for correctly-framed object access; Write is an escape hatch
 // for callers that manage framing themselves.
 //
-// OBJECT_DELIVERY_TIMEOUT is NOT enforced here. §8 measures it per object,
+// OBJECT_DELIVERY_TIMEOUT is NOT enforced here. §5.2 measures it per object,
 // from the moment that object was received, and a caller that manages its own
 // framing is the only party that knows where one object ends and the next
 // begins — bytes handed to Write carry no such boundary. A caller that wants
@@ -247,7 +247,7 @@ func (s *OutgoingSubgroupStream) Write(p []byte) (int, error) {
 	return s.dst.Write(p)
 }
 
-// checkObjectTimeout enforces OBJECT_DELIVERY_TIMEOUT (§8) against one
+// checkObjectTimeout enforces OBJECT_DELIVERY_TIMEOUT (§5.2) against one
 // object's receipt time, resetting the stream with DELIVERY_TIMEOUT.
 func (s *OutgoingSubgroupStream) checkObjectTimeout(receivedAt time.Time) error {
 	if s.objectTimeout <= 0 {
@@ -267,7 +267,7 @@ func (s *OutgoingSubgroupStream) checkObjectTimeout(receivedAt time.Time) error 
 //
 // If SUBGROUP_DELIVERY_TIMEOUT is set and the stream is a
 // [DeliveryTrackingSendStream], Close starts a goroutine that resets the
-// stream if the peer has not acknowledged all data within the timeout (§8).
+// stream if the peer has not acknowledged all data within the timeout (§5.2).
 func (s *OutgoingSubgroupStream) Close() error {
 	err := s.dst.Close()
 	if s.onEnd != nil {
@@ -285,7 +285,7 @@ func (s *OutgoingSubgroupStream) Close() error {
 			case <-finished:
 				// All data acknowledged (or stream already reset) — nothing to do.
 			case <-timer.C:
-				// Timer fired before ACK: reset the stream per §8.
+				// Timer fired before ACK: reset the stream per §5.2.
 				dst.CancelWrite(uint64(moqt.StreamResetDeliveryTimeout))
 			}
 		}()
@@ -293,7 +293,7 @@ func (s *OutgoingSubgroupStream) Close() error {
 	return err
 }
 
-// Cancel resets the stream with the given application code (§3.3.4).
+// Cancel resets the stream with the given application code (§12.5).
 func (s *OutgoingSubgroupStream) Cancel(code moqt.StreamResetCode) {
 	s.dst.CancelWrite(uint64(code))
 	if s.onEnd != nil {
@@ -301,7 +301,7 @@ func (s *OutgoingSubgroupStream) Cancel(code moqt.StreamResetCode) {
 	}
 }
 
-// SetSendPriority forwards the composite §7.2 scheduling key to the underlying
+// SetSendPriority forwards the composite §5.1.2 scheduling key to the underlying
 // transport when it supports per-stream prioritisation (i.e. implements
 // [PrioritizedSendStream]). Adapters that don't satisfy the interface
 // silently no-op. See [StreamPriority] and [PrioritizedSendStream] for the
@@ -316,7 +316,7 @@ func (s *OutgoingSubgroupStream) SetSendPriority(priority StreamPriority) {
 // SUBGROUP_HEADER plus any objects) as reliably delivered even if the stream is
 // later reset, when the transport supports the RESET_STREAM_AT extension (i.e.
 // the underlying stream implements [ReliableResetStream]). This implements the
-// §11.4.3 guidance that a reset data stream's reliable_size should cover at
+// §11.3.2 guidance that a reset data stream's reliable_size should cover at
 // least the header. It is a no-op when the transport lacks the extension.
 func (s *OutgoingSubgroupStream) MarkReliable() {
 	if r, ok := s.dst.(ReliableResetStream); ok {
@@ -353,7 +353,7 @@ func (s *OutgoingFetchStream) Write(p []byte) (int, error) { return s.dst.Write(
 // Close FINs the send side cleanly.
 func (s *OutgoingFetchStream) Close() error { return s.dst.Close() }
 
-// Cancel resets the stream with the given application code (§3.3.4).
+// Cancel resets the stream with the given application code (§12.5).
 func (s *OutgoingFetchStream) Cancel(code moqt.StreamResetCode) {
 	s.dst.CancelWrite(uint64(code))
 }
@@ -362,7 +362,7 @@ func (s *OutgoingFetchStream) Cancel(code moqt.StreamResetCode) {
 // Session method — open outbound data streams
 // ---------------------------------------------------------------------------
 
-// OpenSubgroup opens an outbound SUBGROUP_HEADER uni-stream (§11.4.2),
+// OpenSubgroup opens an outbound SUBGROUP_HEADER uni-stream (§11.3.1),
 // writes the full header (Type, Track Alias, Group ID, optional Subgroup ID,
 // optional Publisher Priority), and returns the body writer. The caller MUST
 // Close to FIN the stream once all objects have been written, or Cancel to
@@ -395,7 +395,7 @@ func (s *Session) OpenSubgroupContext(
 
 // openSubgroup opens a subgroup stream and writes its header, which
 // cancelling ctx interrupts by resetting the stream, first marking what was
-// written reliable when markReliable is set (§11.4.3). It returns the stream
+// written reliable when markReliable is set (§11.3.2). It returns the stream
 // whenever the whole header was written, since the peer can then attribute
 // the stream to its track, with reset reporting that ctx reset it just after.
 func (s *Session) openSubgroup(

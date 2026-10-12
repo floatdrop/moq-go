@@ -88,7 +88,7 @@ func TestValidateRedirectErrorNonRedirectCodeWithBlock(t *testing.T) {
 	}
 }
 
-// The §10.6.2 redirect invariants must be enforced by Parse (via the
+// The §9.4.2 redirect invariants must be enforced by Parse (via the
 // ParsePayload Validate hook), not only by an explicit ValidateRedirect call.
 func TestRequestErrorParseValidatesRedirect(t *testing.T) {
 	// REDIRECT code with no Redirect block.

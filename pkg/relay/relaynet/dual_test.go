@@ -12,7 +12,7 @@ import (
 // TestDualListenerServesBothTransports is the property that removes the need for
 // a transport flag: one socket, one port, and both MOQT mappings work at once — a
 // raw-QUIC client dialing the moqt form and a WebTransport client dialing the
-// https form of the same URI (§3.1.3), each completing a real SETUP.
+// https form of the same URI (§6.1.2), each completing a real SETUP.
 //
 // It is also what lets a relay sit behind an L4 load balancer while its peers
 // keep dialing raw QUIC directly: the two do not have to agree on a transport.
@@ -90,7 +90,7 @@ func TestDualListenerServesBothTransports(t *testing.T) {
 // TestDualListenerCloseKeepsLiveSessions pins the property Relay.Stop's whole
 // drain rests on: Close stops accepting, and connections already accepted keep
 // working. Stop closes the listener as an early step and only then broadcasts
-// GOAWAY and waits out the grace period (§10.4, §3.6), so a Close that tore the
+// GOAWAY and waits out the grace period (§9.2, §6.6.1), so a Close that tore the
 // UDP socket down would kill every draining session and no peer would see its
 // GOAWAY. An earlier version of this listener did exactly that.
 func TestDualListenerCloseKeepsLiveSessions(t *testing.T) {

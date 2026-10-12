@@ -1,11 +1,11 @@
 # relay
 
-A single-instance MOQT relay (draft-ietf-moq-transport-20).
+A single-instance MOQT relay (draft-ietf-moq-transport-22).
 
 One UDP port serves both transport mappings: raw QUIC for clients dialing
 `moqt://host:port`, and WebTransport (HTTP/3) at `-webtransport-path` for
 browsers and anything dialing the `https://host:port/path` form of the same URI
-(§3.1.4). Both are QUIC over UDP — the `https` scheme names an HTTP origin, not
+(§6.2.1). Both are QUIC over UDP — the `https` scheme names an HTTP origin, not
 a TCP transport — and the listener picks per connection from the negotiated
 ALPN, so there is no transport to select.
 
@@ -28,8 +28,8 @@ relay [-addr host:port] [-cert file] [-key file] [-webtransport-path /moq]
 | `-webtransport-path` | `/moq` | HTTP/3 path browsers use for the WebTransport CONNECT. Raw QUIC ignores it. |
 | `-catalog-track-name` | `catalog` | Track name whose object cache uses `-catalog-ttl` instead of the default; empty disables the override. |
 | `-catalog-ttl` | `0` | Per-object TTL for tracks matching `-catalog-track-name`; `0` means infinite retention (FIFO size cap still applies). |
-| `-max-subscriptions` | `0` | Per-session cap on concurrent subscriptions (§13.1); `0` = unlimited. |
-| `-max-namespace-requests` | `0` | Per-session cap on concurrent namespace requests (§13.7.1); `0` = unlimited. |
+| `-max-subscriptions` | `0` | Per-session cap on concurrent subscriptions (§15.1); `0` = unlimited. |
+| `-max-namespace-requests` | `0` | Per-session cap on concurrent namespace requests (§15.7.1); `0` = unlimited. |
 | `-health-addr` | — | TCP address for the HTTP health endpoint. Empty (the default) disables it. |
 | `-health-path` | `/healthz` | Path on `-health-addr` that answers `200 OK`. |
 | `-metrics` | `true` | Serve Prometheus metrics at `<health-path>/metrics`. Requires `-health-addr`. |
@@ -130,7 +130,7 @@ go run ./cmd/relay -cert server.crt -key server.key
 
 ## Shutdown
 
-The relay handles `SIGINT` and `SIGTERM`. On receipt it sends `GOAWAY` (§10.4) to
+The relay handles `SIGINT` and `SIGTERM`. On receipt it sends `GOAWAY` (§9.2) to
 all active sessions with a 5-second grace period, then force-closes any that have
 not drained — and it does not exit until that drain finishes, so peers actually
 receive the GOAWAY rather than losing the connection under them.

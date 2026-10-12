@@ -119,7 +119,7 @@ func TestRelay_AuthDenialUsesPolicyCode(t *testing.T) {
 
 // TestSessionHandler_TokenVerification: a TokenVerifier's denial of a USE_VALUE
 // AUTHORIZATION_TOKEN is REQUEST_ERROR with its code, before any track lookup
-// (§10.2.2); an accepted token lets the SUBSCRIBE reach its handler, which
+// (§9.20.2); an accepted token lets the SUBSCRIBE reach its handler, which
 // refuses the unknown track DOES_NOT_EXIST.
 func TestSessionHandler_TokenVerification(t *testing.T) {
 	t.Parallel()
@@ -228,7 +228,7 @@ func (a *denyAuthorizer) AuthorizeTrackStatus(context.Context, *session.Session,
 
 // TestSessionHandler_TruncatedOpenerKeepsServing: a request stream that ends
 // or is reset before its first message is complete fails that request only
-// (§3.3.2, §3.3.3); the relay goes on serving the session.
+// (§6.4.2.2, §6.4.2.3); the relay goes on serving the session.
 func TestSessionHandler_TruncatedOpenerKeepsServing(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -270,7 +270,7 @@ func TestSessionHandler_TruncatedOpenerKeepsServing(t *testing.T) {
 }
 
 // TestSessionHandler_BadRequestIDClosesSession: a request opener with a
-// wrong-parity Request ID closes the session (§10.1).
+// wrong-parity Request ID closes the session (§6.4.2.1).
 func TestSessionHandler_BadRequestIDClosesSession(t *testing.T) {
 	t.Parallel()
 	l := newPipeListener()

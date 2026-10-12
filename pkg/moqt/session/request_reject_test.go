@@ -14,7 +14,7 @@ import (
 )
 
 // TestRequestRejectedErrorCarriesRetryInterval: REQUEST_ERROR's Retry Interval
-// is the minimum retry delay plus one, 0 meaning do not retry (§10.6.2).
+// is the minimum retry delay plus one, 0 meaning do not retry (§9.4.2).
 func TestRequestRejectedErrorCarriesRetryInterval(t *testing.T) {
 	for _, tc := range []struct {
 		interval  uint64
@@ -24,7 +24,7 @@ func TestRequestRejectedErrorCarriesRetryInterval(t *testing.T) {
 		{0, 0, false},
 		{1, 0, true},
 		{501, 500 * time.Millisecond, true},
-		{math.MaxUint64, time.Duration(math.MaxInt64), true}, // largest varint (§1.4.1): clamped
+		{math.MaxUint64, time.Duration(math.MaxInt64), true}, // largest varint (§8.1): clamped
 	} {
 		client, server := openPair(t)
 		go func() {
@@ -56,7 +56,7 @@ func TestRequestRejectedErrorCarriesRetryInterval(t *testing.T) {
 }
 
 // TestUpdateHandlerRejectionKeepsRetryInterval: an UpdateHandler's
-// *RequestRejectedError goes out with its Retry Interval intact (§10.6.2).
+// *RequestRejectedError goes out with its Retry Interval intact (§9.4.2).
 func TestUpdateHandlerRejectionKeepsRetryInterval(t *testing.T) {
 	client, server := openPair(t)
 	sub, pub := subscribePair(t, client, server)
@@ -78,7 +78,7 @@ func TestUpdateHandlerRejectionKeepsRetryInterval(t *testing.T) {
 }
 
 // TestRejectSendsRetryInterval: Request.Reject puts the Retry Interval on the
-// wire (§10.6.2), which RejectError cannot express.
+// wire (§9.4.2), which RejectError cannot express.
 func TestRejectSendsRetryInterval(t *testing.T) {
 	client, server := openPair(t)
 	go func() {
@@ -100,7 +100,7 @@ func TestRejectSendsRetryInterval(t *testing.T) {
 	}
 }
 
-// TestRejectRefusesRedirect: a REDIRECT needs a Redirect structure (§10.6.2),
+// TestRejectRefusesRedirect: a REDIRECT needs a Redirect structure (§9.4.2),
 // so Reject refuses one without it and writes nothing, and the request can
 // still be refused another way.
 func TestRejectRefusesRedirect(t *testing.T) {
@@ -128,7 +128,7 @@ func TestRejectRefusesRedirect(t *testing.T) {
 var errRejectWrite = errors.New("transport gone")
 
 // TestRejectError_ResetsTheStreamWhenTheErrorCannotBeSent: if the
-// REQUEST_ERROR write fails, RejectError cancels the stream (§3.3.3) so the
+// REQUEST_ERROR write fails, RejectError cancels the stream (§6.4.2.3) so the
 // requester is not left waiting for a response that never comes.
 func TestRejectError_ResetsTheStreamWhenTheErrorCannotBeSent(t *testing.T) {
 	t.Parallel()

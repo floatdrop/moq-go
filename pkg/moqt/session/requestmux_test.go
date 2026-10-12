@@ -35,7 +35,7 @@ func TestRequestMuxRoutesByType(t *testing.T) {
 
 	go func() { _ = mux.Run(t.Context(), server) }()
 
-	// Client sends even Request IDs (§10.1), strictly increasing.
+	// Client sends even Request IDs (§6.4.2.1), strictly increasing.
 
 	// 1. SUBSCRIBE on a registered type.
 	openRequest(t, client, &message.Subscribe{

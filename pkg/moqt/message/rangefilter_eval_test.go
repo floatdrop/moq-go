@@ -198,7 +198,7 @@ func TestMixedScopeSetID(t *testing.T) {
 	}
 }
 
-// TestRangeFiltersSearchImmutable: §12.7 filters see properties inside
+// TestRangeFiltersSearchImmutable: §10.7 filters see properties inside
 // Immutable Properties.
 func TestRangeFiltersSearchImmutable(t *testing.T) {
 	inImmutable := func(typ PropertyType, val uint64) []byte {
@@ -227,7 +227,7 @@ func rangeParam(typ ParamID, lo, hi uint64) Parameter {
 // removeFilter builds the zero-length filter parameter that removes typ.
 func removeFilter(typ ParamID) Parameter { return BytesParam(typ, nil) }
 
-// TestRangeFiltersZeroLengthIsNoFilter: §5.1.4 outside REQUEST_UPDATE a
+// TestRangeFiltersZeroLengthIsNoFilter: §3.3.2 outside REQUEST_UPDATE a
 // zero-length Range Filter is no filter.
 func TestRangeFiltersZeroLengthIsNoFilter(t *testing.T) {
 	t.Parallel()
@@ -240,7 +240,7 @@ func TestRangeFiltersZeroLengthIsNoFilter(t *testing.T) {
 	}
 }
 
-// TestRangeFilterSetUpdate: §5.1.4 an update replaces or removes (Length 0) the
+// TestRangeFilterSetUpdate: §3.3.2 an update replaces or removes (Length 0) the
 // filter types it names and leaves the others unchanged.
 func TestRangeFilterSetUpdate(t *testing.T) {
 	t.Parallel()
@@ -304,7 +304,7 @@ func TestRangeFilterSetUpdate(t *testing.T) {
 	t.Run("duplicate within the update", func(t *testing.T) {
 		dup := Parameters{rangeParam(ParamSubgroupFilter, 2, 2), rangeParam(ParamSubgroupFilter, 3, 3)}
 		if _, err := base.Update(dup); err == nil {
-			t.Fatal("an update repeating (Type, SetID) was accepted; §5.1.4 wants INVALID_FILTER")
+			t.Fatal("an update repeating (Type, SetID) was accepted; §3.3.2 wants INVALID_FILTER")
 		}
 	})
 }

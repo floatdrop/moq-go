@@ -19,7 +19,7 @@ import (
 // errors they carry.
 
 // TestRelay_UnknownDataStreamTypeClosesSession: an unknown data stream type
-// closes the session (§3.4).
+// closes the session (§6.4.1).
 func TestRelay_UnknownDataStreamTypeClosesSession(t *testing.T) {
 	t.Parallel()
 	l := newPipeListener()
@@ -42,7 +42,7 @@ func TestRelay_UnknownDataStreamTypeClosesSession(t *testing.T) {
 
 // TestRelay_AbortedDataStreamHeaderKeepsServing: a data stream that ends
 // mid-header does not stop the relay forwarding the publisher's later streams
-// (§11.4.1).
+// (§11.3.2).
 func TestRelay_AbortedDataStreamHeaderKeepsServing(t *testing.T) {
 	t.Parallel()
 	l := newPipeListener()
@@ -73,7 +73,7 @@ func TestRelay_AbortedDataStreamHeaderKeepsServing(t *testing.T) {
 }
 
 // TestRelay_FINMidObjectIsNotForwardedAsCleanEnd: an END_OF_GROUP subgroup
-// stream FIN'd mid-object (§11.4) is not forwarded with a clean FIN.
+// stream FIN'd mid-object (§11.3) is not forwarded with a clean FIN.
 func TestRelay_FINMidObjectIsNotForwardedAsCleanEnd(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, nil)
@@ -125,7 +125,7 @@ func TestRelay_FINMidObjectIsNotForwardedAsCleanEnd(t *testing.T) {
 }
 
 // TestRelay_ObjectIDOverflowClosesSession: an Object ID delta past 2^64 - 1
-// closes the session (§11.4.2).
+// closes the session (§11.3.1).
 func TestRelay_ObjectIDOverflowClosesSession(t *testing.T) {
 	t.Parallel()
 	pubSess, alias := newCam1Publisher(t, nil)
@@ -149,7 +149,7 @@ func TestRelay_ObjectIDOverflowClosesSession(t *testing.T) {
 }
 
 // TestRelay_NonFirstRequestOpenerClosesSession: a request stream opened with a
-// message not marked "First" in Table 5, here PUBLISH_STATE_NOTIFY (§10.10),
+// message not marked "First" in Table 5, here PUBLISH_STATE_NOTIFY (§9.10),
 // closes the session.
 func TestRelay_NonFirstRequestOpenerClosesSession(t *testing.T) {
 	t.Parallel()
@@ -168,7 +168,7 @@ func TestRelay_NonFirstRequestOpenerClosesSession(t *testing.T) {
 }
 
 // TestRelay_SubgroupBeforeSubscribeOKIsDelivered: a subgroup stream that
-// arrives before the SUBSCRIBE_OK naming its alias is held briefly (§11.4.2)
+// arrives before the SUBSCRIBE_OK naming its alias is held briefly (§3.1.3.1)
 // rather than abandoned. Not parallel: the hook is process-wide.
 func TestRelay_SubgroupBeforeSubscribeOKIsDelivered(t *testing.T) {
 	const alias = uint64(4242) // unique to this test

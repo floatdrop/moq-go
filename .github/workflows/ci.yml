@@ -197,7 +197,7 @@ jobs:
 
   # Interop is gated on independent implementations: the unit tests round-trip
   # through this codebase's own codec, so a wire-encoding regression (e.g. QUIC
-  # varints instead of the §1.4.1 leading-ones encoding) passes every unit test
+  # varints instead of the §8.1 leading-ones encoding) passes every unit test
   # yet breaks interop. Both jobs use Docker (preinstalled on the runner). The
   # advisory `make interop-matrix` is intentionally not gated — it has known
   # cross-implementation divergences (see STATUS.md).

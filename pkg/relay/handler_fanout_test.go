@@ -52,7 +52,7 @@ func TestFanout_PublisherToSubscriberSingleObject(t *testing.T) {
 // requireFilterForwards publishes Objects 0..n-1 of group 0 to a subscriber
 // whose SUBSCRIBE carries filter, and requires it to receive exactly want on
 // one stream under its own alias, ending in a FIN. The relay re-encodes the
-// Object ID deltas, so they must decode to the publisher's IDs (§11.4.2).
+// Object ID deltas, so they must decode to the publisher's IDs (§11.3.1).
 func requireFilterForwards(t *testing.T, filter *message.LocationFilter, n int, want []uint64) {
 	t.Helper()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -77,7 +77,7 @@ func requireFilterForwards(t *testing.T, filter *message.LocationFilter, n int, 
 
 // TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart: an AbsoluteStart
 // {0, 2} filter drops earlier Objects, and the forwarded deltas decode to the
-// publisher's Object IDs (§5.1.2).
+// publisher's Object IDs (§3.3.1).
 func TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart(t *testing.T) {
 	t.Parallel()
 	requireFilterForwards(t, &message.LocationFilter{Fields: 2, StartGroup: 0, StartObject: 2}, 5, []uint64{2, 3, 4})
@@ -92,7 +92,7 @@ func TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange(t *testing.T) {
 }
 
 // TestFanout_UpdatesTrackEntryLargestObject: each forwarded Object advances the
-// track's LargestObject watermark (§10.2.17), observed through a later
+// track's LargestObject watermark (§9.20.17), observed through a later
 // LargestObject-filtered SUBSCRIBE.
 func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 	t.Parallel()
@@ -103,7 +103,7 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 
 	// Objects 0 and 2 of group 4 make the watermark {4, 2}. Object 1 is left
 	// for later: sending it twice with another Payload or Subgroup would make
-	// the track malformed (§9.1).
+	// the track malformed (§7.1).
 	writeSubgroupObjects(t, pub, message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit, GroupID: 4},
 		[]uint64{0, 2})
 	waitRelayLargest(t, pubSess, ns("video"), []byte("cam1"), 4, 2)

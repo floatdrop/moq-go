@@ -52,7 +52,7 @@ type pipeListener struct {
 	dialled atomic.Int64
 }
 
-// streamReset is a reset the relay sent on a stream, with its §3.3.4 code.
+// streamReset is a reset the relay sent on a stream, with its §12.5 code.
 type streamReset struct {
 	stream resetStream
 	code   moqt.StreamResetCode
@@ -131,7 +131,7 @@ func (c resetRecordingConn) AcceptUniStream(ctx context.Context) (session.Receiv
 }
 
 // streamType is a unidirectional stream's first byte, which is its one-byte
-// stream type (§3.4), or -1 before any.
+// stream type (§6.4.1), or -1 before any.
 type streamType struct{ atomic.Int64 }
 
 func (t *streamType) see(p []byte) {
@@ -234,7 +234,7 @@ func (l *pipeListener) Dial() (session.Conn, error) {
 
 // DialWithLimits is [pipeListener.Dial] with bidi-stream credit caps (negative
 // is unlimited). serverBidi bounds how many PUBLISH streams the relay can open
-// to a SUBSCRIBE_TRACKS subscriber, the PUBLISH_SKIPPED (§10.21) trigger.
+// to a SUBSCRIBE_TRACKS subscriber, the PUBLISH_SKIPPED (§9.19) trigger.
 func (l *pipeListener) DialWithLimits(clientBidi, serverBidi int) (session.Conn, error) {
 	clientConn, serverConn := sessiontest.NewConnPairWithLimits(clientBidi, serverBidi)
 	n := int(l.dialled.Add(1))

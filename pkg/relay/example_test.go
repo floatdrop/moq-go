@@ -15,7 +15,7 @@ import (
 
 // Running the relay. relay.New takes a Listener (from quicconn, wtconn, or the
 // in-process sessiontest adapter) and a relay.Config; Run serves until ctx is
-// cancelled and then performs the full §10.4 shutdown — GOAWAY, grace period,
+// cancelled and then performs the full §9.2 shutdown — GOAWAY, grace period,
 // force-close — returning only once that drain has finished.
 //
 // Prefer Run over Start for a binary driven by a signal. ctx is the shutdown

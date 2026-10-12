@@ -19,7 +19,7 @@ import (
 )
 
 // A relay with no Established subscription "MAY forward TRACK_STATUS to one or
-// more publishers" (§10.15). This one forwards it to the candidates SUBSCRIBE
+// more publishers" (§9.13). This one forwards it to the candidates SUBSCRIBE
 // would try, and answers with the first TRACK_STATUS_OK or the refusal
 // SUBSCRIBE would give.
 
@@ -57,8 +57,8 @@ func trackStatusCam1(t *testing.T, sess *session.Session, params ...message.Para
 
 // TestTrackStatus_ForwardsToNamespacePublisher: with only the namespace
 // advertised, the publisher's TRACK_STATUS_OK is passed on: its Track
-// Properties, unless INCLUDE_PROPERTIES is 0 (§10.2.21), and its
-// LARGEST_OBJECT (§10.2.17), as a SUBSCRIBE_OK would carry them.
+// Properties, unless INCLUDE_PROPERTIES is 0 (§9.20.21), and its
+// LARGEST_OBJECT (§9.20.17), as a SUBSCRIBE_OK would carry them.
 func TestTrackStatus_ForwardsToNamespacePublisher(t *testing.T) {
 	t.Parallel()
 	for _, include := range []bool{true, false} {
@@ -100,7 +100,7 @@ func TestTrackStatus_ForwardsToNamespacePublisher(t *testing.T) {
 
 // TestTrackStatus_PassesUpstreamRefusal: a refusal from the publisher is
 // answered as SUBSCRIBE would answer it: DOES_NOT_EXIST passed on, a code about
-// the relay's own hop as INTERNAL_ERROR (§10.6.2).
+// the relay's own hop as INTERNAL_ERROR (§12.3).
 func TestTrackStatus_PassesUpstreamRefusal(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ upstream, want moqt.RequestErrorCode }{
@@ -177,7 +177,7 @@ func TestCrossRelay_TrackStatusForwardedToRemote(t *testing.T) {
 }
 
 // TestRelay_TrackStatusLoopStopsAtSecondHop: a peer relay that routes the
-// relay's TRACK_STATUS straight back on the same session (§6.2 has no loop
+// relay's TRACK_STATUS straight back on the same session (§4.1 has no loop
 // protection) is asked once: the routed-back request finds the relay's own
 // still pending on that session and is not forwarded to it again.
 func TestRelay_TrackStatusLoopStopsAtSecondHop(t *testing.T) {
@@ -231,9 +231,9 @@ func acceptTrackStatusWith(props []byte, largest *message.Location) func(*sessio
 }
 
 // TestTrackStatus_AsksEveryCandidate: every candidate is asked, as SUBSCRIBE
-// subscribes on every matching publisher (§9.5), and the answers combine as a
-// SUBSCRIBE_OK's would: the largest LARGEST_OBJECT (§10.2.17), the first
-// answer's Track Properties (§9.6). A refusal from one does not keep another's
+// subscribes on every matching publisher (§7.6), and the answers combine as a
+// SUBSCRIBE_OK's would: the largest LARGEST_OBJECT (§9.20.17), the first
+// answer's Track Properties (§7.7). A refusal from one does not keep another's
 // answer from the subscriber.
 func TestTrackStatus_AsksEveryCandidate(t *testing.T) {
 	t.Parallel()
@@ -272,7 +272,7 @@ func TestTrackStatus_AsksEveryCandidate(t *testing.T) {
 
 // TestTrackStatus_UpstreamMandatoryPropertyRefused: an upstream
 // TRACK_STATUS_OK with an unknown Mandatory Track Property is refused with
-// UNSUPPORTED_EXTENSION, as a SUBSCRIBE_OK carrying it would be (§2.5.1).
+// UNSUPPORTED_EXTENSION, as a SUBSCRIBE_OK carrying it would be (§3.7).
 func TestTrackStatus_UpstreamMandatoryPropertyRefused(t *testing.T) {
 	t.Parallel()
 	client, teardown := connectRelay(t, relay.Config{})
@@ -283,7 +283,7 @@ func TestTrackStatus_UpstreamMandatoryPropertyRefused(t *testing.T) {
 }
 
 // TestTrackStatus_DrainingCandidateGoingAway: a candidate that sent GOAWAY is
-// sent nothing (§10.4), and the refusal is GOING_AWAY, as for SUBSCRIBE.
+// sent nothing (§9.2), and the refusal is GOING_AWAY, as for SUBSCRIBE.
 func TestTrackStatus_DrainingCandidateGoingAway(t *testing.T) {
 	t.Parallel()
 	client, teardown := connectRelay(t, relay.Config{})
@@ -300,7 +300,7 @@ func TestTrackStatus_DrainingCandidateGoingAway(t *testing.T) {
 }
 
 // TestTrackStatus_SilentCandidateTimesOut: a candidate that does not answer
-// counts as TIMEOUT once the upstream round trip's bound runs out (§13.6),
+// counts as TIMEOUT once the upstream round trip's bound runs out (§15.6),
 // and the requester is answered.
 func TestTrackStatus_SilentCandidateTimesOut(t *testing.T) {
 	defer relay.SetTrackStatusTimeout(200 * time.Millisecond)()
@@ -312,8 +312,8 @@ func TestTrackStatus_SilentCandidateTimesOut(t *testing.T) {
 }
 
 // TestTrackStatus_CancelReleasesRequester: the requester cancelling its
-// TRACK_STATUS (§3.3.3) stops the relay waiting on the upstream round for it,
-// freeing its place under MaxSubscriptionsPerSession (§13.1) before the round
+// TRACK_STATUS (§6.4.2.3) stops the relay waiting on the upstream round for it,
+// freeing its place under MaxSubscriptionsPerSession (§15.1) before the round
 // ends; the round itself, which other requesters may share, runs to its bound.
 func TestTrackStatus_CancelReleasesRequester(t *testing.T) {
 	t.Parallel()
@@ -404,7 +404,7 @@ func trackStatusAsync(
 // TestTrackStatus_ConcurrentRequestsShareOneRound: TRACK_STATUS requests for
 // one track that arrive while a forwarded round is in flight wait for it
 // rather than each going upstream, and each is answered with its own
-// INCLUDE_PROPERTIES (§10.2.21).
+// INCLUDE_PROPERTIES (§9.20.21).
 func TestTrackStatus_ConcurrentRequestsShareOneRound(t *testing.T) {
 	first, second, release, asked, joined := sharedRound(t)
 	a := trackStatusAsync(t.Context(), t, first)
@@ -427,7 +427,7 @@ func TestTrackStatus_ConcurrentRequestsShareOneRound(t *testing.T) {
 }
 
 // TestTrackStatus_LeaderCancelKeepsSharedRound: the requester whose request
-// started a round cancelling it (§3.3.3) does not end the round for another
+// started a round cancelling it (§6.4.2.3) does not end the round for another
 // requester sharing it.
 func TestTrackStatus_LeaderCancelKeepsSharedRound(t *testing.T) {
 	first, second, release, _, joined := sharedRound(t)
@@ -494,7 +494,7 @@ func TestTrackStatus_StopEndsRound(t *testing.T) {
 }
 
 // TestTrackStatus_ForwardingCountsAgainstSubscriptionCap: a TRACK_STATUS
-// waiting on upstreams counts against MaxSubscriptionsPerSession (§13.1), so
+// waiting on upstreams counts against MaxSubscriptionsPerSession (§15.1), so
 // one more past the cap is refused with EXCESSIVE_LOAD.
 func TestTrackStatus_ForwardingCountsAgainstSubscriptionCap(t *testing.T) {
 	t.Parallel()
@@ -513,7 +513,7 @@ func TestTrackStatus_ForwardingCountsAgainstSubscriptionCap(t *testing.T) {
 }
 
 // TestTrackStatus_StopKeepsRoundThroughGrace: Stop drops upstream work only
-// after the downstream GOAWAY's grace period (§3.6), so a forwarded round in
+// after the downstream GOAWAY's grace period (§6.6.1), so a forwarded round in
 // flight when Stop begins still delivers a publisher's answer given within it.
 func TestTrackStatus_StopKeepsRoundThroughGrace(t *testing.T) {
 	t.Parallel()

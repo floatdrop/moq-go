@@ -8,7 +8,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// immutable wraps pairs in an Immutable Properties property (§12.7).
+// immutable wraps pairs in an Immutable Properties property (§10.7).
 func immutable(pairs ...wire.KVPair) wire.KVPair {
 	return wire.KVPair{Type: PropertyImmutableProperties, ByteVal: AppendTrackProperties(pairs)}
 }
@@ -181,8 +181,8 @@ func TestFirstUnknownMandatoryTrackProperty(t *testing.T) {
 	}
 }
 
-// TestTrackDefaultPublisherPriority pins §12.4: omitted is 128, and an invalid
-// (> 255) value or malformed block reads as omitted. §12.7: Immutable
+// TestTrackDefaultPublisherPriority pins §10.4: omitted is 128, and an invalid
+// (> 255) value or malformed block reads as omitted. §10.7: Immutable
 // Properties are searched too.
 func TestTrackDefaultPublisherPriority(t *testing.T) {
 	prop := func(v uint64) []byte { return props(PropertyDefaultPublisherPriority, v) }
@@ -209,7 +209,7 @@ func TestTrackDefaultPublisherPriority(t *testing.T) {
 	}
 }
 
-// TestApplyObjectPropertiesSearchesImmutable: §12.7 processors search both the
+// TestApplyObjectPropertiesSearchesImmutable: §10.7 processors search both the
 // mutable properties and Immutable Properties; the mutable value wins.
 func TestApplyObjectPropertiesSearchesImmutable(t *testing.T) {
 	track := DeliveryTimeouts{Object: 5 * time.Second, Subgroup: 5 * time.Second}
@@ -234,7 +234,7 @@ func TestApplyObjectPropertiesSearchesImmutable(t *testing.T) {
 }
 
 // TestCheckObjectProperties pins the per-Object malformed-track conditions of
-// §12.7–§12.9 and §2.5.1; conditions needing state across Objects are not
+// §10.7–§10.9 and §3.7; conditions needing state across Objects are not
 // checked here.
 func TestCheckObjectProperties(t *testing.T) {
 	const group, object = 10, 5
@@ -251,15 +251,15 @@ func TestCheckObjectProperties(t *testing.T) {
 		{"gap inside Immutable", AppendTrackProperties([]wire.KVPair{immutable(kv(PropertyPriorObjectIDGap, 2))}), true},
 		{"same type in both lists", AppendTrackProperties([]wire.KVPair{kv(0x40, 1), immutable(kv(0x40, 2))}), true},
 
-		// §12.7: a Key-Value-Pair cannot be parsed
+		// §10.7: a Key-Value-Pair cannot be parsed
 		{"unparseable", []byte{0x02}, false},
 		{"unparseable inside Immutable", AppendTrackProperties([]wire.KVPair{
 			{Type: PropertyImmutableProperties, ByteVal: []byte{0x02}},
 		}), false},
-		// §12.7: nested Immutable, or more than one instance
+		// §10.7: nested Immutable, or more than one instance
 		{"Immutable inside Immutable", AppendTrackProperties([]wire.KVPair{immutable(immutable(kv(0x40, 1)))}), false},
 		{"two Immutable", AppendTrackProperties([]wire.KVPair{immutable(kv(0x40, 1)), immutable(kv(0x42, 1))}), false},
-		// §12.8 / §12.9: more than one instance, or larger than the ID
+		// §10.8 / §10.9: more than one instance, or larger than the ID
 		{"two Prior Group ID Gaps", AppendTrackProperties([]wire.KVPair{
 			kv(PropertyPriorGroupIDGap, 1), kv(PropertyPriorGroupIDGap, 2),
 		}), false},
@@ -275,7 +275,7 @@ func TestCheckObjectProperties(t *testing.T) {
 		{"Prior Object ID Gap > Object ID", AppendTrackProperties([]wire.KVPair{
 			immutable(kv(PropertyPriorObjectIDGap, object+1)),
 		}), false},
-		// §2.5.1: a Mandatory Track Property as an Object Property
+		// §3.7: a Mandatory Track Property as an Object Property
 		{"Mandatory Track Property", AppendTrackProperties([]wire.KVPair{kv(0x4000, 1)}), false},
 		{"Mandatory inside Immutable", AppendTrackProperties([]wire.KVPair{immutable(kv(0x7FFE, 1))}), false},
 	} {
@@ -286,8 +286,8 @@ func TestCheckObjectProperties(t *testing.T) {
 	}
 }
 
-// TestPriorObjectIDGap: the Prior Object ID Gap (§12.9) is found in either list
-// (§12.7), and Properties that make the track malformed carry none.
+// TestPriorObjectIDGap: the Prior Object ID Gap (§10.9) is found in either list
+// (§10.7), and Properties that make the track malformed carry none.
 func TestPriorObjectIDGap(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -316,7 +316,7 @@ func TestPriorObjectIDGap(t *testing.T) {
 	}
 }
 
-// TestObjectPriorGaps: both gaps are read in one walk, from either list (§12.7).
+// TestObjectPriorGaps: both gaps are read in one walk, from either list (§10.7).
 func TestObjectPriorGaps(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -345,7 +345,7 @@ func TestObjectPriorGaps(t *testing.T) {
 }
 
 // TestImmutableProperties: the Immutable Properties value is returned as sent,
-// its serialization included (§12.7).
+// its serialization included (§10.7).
 func TestImmutableProperties(t *testing.T) {
 	inner := AppendTrackProperties([]wire.KVPair{kv(0x40, 1)})
 	for _, tc := range []struct {

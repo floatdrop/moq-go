@@ -11,8 +11,8 @@ import (
 )
 
 // A subscription that omits GROUP_ORDER takes the publisher's preference from
-// the Track (§10.2.8, §12.5), and so does its fill (§10.2.15). The fill's
-// Group ID deltas run in that order (§11.4.4.1), so a subscriber decoding it
+// the Track (§9.20.8, §10.5), and so does its fill (§9.20.15). The fill's
+// Group ID deltas run in that order (§11.4.1.1), so a subscriber decoding it
 // by the draft's rule gets the right Groups only if the relay agrees.
 
 // publishDescendingCam publishes video/cam on alias 7 with
@@ -74,8 +74,8 @@ func TestSubscribe_FillFollowsPublisherGroupOrder(t *testing.T) {
 }
 
 // TestSubscribeTracks_FillFollowsPublisherGroupOrder: a forwarded PUBLISH's
-// subscription (§10.20.1). The PUBLISH states the Group Order it resolved to,
-// since §10.20.1 says these parameters "are explicitly communicated in
+// subscription (§3.6.2). The PUBLISH states the Group Order it resolved to,
+// since §3.6.2 says these parameters "are explicitly communicated in
 // PUBLISH".
 func TestSubscribeTracks_FillFollowsPublisherGroupOrder(t *testing.T) {
 	t.Parallel()

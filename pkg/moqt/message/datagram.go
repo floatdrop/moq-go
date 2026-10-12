@@ -7,7 +7,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// Datagram type field bit constants (§11.3).
+// Datagram type field bit constants (§11.2).
 const (
 	DatagramPropertiesBit      = 0x01 // Properties field present
 	DatagramEndOfGroupBit      = 0x02 // End of group marker
@@ -24,7 +24,7 @@ const (
 	DatagramTypeStatusMax = 0x2F
 )
 
-// ObjectDatagram represents a MoQT object sent via QUIC datagram (§11.3).
+// ObjectDatagram represents a MoQT object sent via QUIC datagram (§11.2).
 type ObjectDatagram struct {
 	Type              uint64 // Complex bit field
 	TrackAlias        uint64
@@ -37,11 +37,11 @@ type ObjectDatagram struct {
 }
 
 // IsValidDatagramType checks if a datagram Type Flags value is valid per
-// §11.3.1. The only bits with a specified meaning are the five Datagram*Bit
+// §11.2.1. The only bits with a specified meaning are the five Datagram*Bit
 // flags, so the valid values are 0x00..0x0F / 0x20..0x21 / 0x24..0x25 /
 // 0x28..0x29 / 0x2C..0x2D.
 //
-// §11.3.1 lists the invalid values, which MUST close the session with a
+// §11.2.1 lists the invalid values, which MUST close the session with a
 // PROTOCOL_VIOLATION:
 //
 //   - bit 4 (0x10) set, or any bit set whose meaning is not specified (i.e.
@@ -87,7 +87,7 @@ func (d *ObjectDatagram) HasStatus() bool {
 	return d.Type&DatagramStatusBit != 0
 }
 
-// Validate checks if the datagram is valid according to MoQT spec §11.3.1.
+// Validate checks if the datagram is valid according to MoQT spec §11.2.1.
 // Every violation below is a session-level PROTOCOL_VIOLATION at the
 // receiver.
 func (d *ObjectDatagram) Validate() error {
@@ -95,14 +95,14 @@ func (d *ObjectDatagram) Validate() error {
 		return fmt.Errorf("invalid datagram type: 0x%02X", d.Type)
 	}
 
-	// Per §11.3.1: PROPERTIES bit set with a Properties Length of 0 MUST
+	// Per §11.2.1: PROPERTIES bit set with a Properties Length of 0 MUST
 	// close the session with a PROTOCOL_VIOLATION.
 	if d.HasProperties() && len(d.Properties) == 0 {
 		return errors.New("invalid datagram: PROPERTIES bit set with zero-length Properties")
 	}
 
 	if d.HasStatus() {
-		// §11.2.1.1: the defined Object Status values are Normal (0x0),
+		// §11.1.1: the defined Object Status values are Normal (0x0),
 		// End of Group (0x3), and End of Track (0x4); any other value
 		// SHOULD be treated as a protocol error. Matches the subgroup
 		// object codec's enforcement.
@@ -112,7 +112,7 @@ func (d *ObjectDatagram) Validate() error {
 			return fmt.Errorf("invalid datagram: unknown object status 0x%X", d.ObjectStatus)
 		}
 
-		// §11.3.1: "If an Object Datagram includes both the STATUS bit and
+		// §11.2.1: "If an Object Datagram includes both the STATUS bit and
 		// PROPERTIES bit, and the Object Status is not Normal (0x0), the
 		// endpoint MUST close the session with a PROTOCOL_VIOLATION,
 		// because only Normal Objects can have Properties."
@@ -156,7 +156,7 @@ func (d *ObjectDatagram) Parse(r *wire.Reader) error {
 	d.Type = typ
 
 	// Validate the type before parsing fields — the layout depends on its
-	// bits. Rejects STATUS+END_OF_GROUP and out-of-form values (§11.3.1);
+	// bits. Rejects STATUS+END_OF_GROUP and out-of-form values (§11.2.1);
 	// per-value rules (e.g. non-Normal status with Properties) run in
 	// Validate once the fields are read.
 	if !IsValidDatagramType(d.Type) {
@@ -202,7 +202,7 @@ func (d *ObjectDatagram) Parse(r *wire.Reader) error {
 		if err != nil {
 			return fmt.Errorf("failed to read object status: %w", err)
 		}
-		// The status varint is the last field (§11.3.1 Figure 24); trailing
+		// The status varint is the last field (§11.2.1 Figure 25); trailing
 		// bytes mean the sender and receiver disagree on the layout.
 		if !r.Empty() {
 			return fmt.Errorf("invalid datagram: %d trailing byte(s) after Object Status", r.Remaining())

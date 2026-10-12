@@ -81,10 +81,10 @@ func mutableProps(v uint64) []byte {
 }
 
 // TestRelay_DuplicateConsistency: a duplicate of a cached Object with a
-// different Forwarding Preference, Subgroup ID, Priority or Payload (§9.1), or
-// different Immutable Properties (§2.4.2, §12.7), makes the track malformed.
-// Mutable Properties may differ (§9.1), and Normal may become End of Group
-// (§9.1: existing to not existing).
+// different Forwarding Preference, Subgroup ID, Priority or Payload (§7.1), or
+// different Immutable Properties (§12.1, §10.7), makes the track malformed.
+// Mutable Properties may differ (§7.1), and Normal may become End of Group
+// (§7.1: existing to not existing).
 func TestRelay_DuplicateConsistency(t *testing.T) {
 	t.Parallel()
 	sub := objCopy{payload: "a"}
@@ -117,13 +117,13 @@ func TestRelay_DuplicateConsistency(t *testing.T) {
 		{"Normal, then End of Group", dg, with(dg, func(c *objCopy) {
 			c.status, c.payload = message.ObjectStatusEndOfGroup, ""
 		}), false},
-		// Only a Normal Object carries Properties (§11.2.1.2).
+		// Only a Normal Object carries Properties (§11.1.2).
 		{"Normal with Immutable Properties, then End of Group", with(dg, func(c *objCopy) {
 			c.props = immutableProps(1)
 		}), with(dg, func(c *objCopy) {
 			c.status, c.payload = message.ObjectStatusEndOfGroup, ""
 		}), false},
-		// The late Object of §2.1.
+		// The late Object of §2.1.2.
 		{"End of Group, then Normal with Immutable Properties", with(dg, func(c *objCopy) {
 			c.status, c.payload = message.ObjectStatusEndOfGroup, ""
 		}), with(dg, func(c *objCopy) {
@@ -177,8 +177,8 @@ func TestRelay_DuplicateConsistency(t *testing.T) {
 }
 
 // TestRelay_DuplicateEndOfGroupEndsGroup: an END_OF_GROUP arriving as a
-// duplicate of a Normal Object (§9.1: existing to not existing) still ends the
-// Group, so an Object past it makes the track malformed (§2.4.2).
+// duplicate of a Normal Object (§7.1: existing to not existing) still ends the
+// Group, so an Object past it makes the track malformed (§12.1).
 func TestRelay_DuplicateEndOfGroupEndsGroup(t *testing.T) {
 	t.Parallel()
 	pubA, teardown := connectRelay(t, relay.Config{})

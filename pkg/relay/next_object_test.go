@@ -13,7 +13,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// §11.4.3: the relay forwards an Object on an existing subgroup stream only if
+// §11.3.2: the relay forwards an Object on an existing subgroup stream only if
 // it is "the next Object", and otherwise resets the stream and opens another.
 
 // collectStreams reads events until objects Objects have arrived and every
@@ -58,7 +58,7 @@ func finned(events []objEvent, stream int) bool {
 }
 
 // TestFanout_NextObject_GapOnOneUpstreamStaysOnStream: Objects read in turn
-// from one upstream stream are each the next Object (§11.4.3, second rule),
+// from one upstream stream are each the next Object (§11.3.2, second rule),
 // so a publisher skipping IDs costs no reset.
 func TestFanout_NextObject_GapOnOneUpstreamStaysOnStream(t *testing.T) {
 	t.Parallel()
@@ -94,7 +94,7 @@ func TestFanout_NextObject_GapOnOneUpstreamStaysOnStream(t *testing.T) {
 
 // TestFanout_NextObject_FilteredObjectsBetween: Objects between two forwarded
 // ones that did not pass the subscriber's filters keep the second the next
-// Object (§11.4.3).
+// Object (§11.3.2).
 func TestFanout_NextObject_FilteredObjectsBetween(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -204,8 +204,8 @@ func priorObjectIDGap(gap uint64) []byte {
 }
 
 // TestFanout_NextObject_AcrossUpstreams: with two upstreams feeding one
-// Subgroup (§9.3), an Object from the other upstream after a gap is the next
-// Object only if its Prior Object ID Gap (§12.9) covers the gap (§11.4.3,
+// Subgroup (§7.3), an Object from the other upstream after a gap is the next
+// Object only if its Prior Object ID Gap (§10.9) covers the gap (§11.3.2,
 // third rule).
 func TestFanout_NextObject_AcrossUpstreams(t *testing.T) {
 	t.Parallel()
@@ -237,7 +237,7 @@ func TestFanout_NextObject_AcrossUpstreams(t *testing.T) {
 // TestFanout_NextObject_DuplicateBetweenBreaksRun: an upstream's Object that
 // lost the §2.1 dedup claim was not sent on the downstream stream, so the
 // upstream's following Object is not the next Object after its earlier one
-// (§11.4.3: "with no other Objects in between").
+// (§11.3.2: "with no other Objects in between").
 func TestFanout_NextObject_DuplicateBetweenBreaksRun(t *testing.T) {
 	t.Parallel()
 	a, b, events := twoPublishers(t)

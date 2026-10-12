@@ -18,14 +18,14 @@ import (
 )
 
 // filterRelayConfig is a relay that accepts Range Filters: the zero Config,
-// which advertises [relay.DefaultMaxFilterRanges] rather than §10.3.1.6's 0.
+// which advertises [relay.DefaultMaxFilterRanges] rather than §9.1.6's 0.
 func filterRelayConfig() relay.Config {
 	return relay.Config{}
 }
 
 // TestSubscribe_RangeFilterProhibitedWhenConfiguredOff pins the negative
 // [Config.MaxFilterRanges]: the relay advertises MAX_FILTER_RANGES=0, so a
-// SUBSCRIBE carrying a Range Filter is rejected with INVALID_FILTER (§10.3.1.6).
+// SUBSCRIBE carrying a Range Filter is rejected with INVALID_FILTER (§9.1.6).
 func TestSubscribe_RangeFilterProhibitedWhenConfiguredOff(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{MaxFilterRanges: -1})
@@ -53,8 +53,8 @@ func TestSubscribe_RangeFilterProhibitedWhenConfiguredOff(t *testing.T) {
 }
 
 // TestFanout_ObjectIDRangeFilter: OBJECTID_FILTER [1,2] forwards only Objects 1
-// and 2 (§5.1.4), and the stream ends with a reset, since Objects were omitted
-// (§11.4.3).
+// and 2 (§3.3.2), and the stream ends with a reset, since Objects were omitted
+// (§11.3.2).
 func TestFanout_ObjectIDRangeFilter(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, filterRelayConfig())
@@ -154,7 +154,7 @@ func TestFanout_ObjectIDRangeFilter(t *testing.T) {
 	}
 }
 
-// TestSubscribeTracks_TrackPropertyFilter pins §5.1.4: a TRACK_PROPERTY_FILTER
+// TestSubscribeTracks_TrackPropertyFilter pins §3.3.2: a TRACK_PROPERTY_FILTER
 // on a SUBSCRIBE_TRACKS forwards only PUBLISH messages whose Track Properties
 // pass — a matching track is forwarded, a non-matching one is suppressed.
 func TestSubscribeTracks_TrackPropertyFilter(t *testing.T) {
@@ -218,7 +218,7 @@ func TestSubscribeTracks_TrackPropertyFilter(t *testing.T) {
 	}
 }
 
-// TestFetch_ObjectIDRangeFilter pins §5.1.4 filtering on the FETCH serve path:
+// TestFetch_ObjectIDRangeFilter pins §3.3.2 filtering on the FETCH serve path:
 // an OBJECTID_FILTER selecting [1,2] returns only the matching cached objects.
 func TestFetch_ObjectIDRangeFilter(t *testing.T) {
 	t.Parallel()
@@ -357,7 +357,7 @@ func publishLayer(
 
 // A zero-length Range Filter is no filter; in REQUEST_UPDATE it removes that
 // filter type, a non-zero one replaces it, and an omitted one is unchanged
-// (§5.1.4).
+// (§3.3.2).
 
 // TestSubscribe_ZeroLengthRangeFilterIsNoFilter: a zero-length Range Filter on
 // SUBSCRIBE is accepted as no filter.
@@ -443,7 +443,7 @@ func TestRequestUpdate_ZeroLengthRemovesOneRangeFilterType(t *testing.T) {
 }
 
 // TestRequestUpdate_RangeFilterLimitCountsMergedSet: MAX_FILTER_RANGES applies
-// to the filters merged from an update, not the update alone (§5.1.4).
+// to the filters merged from an update, not the update alone (§3.3.2).
 func TestRequestUpdate_RangeFilterLimitCountsMergedSet(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{MaxFilterRanges: 2})
@@ -468,8 +468,8 @@ func TestRequestUpdate_RangeFilterLimitCountsMergedSet(t *testing.T) {
 }
 
 // TestSubscribe_FillInheritsRangeFilters: the fill fetch stream inherits the
-// subscription's Range Filters (§5.1.3); one inside FILL_PARAMETERS replaces or,
-// zero-length, removes that type (§5.1.4).
+// subscription's Range Filters (§3.4); one inside FILL_PARAMETERS replaces or,
+// zero-length, removes that type (§3.3.2).
 func TestSubscribe_FillInheritsRangeFilters(t *testing.T) {
 	t.Parallel()
 	objectIDs := func(ranges ...message.Range) message.Parameter {

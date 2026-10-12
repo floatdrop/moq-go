@@ -12,13 +12,13 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// SUBSCRIBE_TRACKS (§6.1, §10.20): the relay forwards a PUBLISH per matching
+// SUBSCRIBE_TRACKS (§3.6, §9.18): the relay forwards a PUBLISH per matching
 // track and serves the resulting subscription like any other — Objects on the
-// alias it chose (§10.11), REQUEST_UPDATE answered (§10.9), REQUEST_ERROR ends
-// it, PUBLISH_DONE closes it (§10.12).
+// alias it chose (§9.8), REQUEST_UPDATE answered (§9.5), REQUEST_ERROR ends
+// it, PUBLISH_DONE closes it (§9.9).
 
 // TestForwardedPublish_DeliversObjects: Objects of a forwarded track arrive on
-// the alias of the forwarded PUBLISH (§10.11).
+// the alias of the forwarded PUBLISH (§9.8).
 func TestForwardedPublish_DeliversObjects(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -35,7 +35,7 @@ func TestForwardedPublish_DeliversObjects(t *testing.T) {
 }
 
 // TestForwardedPublish_UninterestedStopsDelivery: REQUEST_ERROR UNINTERESTED on
-// a forwarded PUBLISH (§10.11) stops delivery.
+// a forwarded PUBLISH (§9.8) stops delivery.
 func TestForwardedPublish_UninterestedStopsDelivery(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -48,7 +48,7 @@ func TestForwardedPublish_UninterestedStopsDelivery(t *testing.T) {
 	fwd := awaitForwarded(t, reqs)
 	alias := fwd.First.(*message.Publish).TrackAlias
 	// REQUEST_ERROR and a FIN only: no STOP_SENDING, which would end the
-	// subscription by itself (§3.3.3) whatever the relay made of the error.
+	// subscription by itself (§6.4.2.3) whatever the relay made of the error.
 	refused := make(chan struct{})
 	go func() {
 		_ = message.Marshal(fwd.Stream, &message.RequestError{
@@ -98,7 +98,7 @@ func TestForwardedPublish_EndsWithPublishDone(t *testing.T) {
 }
 
 // TestForwardedPublish_AnswersRequestUpdate: the subscriber of a PUBLISH may
-// send REQUEST_UPDATE (§10.9), and it gets its single mandated response.
+// send REQUEST_UPDATE (§9.5), and it gets its single mandated response.
 func TestForwardedPublish_AnswersRequestUpdate(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -143,7 +143,7 @@ func TestForwardedPublish_OnePerTrack(t *testing.T) {
 }
 
 // TestForwardedPublish_ExistingTrackAnnounced: a track published before the
-// SUBSCRIBE_TRACKS is forwarded too (§10.20).
+// SUBSCRIBE_TRACKS is forwarded too (§3.6).
 func TestForwardedPublish_ExistingTrackAnnounced(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -160,7 +160,7 @@ func TestForwardedPublish_ExistingTrackAnnounced(t *testing.T) {
 }
 
 // TestForwardedPublish_OwnTrackNotEchoed: the subscriber's own tracks are not
-// forwarded to it (§6.1).
+// forwarded to it (§3.6).
 func TestForwardedPublish_OwnTrackNotEchoed(t *testing.T) {
 	t.Parallel()
 	sess, teardown := connectRelay(t, relay.Config{})
@@ -172,7 +172,7 @@ func TestForwardedPublish_OwnTrackNotEchoed(t *testing.T) {
 }
 
 // TestForwardedPublish_DropsUpstreamParameters: the upstream PUBLISH's Message
-// Parameters are not forwarded (§10.2.1).
+// Parameters are not forwarded (§9.20.1).
 func TestForwardedPublish_DropsUpstreamParameters(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -191,8 +191,8 @@ func TestForwardedPublish_DropsUpstreamParameters(t *testing.T) {
 }
 
 // TestForwardedPublish_EchoesSubscribeTracksParameters: the SUBSCRIBE_TRACKS
-// parameters are echoed in each PUBLISH (§10.20.1), except AUTHORIZATION_TOKEN
-// (§10.2.2).
+// parameters are echoed in each PUBLISH (§3.6.2), except AUTHORIZATION_TOKEN
+// (§9.20.2).
 func TestForwardedPublish_EchoesSubscribeTracksParameters(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -233,7 +233,7 @@ func TestForwardedPublish_SubscribedTrackNotForwarded(t *testing.T) {
 
 // TestForwardedPublish_RepublishedTrackForwardedAgain: after PUBLISH_DONE a new
 // publication of the track is forwarded afresh, even before the subscriber
-// closed its side (§10.12).
+// closed its side (§9.9).
 func TestForwardedPublish_RepublishedTrackForwardedAgain(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -253,8 +253,8 @@ func TestForwardedPublish_RepublishedTrackForwardedAgain(t *testing.T) {
 }
 
 // TestForwardedPublish_SubscribeTracksParametersValidated: SUBSCRIBE_TRACKS
-// parameters are validated as on SUBSCRIBE (§10.20.1): a LOCATION_FILTER that
-// does not parse closes the session (§1.4.3).
+// parameters are validated as on SUBSCRIBE (§3.6.2): a LOCATION_FILTER that
+// does not parse closes the session (§8.3).
 func TestForwardedPublish_SubscribeTracksParametersValidated(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -269,8 +269,8 @@ func TestForwardedPublish_SubscribeTracksParametersValidated(t *testing.T) {
 }
 
 // A REQUEST_UPDATE on SUBSCRIBE_TRACKS applies to the PUBLISHes sent from then
-// on, not to existing subscriptions (§10.2.18 FORWARD, §10.9.2 prefix); tracks
-// that newly match are forwarded when it applies (§10.20).
+// on, not to existing subscriptions (§9.20.18 FORWARD, §9.5.2 prefix); tracks
+// that newly match are forwarded when it applies (§3.6).
 
 // updateSubscribeTracks sends a REQUEST_UPDATE with ps on a SUBSCRIBE_TRACKS
 // stream, failing the test unless it is accepted.
@@ -395,7 +395,7 @@ func TestSubscribeTracksUpdate_ExistingSubscriptionsUnaffected(t *testing.T) {
 }
 
 // TestSubscribeTracks_ForwardsTrackGainedBySubscribe: a track the relay gains
-// by SUBSCRIBEing to a namespace publisher is forwarded (§10.20), except to the
+// by SUBSCRIBEing to a namespace publisher is forwarded (§3.6), except to the
 // subscriber whose SUBSCRIBE caused it.
 func TestSubscribeTracks_ForwardsTrackGainedBySubscribe(t *testing.T) {
 	t.Parallel()
@@ -433,7 +433,7 @@ func TestSubscribeTracks_ForwardsTrackGainedBySubscribe(t *testing.T) {
 }
 
 // TestSubscribeTracksUpdate_RefusalEndsRequest: a refused REQUEST_UPDATE ends
-// the SUBSCRIBE_TRACKS (§10.9.1, §3.3.2), freeing its prefix for a new one.
+// the SUBSCRIBE_TRACKS (§9.5.1, §6.4.2.2), freeing its prefix for a new one.
 func TestSubscribeTracksUpdate_RefusalEndsRequest(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -466,8 +466,8 @@ func TestSubscribeTracksUpdate_RefusalEndsRequest(t *testing.T) {
 }
 
 // TestSubscribeTracks_FillParametersOpenFillPerTrack: FILL_PARAMETERS on
-// SUBSCRIBE_TRACKS (§10.20.1) opens a fill fetch stream per forwarded PUBLISH,
-// carrying that PUBLISH's Request ID (§5.1.3).
+// SUBSCRIBE_TRACKS (§3.6.2) opens a fill fetch stream per forwarded PUBLISH,
+// carrying that PUBLISH's Request ID (§3.4).
 func TestSubscribeTracks_FillParametersOpenFillPerTrack(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -502,7 +502,7 @@ func TestSubscribeTracks_FillParametersOpenFillPerTrack(t *testing.T) {
 }
 
 // TestSubscribeTracks_NewGroupRequestPropagated: a NEW_GROUP_REQUEST on
-// SUBSCRIBE_TRACKS reaches the upstream of a dynamic-Groups track (§10.2.19).
+// SUBSCRIBE_TRACKS reaches the upstream of a dynamic-Groups track (§9.20.19).
 func TestSubscribeTracks_NewGroupRequestPropagated(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -525,9 +525,9 @@ func TestSubscribeTracks_NewGroupRequestPropagated(t *testing.T) {
 	}
 }
 
-// INCLUDE_PROPERTIES=0 (§10.2.21) empties the Track Properties of the OK or
+// INCLUDE_PROPERTIES=0 (§9.20.21) empties the Track Properties of the OK or
 // forwarded PUBLISH. The subscriber then reads DEFAULT_PUBLISHER_PRIORITY as
-// 128 (§12.4), so the relay writes the priority inline on what it forwards.
+// 128 (§10.4), so the relay writes the priority inline on what it forwards.
 
 const trackDefaultPriority = 7
 
@@ -571,7 +571,7 @@ func TestIncludeProperties_SubscribeOK(t *testing.T) {
 // TestIncludeProperties_SurvivesUpdate: a REQUEST_UPDATE cannot carry
 // INCLUDE_PROPERTIES, so it leaves the subscription's 0 in force: "If a
 // parameter previously set on the request is not present in REQUEST_UPDATE,
-// its value remains unchanged" (§10.9). Subgroups after the update still carry
+// its value remains unchanged" (§9.5). Subgroups after the update still carry
 // the priority inline.
 func TestIncludeProperties_SurvivesUpdate(t *testing.T) {
 	t.Parallel()

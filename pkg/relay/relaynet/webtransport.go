@@ -15,14 +15,14 @@ import (
 // WebTransportALPNs lists the TLS ALPNs of the MOQT-over-WebTransport mapping.
 // WebTransport rides HTTP/3, whose ALPN is "h3" — the "moqt-NN" identifiers belong
 // to raw QUIC ([MOQTQUICALPNs]). The draft version is instead negotiated as the
-// WebTransport sub-protocol (§3.1), which [Listen] offers.
+// WebTransport sub-protocol (§6.2), which [Listen] offers.
 //
 // Pass these alone to [TLSConfig] for a listener that serves *only* WebTransport;
 // [DualALPNs] serves both mappings.
 var WebTransportALPNs = []string{http3.NextProtoH3}
 
 // DialWebTransport dials rawURL — the https URL of a WebTransport endpoint, i.e.
-// the §3.1.4 conversion of a moqt URI — and returns the established session as a
+// the §6.2.1 conversion of a moqt URI — and returns the established session as a
 // [session.Conn], ready for the caller to drive the client-side MOQT SETUP on.
 // It is the WebTransport counterpart of [DialQUIC] and has the shape a relay
 // Dialer expects; tlsCfg must advertise [WebTransportALPNs]. opts tune the QUIC
@@ -37,10 +37,10 @@ func DialWebTransport(ctx context.Context, rawURL string, tlsCfg *tls.Config, op
 		// a bare errors.New, not a sentinel, so it is reportable but not testable
 		// with errors.Is.
 		QUICConfig: quicConfig(opts),
-		// §3.1.4: "The client includes MOQT protocol identifiers in the
+		// §6.2.1: "The client includes MOQT protocol identifiers in the
 		// WT-Available-Protocols header." That header is how a WebTransport
 		// session negotiates the draft version, the way ALPN does it for raw
-		// QUIC (§3.1) — without it the upgrade completes with an empty protocol
+		// QUIC (§6.2) — without it the upgrade completes with an empty protocol
 		// and the version is never agreed. webtransport-go builds the header
 		// from this list and rejects a selection it did not offer.
 		ApplicationProtocols: MOQTQUICALPNs,

@@ -1,5 +1,5 @@
 // Package message implements MoQT control- and request-stream message types
-// per draft-ietf-moq-transport-20. Each Message exposes a wire Type and
+// per draft-ietf-moq-transport-22. Each Message exposes a wire Type and
 // Append/Parse methods over wire.Writer/Reader.
 //
 // Marshal writes a complete control-message frame (Type + Length + Payload).
@@ -15,7 +15,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// Type is the wire type ID for a MoQT message (§10, table 5).
+// Type is the wire type ID for a MoQT message (§9, table 5).
 type Type uint64
 
 const (
@@ -53,7 +53,7 @@ type Message interface {
 }
 
 // WithRequestID is implemented by messages that carry a Request ID as their
-// first field (§10.1). These are the messages that can appear as the first
+// first field (§6.4.2.1). These are the messages that can appear as the first
 // message on a request stream: SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS,
 // PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS, and
 // REQUEST_UPDATE.
@@ -62,7 +62,7 @@ type WithRequestID interface {
 	// GetRequestID returns the Request ID carried by this message.
 	GetRequestID() uint64
 	// SetRequestID overwrites the Request ID carried by this message. The
-	// session uses it to assign a freshly allocated ID (§10.1) after a
+	// session uses it to assign a freshly allocated ID (§6.4.2.1) after a
 	// request stream is opened, so a failed open consumes no ID.
 	SetRequestID(uint64)
 }
@@ -88,7 +88,7 @@ func Parse(src io.Reader) (Message, error) {
 // ErrMalformedMessage is wrapped by every error [ParsePayload] returns, and by
 // every error [Parse] returns once it has read a whole frame: an unknown type,
 // a Length mismatch, or a field that fails validation, each session-fatal
-// (§10). A frame that could not be read whole does not wrap it.
+// (§9). A frame that could not be read whole does not wrap it.
 var ErrMalformedMessage = errors.New("moqt/message: malformed message")
 
 // ParsePayload constructs a Message of the given Type and parses payload into
@@ -116,7 +116,7 @@ func ParsePayload(t Type, payload []byte) (Message, error) {
 
 // validator is implemented by messages that enforce field-level invariants the
 // wire decoder cannot catch on its own (e.g. a FETCH whose full track name
-// exceeds §2.4.1's 4,096-byte cap). ParsePayload invokes Validate after a
+// exceeds §8.7's 4,096-byte cap). ParsePayload invokes Validate after a
 // successful decode so a malformed-but-decodable control message is rejected at
 // the message boundary — the session layer treats the resulting error as a
 // PROTOCOL_VIOLATION — rather than propagating bad state inward.
@@ -125,7 +125,7 @@ type validator interface {
 }
 
 // ErrUnknownType is returned for a message type not implemented by this
-// package. Per §10 the receiver MUST close the session; §10 names no error
+// package. Per §9 the receiver MUST close the session; §9 names no error
 // code for this, and callers close with PROTOCOL_VIOLATION.
 type ErrUnknownType Type
 

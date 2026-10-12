@@ -13,8 +13,8 @@ import (
 )
 
 // Forward State: a FORWARD=0 PUBLISH is resumed for Forward=1 subscribers
-// (§9.5, §9.2), and a subgroup stream that omitted Objects ends with a reset,
-// not a FIN (§11.4.3).
+// (§7.6, §7.2), and a subgroup stream that omitted Objects ends with a reset,
+// not a FIN (§11.3.2).
 
 // pausedPublish PUBLISHes video/cam1 with FORWARD=0 from a new session and
 // delivers each FORWARD value the relay sends back in REQUEST_UPDATE.
@@ -59,7 +59,7 @@ func requireForwardOn(t *testing.T, forwards <-chan bool, when string) {
 }
 
 // TestRelay_PausedPublishResumedForExistingSubscriber: a FORWARD=0 PUBLISH of a
-// track with a Forward=1 subscriber is resumed (§9.5).
+// track with a Forward=1 subscriber is resumed (§7.6).
 func TestRelay_PausedPublishResumedForExistingSubscriber(t *testing.T) {
 	t.Parallel()
 	pubSess, _ := newCam1Publisher(t, nil) // establishes the track
@@ -69,7 +69,7 @@ func TestRelay_PausedPublishResumedForExistingSubscriber(t *testing.T) {
 }
 
 // TestRelay_PausedPublishResumedForLaterSubscriber: a FORWARD=0 PUBLISH is
-// resumed when a Forward=1 subscriber arrives (§9.2).
+// resumed when a Forward=1 subscriber arrives (§7.2).
 func TestRelay_PausedPublishResumedForLaterSubscriber(t *testing.T) {
 	t.Parallel()
 	anchor, teardown := connectRelay(t, relay.Config{})
@@ -80,7 +80,7 @@ func TestRelay_PausedPublishResumedForLaterSubscriber(t *testing.T) {
 }
 
 // TestRelay_PublishInvalidForwardClosesSession: FORWARD other than 0 or 1 on
-// PUBLISH closes the session (§10.2.18).
+// PUBLISH closes the session (§9.20.18).
 func TestRelay_PublishInvalidForwardClosesSession(t *testing.T) {
 	t.Parallel()
 	anchor, teardown := connectRelay(t, relay.Config{})
@@ -98,7 +98,7 @@ func TestRelay_PublishInvalidForwardClosesSession(t *testing.T) {
 
 // TestRelay_ForwardStateOmissionResetsStream: an Object omitted while the
 // subscription is paused (FORWARD=0) makes the stream end with a reset
-// (§11.4.3).
+// (§11.3.2).
 func TestRelay_ForwardStateOmissionResetsStream(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -172,7 +172,7 @@ func requireReset(t *testing.T, end error, why string) {
 }
 
 // TestRelay_SkipBeforeStartKeepsFIN: Objects before the Start Location are the
-// one omission that keeps the FIN (§11.4.3).
+// one omission that keeps the FIN (§11.3.2).
 func TestRelay_SkipBeforeStartKeepsFIN(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -193,9 +193,9 @@ func TestRelay_SkipBeforeStartKeepsFIN(t *testing.T) {
 }
 
 // TestRelay_ForwardStateOmissionKeepsStream: an Object omitted while paused did
-// not pass the subscriber's filters (§5.1.5: "The Forward parameter is also a
+// not pass the subscriber's filters (§3.3.3: "The Forward parameter is also a
 // type of filter"), so the Object after the resume is the next Object and
-// stays on the stream (§11.4.3), which still ends with a reset.
+// stays on the stream (§11.3.2), which still ends with a reset.
 func TestRelay_ForwardStateOmissionKeepsStream(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})
@@ -279,7 +279,7 @@ func TestRelay_ForwardStateOmissionKeepsStream(t *testing.T) {
 
 // TestRelay_StartRaisedToLaterGroupResetsPromptly: a Start raised past the
 // stream's group resets it at its next Object, not when the Subgroup ends
-// (§11.4.3).
+// (§11.3.2).
 func TestRelay_StartRaisedToLaterGroupResetsPromptly(t *testing.T) {
 	t.Parallel()
 	pubSess, teardown := connectRelay(t, relay.Config{})

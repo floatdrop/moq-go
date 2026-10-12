@@ -11,7 +11,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
-// TestRelay_SubscriptionLimit pins §13.1: with MaxSubscriptionsPerSession=1 the
+// TestRelay_SubscriptionLimit pins §15.1: with MaxSubscriptionsPerSession=1 the
 // relay accepts the first SUBSCRIBE and rejects a second concurrent one on the
 // same session with REQUEST_ERROR EXCESSIVE_LOAD.
 func TestRelay_SubscriptionLimit(t *testing.T) {
@@ -52,7 +52,7 @@ func TestRelay_SubscriptionLimit(t *testing.T) {
 }
 
 // requireRetryInvited requires an EXCESSIVE_LOAD refusal whose Retry Interval
-// invites a retry after about a second, jittered (§10.6.2).
+// invites a retry after about a second, jittered (§9.4.2).
 func requireRetryInvited(t *testing.T, err error) {
 	t.Helper()
 	rej, _ := errors.AsType[*session.RequestRejectedError](err)
@@ -64,7 +64,7 @@ func requireRetryInvited(t *testing.T, err error) {
 
 // TestRelay_NamespaceRequestLimit: with MaxNamespaceRequestsPerSession=1 a
 // second concurrent namespace request on the session is EXCESSIVE_LOAD
-// (§13.7.1).
+// (§15.7.1).
 func TestRelay_NamespaceRequestLimit(t *testing.T) {
 	t.Parallel()
 

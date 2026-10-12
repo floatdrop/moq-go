@@ -188,7 +188,7 @@ func (r *TrackRegistry) Get(key track.Key) (*TrackEntry, bool) {
 }
 
 // MatchNamespace returns every entry whose Track Namespace has prefix as a
-// prefix: the tracks a PUBLISH_NAMESPACE for prefix covers (§9.5).
+// prefix: the tracks a PUBLISH_NAMESPACE for prefix covers (§7.6).
 func (r *TrackRegistry) MatchNamespace(prefix wire.TrackNamespace) []*TrackEntry {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -202,7 +202,7 @@ func (r *TrackRegistry) MatchNamespace(prefix wire.TrackNamespace) []*TrackEntry
 }
 
 // ClaimUpstream marks an upstream SUBSCRIBE for key on sess as in flight, so a
-// §9.5 late-publisher SUBSCRIBE does not duplicate one. On success the caller
+// §7.6 late-publisher SUBSCRIBE does not duplicate one. On success the caller
 // opens and registers the upstream, then calls release. ok is false when sess
 // already has a registered upstream for key or another claim is in flight.
 func (r *TrackRegistry) ClaimUpstream(sess *session.Session, key track.Key) (release func(), ok bool) {
@@ -313,13 +313,13 @@ func (r *TrackRegistry) GetOrCreateNew(fullName track.FullTrackName) (entry *Tra
 // It is the counterpart to a speculative [TrackRegistry.GetOrCreateNew] — the
 // PUBLISH path creates the entry before the request is known to succeed, so an
 // inbound data stream cannot arrive against a routable Track Alias with no
-// entry to route it to (§11.1, §10.11). When the request then fails, the entry
+// entry to route it to (§3.1.3, §9.8). When the request then fails, the entry
 // must not linger: [TrackRegistry.Get] answering for it is read as "track
 // known" by the FETCH path, which turns a DOES_NOT_EXIST into an INVALID_RANGE.
 //
 // The watermark and cache are checked as well as the two slices because a
 // DIFFERENT session may have adopted this entry in the meantime and be part
-// way through its own §10.11 window — publishing objects into a track whose
+// way through its own §9.8 window — publishing objects into a track whose
 // AddUpstream has not run yet. Deleting it there would strand exactly the
 // streams this mechanism exists to protect. Callers must additionally only
 // call this when GetOrCreateNew reported created, so an entry another session
@@ -354,7 +354,7 @@ func (r *TrackRegistry) DeleteIfUnused(fullName track.FullTrackName) {
 // GetOrCreate returns the existing entry for fullName, or creates and inserts
 // a new one if none exists yet. The fullName argument (rather than just a
 // Key) is required so a freshly-created entry can be populated with the
-// {namespace, name} tuple §9.6 needs to echo back on outbound replies.
+// {namespace, name} tuple §7.7 needs to echo back on outbound replies.
 //
 // NOTE: GetOrCreate by itself is not sufficient to protect against the
 // resurrection race — between this call returning and the caller acquiring
@@ -458,7 +458,7 @@ func (r *TrackRegistry) AddUpstream(
 	if conf.setProperties && len(entry.Properties) == 0 {
 		// Set Properties INSIDE the entry lock so the Discovery
 		// publish below sees them. Skip if Properties were already
-		// captured by a prior caller — §9.6 expects them to be
+		// captured by a prior caller — §7.7 expects them to be
 		// stable for the lifetime of the track entry, so the first
 		// setter wins.
 		entry.setPropertiesLocked(conf.properties)
@@ -471,7 +471,7 @@ func (r *TrackRegistry) AddUpstream(
 }
 
 // AwaitUpstream returns a channel closed once an upstream is next added for
-// key, for a SUBSCRIBE held until its track has one (§10.2.6), and the stop
+// key, for a SUBSCRIBE held until its track has one (§9.20.6), and the stop
 // that ends the wait.
 func (r *TrackRegistry) AwaitUpstream(key track.Key) (arrived <-chan struct{}, stop func()) {
 	r.mu.Lock()
@@ -487,12 +487,12 @@ type addUpstreamConfig struct {
 	properties    []byte
 }
 
-// WithProperties attaches Track Properties (§9.6) to the entry
+// WithProperties attaches Track Properties (§7.7) to the entry
 // atomically with the first upstream-sub insertion, so the Discovery
 // publish triggered by the same call sees them. Without this, a
 // caller that sets Properties after AddUpstream returns sees an
 // initial Discovery event with empty Properties followed by no
-// update — the §9.6 properties end up missing from the
+// update — the §7.7 properties end up missing from the
 // cross-relay record. Passing them through AddUpstream avoids the gap.
 func WithProperties(props []byte) AddUpstreamOption {
 	return func(c *addUpstreamConfig) {
@@ -540,7 +540,7 @@ func (r *TrackRegistry) AddDownstream(fullName track.FullTrackName, sub *Downstr
 // AddDownstreamSnapshotLargest never creates an entry and requires at least
 // one upstream to still be registered: ok=false means the track's last
 // upstream vanished between the caller's establish check and this call
-// (the §9.4 TOCTOU) — registering the downstream anyway would resurrect a
+// (the §7.4 TOCTOU) — registering the downstream anyway would resurrect a
 // sourceless entry whose subscriber then hangs with neither objects nor
 // PUBLISH_DONE. The caller retries the establish step or rejects.
 func (r *TrackRegistry) AddDownstreamSnapshotLargest(
@@ -634,7 +634,7 @@ func (r *TrackRegistry) RemoveUpstream(
 	r.mu.Unlock()
 
 	if upstreamEmpty {
-		// §10.12: carry the last upstream's reason; see DownstreamDoneCode.
+		// §12.4: carry the last upstream's reason; see DownstreamDoneCode.
 		code := DownstreamDoneCode(gone.publishDone())
 		for _, sub := range notifyDownstreams {
 			sub.TerminateWithPublishDone(code, "relay: upstream gone")
@@ -648,7 +648,7 @@ func (r *TrackRegistry) RemoveUpstream(
 // [TrackRegistry.RemoveUpstream]: (removed, downstreamEmpty, entryDeleted).
 //
 // When the removed subscription was the entry's LAST downstream, the
-// relay's on-demand upstream subscriptions (§9.4 aggregation) have no
+// relay's on-demand upstream subscriptions (§7.4 aggregation) have no
 // consumers left: they are stripped from the entry in the same critical
 // section — so a concurrent SUBSCRIBE cannot latch onto a dying upstream —
 // and torn down via [UpstreamSub.CloseOnDemand] after the locks are
@@ -713,7 +713,7 @@ func (r *TrackRegistry) RemoveDownstream(
 // Deliberate trade-off: when this empties the entry, the entry — including
 // its object cache and LARGEST_OBJECT watermark — is deleted with it, so a
 // FETCH arriving after the last subscriber left cold-starts via a fresh
-// upstream instead of hitting warm cache. The §9.4 aggregation exists to
+// upstream instead of hitting warm cache. The §7.4 aggregation exists to
 // serve live downstreams, not to keep publishers streaming into a void.
 func stripOnDemandLocked(entry *TrackEntry) (stranded []*UpstreamSub) {
 	entry.Upstream = slices.DeleteFunc(entry.Upstream, func(u *UpstreamSub) bool {

@@ -20,9 +20,9 @@ import (
 var ErrPaddingStream = errors.New("moqt/session: padding stream received (ignorable)")
 
 // ErrMalformedTrack wraps the error a read returns for an Object that makes
-// its track malformed (§2.4.2), such as Object Properties that fail
+// its track malformed (§12.1), such as Object Properties that fail
 // [message.CheckObjectProperties]. The session stays up; the caller MUST
-// cancel the corresponding subscription or fetch (§2.4.2).
+// cancel the corresponding subscription or fetch (§12.1).
 var ErrMalformedTrack = errors.New("moqt/session: malformed track")
 
 // ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ var ErrMalformedTrack = errors.New("moqt/session: malformed track")
 type DataStream interface {
 	// Read returns body bytes that follow the parsed header.
 	Read(p []byte) (int, error)
-	// Cancel resets the stream with the given application code (§3.3.4).
+	// Cancel resets the stream with the given application code (§12.5).
 	Cancel(code moqt.StreamResetCode)
 	// isDataStream seals the interface to this package.
 	isDataStream()
@@ -55,7 +55,7 @@ type DataStream interface {
 // carried across calls), or Read (raw bytes). The peer's FIN surfaces as
 // io.EOF from any of these methods.
 type IncomingSubgroupStream struct {
-	// Header is the parsed SUBGROUP_HEADER (§11.4.2).
+	// Header is the parsed SUBGROUP_HEADER (§11.3.1).
 	Header message.SubgroupHeader
 	src    ReceiveStream
 	br     *bufio.Reader
@@ -67,10 +67,10 @@ type IncomingSubgroupStream struct {
 	// SubgroupObject.Parse).
 	rd *wire.StreamReader
 
-	// Decoder state, kept by ReadObject (§11.4.2).
+	// Decoder state, kept by ReadObject (§11.3.1).
 	decPrevObject       uint64
 	decHavePrev         bool
-	decSubgroupID       uint64 // resolved per §11.4.2 (zero / first-object / explicit)
+	decSubgroupID       uint64 // resolved per §11.3.1 (zero / first-object / explicit)
 	decSubgroupResolved bool
 
 	// sess is the owning session, used by TrackKey to resolve Header.TrackAlias
@@ -79,14 +79,14 @@ type IncomingSubgroupStream struct {
 }
 
 // TrackKey returns the track this subgroup belongs to, resolved from the
-// stream's §11.1 Track Alias (Header.TrackAlias) via the inbound alias registry
+// stream's §3.1.3 Track Alias (Header.TrackAlias) via the inbound alias registry
 // the session populates on SUBSCRIBE_OK and [Request.AcceptPublish]. The second
 // result is false when the alias is not registered, in which case callers fall
 // back to Header.TrackAlias and their own mapping.
 //
 // Resolution is live: it queries the registry at call time, not at accept time.
 // So if a subgroup stream is accepted before the SUBSCRIBE_OK that binds its
-// alias (a legitimate §11.1 ordering), a TrackKey call once the alias has been
+// alias (a legitimate §3.1.3 ordering), a TrackKey call once the alias has been
 // registered resolves correctly rather than being pinned to a stale snapshot.
 func (s *IncomingSubgroupStream) TrackKey() (track.Key, bool) {
 	return s.sess.LookupInboundTrackAlias(s.Header.TrackAlias)
@@ -100,10 +100,10 @@ func (s *IncomingSubgroupStream) InboundTrack() (InboundTrack, bool) {
 
 // AwaitInboundTrack is [IncomingSubgroupStream.InboundTrack] that waits for
 // the stream's Track Alias to be registered, until ctx ends or the session
-// closes (§11.4.2 allows buffering "for a brief period").
+// closes (§3.1.3.1 allows buffering "for a brief period").
 //
 // The unread stream holds connection flow control, and the bundled transports
-// do not reserve it for control streams (§11.4.2), so early data can stall
+// do not reserve it for control streams (§3.1.3.1), so early data can stall
 // the SUBSCRIBE_OK being waited for. Keep ctx's bound short.
 func (s *IncomingSubgroupStream) AwaitInboundTrack(ctx context.Context) (InboundTrack, bool) {
 	return s.sess.awaitInboundTrack(ctx, s.Header.TrackAlias)
@@ -115,18 +115,18 @@ func (s *IncomingSubgroupStream) isDataStream() {}
 // for correctly-framed object access.
 func (s *IncomingSubgroupStream) Read(p []byte) (int, error) { return s.br.Read(p) }
 
-// ObjectID returns the absolute Object ID (§11.4.2) of the Object last read,
+// ObjectID returns the absolute Object ID (§11.3.1) of the Object last read,
 // including one returned with [ErrMalformedTrack].
 func (s *IncomingSubgroupStream) ObjectID() uint64 { return s.decPrevObject }
 
-// Cancel resets the stream with the given application code (§3.3.4).
+// Cancel resets the stream with the given application code (§12.5).
 func (s *IncomingSubgroupStream) Cancel(code moqt.StreamResetCode) {
 	s.src.CancelRead(uint64(code))
 }
 
 // ReadObject reads the next framed SubgroupObject from the stream body.
 // Returns (nil, io.EOF) when the peer has FIN'd the stream cleanly. The
-// returned [message.SubgroupObject] holds the raw §11.4.2 ObjectIDDelta;
+// returned [message.SubgroupObject] holds the raw §11.3.1 ObjectIDDelta;
 // use [IncomingSubgroupStream.ReadDecoded] when you want absolute IDs and
 // implicit SubgroupID resolution done for you.
 //
@@ -137,11 +137,11 @@ func (s *IncomingSubgroupStream) ReadObject() (*message.SubgroupObject, error) {
 	if err := obj.Parse(s.rd, s.Header.Properties); err != nil {
 		return nil, s.sess.checkFINMidObject(err)
 	}
-	// §11.2.1.1, §11.2.1.2.
+	// §11.1.1, §11.1.2.
 	if err := obj.Validate(); err != nil {
 		return nil, s.sess.closeProtocolViolation(fmt.Errorf("moqt/session: subgroup object: %w", err))
 	}
-	// §11.4.2. Resolved here so the Properties check has the absolute ID.
+	// §11.3.1. Resolved here so the Properties check has the absolute ID.
 	objectID := obj.ObjectIDDelta
 	if s.decHavePrev {
 		var err error
@@ -150,7 +150,7 @@ func (s *IncomingSubgroupStream) ReadObject() (*message.SubgroupObject, error) {
 		}
 	}
 	s.decPrevObject, s.decHavePrev = objectID, true
-	// Resolve the §11.4.2 SubgroupID once per stream, before the Properties
+	// Resolve the §11.3.1 SubgroupID once per stream, before the Properties
 	// check, so a malformed first Object still sets it.
 	if !s.decSubgroupResolved {
 		switch s.Header.SubgroupIDMode {
@@ -171,7 +171,7 @@ func (s *IncomingSubgroupStream) ReadObject() (*message.SubgroupObject, error) {
 	return obj, nil
 }
 
-// DecodedSubgroupObject is the absolute-coordinates view of one §11.4.2
+// DecodedSubgroupObject is the absolute-coordinates view of one §11.3.1
 // SubgroupObject. ReadDecoded reconstructs the absolute ObjectID from the
 // per-object delta + the running previous ObjectID, and resolves the
 // SubgroupID from the header's [message.SubgroupIDMode]:
@@ -192,7 +192,7 @@ type DecodedSubgroupObject struct {
 	Payload      []byte
 }
 
-// ReadDecoded reads the next SubgroupObject and resolves §11.4.2 deltas
+// ReadDecoded reads the next SubgroupObject and resolves §11.3.1 deltas
 // into absolute coordinates, carrying decoder state across calls.
 // Returns (nil, io.EOF) on clean stream FIN.
 //
@@ -226,7 +226,7 @@ func (s *IncomingSubgroupStream) ReadDecoded() (*DecodedSubgroupObject, error) {
 // calls), or Read (raw bytes). The peer's FIN surfaces as io.EOF from any of
 // these methods.
 type IncomingFetchStream struct {
-	// Header is the parsed FETCH_HEADER (§11.4.4).
+	// Header is the parsed FETCH_HEADER (§11.4.1).
 	Header message.FetchHeader
 	src    ReceiveStream
 	br     *bufio.Reader
@@ -238,14 +238,14 @@ type IncomingFetchStream struct {
 	sess *Session
 
 	// GroupOrder tells [IncomingFetchStream.ReadDecoded] how to
-	// interpret cross-group GroupIDDeltas (§11.4.4.1): ascending →
+	// interpret cross-group GroupIDDeltas (§11.4.1.1): ascending →
 	// newGroup = prevGroup + delta + 1; descending → newGroup =
-	// prevGroup - delta - 1. The §11.4.4 wire format does not encode
+	// prevGroup - delta - 1. The §11.4.1 wire format does not encode
 	// the direction; the caller knows it from the GROUP_ORDER
-	// parameter it sent in FETCH (§10.2.8: Ascending when omitted) or,
+	// parameter it sent in FETCH (§9.20.8: Ascending when omitted) or,
 	// for a fill fetch stream, from FILL_PARAMETERS, else the
-	// subscription's group order (§10.2.15), which defaults to the
-	// Track's publisher preference (§10.2.8). Defaults to ascending when
+	// subscription's group order (§9.20.15), which defaults to the
+	// Track's publisher preference (§9.20.8). Defaults to ascending when
 	// unset (zero value).
 	GroupOrder message.GroupOrder
 
@@ -254,10 +254,10 @@ type IncomingFetchStream struct {
 	// current object's deltas.
 	//
 	// decHavePrev means a prior Group/Object ID exists — a real object OR
-	// a §11.4.4.2 End-of-Range marker (markers ARE the prior for the
+	// a §11.4.1.2 End-of-Range marker (markers ARE the prior for the
 	// Group/Object dimension). decHaveActual means a real object was
 	// decoded: only then do a prior Subgroup ID and prior Priority exist —
-	// §11.4.4.2: "If there was no prior Object, using a flag that
+	// §11.4.1.2: "If there was no prior Object, using a flag that
 	// references the prior Subgroup ID [or Priority] is a
 	// PROTOCOL_VIOLATION."
 	decPrevGroup    uint64
@@ -274,7 +274,7 @@ func (s *IncomingFetchStream) isDataStream() {}
 // for correctly-framed object access.
 func (s *IncomingFetchStream) Read(p []byte) (int, error) { return s.br.Read(p) }
 
-// Cancel resets the stream with the given application code (§3.3.4).
+// Cancel resets the stream with the given application code (§12.5).
 func (s *IncomingFetchStream) Cancel(code moqt.StreamResetCode) {
 	s.src.CancelRead(uint64(code))
 }
@@ -282,13 +282,13 @@ func (s *IncomingFetchStream) Cancel(code moqt.StreamResetCode) {
 // ReadObject reads the next framed FetchObject from the stream body.
 // Returns (nil, io.EOF) when the peer has FIN'd the stream cleanly. Fields
 // on the returned [message.FetchObject] are raw — GroupIDDelta and
-// ObjectIDDelta carry §11.4.4 wire deltas, not absolute IDs. Use
+// ObjectIDDelta carry §11.4.1 wire deltas, not absolute IDs. Use
 // [IncomingFetchStream.ReadDecoded] when you want absolute IDs reconstructed
 // for you.
 func (s *IncomingFetchStream) ReadObject() (*message.FetchObject, error) {
 	obj := &message.FetchObject{}
 	if err := obj.Parse(s.rd); err != nil {
-		// §11.4.4: a Serialization Flags value of 128 or more that is not
+		// §11.4.1: a Serialization Flags value of 128 or more that is not
 		// an End of Range marker "is a PROTOCOL_VIOLATION".
 		if errors.Is(err, message.ErrInvalidFetchFlags) {
 			return nil, s.sess.closeProtocolViolation(fmt.Errorf("moqt/session: fetch object: %w", err))
@@ -298,12 +298,12 @@ func (s *IncomingFetchStream) ReadObject() (*message.FetchObject, error) {
 	return obj, nil
 }
 
-// DecodedFetchObject is the absolute-coordinates view of one §11.4.4
+// DecodedFetchObject is the absolute-coordinates view of one §11.4.1
 // FetchObject. ReadDecoded reconstructs GroupID / ObjectID / SubgroupID /
 // PublisherPriority from the wire deltas + previous objects so the caller
 // doesn't have to maintain state itself.
 //
-// End-of-range markers (§11.4.4.2) surface via EndOfNonExistentRange,
+// End-of-range markers (§11.4.1.2) surface via EndOfNonExistentRange,
 // EndOfUnknownRange or EndOfTimedOutRange; for those, GroupID / ObjectID hold the absolute range
 // boundary the marker carries and the payload / properties fields are zero.
 type DecodedFetchObject struct {
@@ -314,17 +314,17 @@ type DecodedFetchObject struct {
 	Properties        []byte
 	Payload           []byte
 
-	// Datagram reports the §11.4.4.1 Datagram bit (0x40): the object was
+	// Datagram reports the §11.4.1.1 Datagram bit (0x40): the object was
 	// published with Forwarding Preference "Datagram" and has no Subgroup
 	// ID (SubgroupID is 0).
 	Datagram bool
 
-	EndOfNonExistentRange bool // §11.4.4.2 flag 0x8C
-	EndOfUnknownRange     bool // §11.4.4.2 flag 0x10C
-	EndOfTimedOutRange    bool // §11.4.4.2 flag 0x20C (draft-20)
+	EndOfNonExistentRange bool // §11.4.1.2 flag 0x8C
+	EndOfUnknownRange     bool // §11.4.1.2 flag 0x10C
+	EndOfTimedOutRange    bool // §11.4.1.2 flag 0x20C (draft-20)
 }
 
-// IsEndOfRange reports whether this is any §11.4.4.2 end-of-range marker rather
+// IsEndOfRange reports whether this is any §11.4.1.2 end-of-range marker rather
 // than a delivered Object. Markers describe a span of Locations — non-existent,
 // unknown, or timed out — and carry no payload, subgroup, priority or
 // properties, so most consumers want to skip them as a group. Prefer this over
@@ -335,17 +335,17 @@ func (d *DecodedFetchObject) IsEndOfRange() bool {
 	return d.EndOfNonExistentRange || d.EndOfUnknownRange || d.EndOfTimedOutRange
 }
 
-// ReadDecoded reads the next FetchObject and resolves §11.4.4 deltas
+// ReadDecoded reads the next FetchObject and resolves §11.4.1 deltas
 // into absolute coordinates, carrying decoder state across calls.
 // Returns (nil, io.EOF) on clean stream FIN.
 //
-// Subgroup-ID encoding modes (§11.4.4.1): Zero, Prior, PriorPlusOne, and
+// Subgroup-ID encoding modes (§11.4.1.1): Zero, Prior, PriorPlusOne, and
 // Explicit are all resolved against the previous object's SubgroupID.
 // Priority is inherited from the previous object when the per-object
 // PRIORITY flag is absent.
 //
 // The first object on the stream carries absolute GroupID / ObjectID
-// directly in the delta fields (per §11.4.4.1); subsequent objects' deltas
+// directly in the delta fields (per §11.4.1.1); subsequent objects' deltas
 // are interpreted using [IncomingFetchStream.GroupOrder] for cross-group
 // transitions.
 //
@@ -358,7 +358,7 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		return nil, err
 	}
 
-	// §11.4.4.2: end-of-range markers carry absolute Group/Object IDs in
+	// §11.4.1.2: end-of-range markers carry absolute Group/Object IDs in
 	// the otherwise-delta fields — and those values become the "prior
 	// Group ID and prior Object ID" for the next object. The prior
 	// Subgroup ID / Priority stay those of the last ACTUAL object
@@ -382,7 +382,7 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		Payload:    raw.ObjectPayload,
 	}
 
-	// §11.4.4.1 / §11.4.4.2: flags referencing the prior Object's Subgroup
+	// §11.4.1.1 / §11.4.1.2: flags referencing the prior Object's Subgroup
 	// ID or Priority are a PROTOCOL_VIOLATION until a real (non-End-of-Range)
 	// object has been decoded.
 	if !s.decHaveActual {
@@ -404,7 +404,7 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 	// Group / Object reconstruction.
 	switch {
 	case !s.decHavePrev:
-		// §11.4.4.1: the first object carries absolute Group and Object IDs.
+		// §11.4.1.1: the first object carries absolute Group and Object IDs.
 		// An End-of-Range marker counts as a prior here.
 		if raw.SerializationFlags&message.FetchFlagGroupIDDelta == 0 ||
 			raw.SerializationFlags&message.FetchFlagObjectIDDelta == 0 {
@@ -415,7 +415,7 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		d.GroupID = raw.GroupIDDelta
 		d.ObjectID = raw.ObjectIDDelta
 	default:
-		// §11.4.4.1: unlike §11.4.2, a present Object ID Delta carries no
+		// §11.4.1.1: unlike §11.3.1, a present Object ID Delta carries no
 		// implicit +1; an absent one means the prior ID plus one, in any
 		// group. An ID outside 0..2^64-1 is a PROTOCOL_VIOLATION.
 		var over uint64
@@ -445,10 +445,10 @@ func (s *IncomingFetchStream) ReadDecoded() (*DecodedFetchObject, error) {
 		}
 	}
 
-	// SubgroupID reconstruction per §11.4.4.1 modes. Datagram objects
+	// SubgroupID reconstruction per §11.4.1.1 modes. Datagram objects
 	// (bit 0x40) have no Subgroup ID and the mode bits are ignored; they
 	// also don't become the "prior Object's Subgroup ID" for later objects
-	// (the spec is silent here; this mirrors the §11.4.4.2 rule that the
+	// (the spec is silent here; this mirrors the §11.4.1.2 rule that the
 	// prior Subgroup ID comes from the last actual subgroup object).
 	if !d.Datagram {
 		switch raw.SubgroupMode() {
@@ -507,13 +507,13 @@ func (s *IncomingFetchStream) decGroupOrder() message.GroupOrder {
 // *IncomingFetchStream; callers type-switch to obtain the typed stream.
 //
 // A stream that ends or is reset before its header is complete is skipped
-// (§11.4.1). Interpretation: a FIN mid-header is treated the same, since §11.4
+// (§11.3.2). Interpretation: a FIN mid-header is treated the same, since §11.3
 // asks for PROTOCOL_VIOLATION only on a FIN mid-Object. The returned errors
 // are:
 //   - ErrPaddingStream when a padding stream (§11.5.1) is received — callers
 //     SHOULD loop and call AcceptDataStream again;
-//   - *message.UnknownDataStreamTypeError (§3.4) or
-//     *message.ReservedSubgroupIDModeError (§11.4.2); AcceptDataStream has
+//   - *message.UnknownDataStreamTypeError (§6.4.1) or
+//     *message.ReservedSubgroupIDModeError (§11.3.1); AcceptDataStream has
 //     already closed the session with PROTOCOL_VIOLATION;
 //   - transport-level errors (session closed, ctx cancelled), unwrapped from
 //     the underlying conn.
@@ -530,8 +530,8 @@ func (s *Session) AcceptDataStream(ctx context.Context) (DataStream, error) {
 }
 
 // checkFINMidObject closes the session with PROTOCOL_VIOLATION when a data
-// stream ended with a FIN mid-Object (§11.4), which the parsers report as
-// io.ErrUnexpectedEOF; a reset is left alone (§11.4.1). err is returned
+// stream ended with a FIN mid-Object (§11.3), which the parsers report as
+// io.ErrUnexpectedEOF; a reset is left alone (§11.3.2). err is returned
 // unchanged.
 func (s *Session) checkFINMidObject(err error) error {
 	if errors.Is(err, io.ErrUnexpectedEOF) {
@@ -590,11 +590,11 @@ func (s *Session) acceptDataStream(ctx context.Context) (DataStream, error) {
 		src.CancelRead(uint64(moqt.StreamResetInternalError))
 		return nil, ErrPaddingStream
 	case message.IsReservedSubgroupHeaderType(typ):
-		// §11.4.2: SUBGROUP_ID_MODE 0b11 is reserved.
+		// §11.3.1: SUBGROUP_ID_MODE 0b11 is reserved.
 		src.CancelRead(uint64(moqt.StreamResetInternalError))
 		return nil, s.closeProtocolViolation(&message.ReservedSubgroupIDModeError{Type: typ})
 	default:
-		// §3.4: unknown stream type.
+		// §6.4.1: unknown stream type.
 		src.CancelRead(uint64(moqt.StreamResetInternalError))
 		return nil, s.closeProtocolViolation(&message.UnknownDataStreamTypeError{Type: typ})
 	}

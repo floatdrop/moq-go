@@ -65,7 +65,7 @@ func metricsPath(healthPath string) string {
 //
 // The shutdown is tied to ctx rather than left to the caller because of WHEN it
 // has to happen. A relay's own shutdown returns only once the GOAWAY drain has
-// finished (§10.4), so an endpoint torn down after that keeps reporting the
+// finished (§9.2), so an endpoint torn down after that keeps reporting the
 // relay healthy for the whole drain — and keeps a load balancer sending it
 // connections it is about to refuse. Cancelling ctx takes the endpoint down
 // first, which is the order an orchestrator needs.

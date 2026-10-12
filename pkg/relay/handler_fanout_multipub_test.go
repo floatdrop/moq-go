@@ -18,7 +18,7 @@ import (
 
 // TestFanout_MultiPublisher_DeduplicatesObjects: two publishers sending the
 // same Objects of one track reach the subscriber as one stream with each Object
-// once (§9.3, §2.1, §2.2).
+// once (§7.3, §2.1, §2.2).
 func TestFanout_MultiPublisher_DeduplicatesObjects(t *testing.T) {
 	t.Parallel()
 
@@ -74,7 +74,7 @@ func TestFanout_MultiPublisher_DeduplicatesObjects(t *testing.T) {
 	for i := range 3 {
 		if err := bSg.WriteObject(&message.SubgroupObject{
 			ObjectIDDelta: 0,
-			Payload:       []byte{byte('A' + i)}, // the same Object: §9.1 forbids another Payload
+			Payload:       []byte{byte('A' + i)}, // the same Object: §7.1 forbids another Payload
 		}); err != nil {
 			t.Fatalf("B WriteObject #%d: %v", i, err)
 		}
@@ -159,7 +159,7 @@ func TestFanout_MultiPublisher_DedupSurvivesCacheEviction(t *testing.T) {
 	for i := range n {
 		if err := bSg.WriteObject(&message.SubgroupObject{
 			ObjectIDDelta: 0,
-			Payload:       []byte{byte('A' + i)}, // the same Object: §9.1 forbids another Payload
+			Payload:       []byte{byte('A' + i)}, // the same Object: §7.1 forbids another Payload
 		}); err != nil {
 			t.Fatalf("B WriteObject #%d: %v", i, err)
 		}
@@ -186,7 +186,7 @@ func TestFanout_MultiPublisher_DedupSurvivesCacheEviction(t *testing.T) {
 
 // TestFanout_MultiPublisher_FailoverContinuesFromSurvivor: resetting one of two
 // publishers mid-stream leaves the subscriber's stream to the survivor, which
-// FINs it cleanly (§9.3, §2.2).
+// FINs it cleanly (§7.3, §2.2).
 func TestFanout_MultiPublisher_FailoverContinuesFromSurvivor(t *testing.T) {
 	t.Parallel()
 
@@ -265,7 +265,7 @@ func TestFanout_MultiPublisher_FailoverContinuesFromSurvivor(t *testing.T) {
 }
 
 // TestFanout_MultiPublisher_SurvivorFINsOnlyWhatItCovers: a merged Subgroup
-// FINs only when every Object in it was delivered (§11.4.3: "If a sender
+// FINs only when every Object in it was delivered (§11.3.2: "If a sender
 // closes the stream before delivering all such objects to the QUIC stream, it
 // MUST reset the stream"). A survivor's replay stream that FINs vouches only
 // for the Objects from its own first one on, so the relay FINs when the
@@ -295,7 +295,7 @@ func TestFanout_MultiPublisher_SurvivorFINsOnlyWhatItCovers(t *testing.T) {
 		// that continues the run resets.
 		{"replay after A left continues the run", []uint64{0, 1}, []uint64{2, 3}, true, false},
 		// A replay covering from that lowest Object still FINs; its copies
-		// of 0 and 1 are redundant (§9.3), so only 2 and 3 are forwarded.
+		// of 0 and 1 are redundant (§7.3), so only 2 and 3 are forwarded.
 		{"replay after A left covers from the lowest Object", []uint64{0, 1}, []uint64{0, 1, 2, 3}, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -311,7 +311,7 @@ func TestFanout_MultiPublisher_SurvivorFINsOnlyWhatItCovers(t *testing.T) {
 			events := make(chan objEvent, 32)
 			go readSubgroups(t.Context(), subSess, events)
 			// await reads the next Object, skipping the end of a stream the
-			// relay reset to reopen after a gap (§11.4.3).
+			// relay reset to reopen after a gap (§11.3.2).
 			await := func(want uint64) {
 				t.Helper()
 				for {
@@ -353,7 +353,7 @@ func TestFanout_MultiPublisher_SurvivorFINsOnlyWhatItCovers(t *testing.T) {
 				t.Fatalf("B OpenSubgroup: %v", err)
 			}
 			for _, id := range tc.b {
-				// The same Object as A's, if A sent it: §9.1 forbids another Payload.
+				// The same Object as A's, if A sent it: §7.1 forbids another Payload.
 				if err := b.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte{byte(id)}}); err != nil {
 					t.Fatalf("B WriteObjectAt %d: %v", id, err)
 				}
@@ -416,7 +416,7 @@ func TestFanout_MultiPublisher_MergesDisjointObjects(t *testing.T) {
 		t.Fatalf("B OpenSubgroup: %v", err)
 	}
 
-	// A: absolute IDs 0,2,4. B: 1,3,5. WriteObjectAt computes the §11.4.2 delta.
+	// A: absolute IDs 0,2,4. B: 1,3,5. WriteObjectAt computes the §11.3.1 delta.
 	for _, id := range []uint64{0, 2, 4} {
 		if err := aSg.WriteObjectAt(id, &message.SubgroupObject{Payload: []byte("a")}); err != nil {
 			t.Fatalf("A WriteObjectAt %d: %v", id, err)
@@ -455,7 +455,7 @@ func TestFanout_MultiPublisher_MergesDisjointObjects(t *testing.T) {
 
 	// A ends with a reset: a FIN would make its last Object, 4, the
 	// Subgroup's final one, and B's 5 past it would make the track malformed
-	// (§2.4.2).
+	// (§12.1).
 	aSg.Cancel(moqt.StreamResetCancelled)
 	if err := bSg.Close(); err != nil {
 		t.Fatalf("B Close: %v", err)
@@ -494,8 +494,8 @@ func awaitStreamEnd(t *testing.T, events <-chan objEvent) objEvent {
 }
 
 // TestFanout_MultiPublisher_ForwardsEveryContributorsProperties: Object
-// Properties MUST be forwarded (§2.5), whichever contributor's SUBGROUP_HEADER
-// set the merged stream's PROPERTIES bit (§11.4.2).
+// Properties MUST be forwarded (§8.4), whichever contributor's SUBGROUP_HEADER
+// set the merged stream's PROPERTIES bit (§11.3.1).
 func TestFanout_MultiPublisher_ForwardsEveryContributorsProperties(t *testing.T) {
 	t.Parallel()
 	props := message.AppendTrackProperties([]wire.KVPair{{Type: 0x40, IntVal: 7}})
@@ -593,7 +593,7 @@ func TestFanout_MultiPublisher_ForwardsEveryContributorsProperties(t *testing.T)
 				t.Fatalf("Object 1 Properties = %x, want %x", r.props, bProps)
 			}
 			// B's header claims FIRST_OBJECT, but a stream beginning with Object 1
-			// is mid-Subgroup (§11.4.2): Object 0 went out first.
+			// is mid-Subgroup (§11.3.1): Object 0 went out first.
 			if r.stream != r0.stream && !r.replay {
 				t.Fatal("Object 1's new stream sets FIRST_OBJECT, though Object 0 was sent before it")
 			}
@@ -656,7 +656,7 @@ func awaitHeader(t *testing.T, ch <-chan message.SubgroupHeader) message.Subgrou
 
 // TestFanout_MultiPublisher_FirstObjectOnlyForSubgroupsFirst: Objects are
 // published in ascending ID order (§2.2), so a contributor's FIRST_OBJECT
-// claim holds unless an Object with a lower ID was forwarded (§11.4.2, §2.2),
+// claim holds unless an Object with a lower ID was forwarded (§11.3.1, §2.2),
 // whether or not a given subscriber got it.
 func TestFanout_MultiPublisher_FirstObjectOnlyForSubgroupsFirst(t *testing.T) {
 	t.Parallel()
@@ -726,7 +726,7 @@ func TestFanout_MultiPublisher_FirstObjectOnlyForSubgroupsFirst(t *testing.T) {
 
 // TestFanout_MultiPublisher_FirstObjectAfterTeardown: the lowest Object
 // forwarded in a Subgroup outlives its contributors, so a later contributor's
-// FIRST_OBJECT claim above it is still not honoured (§11.4.2, §2.2).
+// FIRST_OBJECT claim above it is still not honoured (§11.3.1, §2.2).
 func TestFanout_MultiPublisher_FirstObjectAfterTeardown(t *testing.T) {
 	t.Parallel()
 	pubA, teardown := connectRelay(t, relay.Config{})
@@ -771,7 +771,7 @@ func TestFanout_MultiPublisher_FirstObjectAfterTeardown(t *testing.T) {
 	}
 
 	// A sends Objects 0..2 and resets: a FIN would end the Subgroup there,
-	// making B's Object 3 malformed (§2.4.2).
+	// making B's Object 3 malformed (§12.1).
 	hdr := message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit}
 	a, err := aPub.OpenSubgroup(hdr)
 	if err != nil {

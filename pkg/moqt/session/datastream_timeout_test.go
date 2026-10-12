@@ -17,7 +17,7 @@ import (
 
 // TestObjectDeliveryTimeoutObjectPropertyOverride: an OBJECT_DELIVERY_TIMEOUT
 // Object Property on the subgroup's first Object overrides the Track value
-// (§12.2), so a write past the shorter timeout resets the stream.
+// (§10.2), so a write past the shorter timeout resets the stream.
 func TestObjectDeliveryTimeoutObjectPropertyOverride(t *testing.T) {
 	client, server := openPair(t)
 
@@ -45,7 +45,7 @@ func TestObjectDeliveryTimeoutObjectPropertyOverride(t *testing.T) {
 		}
 		out = out.WithDeliveryTimeouts(message.DeliveryTimeouts{Object: trackTimeout}, message.DeliveryTimeouts{})
 
-		// First object carries the OBJECT_DELIVERY_TIMEOUT override (§12.2).
+		// First object carries the OBJECT_DELIVERY_TIMEOUT override (§10.2).
 		first := &message.SubgroupObject{
 			ObjectIDDelta: 0,
 			Properties: message.AppendTrackProperties([]wire.KVPair{
@@ -60,7 +60,7 @@ func TestObjectDeliveryTimeoutObjectPropertyOverride(t *testing.T) {
 
 		// A second object that was received a while ago — long enough to breach
 		// the overridden (short) timeout, but nowhere near the Track-level one.
-		// Its age is what decides, not the stream's: §8 measures each object
+		// Its age is what decides, not the stream's: §5.2 measures each object
 		// from its own receipt, so the write below is rejected while an object
 		// received just now would still go out on this same stream.
 		second := &message.SubgroupObject{ObjectIDDelta: 1, Properties: []byte{}, Payload: []byte("second")}
@@ -74,7 +74,7 @@ func TestObjectDeliveryTimeoutObjectPropertyOverride(t *testing.T) {
 	}
 }
 
-// TestObjectDeliveryTimeoutIsPerObjectNotPerStream: the §8 clock runs per
+// TestObjectDeliveryTimeoutIsPerObjectNotPerStream: the §5.2 clock runs per
 // Object, so fresh Objects keep passing however long the stream is open. Only a
 // sender that is never late tells this apart from a per-stream clock.
 func TestObjectDeliveryTimeoutIsPerObjectNotPerStream(t *testing.T) {
@@ -135,7 +135,7 @@ func TestObjectDeliveryTimeoutIsPerObjectNotPerStream(t *testing.T) {
 
 // TestObjectDeliveryTimeoutOverrideCannotOutrankSubscriber: the first-object
 // override replaces only the publisher's value, and the smaller of that and the
-// subscriber's is used (§8), so a publisher cannot lengthen a subscriber's timeout.
+// subscriber's is used (§5.2), so a publisher cannot lengthen a subscriber's timeout.
 func TestObjectDeliveryTimeoutOverrideCannotOutrankSubscriber(t *testing.T) {
 	client, server := openPair(t)
 
@@ -194,8 +194,8 @@ func TestObjectDeliveryTimeoutOverrideCannotOutrankSubscriber(t *testing.T) {
 }
 
 // TestObjectDeliveryTimeoutOverrideIgnoredOnReplayStream: the override applies
-// only to the subgroup's first Object (§12.2), not the first Object of a replay
-// stream (FIRST_OBJECT clear, §11.4.2). Here it would stretch 50 ms to 10 s.
+// only to the subgroup's first Object (§10.2), not the first Object of a replay
+// stream (FIRST_OBJECT clear, §11.3.1). Here it would stretch 50 ms to 10 s.
 func TestObjectDeliveryTimeoutOverrideIgnoredOnReplayStream(t *testing.T) {
 	client, server := openPair(t)
 
@@ -266,7 +266,7 @@ func TestObjectDeliveryTimeoutOverrideIgnoredOnReplayStream(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestObjectDeliveryTimeoutWriteRawIsNotEnforced: raw Write carries no Object
-// boundaries or receipt time, so it does not enforce the per-Object §8 timeout;
+// boundaries or receipt time, so it does not enforce the per-Object §5.2 timeout;
 // WriteObjectReceivedAt does.
 func TestObjectDeliveryTimeoutWriteRawIsNotEnforced(t *testing.T) {
 	client, server := openPair(t)
@@ -416,7 +416,7 @@ func TestObjectDeliveryTimeoutDisabled(t *testing.T) {
 
 // TestSubgroupDeliveryTimeoutReset: a closed subgroup the peer has not fully
 // acknowledged within SUBGROUP_DELIVERY_TIMEOUT is reset with DELIVERY_TIMEOUT
-// (§8). Only the DeliveryTrackingSendStream signal reports delivery.
+// (§5.2). Only the DeliveryTrackingSendStream signal reports delivery.
 func TestSubgroupDeliveryTimeoutReset(t *testing.T) {
 	t.Parallel()
 	fake := newFinishingSendStream()

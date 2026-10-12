@@ -10,7 +10,7 @@ import (
 )
 
 // TestWithMaxRequestUpdatesAdvertised checks WithMaxRequestUpdates puts the
-// MAX_REQUEST_UPDATES option (§10.3.1.7, type 0x08) on the wire so the peer
+// MAX_REQUEST_UPDATES option (§9.1.7, type 0x08) on the wire so the peer
 // observes it in PeerOptions.
 func TestWithMaxRequestUpdatesAdvertised(t *testing.T) {
 	t.Parallel()
@@ -35,7 +35,7 @@ func TestWithMaxRequestUpdatesAdvertised(t *testing.T) {
 }
 
 // TestRequestUpdateLimiter exercises the per-stream MAX_REQUEST_UPDATES counter
-// (§10.3.1.7) directly: with a limit of 2, a third un-acknowledged update is
+// (§9.1.7) directly: with a limit of 2, a third un-acknowledged update is
 // rejected, and each Responded restores exactly one credit.
 func TestRequestUpdateLimiter(t *testing.T) {
 	t.Parallel()
@@ -83,7 +83,7 @@ func TestRequestUpdateLimiterUnlimited(t *testing.T) {
 }
 
 // TestAcceptRequestRejectsStrayRequestUpdate checks that a REQUEST_UPDATE sent
-// as the first message of a freshly opened request stream is a §10.9
+// as the first message of a freshly opened request stream is a §9.5
 // PROTOCOL_VIOLATION: AcceptRequest returns *ErrUnexpectedRequestUpdate (the
 // caller closes the session).
 func TestAcceptRequestRejectsStrayRequestUpdate(t *testing.T) {
@@ -94,7 +94,7 @@ func TestAcceptRequestRejectsStrayRequestUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenStream: %v", err)
 	}
-	// Client Request IDs are even (§10.1), so 0 is a well-formed ID — the
+	// Client Request IDs are even (§6.4.2.1), so 0 is a well-formed ID — the
 	// rejection must be about the message's position, not its ID.
 	go func() { _ = message.Marshal(stream, &message.RequestUpdate{RequestID: 0}) }()
 
@@ -105,7 +105,7 @@ func TestAcceptRequestRejectsStrayRequestUpdate(t *testing.T) {
 }
 
 // TestAcceptRequestNonFirstOpenerClosesSession: only the "First" messages of
-// §10 Table 5 may open a request stream; AcceptRequest closes the session with
+// §9 Table 5 may open a request stream; AcceptRequest closes the session with
 // PROTOCOL_VIOLATION on anything else.
 func TestAcceptRequestNonFirstOpenerClosesSession(t *testing.T) {
 	t.Parallel()
@@ -136,7 +136,7 @@ func TestAcceptRequestNonFirstOpenerClosesSession(t *testing.T) {
 }
 
 // TestAcceptRequestUnknownTypeOpenerClosesSession: a message type this
-// endpoint does not know cannot be one of the seven §3.3 request openers
+// endpoint does not know cannot be one of the seven §6.3 request openers
 // either, and closes the session rather than just resetting the stream.
 func TestAcceptRequestUnknownTypeOpenerClosesSession(t *testing.T) {
 	t.Parallel()

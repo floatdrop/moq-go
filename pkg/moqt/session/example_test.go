@@ -24,7 +24,7 @@ func ExampleClient() {
 
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: true,                // dev only
-		NextProtos:         []string{"moqt-20"}, // §3.1: the ALPN fixes the draft version
+		NextProtos:         []string{"moqt-20"}, // §6.2: the ALPN fixes the draft version
 	}
 	qconn, err := quic.DialAddr(ctx, "relay.example:4433", tlsCfg, &quic.Config{
 		MaxIdleTimeout:  30 * time.Second,
@@ -43,7 +43,7 @@ func ExampleClient() {
 	if err != nil {
 		panic(err)
 	}
-	// Close with one of the §3.5 session-error codes from pkg/moqt.
+	// Close with one of the §12.2 session-error codes from pkg/moqt.
 	defer sess.Close(moqt.SessionNoError, "bye")
 }
 
@@ -71,7 +71,7 @@ func ExampleSession_Publish() {
 	if err != nil {
 		return
 	}
-	// WriteObjectAt takes absolute Object IDs and computes the §11.4.2 delta
+	// WriteObjectAt takes absolute Object IDs and computes the §11.3.1 delta
 	// encoding for you (the mirror of ReadDecoded). Use the lower-level
 	// WriteObject if you want to set ObjectIDDelta yourself.
 	if err := sg.WriteObjectAt(0, &message.SubgroupObject{
@@ -86,7 +86,7 @@ func ExampleSession_Publish() {
 }
 
 // Subscribing to a track: send SUBSCRIBE, then read objects from the
-// uni-streams pulled by AcceptDataStream. The location filter (§5.1.2)
+// uni-streams pulled by AcceptDataStream. The location filter (§3.3.1)
 // decides where delivery starts; FilterLargestObject means "everything
 // strictly after the current live edge".
 func ExampleSession_Subscribe() {
@@ -115,7 +115,7 @@ func ExampleSession_Subscribe() {
 		switch s := ds.(type) {
 		case *session.IncomingSubgroupStream:
 			for {
-				obj, err := s.ReadDecoded() // resolves §11.4.2 deltas
+				obj, err := s.ReadDecoded() // resolves §11.3.1 deltas
 				if err != nil {
 					break // io.EOF on clean FIN
 				}
@@ -130,7 +130,7 @@ func ExampleSession_Subscribe() {
 
 // Routing inbound data streams with a Demux instead of the hand-rolled
 // AcceptDataStream loop + type-switch above. Subgroup streams dispatch by their
-// §11.1 Track Alias, FETCH streams by their §11.4.4 Request ID, so a subscriber
+// §3.1.3 Track Alias, FETCH streams by their §11.4.1 Request ID, so a subscriber
 // to several tracks gets each track's objects on its own handler without
 // matching aliases by hand.
 func ExampleDemux() {
@@ -183,7 +183,7 @@ func ExampleDemux() {
 func drain(s *session.IncomingSubgroupStream, label string) {
 	go func() {
 		for {
-			obj, err := s.ReadDecoded() // resolves §11.4.2 deltas
+			obj, err := s.ReadDecoded() // resolves §11.3.1 deltas
 			if err != nil {
 				return // io.EOF on clean FIN
 			}
@@ -234,7 +234,7 @@ func ExampleRequestMux() {
 	_ = mux.Run(ctx, server)
 }
 
-// Backfilling with a fill fetch stream (§5.1.3): the Next Object filter only
+// Backfilling with a fill fetch stream (§3.4): the Next Object filter only
 // delivers objects strictly after the live edge, so the current group is
 // invisible until the next one lands. FILL_PARAMETERS on the same SUBSCRIBE
 // fills it, which is what draft-20 replaced the Relative Joining FETCH with.
@@ -250,7 +250,7 @@ func ExampleSession_Subscribe_fill() {
 		Name:      []byte("clock"),
 		Parameters: message.Parameters{
 			message.NextObjectFilter(),
-			// StartGroup=1 fills the current group from its start (§5.1.6).
+			// StartGroup=1 fills the current group from its start (§3.5).
 			message.FillParametersParam(message.Parameters{
 				message.RelativeStartFilter(1),
 			}),
@@ -265,7 +265,7 @@ func ExampleSession_Subscribe_fill() {
 }
 
 // FETCH of an explicit inclusive range. draft-20 removed the Joining variant,
-// so every FETCH is this shape: a track name plus a LOCATION_FILTER (§5.1.2).
+// so every FETCH is this shape: a track name plus a LOCATION_FILTER (§3.3.1).
 func ExampleSession_Fetch() {
 	var sess *session.Session
 	ctx := context.Background()
@@ -273,7 +273,7 @@ func ExampleSession_Fetch() {
 	fetch, err := sess.Fetch(ctx, &message.Fetch{
 		Namespace: wire.Namespace("moq-example"),
 		Name:      []byte("clock"),
-		// §5.1.2: groups 0 through 10, inclusive.
+		// §3.3.1: groups 0 through 10, inclusive.
 		Parameters: message.Parameters{message.AbsoluteRangeFilter(message.Location{}, 10)},
 	})
 	if err != nil {
@@ -283,7 +283,7 @@ func ExampleSession_Fetch() {
 }
 
 // Draining the objects a FETCH delivers. The *IncomingFetchStream arrives
-// from Session.AcceptDataStream; ReadDecoded resolves §11.4.4 deltas to
+// from Session.AcceptDataStream; ReadDecoded resolves §11.4.1 deltas to
 // absolute IDs.
 func ExampleIncomingFetchStream() {
 	var s *session.IncomingFetchStream
@@ -293,15 +293,15 @@ func ExampleIncomingFetchStream() {
 			return // io.EOF on clean FIN
 		}
 		if obj.IsEndOfRange() {
-			continue // §11.4.4.2 absence markers carry no payload
+			continue // §11.4.1.2 absence markers carry no payload
 		}
 		fmt.Printf("backfill group=%d object=%d\n", obj.GroupID, obj.ObjectID)
 	}
 }
 
-// Updating a live request (§10.9). REQUEST_UPDATE rides the original
+// Updating a live request (§9.5). REQUEST_UPDATE rides the original
 // request's bidi stream (which is what names the request being modified)
-// and consumes a fresh Request ID of its own (§10.1). Only the parameters
+// and consumes a fresh Request ID of its own (§6.4.2.1). Only the parameters
 // you include change; omitted ones keep their prior value on the peer.
 // [Subscription.Update] (and the FetchRequest equivalent) fills in the stream
 // and Request ID; [Session.UpdateRequest] is the lower-level form for when you
@@ -319,11 +319,11 @@ func ExampleSession_UpdateRequest() {
 
 // Serving a long-lived request stream. Update (without a broker) reads its
 // response directly off the stream, so it cannot coexist with any other
-// reader — a publisher that must answer subscriber REQUEST_UPDATEs (§10.9),
+// reader — a publisher that must answer subscriber REQUEST_UPDATEs (§9.5),
 // or a subscriber that both watches for PUBLISH_DONE and sends updates,
 // needs exactly one reader owning the stream. The handle's [RequestBroker]
 // is that reader: Serve answers peer updates with REQUEST_OK, resolves
-// AUTHORIZATION_TOKEN parameters (§10.2.2), and routes responses to Update
+// AUTHORIZATION_TOKEN parameters (§9.20.2), and routes responses to Update
 // calls, which — like Done — automatically go through the broker once it is
 // attached.
 func ExampleRequestBroker() {
@@ -348,7 +348,7 @@ func ExampleRequestBroker() {
 	_ = pub.Done(moqt.PublishDoneTrackEnded, "")
 }
 
-// Ending a publication (§10.12): Publication.Done writes PUBLISH_DONE on the
+// Ending a publication (§9.9): Publication.Done writes PUBLISH_DONE on the
 // request stream and FINs it. (message.Marshal + Close is the lower-level form.)
 func Example_endingAPublication() {
 	var sess *session.Session
@@ -361,7 +361,7 @@ func Example_endingAPublication() {
 	if err != nil {
 		return
 	}
-	// Done writes PUBLISH_DONE (with the §10.12 Stream Count of subgroups opened
+	// Done writes PUBLISH_DONE (with the §9.9 Stream Count of subgroups opened
 	// via the handle) and FINs the stream in one call.
 	_ = pub.Done(moqt.PublishDoneTrackEnded, "")
 }
@@ -369,7 +369,7 @@ func Example_endingAPublication() {
 // Reacting to stream exhaustion. A relay forwarding many tracks can't block,
 // so it uses the non-blocking OpenPublish. When the peer's stream limit is
 // exhausted it returns ErrNoStreamCredit WITHOUT consuming a Request ID, so
-// the caller can send PUBLISH_SKIPPED (§6.1, §10.21) and let the subscriber
+// the caller can send PUBLISH_SKIPPED (§3.6.3, §9.19) and let the subscriber
 // recover with an explicit SUBSCRIBE.
 func ExampleSession_OpenPublish() {
 	var sess *session.Session
@@ -408,7 +408,7 @@ func ExampleTrackSubscription_ReadPublishSkipped() {
 	// Recover: sess.Subscribe for (pb.TrackNamespaceSuffix, pb.TrackName).
 }
 
-// Announcing a whole namespace once (§10.16) rather than a PUBLISH per track.
+// Announcing a whole namespace once (§9.14) rather than a PUBLISH per track.
 func ExampleSession_PublishNamespace() {
 	var sess *session.Session
 	ctx := context.Background()
@@ -422,7 +422,7 @@ func ExampleSession_PublishNamespace() {
 	defer nsStream.Close()
 }
 
-// Discovering tracks under a prefix (§10.19): NAMESPACE / NAMESPACE_DONE
+// Discovering tracks under a prefix (§4.2): NAMESPACE / NAMESPACE_DONE
 // arrive on the returned stream as tracks come and go.
 func ExampleSession_SubscribeNamespace() {
 	var sess *session.Session
@@ -437,7 +437,7 @@ func ExampleSession_SubscribeNamespace() {
 	defer annStream.Close()
 
 	// The broker enforces the session-level rules, such as a NAMESPACE_DONE
-	// only after its NAMESPACE (§10.19), and returns when the stream ends.
+	// only after its NAMESPACE (§4.2), and returns when the stream ends.
 	_ = annStream.Broker().Serve(ctx, func(msg message.Message) bool {
 		switch m := msg.(type) {
 		case *message.Namespace:
@@ -451,7 +451,7 @@ func ExampleSession_SubscribeNamespace() {
 
 // Accepting requests on the server side. A server (or relay) pulls inbound
 // request streams with AcceptRequest, type-switches on req.First, and answers
-// with Reply or RejectError. AcceptRequest enforces the §10.1 Request-ID
+// with Reply or RejectError. AcceptRequest enforces the §6.4.2.1 Request-ID
 // parity/monotonicity rules and resolves AUTHORIZATION_TOKEN params into
 // req.Tokens before returning.
 func ExampleSession_AcceptRequest() {
@@ -474,7 +474,7 @@ func ExampleSession_AcceptRequest() {
 			}
 			_ = pub // ... push subgroups, then pub.Done(...) when finished.
 		case *message.Publish:
-			// AcceptPublish registers the Track Alias (§11.1) and replies
+			// AcceptPublish registers the Track Alias (§3.1.3) and replies
 			// REQUEST_OK; objects arrive via Session.AcceptDataStream.
 			recv, err := req.AcceptPublish()
 			if err != nil {
@@ -516,12 +516,12 @@ func ExampleSession_AcceptRequest() {
 			if err != nil {
 				return
 			}
-			_ = tracks // tracks.WritePublishSkipped(...) on §6.1 stream exhaustion.
+			_ = tracks // tracks.WritePublishSkipped(...) on §3.6.3 stream exhaustion.
 		}
 	}
 }
 
-// Graceful shutdown (§3.5). The server sends GOAWAY with an optional
+// Graceful shutdown (§6.6). The server sends GOAWAY with an optional
 // new-session URI and a drain timeout.
 func ExampleSession_SendGoaway() {
 	var sess *session.Session

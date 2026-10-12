@@ -24,14 +24,14 @@ type Publication struct {
 	// requestHandle carries the request stream. [Publication.Done] ends the
 	// publication gracefully (PUBLISH_DONE, then FIN); Close cancels it.
 	//
-	// §10.9: Update is valid on a Publication from [Session.Publish] but not
+	// §9.5: Update is valid on a Publication from [Session.Publish] but not
 	// on one from [Request.AcceptSubscribe], where this side did not send
 	// the request.
 	requestHandle
 
 	alias uint64
 
-	// The subgroups opened via OpenSubgroup, for Done (§10.12). subMu
+	// The subgroups opened via OpenSubgroup, for Done (§9.9). subMu
 	// orders each OpenSubgroup against Done, which waits for the opens in
 	// flight (opening) and cancels their header writes (endCtx), so every
 	// subgroup opened is counted in subgroupCount, and the ones still open
@@ -45,12 +45,12 @@ type Publication struct {
 	endCtx        context.Context
 	endCancel     context.CancelFunc
 
-	// paused is the inverse of the §5.1 Forward State.
+	// paused is the inverse of the §3.1.1 Forward State.
 	paused atomic.Bool
 
 	// largest is the largest Location this side announced in SUBSCRIBE_OK
 	// or PUBLISH, or wrote through OpenSubgroup streams since, reported as
-	// LARGEST_OBJECT in REQUEST_UPDATE_OK (§10.9.1, §10.2.17).
+	// LARGEST_OBJECT in REQUEST_UPDATE_OK (§9.5.1, §9.20.17).
 	largestMu  sync.Mutex
 	largest    message.Location
 	hasLargest bool
@@ -63,29 +63,29 @@ type Publication struct {
 }
 
 // ErrForwardPaused is returned while the subscription's Forward State is 0
-// (§5.1): [Publication.OpenSubgroup] opens nothing, and a write to an open
-// subgroup resets that stream first (§11.4.3). A REQUEST_UPDATE with FORWARD=1
+// (§3.1.1): [Publication.OpenSubgroup] opens nothing, and a write to an open
+// subgroup resets that stream first (§11.3.2). A REQUEST_UPDATE with FORWARD=1
 // resumes.
 var ErrForwardPaused = errors.New("moqt/session: Forward State is 0; not sending objects")
 
 // ErrPublicationEnded is returned by [Publication.OpenSubgroup], and by the
 // WriteObject methods of a subgroup it opened, once the publication has ended
 // — by [Publication.Done], or automatically after a declined REQUEST_UPDATE
-// (§10.9.1).
+// (§9.5.1).
 var ErrPublicationEnded = errors.New("moqt/session: publication ended (PUBLISH_DONE sent)")
 
 // newPublication builds a Publication whose initial Forward State is the
-// establishing message's FORWARD (§5.1), or 1 when omitted (§10.2.18), and
+// establishing message's FORWARD (§3.1.1), or 1 when omitted (§9.20.18), and
 // whose Largest Object starts at the LARGEST_OBJECT this side announced in
-// its SUBSCRIBE_OK or PUBLISH (§10.2.17), if any.
+// its SUBSCRIBE_OK or PUBLISH (§9.20.17), if any.
 func newPublication(
 	s *Session,
 	stream Stream,
 	requestID, alias uint64,
 	establishing, announced message.Parameters,
 ) *Publication {
-	// The subscriber may send REQUEST_UPDATE (§10.9) but not
-	// PUBLISH_STATE_NOTIFY (§10.10).
+	// The subscriber may send REQUEST_UPDATE (§9.5) but not
+	// PUBLISH_STATE_NOTIFY (§9.10).
 	p := &Publication{
 		Stream: stream, s: s, requestID: requestID, alias: alias,
 		peerUpdate: true, updateScope: message.ScopeUpdateFromSubscriber,
@@ -104,7 +104,7 @@ func newPublication(
 // Broker returns the publication's [RequestBroker] (see [requestHandle.Broker])
 // with [Publication.ApplyUpdate] installed to decide REQUEST_UPDATEs. A
 // declined update ends the subscription with PUBLISH_DONE UPDATE_FAILED
-// (§10.9.1). Use [RequestBroker.HandleUpdates] to support more parameters.
+// (§9.5.1). Use [RequestBroker.HandleUpdates] to support more parameters.
 func (p *Publication) Broker() *RequestBroker {
 	b := p.requestHandle.Broker()
 	p.brokerInit.Do(func() {
@@ -116,13 +116,13 @@ func (p *Publication) Broker() *RequestBroker {
 	return b
 }
 
-// ApplyUpdate is the publication's built-in REQUEST_UPDATE handling (§10.9).
-// FORWARD (§10.2.18) sets the Forward State; SUBSCRIBER_PRIORITY,
+// ApplyUpdate is the publication's built-in REQUEST_UPDATE handling (§9.5).
+// FORWARD (§9.20.18) sets the Forward State; SUBSCRIBER_PRIORITY,
 // NEW_GROUP_REQUEST and AUTHORIZATION_TOKEN are accepted without action (the
 // Serve callback still sees the update). Any other parameter declines the
 // whole update with NOT_SUPPORTED.
 //
-// The REQUEST_UPDATE_OK carries LARGEST_OBJECT (§10.9.1, §10.2.17): the
+// The REQUEST_UPDATE_OK carries LARGEST_OBJECT (§9.5.1, §9.20.17): the
 // larger of the one this side's SUBSCRIBE_OK or PUBLISH reported and the
 // largest Object written through [Publication.OpenSubgroup] streams; other
 // objects are not seen.
@@ -130,7 +130,7 @@ func (p *Publication) ApplyUpdate(upd *message.RequestUpdate) (*message.RequestO
 	forward, setForward := false, false
 	for _, prm := range upd.Parameters {
 		if prm.Type == message.ParamForward {
-			// §10.2.18.
+			// §9.20.18.
 			if prm.Byte > 1 {
 				return nil, p.s.closeProtocolViolation(
 					fmt.Errorf("moqt/session: FORWARD value %d in REQUEST_UPDATE", prm.Byte))
@@ -175,14 +175,14 @@ func (p *Publication) noteObject(group, object uint64) {
 	p.largestMu.Unlock()
 }
 
-// TrackAlias reports the §11.1 Track Alias bound to this publication — the
+// TrackAlias reports the §3.1.3 Track Alias bound to this publication — the
 // integer inbound subgroup streams carry to identify the track. It is the
 // value the caller supplied in message.Publish.TrackAlias, or, when that was
 // the zero value, the one [Session.Publish] allocated via
 // [Session.AllocOutboundTrackAlias].
 func (p *Publication) TrackAlias() uint64 { return p.alias }
 
-// OpenSubgroup opens an outbound SUBGROUP_HEADER uni-stream (§11.4.2) for this
+// OpenSubgroup opens an outbound SUBGROUP_HEADER uni-stream (§11.3.1) for this
 // publication's track, filling in the Track Alias automatically — h.TrackAlias
 // is ignored and overwritten. It is otherwise identical to
 // [Session.OpenSubgroup]: the caller MUST Close the returned stream to FIN it
@@ -232,7 +232,7 @@ func (p *Publication) forget(sg *OutgoingSubgroupStream) {
 	p.subMu.Unlock()
 }
 
-// Done ends the publication (§10.12): "A sender MUST NOT send PUBLISH_DONE
+// Done ends the publication (§9.9): "A sender MUST NOT send PUBLISH_DONE
 // until it has closed all streams it will ever open", so Done stops new
 // subgroups, resets the ones still open with CANCELLED, then writes a
 // PUBLISH_DONE with the given status code and reason and FINs the request
@@ -262,7 +262,7 @@ func (p *Publication) Done(code moqt.PublishDoneCode, reason string) error {
 	open, count := p.open, p.subgroupCount
 	p.open = nil
 	p.subMu.Unlock()
-	// §11.4.3: ending the subscription early resets the subgroups it cut
+	// §11.3.2: ending the subscription early resets the subgroups it cut
 	// short, keeping what was written, header first, reliable so the
 	// subscriber can attribute each reset stream when handling PUBLISH_DONE.
 	for sg := range open {
@@ -280,16 +280,16 @@ func (p *Publication) Done(code moqt.PublishDoneCode, reason string) error {
 }
 
 // IncomingPublication is the receiving side of a publisher-initiated PUBLISH
-// (§10.11) this endpoint accepted via [Request.AcceptPublish] — the accept-side
+// (§9.8) this endpoint accepted via [Request.AcceptPublish] — the accept-side
 // counterpart of [Session.Subscribe]'s [Subscription]. The objects arrive on
 // subgroup uni-streams (or datagrams) keyed by [IncomingPublication.TrackAlias]
 // and are consumed via [Session.AcceptDataStream]; the embedded request stream
 // stays open for follow-ups — PUBLISH_DONE from the publisher, or a
 // REQUEST_UPDATE this side sends via [IncomingPublication.Update] to adjust
-// forwarding (§10.9). Close it to end the reception.
+// forwarding (§9.5). Close it to end the reception.
 //
-// Its Track Alias is released (§11.1) when the subscription is Terminated
-// (§5.1), as for a [Subscription].
+// Its Track Alias is released (§3.1.3) when the subscription is Terminated
+// (§3.1), as for a [Subscription].
 type IncomingPublication struct {
 	// requestHandle carries the PUBLISH request stream — still open for
 	// follow-up traffic (inbound PUBLISH_DONE, outbound REQUEST_UPDATE;
@@ -299,12 +299,12 @@ type IncomingPublication struct {
 	alias uint64
 }
 
-// TrackAlias reports the §11.1 Track Alias the publisher assigned — the integer
+// TrackAlias reports the §3.1.3 Track Alias the publisher assigned — the integer
 // inbound subgroup and datagram streams carry to identify this track (resolve it
 // via [Session.LookupInboundTrackAlias]).
 func (p *IncomingPublication) TrackAlias() uint64 { return p.alias }
 
-// Publish opens a PUBLISH request stream (§10.11) and awaits the peer's
+// Publish opens a PUBLISH request stream (§9.8) and awaits the peer's
 // initial response. It is [Session.OpenPublish] plus the response wait: the
 // session assigns m.RequestID (after the stream opens, so a blocked open
 // consumes no ID) and, when m.TrackAlias is the zero value, a Track Alias via
@@ -324,7 +324,7 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 	}
 	return awaitRequestResponse(ctx, s, m,
 		func(stream Stream, _ *message.RequestOK) (*Publication, error) {
-			// The PUBLISH sets the initial Forward State (§5.1); PUBLISH_OK
+			// The PUBLISH sets the initial Forward State (§3.1.1); PUBLISH_OK
 			// carries no subscription parameters.
 			p := newPublication(s, stream, m.RequestID, m.TrackAlias, m.Parameters, m.Parameters)
 			p.answered = message.TypePublish
@@ -332,7 +332,7 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 		})
 }
 
-// OpenPublish opens a PUBLISH request stream (§10.11) without blocking on
+// OpenPublish opens a PUBLISH request stream (§9.8) without blocking on
 // stream-flow-control credit and without awaiting the peer's response. It is
 // the relay-side counterpart of [Publish]: relay fan-out is fire-and-continue,
 // so the caller owns the stream's read side.
@@ -341,8 +341,8 @@ func (s *Session) Publish(ctx context.Context, m *message.Publish) (*Publication
 // [ErrNoStreamCredit] and consumes NO Request ID — the ID is allocated only
 // after the stream is successfully opened (see [Session.openAllocRequest]), so
 // a blocked attempt leaves the session's Request ID sequence untouched. This
-// lets the caller react to an exhausted limit by sending PUBLISH_SKIPPED (§6.1,
-// §10.21) instead. On success it assigns m.RequestID, writes the PUBLISH as the
+// lets the caller react to an exhausted limit by sending PUBLISH_SKIPPED (§3.6.3,
+// §9.19) instead. On success it assigns m.RequestID, writes the PUBLISH as the
 // stream's first message, and returns the still-open bidi stream so the caller
 // can read the peer's REQUEST_OK / REQUEST_ERROR and send follow-ups (subgroup
 // streams, PUBLISH_DONE, REQUEST_UPDATE).
@@ -351,8 +351,8 @@ func (s *Session) OpenPublish(m *message.Publish) (Stream, error) {
 }
 
 // AwaitPublishOK reads the response to a PUBLISH sent with
-// [Session.OpenPublish], with the checks [Session.Publish] applies (§10.5,
-// §10.2.1). REQUEST_ERROR is returned as a *RequestRejectedError. The stream
+// [Session.OpenPublish], with the checks [Session.Publish] applies (§9.3,
+// §9.20.1). REQUEST_ERROR is returned as a *RequestRejectedError. The stream
 // stays open either way.
 func (s *Session) AwaitPublishOK(ctx context.Context, stream Stream) (*message.RequestOK, error) {
 	resp, err := s.readResponse(ctx, stream)

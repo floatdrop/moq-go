@@ -86,10 +86,10 @@ type Subscription struct {
 	// Set once at construction; read-only.
 	ID uint64
 
-	// RequestID is the MOQT Request ID (§10.1) of the SUBSCRIBE / PUBLISH
+	// RequestID is the MOQT Request ID (§6.4.2.1) of the SUBSCRIBE / PUBLISH
 	// that opened this subscription's request stream, kept for identity
 	// and diagnostics. (A REQUEST_UPDATE rides the same stream but consumes
-	// a fresh ID from the sender's space, §10.1 — the stream, not the ID,
+	// a fresh ID from the sender's space, §6.4.2.1 — the stream, not the ID,
 	// names the request being updated.) Set once at construction; read-only.
 	RequestID uint64
 
@@ -106,14 +106,14 @@ type Subscription struct {
 	Stream session.Stream
 
 	// TrackAlias is the alias the relay assigned to this subscription on
-	// its side of the wire (§11.1). For UpstreamSub it is the alias the
+	// its side of the wire (§3.1.3). For UpstreamSub it is the alias the
 	// publisher uses when sending objects to us; for DownstreamSub it is
 	// the alias we use when sending objects to the subscriber. Aliases
 	// are per-direction, per-session — the fanout remaps between them.
 	// Set once at construction; read-only.
 	TrackAlias uint64
 
-	// forwardState is the §9.2 Forward flag the peer most recently
+	// forwardState is the §7.2 Forward flag the peer most recently
 	// requested. 1 = deliver objects, 0 = pause delivery. The session
 	// handler updates it on REQUEST_UPDATE and the fanout consults it to
 	// decide whether to write objects out.
@@ -155,15 +155,15 @@ func (s *Subscription) IsTerminated() bool {
 	return s.State() == SubTerminated
 }
 
-// SetForwardState updates the §9.2 Forward flag. The value is not validated
-// here (§10.2.18's FORWARD is 0 or 1).
+// SetForwardState updates the §7.2 Forward flag. The value is not validated
+// here (§9.20.18's FORWARD is 0 or 1).
 func (s *Subscription) SetForwardState(v int) {
 	s.mu.Lock()
 	s.forwardState = v
 	s.mu.Unlock()
 }
 
-// ForwardState returns the most recently set §9.2 Forward flag.
+// ForwardState returns the most recently set §7.2 Forward flag.
 func (s *Subscription) ForwardState() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -179,8 +179,8 @@ func (s *Subscription) ForwardState() int {
 // downstream SUBSCRIBE or an explicit PUBLISH / PUBLISH_NAMESPACE from a
 // publishing peer.
 //
-// The Filter is the upstream-side §5.1.2 filter the relay chose for this
-// subscription. Per §9.4 the relay typically subscribes upstream with the
+// The Filter is the upstream-side §3.3.1 filter the relay chose for this
+// subscription. Per §7.4 the relay typically subscribes upstream with the
 // "Largest Object" filter so disparate downstream filters don't churn the
 // upstream subscription.
 //
@@ -189,7 +189,7 @@ func (s *Subscription) ForwardState() int {
 type UpstreamSub struct {
 	Subscription
 
-	// Filter is the §5.1.2 filter the relay used in its upstream
+	// Filter is the §3.3.1 filter the relay used in its upstream
 	// SUBSCRIBE. nil means "filter unset" (i.e. the subscription has not
 	// been sent yet); once set, the value is owned by the subscription
 	// and must not be mutated externally.
@@ -203,7 +203,7 @@ type UpstreamSub struct {
 	FetchCapable bool
 
 	// OnDemand marks an upstream subscription the relay itself opened via
-	// SUBSCRIBE to serve downstream subscribers (§9.4 aggregation). Such a
+	// SUBSCRIBE to serve downstream subscribers (§7.4 aggregation). Such a
 	// subscription exists only for its downstreams: when the last one
 	// leaves, the registry tears it down ([UpstreamSub.CloseOnDemand]) so
 	// the publisher stops streaming into a void. It stays false for
@@ -212,7 +212,7 @@ type UpstreamSub struct {
 
 	// Broker owns the request stream's read side (via
 	// [session.RequestBroker.Serve], run by the relay's per-upstream reader
-	// goroutine) and serializes every relay write on the stream — §10.9
+	// goroutine) and serializes every relay write on the stream — §9.5
 	// REQUEST_UPDATEs via [UpstreamSub.Update] and other control messages
 	// via [UpstreamSub.WriteMessage] must not interleave. nil only for
 	// literal-constructed test fixtures; [NewUpstreamSub] always builds one.
@@ -223,7 +223,7 @@ type UpstreamSub struct {
 	done *message.PublishDone
 }
 
-// SetPublishDone records the PUBLISH_DONE (§10.12) the upstream ended this
+// SetPublishDone records the PUBLISH_DONE (§9.9) the upstream ended this
 // subscription with.
 func (u *UpstreamSub) SetPublishDone(pd *message.PublishDone) {
 	u.mu.Lock()
@@ -240,7 +240,7 @@ func (u *UpstreamSub) publishDone() *message.PublishDone {
 
 // DownstreamDoneCode is the PUBLISH_DONE status code the relay sends its
 // subscribers when a track's last upstream ended with upstream (nil: without
-// a PUBLISH_DONE, which counts as TRACK_ENDED). §10.12: "SHOULD use a relevant
+// a PUBLISH_DONE, which counts as TRACK_ENDED). §12.4: "SHOULD use a relevant
 // status code". A code about the track passes through; one about the relay's
 // own upstream subscription, or an unknown one, becomes INTERNAL_ERROR.
 func DownstreamDoneCode(upstream *message.PublishDone) moqt.PublishDoneCode {
@@ -258,13 +258,13 @@ func DownstreamDoneCode(upstream *message.PublishDone) moqt.PublishDoneCode {
 	return moqt.PublishDoneInternalError // a code this relay does not know
 }
 
-// updateResponseTimeout bounds the wait for the §10.9 REQUEST_OK /
+// updateResponseTimeout bounds the wait for the §9.5 REQUEST_OK /
 // REQUEST_ERROR after Update writes a REQUEST_UPDATE. A conforming peer
 // always answers; the bound keeps a peer that never does from wedging the
 // dispatch loop the Update call runs on.
 const updateResponseTimeout = 5 * time.Second
 
-// Update sends a REQUEST_UPDATE (§10.9) on the upstream request stream and
+// Update sends a REQUEST_UPDATE (§9.5) on the upstream request stream and
 // awaits the single REQUEST_OK / REQUEST_ERROR the spec mandates, bounded
 // by [updateResponseTimeout] (tightened further by any earlier deadline on
 // ctx). It delegates to the sub's [session.RequestBroker]; the response is
@@ -293,7 +293,7 @@ func (u *UpstreamSub) WriteMessage(msg message.Message) error {
 }
 
 // CloseOnDemand tears down an on-demand upstream subscription after its
-// last downstream left by cancelling the request (§5.1: "by sending
+// last downstream left by cancelling the request (§3.1: "by sending
 // STOP_SENDING"). Idempotent; must be called without registry locks held
 // (stream I/O).
 func (u *UpstreamSub) CloseOnDemand() {
@@ -301,7 +301,7 @@ func (u *UpstreamSub) CloseOnDemand() {
 }
 
 // Cancel ends the relay's subscription to this upstream by resetting both
-// directions of its request stream with code (§3.3.3). Idempotent; must be
+// directions of its request stream with code (§6.4.2.3). Idempotent; must be
 // called without registry locks held (stream I/O).
 func (u *UpstreamSub) Cancel(code moqt.StreamResetCode) {
 	u.Terminate()
@@ -316,15 +316,15 @@ func (u *UpstreamSub) Cancel(code moqt.StreamResetCode) {
 // SUBSCRIBE_OK has arrived (the TrackAlias comes from it), so the
 // subscription is live from construction.
 //
-// requestID is the §10.1 Request ID of the SUBSCRIBE / PUBLISH that opened
+// requestID is the §6.4.2.1 Request ID of the SUBSCRIBE / PUBLISH that opened
 // the request stream, recorded for identity and diagnostics.
 //
-// The Forward State starts at 1: an omitted FORWARD means 1 (§10.2.18), and
+// The Forward State starts at 1: an omitted FORWARD means 1 (§9.20.18), and
 // the relay's upstream requests never carry it.
 //
 // broker owns the request stream's reads, set up by the caller: the
 // [session.Subscription]'s own for the relay's SUBSCRIBE, so the session
-// releases its Track Alias when it ends (§11.1).
+// releases its Track Alias when it ends (§3.1.3).
 func NewUpstreamSub(
 	id uint64,
 	sess *session.Session,
@@ -361,9 +361,9 @@ func (u *UpstreamSub) GetFilter() *message.LocationFilter {
 
 // DownstreamSub represents one subscription the relay holds for a
 // subscriber: the relay accepted a SUBSCRIBE from the peer and is now
-// responsible for forwarding objects, applying the §5.1.2 filter, honouring
-// priority (§7) and group order (§10.2.8), and respecting the Forward flag
-// (§9.2).
+// responsible for forwarding objects, applying the §3.3.1 filter, honouring
+// priority (§5.1) and group order (§9.20.8), and respecting the Forward flag
+// (§7.2).
 type DownstreamSub struct {
 	Subscription
 
@@ -374,52 +374,52 @@ type DownstreamSub struct {
 	// termination (PUBLISH_DONE via TerminateWithPublishDone).
 	writeMu sync.Mutex
 
-	// okSent records that the §10.8 SUBSCRIBE_OK went out, or that the
+	// okSent records that the §9.7 SUBSCRIBE_OK went out, or that the
 	// relay's own PUBLISH opened the stream (OpenedByPublish); guarded by
 	// writeMu. A termination consults it: without a prior response it
 	// answers with REQUEST_ERROR instead of PUBLISH_DONE.
 	okSent bool
 
-	// Filter is the §5.1.2 filter the subscriber declared. The fanout
+	// Filter is the §3.3.1 filter the subscriber declared. The fanout
 	// consults it on every object to decide whether to forward. nil
 	// means "no filter installed" — the relay treats the subscription
 	// as unfiltered (delivers every object on the track).
 	Filter *message.LocationFilter
 
-	// rangeFilters holds the §5.1.4 Range Filters the subscriber declared
+	// rangeFilters holds the §3.3.2 Range Filters the subscriber declared
 	// (Subgroup ID / Object ID / Publisher Priority / Object Property). The
 	// fanout ANDs them with Filter per object. nil = no range restriction.
 	// Guarded by mu; access via SetRangeFilters / GetRangeFilters.
 	rangeFilters *message.RangeFilterSet
 
-	// deliveryTimeouts holds the §10.2.3 / §10.2.4 values the subscriber asked
+	// deliveryTimeouts holds the §9.20.3 / §9.20.4 values the subscriber asked
 	// for. The fanout resolves them against the publisher's Track-level pair
-	// (§8: the smaller of the two non-zero values) once per subgroup stream it
+	// (§5.2: the smaller of the two non-zero values) once per subgroup stream it
 	// opens. Guarded by mu; access via SetDeliveryTimeouts / GetDeliveryTimeouts.
 	deliveryTimeouts message.DeliveryTimeouts
 
 	// LargestAtSubscribe is the largest object the relay had observed on
-	// this track when the SUBSCRIBE was accepted (§5.1.2). Filters resolve
+	// this track when the SUBSCRIBE was accepted (§3.1.4). Filters resolve
 	// their start against it, not the live watermark, so the start does not
 	// drift as objects arrive.
 	LargestAtSubscribe message.Location
 
 	// HasLargestAtSubscribe is false when no objects had been delivered
-	// on the track at SUBSCRIBE time. Per §5.1.2, the Next Object and
+	// on the track at SUBSCRIBE time. Per §3.1.4, the Next Object and
 	// relative-start filters fall back to {0,0} in that case.
 	HasLargestAtSubscribe bool
 
-	// Priority is the §7 Subscriber Priority the peer asked for. Lower
-	// numeric values mean higher delivery priority. Folded into the §7.2
+	// Priority is the §5.1 Subscriber Priority the peer asked for. Lower
+	// numeric values mean higher delivery priority. Folded into the §5.1.2
 	// stream-scheduling key by [DownstreamSub.EffectiveStreamPriority].
-	// Default per §7 / §10.2.7 is 128 (mid-range), set in NewDownstreamSub.
+	// Default per §5.1 / §9.20.7 is 128 (mid-range), set in NewDownstreamSub.
 	Priority uint8
 
-	// GroupOrder is the Group Order preference (§7, §10.2.8), encoded as
+	// GroupOrder is the Group Order preference (§5.1, §9.20.8), encoded as
 	// 0x1 = ascending, 0x2 = descending. It drives the group-order
 	// tie-breaker in both reorder-capable paths (FETCH responses) and the
-	// §7.2 rule-3 GroupKey of the subgroup-stream scheduling priority.
-	// Default per §7.1: the publisher's preference, which the relay fills in
+	// §5.1.2 rule-3 GroupKey of the subgroup-stream scheduling priority.
+	// Default per §5.1.1: the publisher's preference, which the relay fills in
 	// from the Track Properties before registering the subscription; zero
 	// until then, read as Ascending.
 	GroupOrder uint8
@@ -429,7 +429,7 @@ type DownstreamSub struct {
 	omitProperties atomic.Bool
 
 	// streamsOpened counts the data streams opened for this subscription,
-	// for the §10.12 Stream Count; streamsOpening counts opens in flight and
+	// for the §9.9 Stream Count; streamsOpening counts opens in flight and
 	// streamsOpen the opened streams not yet closed. pendingDone is a
 	// PUBLISH_DONE waiting for them. Guarded by mu, the same lock as the
 	// lifecycle state, so no stream is counted after termination.
@@ -490,7 +490,7 @@ func (d *DownstreamSub) StreamClosed() {
 	d.sendPublishDone(done, count)
 }
 
-// BeginDatagram reserves one datagram send for this subscription (§10.12:
+// BeginDatagram reserves one datagram send for this subscription (§9.9:
 // PUBLISH_DONE waits until the sender "has no further datagrams to send"). It
 // returns false once the subscription is terminated, and the caller must not
 // send. Each true must be paired with one [DownstreamSub.EndDatagram].
@@ -529,9 +529,9 @@ func (d *DownstreamSub) takeReadyDoneLocked() (*pendingPublishDone, uint64) {
 // accepts the subscriber's SUBSCRIBE (replying SUBSCRIBE_OK) before building
 // the sub, so it is live from construction.
 //
-// Forward State defaults to 1: an omitted FORWARD means 1 (§10.2.18).
+// Forward State defaults to 1: an omitted FORWARD means 1 (§9.20.18).
 // installSubscribeParams overrides this to 0 only when the peer explicitly
-// sends FORWARD=0, and REQUEST_UPDATE can flip it later (§9.2 / §10.9).
+// sends FORWARD=0, and REQUEST_UPDATE can flip it later (§7.2 / §9.5).
 func NewDownstreamSub(id uint64, sess *session.Session, stream session.Stream, trackAlias uint64) *DownstreamSub {
 	cancelled, cancel := context.WithCancel(context.Background())
 	return &DownstreamSub{
@@ -543,7 +543,7 @@ func NewDownstreamSub(id uint64, sess *session.Session, stream session.Stream, t
 		Stream:       stream,
 		TrackAlias:   trackAlias,
 		forwardState: 1,
-		// §10.2.7: SUBSCRIBER_PRIORITY defaults to 128 (mid-range) when
+		// §9.20.7: SUBSCRIBER_PRIORITY defaults to 128 (mid-range) when
 		// the peer omits the parameter. installSubscribeParams overrides
 		// this only when the SUBSCRIBE / REQUEST_UPDATE carries an explicit
 		// value (including an explicit 0, the highest priority).
@@ -566,8 +566,8 @@ func (d *DownstreamSub) GetFilter() *message.LocationFilter {
 	return d.Filter
 }
 
-// SetDeliveryTimeouts records the §10.2.3 / §10.2.4 delivery timeouts the
-// subscriber asked for. A zero dimension means "no timeout" per §8.
+// SetDeliveryTimeouts records the §9.20.3 / §9.20.4 delivery timeouts the
+// subscriber asked for. A zero dimension means "no timeout" per §5.2.
 func (d *DownstreamSub) SetDeliveryTimeouts(t message.DeliveryTimeouts) {
 	d.mu.Lock()
 	d.deliveryTimeouts = t
@@ -576,14 +576,14 @@ func (d *DownstreamSub) SetDeliveryTimeouts(t message.DeliveryTimeouts) {
 
 // GetDeliveryTimeouts returns the delivery timeouts the subscriber asked for.
 // The zero value means the subscriber requested none, which leaves the
-// publisher's Track-level values to stand on their own (§8).
+// publisher's Track-level values to stand on their own (§5.2).
 func (d *DownstreamSub) GetDeliveryTimeouts() message.DeliveryTimeouts {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.deliveryTimeouts
 }
 
-// GetRangeFilters returns the subscription's current §5.1.4 Range Filters, nil
+// GetRangeFilters returns the subscription's current §3.3.2 Range Filters, nil
 // when it has none.
 func (d *DownstreamSub) GetRangeFilters() *message.RangeFilterSet {
 	d.mu.RLock()
@@ -591,7 +591,7 @@ func (d *DownstreamSub) GetRangeFilters() *message.RangeFilterSet {
 	return d.rangeFilters
 }
 
-// SetRangeFilters installs the subscription's Range Filters (§5.1.4), which the
+// SetRangeFilters installs the subscription's Range Filters (§3.3.2), which the
 // fanout ANDs with the Location filter and Forward gate per object (read
 // directly under mu by ForwardDecision). nil clears them (no range restriction).
 func (d *DownstreamSub) SetRangeFilters(f *message.RangeFilterSet) {
@@ -600,7 +600,7 @@ func (d *DownstreamSub) SetRangeFilters(f *message.RangeFilterSet) {
 	d.mu.Unlock()
 }
 
-// SetPriority records the §7 Subscriber Priority. Updated when the peer
+// SetPriority records the §5.1 Subscriber Priority. Updated when the peer
 // sends a REQUEST_UPDATE.
 func (d *DownstreamSub) SetPriority(p uint8) {
 	d.mu.Lock()
@@ -608,17 +608,17 @@ func (d *DownstreamSub) SetPriority(p uint8) {
 	d.mu.Unlock()
 }
 
-// SetIncludeProperties records INCLUDE_PROPERTIES (§10.2.21), set once from
+// SetIncludeProperties records INCLUDE_PROPERTIES (§9.20.21), set once from
 // the SUBSCRIBE or SUBSCRIBE_TRACKS.
 func (d *DownstreamSub) SetIncludeProperties(include bool) { d.omitProperties.Store(!include) }
 
 // IncludesProperties reports whether the subscriber wants Track Properties
 // (INCLUDE_PROPERTIES omitted or 1). One that does not also lacks the track's
-// DEFAULT_PUBLISHER_PRIORITY (§12.4), so objects carry the priority inline.
+// DEFAULT_PUBLISHER_PRIORITY (§10.4), so objects carry the priority inline.
 func (d *DownstreamSub) IncludesProperties() bool { return !d.omitProperties.Load() }
 
-// SetGroupOrder records the Group Order (§10.2.8), set once from the SUBSCRIBE
-// (§7.1: it "cannot be changed").
+// SetGroupOrder records the Group Order (§9.20.8), set once from the SUBSCRIBE
+// (§5.1.1: it "cannot be changed").
 func (d *DownstreamSub) SetGroupOrder(o uint8) {
 	d.mu.Lock()
 	d.GroupOrder = o
@@ -626,7 +626,7 @@ func (d *DownstreamSub) SetGroupOrder(o uint8) {
 }
 
 // SetLargestAtSubscribe records the largest-object snapshot captured when
-// the subscription was accepted. The fanout feeds this into the §5.1.2
+// the subscription was accepted. The fanout feeds this into the §3.3.1
 // filter evaluator so LargestObject / NextGroupStart filters resolve
 // against a stable subscribe-time anchor rather than the live watermark.
 func (d *DownstreamSub) SetLargestAtSubscribe(loc message.Location, hasLargest bool) {
@@ -636,24 +636,24 @@ func (d *DownstreamSub) SetLargestAtSubscribe(loc message.Location, hasLargest b
 	d.mu.Unlock()
 }
 
-// EffectiveStreamPriority builds the composite §7.2 scheduling key for one
+// EffectiveStreamPriority builds the composite §5.1.2 scheduling key for one
 // subgroup stream of this subscription, which the relay pushes down to the
 // transport via [session.PrioritizedSendStream.SetSendPriority].
 //
-// All four §7.2 rules are encoded in the returned [session.StreamPriority],
+// All four §5.1.2 rules are encoded in the returned [session.StreamPriority],
 // compared lexicographically (lower is higher priority):
 //
 //  1. Subscriber: this subscription's SUBSCRIBER_PRIORITY (default 128).
 //  2. Publisher:  publisherPriority — the byte the subgroup carries
 //     (SubgroupHeader.PublisherPriority), already resolved to the track's
-//     §12.4 default when the header omits it.
+//     §10.4 default when the header omits it.
 //  3. GroupKey:   groupID with this subscription's GROUP_ORDER applied —
 //     bitwise-complemented for Descending so a "lower is higher priority"
 //     comparison sends higher Group IDs first.
 //  4. Subgroup:   subgroupID — lowest Subgroup ID in a group goes first.
 //
 // Rules 3+4 only define an ordering between streams of the same request, but
-// the transport sees streams from every subscription; §7.2 leaves the
+// the transport sees streams from every subscription; §5.1.2 leaves the
 // cross-subscription tie-break implementation-defined, so feeding it the full
 // key is conformant and degrades gracefully when the transport projects the
 // key onto a coarser knob.
@@ -666,7 +666,7 @@ func (d *DownstreamSub) EffectiveStreamPriority(
 	order := message.GroupOrder(d.GroupOrder)
 	d.mu.RUnlock()
 
-	// §7.2 rule 3: Descending order means higher Group IDs are scheduled
+	// §5.1.2 rule 3: Descending order means higher Group IDs are scheduled
 	// first. Complementing the Group ID flips the numeric comparison so the
 	// same "lower GroupKey is higher priority" rule yields that direction.
 	// An unresolved GROUP_ORDER (zero value) is read as Ascending.
@@ -684,7 +684,7 @@ func (d *DownstreamSub) EffectiveStreamPriority(
 }
 
 // ForwardVerdict is [DownstreamSub.ForwardDecision]'s answer for one Object.
-// §11.4.3 allows a FIN only when the stream carried every Object of the
+// §11.3.2 allows a FIN only when the stream carried every Object of the
 // Subgroup "except any Objects with Locations smaller than the subscription's
 // Start Location"; every other skip means the stream must end with a reset.
 type ForwardVerdict uint8
@@ -699,17 +699,17 @@ const (
 	// SkipObject: a filter drops this Object only; a later one in the group
 	// may still pass.
 	SkipObject
-	// SkipPaused: Forward State 0 omits the Object (§5.1.5).
+	// SkipPaused: Forward State 0 omits the Object (§3.3.3).
 	SkipPaused
 	// SkipGroup: the Location filter puts this whole group permanently out of
-	// range (§11.4.3); the stream can be reset promptly.
+	// range (§11.3.2); the stream can be reset promptly.
 	SkipGroup
-	// SkipEnded: the subscription is terminated (§10.12).
+	// SkipEnded: the subscription is terminated (§9.9).
 	SkipEnded
 )
 
 // ForwardDecision decides whether an Object goes to this subscription, under
-// one lock acquisition (it runs per Object per subscriber). §5.1.5: "Pass =
+// one lock acquisition (it runs per Object per subscriber). §3.3.3: "Pass =
 // Forward AND Location Filters AND Range Filters". The Location filter uses
 // the subscribe-time LargestObject snapshot, not the live watermark.
 func (d *DownstreamSub) ForwardDecision(
@@ -730,7 +730,7 @@ func (d *DownstreamSub) ForwardDecision(
 	case paused:
 		return SkipPaused
 	}
-	// Location filter first, so its group-exhaustion signal (§11.4.3) governs.
+	// Location filter first, so its group-exhaustion signal (§11.3.2) governs.
 	loc := message.Location{Group: group, Object: object}
 	if f != nil && !f.Matches(loc, largest, has) {
 		switch {
@@ -741,7 +741,7 @@ func (d *DownstreamSub) ForwardDecision(
 		}
 		return SkipObject
 	}
-	// Range Filters (§5.1.4): per-object AND; a miss drops the object only.
+	// Range Filters (§3.3.2): per-object AND; a miss drops the object only.
 	if rf != nil && !rf.MatchesObject(subgroupID, object, priority, objProps) {
 		return SkipObject
 	}
@@ -750,7 +750,7 @@ func (d *DownstreamSub) ForwardDecision(
 
 // GroupOutOfRange reports whether a Subgroup belonging to group is entirely
 // outside the subscription's filter range — i.e. no object in that group can
-// ever pass — which makes its in-flight stream eligible for a §11.4.3 reset
+// ever pass — which makes its in-flight stream eligible for a §11.3.2 reset
 // (e.g. after a REQUEST_UPDATE narrowed the End Group or raised the Start
 // Location to a higher group). Only the absolute filters carry a fixed range;
 // the dynamic (Next Object / relative-start) and unset filters never put a
@@ -776,12 +776,12 @@ func GroupOutOfRange(group uint64, f *message.LocationFilter) bool {
 }
 
 // Cancel ends the subscription once its request has ended: the subscriber
-// cancelled it (§3.3.3), or the session is ending. [DownstreamSub.Cancelled]
+// cancelled it (§6.4.2.3), or the session is ending. [DownstreamSub.Cancelled]
 // is done, so the streams still open for it are reset ("It MUST reset any open
-// streams associated with the SUBSCRIBE", §5.1.1; its fill fetch streams,
-// §5.1.3.1). No new PUBLISH_DONE follows; one a termination left pending still
+// streams associated with the SUBSCRIBE", §3.1.2; its fill fetch streams,
+// §3.4.1). No new PUBLISH_DONE follows; one a termination left pending still
 // goes out once those streams close, since it may be the request's only
-// response (§3.3.2). Safe to call more than once, and after another
+// response (§6.4.2.2). Safe to call more than once, and after another
 // termination.
 func (d *DownstreamSub) Cancel() {
 	d.mu.Lock()
@@ -793,7 +793,7 @@ func (d *DownstreamSub) Cancel() {
 // Cancelled is done once [DownstreamSub.Cancel] has run.
 func (d *DownstreamSub) Cancelled() context.Context { return d.cancelled }
 
-// TerminateWithPublishDone ends this downstream subscription (§10.12): the
+// TerminateWithPublishDone ends this downstream subscription (§9.9): the
 // relay writes PUBLISH_DONE on the subscriber's request stream and FINs the
 // send side. If SUBSCRIBE_OK never went out, it answers with REQUEST_ERROR
 // (DOES_NOT_EXIST) instead, and [DownstreamSub.WriteSubscribeOK] then refuses
@@ -802,7 +802,7 @@ func (d *DownstreamSub) Cancelled() context.Context { return d.cancelled }
 // First termination wins; later calls do nothing. Safe to call concurrently,
 // and it does no I/O itself (see [DownstreamSub.sendPublishDone]).
 //
-// §10.12: "MUST NOT send PUBLISH_DONE until it has closed all streams". The
+// §9.9: "MUST NOT send PUBLISH_DONE until it has closed all streams". The
 // answer waits for every stream opened or opening to be reported through
 // [DownstreamSub.StreamClosed], so its Stream Count is exact.
 func (d *DownstreamSub) TerminateWithPublishDone(code moqt.PublishDoneCode, reason string) {
@@ -829,7 +829,7 @@ func (d *DownstreamSub) sendPublishDone(done *pendingPublishDone, streamCount ui
 		d.writeMu.Lock()
 		defer d.writeMu.Unlock()
 		if !d.okSent {
-			// Mirror [session.Request.RejectError] (§3.3.4): an answer that
+			// Mirror [session.Request.RejectError] (§12.5): an answer that
 			// cannot be written resets the stream as a failure; once written,
 			// nothing reads this stream any more, so the read side is
 			// cancelled.
@@ -853,9 +853,9 @@ func (d *DownstreamSub) sendPublishDone(done *pendingPublishDone, streamCount ui
 	}()
 }
 
-// WriteSubscribeOK writes the §10.8 SUBSCRIBE_OK response under the write
+// WriteSubscribeOK writes the §9.7 SUBSCRIBE_OK response under the write
 // lock and records that the request now has its response, so a later
-// termination emits PUBLISH_DONE (§10.12) rather than a second response.
+// termination emits PUBLISH_DONE (§9.9) rather than a second response.
 // If a termination won the race first, it returns
 // [ErrSubscriptionTerminated] without writing.
 func (d *DownstreamSub) WriteSubscribeOK(msg *message.SubscribeOK) error {
@@ -872,7 +872,7 @@ func (d *DownstreamSub) WriteSubscribeOK(msg *message.SubscribeOK) error {
 }
 
 // OpenedByPublish records that the relay's own PUBLISH opened this
-// subscription, so it ends with PUBLISH_DONE (§10.12) rather than
+// subscription, so it ends with PUBLISH_DONE (§9.9) rather than
 // REQUEST_ERROR. Call it before registering the subscription.
 func (d *DownstreamSub) OpenedByPublish() {
 	d.writeMu.Lock()
@@ -881,7 +881,7 @@ func (d *DownstreamSub) OpenedByPublish() {
 }
 
 // EndRefused ends a subscription its subscriber refused (REQUEST_ERROR to the
-// relay's PUBLISH, §10.11): it is terminated without a PUBLISH_DONE, even one
+// relay's PUBLISH, §9.8): it is terminated without a PUBLISH_DONE, even one
 // already pending, and the stream is closed in both directions under writeMu.
 func (d *DownstreamSub) EndRefused() {
 	d.mu.Lock()

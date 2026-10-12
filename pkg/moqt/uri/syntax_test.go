@@ -6,9 +6,9 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/uri"
 )
 
-// §10.3.1.1 / §10.3.1.2: the AUTHORITY and PATH Setup Options follow "the
+// §9.1.1 / §9.1.2: the AUTHORITY and PATH Setup Options follow "the
 // URI formatting rules [RFC3986]"; one that does not conform closes the
-// session with MALFORMED_AUTHORITY / MALFORMED_PATH. §3.1.1 adds that the
+// session with MALFORMED_AUTHORITY / MALFORMED_PATH. §6.1 adds that the
 // authority "MUST NOT contain an empty host portion".
 
 func TestCheckAuthority(t *testing.T) {
@@ -28,9 +28,9 @@ func TestCheckAuthority(t *testing.T) {
 		{"[::ffff:192.0.2.1]", true},
 		{"[v7.a:b]", true},
 
-		{"", false},                  // empty host (§3.1.1)
-		{":443", false},              // empty host (§3.1.1)
-		{"user@", false},             // empty host (§3.1.1)
+		{"", false},                  // empty host (§6.1)
+		{":443", false},              // empty host (§6.1)
+		{"user@", false},             // empty host (§6.1)
 		{"exa mple.com", false},      // space
 		{"example.com/path", false},  // path in authority
 		{"example.com?q", false},     // query in authority
@@ -74,7 +74,7 @@ func TestCheckPathAndQuery(t *testing.T) {
 
 		{"relay", false},   // must begin with "/" when non-empty
 		{"/a b", false},    // space
-		{"/a#f", false},    // fragment is never sent (§3.1.2)
+		{"/a#f", false},    // fragment is never sent (§6.1.1)
 		{"/a%2", false},    // truncated pct-encoding
 		{"/a%g0", false},   // bad hex
 		{"/a[b]", false},   // gen-delims not allowed in a segment

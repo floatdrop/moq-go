@@ -16,11 +16,11 @@ import (
 // the [DeniedError]'s mapped code (see [DeniedError.RequestErrorCode]).
 //
 // A REQUEST_UPDATE that changes a SUBSCRIBE_NAMESPACE's or SUBSCRIBE_TRACKS's
-// TRACK_NAMESPACE_PREFIX is authorized again (§10.19, §10.20): the method
+// TRACK_NAMESPACE_PREFIX is authorized again (§4.2.1, §3.6): the method
 // receives the subscription as updated: the new prefix, and the
 // AUTHORIZATION_TOKENs of the latest request or update that carried any (a
 // DELETE authorizes nothing). A denial refuses the update and ends the
-// subscription (§10.9.1).
+// subscription (§9.5.1).
 //
 // The interface is split per request type for two reasons:
 //
@@ -62,7 +62,7 @@ type Authorizer interface {
 // REQUEST_ERROR it sends downstream; Reason is forwarded as the human-readable
 // reason string.
 //
-// Code MUST be one of the §10.6 / IANA §15.11.2 REQUEST_ERROR codes (see
+// Code MUST be one of the §12.3 / IANA §16.11.2 REQUEST_ERROR codes (see
 // [moqt.RequestErrorCode]). If Code is the zero value, the relay substitutes
 // [moqt.RequestUnauthorized] when forming the REQUEST_ERROR.
 type DeniedError struct {
