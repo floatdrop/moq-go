@@ -904,9 +904,10 @@ func (e *TrackEntry) ConsiderNewGroupRequest(value uint64, dynamicGroups bool) b
 	return true
 }
 
-// UpdateLargestAndDetectNew advances LargestObject and, under the same
-// e.mu acquisition, returns any Downstream subs for which seen reports
-// false. seen is consulted (the fanout passes a membership test over the
+// UpdateLargestAndDetectNew records f's Object, at loc, as arriving (see
+// [InFlight]), advances LargestObject to it (§3.1.4: on its first byte) and,
+// under the same e.mu acquisition, returns any Downstream subs for which seen
+// reports false. seen is consulted (the fanout passes a membership test over the
 // writers it has already opened); the entry never mutates it. Used by
 // runFanout per-object so a downstream sub that joined the entry's
 // Downstream after the initial CopyDownstream is detected and given a
@@ -926,12 +927,16 @@ func (e *TrackEntry) ConsiderNewGroupRequest(value uint64, dynamicGroups bool) b
 // need not know the fanout's writer type, keeping the dependency edge
 // pointing one way (fanout → registry).
 func (e *TrackEntry) UpdateLargestAndDetectNew(
+	f *InFlight,
 	loc message.Location,
 	seen func(*DownstreamSub) bool,
 	lastGen uint64,
 ) (newSubs []*DownstreamSub, gen uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	// In the same critical section as the bump, so a FETCH or fill that sees
+	// the new Largest Object finds this Object arriving or, later, cached.
+	f.loc, f.active = loc, true
 	if !e.HasLargestObject || e.LargestObject.Less(loc) {
 		e.LargestObject = loc
 		e.HasLargestObject = true

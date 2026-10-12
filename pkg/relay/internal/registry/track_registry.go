@@ -521,22 +521,24 @@ func (r *TrackRegistry) AddDownstream(fullName track.FullTrackName, sub *Downstr
 // Why atomic: handleSubscribe needs a [DownstreamSub.LargestAtSubscribe]
 // snapshot that is consistent with the moment the sub becomes eligible
 // for live fanout delivery. If the snapshot and append happen in
-// separate lock cycles, a publisher write between them can:
-//   - Run the fanout's UpdateLargest (under entry.mu) → advances Largest
-//   - Cache the object
-//   - Not deliver to this sub via live (the fanout's CopyDownstream
-//     snapshot pre-dates our append)
+// separate lock cycles, an Object's header read between them can:
+//   - Run the fanout's [TrackEntry.UpdateLargestAndDetectNew] (under
+//     entry.mu) → advances Largest on the Object's first byte (§3.1.4)
+//   - Not deliver it to this sub via live (the fanout's joiner scan
+//     pre-dates our append)
 //
 // resulting in an object whose Location is > our snapshot AND was never
 // pushed to us via live — a gap a fill fetch stream can't cover (its
 // range ends at our snapshot, which doesn't include the missed object).
 //
 // Holding entry.mu across both operations serialises with
-// [TrackEntry.UpdateLargest] (which also locks entry.mu): either we
-// snapshot the pre-update Largest AND appear in any post-update
-// CopyDownstream, or we snapshot the post-update Largest. Either way,
-// every object the publisher has emitted is either covered by FETCH
-// (via the snapshot) or delivered via live (via Downstream inclusion).
+// [TrackEntry.UpdateLargestAndDetectNew] (which also locks entry.mu): either
+// we snapshot the pre-update Largest AND the fanout's scan at that header
+// opens our writer, or we snapshot the post-update Largest, the Object then
+// arriving ([InFlight]) or cached, which a fill fetch stream waits for or
+// reads. Either way, every object the publisher has emitted is either
+// covered by the fill (via the snapshot) or delivered via live, never both:
+// a writer opened after an Object's header does not get that Object.
 // AddDownstreamSnapshotLargest never creates an entry and requires at least
 // one upstream to still be registered: ok=false means the track's last
 // upstream vanished between the caller's establish check and this call

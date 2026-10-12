@@ -94,11 +94,13 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		return
 	}
 
-	// §9.20.17
-	entry.UpdateLargest(message.Location{Group: d.GroupID, Object: d.ObjectID})
-
 	// The cache keeps the buffers by reference; nothing mutates them after.
 	entry.Cache.PutDatagram(d, in.MaxCacheDuration, in.HasMaxCacheDuration)
+
+	// §9.20.17. After the cache, so a FETCH that sees the new Largest Object
+	// finds the datagram there: a datagram arrives whole, so its first byte
+	// and its last are the same moment (§3.1.4).
+	entry.UpdateLargest(message.Location{Group: d.GroupID, Object: d.ObjectID})
 
 	downstream := entry.CopyDownstream()
 	for _, sub := range downstream {

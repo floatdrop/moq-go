@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -68,6 +69,11 @@ type subgroupWriterSet struct {
 	// gen is the downstream generation at the last joiner scan; the scan is
 	// skipped while it is unchanged.
 	gen uint64
+	// opened numbers the writers joiner scans open (see [subgroupWriter.seq]).
+	opened uint64
+	// reading holds the Objects contributors are part way through, a few at a
+	// time (see [subgroupWriterSet.noteHeader]).
+	reading []objHeard
 
 	// lowest is the lowest Object ID forwarded, if forwarded. Objects are
 	// published in ascending order (§2.2), so a FIRST_OBJECT claim (§11.3.1)
@@ -457,20 +463,38 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		h.endMalformedTrack(ctx, entry, h.sess, err)
 	}
 
+	// done releases this stream's note of the Object it was reading, outside
+	// sg.Mu.
+	done := func(id uint64, reading bool) {
+		if reading {
+			sg.Mu.Lock()
+			set.doneReading(id)
+			sg.Mu.Unlock()
+		}
+	}
+
 	for {
 		obj, err := pending, error(nil)
 		pending = nil
+		// heard is the set's opened count at the first header read for this
+		// Object by any contributor; reading reports this stream noted it.
+		var (
+			heard   uint64
+			reading bool
+		)
 		if obj == nil {
 			obj, err = stream.ReadObjectHeader()
 		}
 		if err == nil {
-			entry.BeginInFlight(flight, message.Location{Group: hdr.GroupID, Object: stream.ObjectID()})
+			loc := message.Location{Group: hdr.GroupID, Object: stream.ObjectID()}
+			heard, reading = h.headerRead(ctx, entry, sg, set, flight, loc, ref), true
 			err = stream.ReadObjectPayload(obj)
 		}
 		if err != nil {
 			// Abandoned now, not after the teardown below, which can wait on
 			// slow downstream writers.
 			entry.EndInFlight(flight, nil)
+			done(stream.ObjectID(), reading)
 			inboundReset, inboundResetCode = h.inboundEnded(ctx, entry, stream, hdr, last, err)
 			return
 		}
@@ -480,6 +504,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			h.log.LogAttrs(ctx, slog.LevelDebug,
 				"fanout: object after EndOfGroup/EndOfTrack — malformed track",
 				slog.Uint64("group", hdr.GroupID), slog.Uint64("subgroup", hdr.SubgroupID))
+			done(stream.ObjectID(), reading)
 			malformed(fmt.Errorf("object after END_OF_GROUP / END_OF_TRACK in Group %d", hdr.GroupID))
 			return
 		}
@@ -509,6 +534,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		}
 		claim, err := entry.ClaimDelivered(info)
 		if err != nil {
+			done(objectID, reading)
 			malformed(err)
 			return
 		}
@@ -523,16 +549,21 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 				Properties:        obj.Properties,
 				Payload:           obj.Payload,
 			}); err != nil {
+				done(objectID, reading)
 				malformed(err)
 				return
 			}
 			entry.EndInFlight(flight, nil)
+			done(objectID, reading)
 			continue // redundant copy already forwarded by a peer upstream.
 		}
 
 		// Under sg.Mu: joiner detection, writer open and publish are atomic
 		// against other contributors and the last-contributor teardown.
 		sg.Mu.Lock()
+		if reading {
+			set.doneReading(objectID)
+		}
 		if !set.admitAgedOut(claim, hdr, objectID, obj.Properties) {
 			sg.Mu.Unlock()
 			entry.EndInFlight(flight, nil)
@@ -542,8 +573,6 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// Counted after the dedup claim, so redundant copies don't count.
 		h.metrics.ObjectReceived(ref, hdr.SubgroupID)
 
-		// Cache before bumping LARGEST_OBJECT, so a FETCH that snapshots the
-		// new watermark finds the object cached.
 		cached := &cache.CachedObject{
 			GroupID:           hdr.GroupID,
 			ObjectID:          objectID,
@@ -561,26 +590,86 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// Cached first, so a FETCH that registers after this finds it there.
 		entry.EndInFlight(flight, cached)
 
-		// Serialised with AddDownstreamSnapshotLargest: a new sub either saw
-		// the old Largest and appears in newSubs (delivered live), or saw the
-		// new one (its fill fetch stream covers this object).
-		loc := message.Location{Group: hdr.GroupID, Object: objectID}
-		var newSubs []*registry.DownstreamSub
-		newSubs, set.gen = entry.UpdateLargestAndDetectNew(loc,
-			func(s *registry.DownstreamSub) bool { _, ok := set.writers[s]; return ok }, set.gen)
-		for _, sub := range newSubs {
-			h.openWriterForSub(ctx, set.hdr, sub, set.writers, entry.DeliveryTimeouts(), ref)
-		}
-
-		set.forward(entry, pos, hdr, objectID, obj, isTrueFirst, liveMaxAge)
+		set.forward(entry, pos, hdr, objectID, obj, isTrueFirst, liveMaxAge, heard)
 		sg.Mu.Unlock()
+	}
+}
+
+// headerRead handles a contributor's read of the header of the Object at loc:
+// §3.1.4 has Largest Object advance on an Object's first byte, not its last.
+// Serialised with AddDownstreamSnapshotLargest under sg.Mu, a new sub either
+// saw the old Largest and is given a writer here (delivered live), or saw
+// this Object as Largest and starts after it, its fill fetch stream (if any)
+// waiting for the Object to arrive. It returns the opened count the Object's
+// forward is limited to (see [subgroupWriterSet.noteHeader]).
+func (h *sessionHandler) headerRead(
+	ctx context.Context,
+	entry *registry.TrackEntry,
+	sg *registry.SharedSubgroup,
+	set *subgroupWriterSet,
+	flight *registry.InFlight,
+	loc message.Location,
+	ref TrackRef,
+) uint64 {
+	sg.Mu.Lock()
+	defer sg.Mu.Unlock()
+	var newSubs []*registry.DownstreamSub
+	newSubs, set.gen = entry.UpdateLargestAndDetectNew(flight, loc,
+		func(s *registry.DownstreamSub) bool { _, ok := set.writers[s]; return ok }, set.gen)
+	for _, sub := range newSubs {
+		h.openWriterForSub(ctx, set.hdr, sub, set.writers, entry.DeliveryTimeouts(), ref)
+		if w := set.writers[sub]; w != nil {
+			set.opened++
+			w.seq = set.opened
+		}
+	}
+	// Another contributor's scan can open writers before this Object is
+	// forwarded; they are not its.
+	return set.noteHeader(loc.Object, set.opened)
+}
+
+// objHeard is an Object contributors of a set are reading: the set's opened
+// count at the first header read for it, and how many are reading it.
+type objHeard struct {
+	id, heard uint64
+	readers   int
+}
+
+// noteHeader records that a contributor read the header of Object id while
+// the set's opened count was heard, and returns the count at the first header
+// read for it. The Object reached the relay then (§3.1.4), so whichever copy
+// is forwarded goes only to writers open by that time; a sub that joined
+// later saw it as Largest Object and its fill carries it. Callers hold sg.Mu.
+func (s *subgroupWriterSet) noteHeader(id, heard uint64) uint64 {
+	for i := range s.reading {
+		if s.reading[i].id == id {
+			s.reading[i].readers++
+			return s.reading[i].heard
+		}
+	}
+	s.reading = append(s.reading, objHeard{id: id, heard: heard, readers: 1})
+	return heard
+}
+
+// doneReading records that a contributor is done with Object id, forwarded or
+// not. Callers hold sg.Mu.
+func (s *subgroupWriterSet) doneReading(id uint64) {
+	for i := range s.reading {
+		if s.reading[i].id == id {
+			if s.reading[i].readers--; s.reading[i].readers == 0 {
+				s.reading = slices.Delete(s.reading, i, i+1)
+			}
+			return
+		}
 	}
 }
 
 // forward hands obj, the Object at objectID of the Subgroup hdr names, read at
 // pos, to every writer whose subscriber takes it. claimed reports that its
 // contributor claims it starts the Subgroup (see [subgroupWriterSet.claimFirst]);
-// maxCacheAge is [fwdObject.maxCacheAge]. Callers hold sg.Mu.
+// maxCacheAge is [fwdObject.maxCacheAge]. Writers opened after the Object's
+// header was read, when the set's opened count was heard, do not get it.
+// Callers hold sg.Mu.
 func (s *subgroupWriterSet) forward(
 	entry *registry.TrackEntry,
 	pos inboundPos,
@@ -589,6 +678,7 @@ func (s *subgroupWriterSet) forward(
 	obj *message.SubgroupObject,
 	claimed bool,
 	maxCacheAge time.Duration,
+	heard uint64,
 ) {
 	first := s.claimFirst(objectID, claimed)
 	// §5.2: the first Object's Properties settle the publisher's timeouts for
@@ -600,7 +690,7 @@ func (s *subgroupWriterSet) forward(
 
 	// §3.3.1 filters run before enqueue, so a miss takes no queue slot.
 	for _, w := range s.writers {
-		if w == nil {
+		if w == nil || w.seq > heard {
 			continue
 		}
 		if take, follows := w.admit(pos, hdr, objectID, obj.Properties); take {
@@ -728,6 +818,11 @@ func (h *sessionHandler) openWriterForSub(
 //     DELIVERY_TIMEOUT; the subscription survives (§12.5).
 type subgroupWriter struct {
 	sub *registry.DownstreamSub
+	// seq is the set's opened count when a joiner scan opened this writer, 0
+	// for one opened with the set. An Object goes only to writers open by the
+	// time its header was read: a sub that joined after that saw it as
+	// Largest Object (§3.1.4), and its fill, not its subscription, carries it.
+	seq uint64
 	// ctx bounds every blocking stream operation; cancelIO resets the
 	// in-flight stream, unwedging a writer blocked on a stalled subscriber.
 	// The subscriber's cancellation calls it too (§3.1.2), until unwatchSub.

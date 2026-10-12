@@ -26,8 +26,9 @@ type InFlight struct {
 	waiters []*FlightWait
 }
 
-// NewInFlight registers a slot for one inbound stream of e. Release it with
-// [TrackEntry.ReleaseInFlight] when the stream ends.
+// NewInFlight registers a slot for one inbound stream of e; each Object's
+// header marks it active ([TrackEntry.UpdateLargestAndDetectNew]). Release it
+// with [TrackEntry.ReleaseInFlight] when the stream ends.
 func (e *TrackEntry) NewInFlight() *InFlight {
 	f := &InFlight{}
 	e.mu.Lock()
@@ -37,14 +38,6 @@ func (e *TrackEntry) NewInFlight() *InFlight {
 	e.inflight[f] = struct{}{}
 	e.mu.Unlock()
 	return f
-}
-
-// BeginInFlight records that f's stream has read the header of the Object at
-// loc and is reading its payload.
-func (e *TrackEntry) BeginInFlight(f *InFlight, loc message.Location) {
-	e.mu.Lock()
-	f.loc, f.active = loc, true
-	e.mu.Unlock()
 }
 
 // EndInFlight records that f's Object is no longer arriving. obj is the Object
@@ -63,7 +56,11 @@ func (e *TrackEntry) endInFlightLocked(f *InFlight, obj *cache.CachedObject) {
 		return
 	}
 	for _, w := range f.waiters {
-		w.results <- flightResult{loc: f.loc, obj: obj} // buffered: never blocks
+		w.results = append(w.results, flightResult{loc: f.loc, obj: obj})
+		select {
+		case w.notify <- struct{}{}:
+		default: // a wake-up is already pending
+		}
 	}
 	f.active, f.waiters = false, nil
 }
@@ -79,9 +76,12 @@ func (e *TrackEntry) ReleaseInFlight(f *InFlight) {
 
 // FlightWait is a FETCH's wait on the Objects arriving within its range.
 type FlightWait struct {
-	entry   *TrackEntry
+	entry *TrackEntry
+	// slots and results are guarded by entry.mu; notify wakes Wait when
+	// results grows.
 	slots   []*InFlight
-	results chan flightResult
+	results []flightResult
+	notify  chan struct{}
 	// pending counts, per Location, the streams still reading that Object.
 	pending map[message.Location]int
 	// done holds the Objects handed over on completion.
@@ -107,16 +107,18 @@ func (e *TrackEntry) WaitInFlight(start, end message.Location) *FlightWait {
 			continue
 		}
 		if w == nil {
-			w = &FlightWait{entry: e, pending: make(map[message.Location]int)}
+			w = &FlightWait{entry: e, pending: make(map[message.Location]int), notify: make(chan struct{}, 1)}
 		}
-		w.pending[f.loc]++
-		w.slots = append(w.slots, f)
-		f.waiters = append(f.waiters, w)
-	}
-	if w != nil {
-		w.results = make(chan flightResult, len(w.slots))
+		w.registerLocked(f)
 	}
 	return w
+}
+
+// registerLocked adds w to f's waiters. Callers hold w.entry.mu.
+func (w *FlightWait) registerLocked(f *InFlight) {
+	w.pending[f.loc]++
+	w.slots = append(w.slots, f)
+	f.waiters = append(f.waiters, w)
 }
 
 // Forget stops waiting for the Object at loc, which the caller already holds:
@@ -137,25 +139,46 @@ func (w *FlightWait) Wait(
 	defer timer.Stop()
 	for len(w.pending) > 0 {
 		select {
-		case r := <-w.results:
-			if _, ok := w.pending[r.loc]; !ok {
-				continue // resolved by another stream's copy, or forgotten
-			}
-			if r.obj != nil {
-				w.done = append(w.done, r.obj)
-				delete(w.pending, r.loc)
-				continue
-			}
-			if w.pending[r.loc]--; w.pending[r.loc] == 0 {
-				delete(w.pending, r.loc)
-			}
+		case <-w.notify:
+			w.drain()
 		case <-timer.C:
+			w.drain() // what completed just in time still counts
 			return w.done, w.StillArriving()
 		case <-ctx.Done():
+			w.drain()
 			return w.done, w.StillArriving()
 		}
 	}
 	return w.done, nil
+}
+
+// drain applies the results the slots have posted. An Object every stream it
+// was registered on abandoned is still waited for if another stream has
+// started reading it since: its copy can still arrive whole.
+func (w *FlightWait) drain() {
+	w.entry.mu.Lock()
+	defer w.entry.mu.Unlock()
+	results := w.results
+	w.results = nil
+	for _, r := range results {
+		if _, ok := w.pending[r.loc]; !ok {
+			continue // resolved by another stream's copy, or forgotten
+		}
+		if r.obj != nil {
+			w.done = append(w.done, r.obj)
+			delete(w.pending, r.loc)
+			continue
+		}
+		if w.pending[r.loc]--; w.pending[r.loc] > 0 {
+			continue
+		}
+		delete(w.pending, r.loc)
+		for f := range w.entry.inflight {
+			if f.active && f.loc == r.loc && !slices.Contains(f.waiters, w) {
+				w.registerLocked(f)
+			}
+		}
+	}
 }
 
 // StillArriving returns the Locations the wait covers and has not resolved:
