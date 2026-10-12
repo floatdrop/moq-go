@@ -298,3 +298,68 @@ func TestPublicationLargestObjectOnFirstByte(t *testing.T) {
 	}
 	must(t, sg.Close())
 }
+
+// TestPublicationSendDatagram: a datagram sent through the Publication carries
+// its Track Alias and advances its Largest Object (§3.1.4, §9.20.17) as a
+// subgroup Object does; it is refused while paused (§3.1.1) and after Done.
+func TestPublicationSendDatagram(t *testing.T) {
+	client, sub, pub := servedPublication(t)
+
+	must(
+		t,
+		pub.SendDatagram(&message.ObjectDatagram{TrackAlias: 999, GroupID: 7, ObjectID: 4, ObjectPayload: []byte("d")}),
+	)
+	got, err := client.ReceiveDatagram(t.Context())
+	must(t, err)
+	if got.TrackAlias != pub.TrackAlias() || got.GroupID != 7 || got.ObjectID != 4 {
+		t.Fatalf("received datagram alias %d {%d,%d}, want alias %d {7,4}",
+			got.TrackAlias, got.GroupID, got.ObjectID, pub.TrackAlias())
+	}
+	ok, err := sub.Update(t.Context(), message.Parameters{message.ForwardParam(true)})
+	must(t, err)
+	if p, found := ok.Parameters.Find(message.ParamLargestObject); !found || p.Group != 7 || p.Object != 4 {
+		t.Fatalf("REQUEST_UPDATE_OK LARGEST_OBJECT = %+v (found %v), want {7, 4}", p, found)
+	}
+
+	// An invalid datagram is refused before any byte is built, so it was
+	// never published and does not move Largest Object; a ZERO_OBJECT_ID one
+	// is Object 0 whatever its ObjectID field says (§11.2.1).
+	invalid := &message.ObjectDatagram{Type: message.DatagramPropertiesBit, GroupID: 9, ObjectPayload: []byte("d")}
+	if err := pub.SendDatagram(invalid); err == nil {
+		t.Fatal("SendDatagram accepted a PROPERTIES datagram with no Properties")
+	}
+	zero := &message.ObjectDatagram{
+		Type:          message.DatagramZeroObjectIDBit,
+		GroupID:       8,
+		ObjectID:      3,
+		ObjectPayload: []byte("d"),
+	}
+	must(t, pub.SendDatagram(zero))
+	if _, err := client.ReceiveDatagram(t.Context()); err != nil {
+		t.Fatalf("ReceiveDatagram: %v", err)
+	}
+	ok, err = sub.Update(t.Context(), message.Parameters{message.ForwardParam(false)})
+	must(t, err)
+	if p, found := ok.Parameters.Find(message.ParamLargestObject); !found || p.Group != 8 || p.Object != 0 {
+		t.Fatalf("REQUEST_UPDATE_OK LARGEST_OBJECT = %+v (found %v), want {8, 0}", p, found)
+	}
+
+	next := &message.ObjectDatagram{GroupID: 8, ObjectID: 5, ObjectPayload: []byte("d")}
+	if err := pub.SendDatagram(next); !errors.Is(err, session.ErrForwardPaused) {
+		t.Fatalf("SendDatagram while paused = %v, want ErrForwardPaused", err)
+	}
+	// Done blocks writing PUBLISH_DONE until the subscriber reads it, which
+	// this test does not; the publication counts as ended before that.
+	go func() { _ = pub.Done(moqt.PublishDoneTrackEnded, "") }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := pub.SendDatagram(next)
+		if errors.Is(err, session.ErrPublicationEnded) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("SendDatagram after Done = %v, want ErrPublicationEnded", err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

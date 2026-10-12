@@ -225,6 +225,43 @@ func (p *Publication) OpenSubgroup(h message.SubgroupHeader) (*OutgoingSubgroupS
 	return sg, nil
 }
 
+// SendDatagram sends d as an Object Datagram (§11.2.1) of this publication's
+// track, filling in the Track Alias — d.TrackAlias is ignored and
+// overwritten — and advancing the publication's Largest Object (§3.1.4) as a
+// subgroup Object does. It fails with [ErrForwardPaused] while the
+// subscription is paused (§3.1.1) and with [ErrPublicationEnded] after
+// [Publication.Done]. [Session.SendDatagram] sends a datagram without any of
+// this.
+func (p *Publication) SendDatagram(d *message.ObjectDatagram) error {
+	// Refused before any byte is built, an invalid datagram is never
+	// published and does not move Largest Object.
+	if err := d.Validate(); err != nil {
+		return fmt.Errorf("moqt/session: SendDatagram: %w", err)
+	}
+	// As in OpenSubgroup: Done waits for a send in progress before
+	// PUBLISH_DONE (§9.9).
+	p.subMu.Lock()
+	if p.ended.Load() {
+		p.subMu.Unlock()
+		return ErrPublicationEnded
+	}
+	if p.paused.Load() {
+		p.subMu.Unlock()
+		return ErrForwardPaused
+	}
+	p.opening.Add(1)
+	p.subMu.Unlock()
+	defer p.opening.Done()
+
+	d.TrackAlias = p.alias
+	objectID := d.ObjectID
+	if d.HasZeroObjectID() {
+		objectID = 0 // §11.2.1: omitted, "the Object ID is 0"
+	}
+	p.noteObject(d.GroupID, objectID)
+	return p.s.SendDatagram(d)
+}
+
 // forget drops a subgroup that was FINished or reset from the ones Done
 // resets.
 func (p *Publication) forget(sg *OutgoingSubgroupStream) {

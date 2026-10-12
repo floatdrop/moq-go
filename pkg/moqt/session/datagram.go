@@ -71,6 +71,8 @@ func (s *Session) ReceiveDatagram(ctx context.Context) (*message.ObjectDatagram,
 // case; per §11.2 the object is silently dropped at the sender).
 //
 // SendDatagram is the publisher-side counterpart of [Session.ReceiveDatagram].
+// It updates no [Publication]; send a published track's datagrams with
+// [Publication.SendDatagram] so they count toward its Largest Object.
 func (s *Session) SendDatagram(d *message.ObjectDatagram) error {
 	if err := d.Validate(); err != nil {
 		return fmt.Errorf("moqt/session: SendDatagram: %w", err)
