@@ -104,6 +104,10 @@ const (
 	KindByte               // single byte (uint8)
 	KindBytes              // varint-length-prefixed bytes
 	KindLocation           // two varints: Group, Object
+	// KindLocationFilter is a LOCATION_FILTER value (§9.20.9): a Location
+	// Filter Type and the fields it selects, with no length prefix. Bytes
+	// holds the encoded value.
+	KindLocationFilter
 )
 
 var paramKinds = map[ParamID]ParamKind{
@@ -116,7 +120,7 @@ var paramKinds = map[ParamID]ParamKind{
 	ParamFillTimeout:             KindVarint,
 	ParamForward:                 KindByte,
 	ParamSubscriberPriority:      KindByte,
-	ParamLocationFilter:          KindBytes,
+	ParamLocationFilter:          KindLocationFilter,
 	ParamGroupOrder:              KindByte,
 	ParamFillParameters:          KindBytes,
 	ParamSubgroupFilter:          KindBytes,
@@ -167,7 +171,14 @@ func VarintParam(t ParamID, v uint64) Parameter {
 	return Parameter{Type: t, Varint: v, kind: KindVarint}
 }
 func ByteParam(t ParamID, v uint8) Parameter { return Parameter{Type: t, Byte: v, kind: KindByte} }
+
+// BytesParam stores v as a length-prefixed value, except for a type whose
+// value is self-delimiting (LOCATION_FILTER, §9.20.9): v is then written as
+// is, since a length in front would be read as its first field.
 func BytesParam(t ParamID, v []byte) Parameter {
+	if paramKinds[t] == KindLocationFilter {
+		return Parameter{Type: t, Bytes: v, kind: KindLocationFilter}
+	}
 	return Parameter{Type: t, Bytes: v, kind: KindBytes}
 }
 func LocationParam(t ParamID, g, o uint64) Parameter {
@@ -242,8 +253,8 @@ func SubscriberPriorityParam(priority uint8) Parameter {
 }
 
 // LocationFilterParam builds LOCATION_FILTER (§9.20.9) from a typed
-// LocationFilter. The filter is serialised to bytes and stored as a
-// length-prefixed KindBytes parameter per §9.20.9.
+// LocationFilter. The value is written as-is, without a length prefix: its
+// Location Filter Type says how many fields follow.
 func LocationFilterParam(f *LocationFilter) Parameter {
 	return BytesParam(ParamLocationFilter, f.Bytes())
 }
@@ -405,6 +416,8 @@ func appendParamValue(w *wire.Writer, p Parameter) {
 	case KindLocation:
 		w.Varint(p.Group)
 		w.Varint(p.Object)
+	case KindLocationFilter:
+		w.FixedBytes(p.Bytes)
 	case kindUnset:
 		// The Parameter was built as a bare struct literal rather than via a
 		// typed helper or VarintParam/ByteParam/BytesParam/LocationParam (or
@@ -453,6 +466,14 @@ func parseParamValue(r *wire.Reader, p *Parameter) error {
 		}
 		p.Group = g
 		p.Object = o
+	case KindLocationFilter:
+		// The Type says how many fields follow, so the value has to be decoded
+		// to find its end; an unknown Type fails the whole block (§9.20.9).
+		var f LocationFilter
+		if err := f.Parse(r); err != nil {
+			return err
+		}
+		p.Bytes = f.Bytes()
 	case kindUnset:
 		// kindOf never returns kindUnset for a registered type, so this is
 		// unreachable; enumerated to keep the switch exhaustive.

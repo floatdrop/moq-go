@@ -253,8 +253,8 @@ func TestForwardedPublish_RepublishedTrackForwardedAgain(t *testing.T) {
 }
 
 // TestForwardedPublish_SubscribeTracksParametersValidated: SUBSCRIBE_TRACKS
-// parameters are validated as on SUBSCRIBE (§3.6.2): a LOCATION_FILTER that
-// does not parse closes the session (§8.3).
+// parameters are validated as on SUBSCRIBE (§3.6.2): a LOCATION_FILTER cut
+// short closes the session (§9.20.9).
 func TestForwardedPublish_SubscribeTracksParametersValidated(t *testing.T) {
 	t.Parallel()
 	subSess, teardown := connectRelay(t, relay.Config{})
@@ -262,10 +262,12 @@ func TestForwardedPublish_SubscribeTracksParametersValidated(t *testing.T) {
 	go func() {
 		_, _ = subSess.SubscribeTracks(t.Context(), &message.SubscribeTracks{
 			TrackNamespacePrefix: ns("video"),
-			Parameters:           message.Parameters{message.BytesParam(message.ParamLocationFilter, []byte{0xFF})},
+			Parameters: message.Parameters{
+				message.BytesParam(message.ParamLocationFilter, []byte{0x02, 0x05}),
+			},
 		})
 	}()
-	requireSessionClosed(t, subSess, "a SUBSCRIBE_TRACKS with a LOCATION_FILTER that does not parse")
+	requireSessionClosed(t, subSess, "a SUBSCRIBE_TRACKS with a LOCATION_FILTER cut short")
 }
 
 // A REQUEST_UPDATE on SUBSCRIBE_TRACKS applies to the PUBLISHes sent from then

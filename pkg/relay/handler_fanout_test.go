@@ -80,15 +80,29 @@ func requireFilterForwards(t *testing.T, filter *message.LocationFilter, n int, 
 // publisher's Object IDs (§3.3.1).
 func TestFanout_AbsoluteStartFilter_DropsObjectsBeforeStart(t *testing.T) {
 	t.Parallel()
-	requireFilterForwards(t, &message.LocationFilter{Fields: 2, StartGroup: 0, StartObject: 2}, 5, []uint64{2, 3, 4})
+	requireFilterForwards(
+		t,
+		&message.LocationFilter{Type: message.LocationFilterAbsoluteStart, StartGroup: 0, StartObject: 2},
+		5,
+		[]uint64{2, 3, 4},
+	)
 }
 
 // TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange: an AbsoluteRange
 // {0, 1}..group 0 filter forwards Objects 1, 2, 3 with re-encoded deltas.
 func TestFanout_AbsoluteRangeFilter_DropsObjectsOutsideRange(t *testing.T) {
 	t.Parallel()
-	requireFilterForwards(t,
-		&message.LocationFilter{Fields: 3, StartGroup: 0, StartObject: 1, EndGroupDelta: 0}, 4, []uint64{1, 2, 3})
+	requireFilterForwards(
+		t,
+		&message.LocationFilter{
+			Type:          message.LocationFilterAbsoluteStartGroupEnd,
+			StartGroup:    0,
+			StartObject:   1,
+			EndGroupDelta: 0,
+		},
+		4,
+		[]uint64{1, 2, 3},
+	)
 }
 
 // TestFanout_UpdatesTrackEntryLargestObject: each forwarded Object advances the
@@ -111,7 +125,11 @@ func TestFanout_UpdatesTrackEntryLargestObject(t *testing.T) {
 	// installSubscribeParams snapshots the watermark for this filter, so of
 	// Object 1 (below {4, 2}) and Object 3 (above), only 3 passes. They go on
 	// a fresh subgroup, as subgroup 0 already ended.
-	sub2 := newCam1Subscriber(t, pubSess, message.LocationFilterParam(&message.LocationFilter{Fields: 2}))
+	sub2 := newCam1Subscriber(
+		t,
+		pubSess,
+		message.LocationFilterParam(&message.LocationFilter{Type: message.LocationFilterNextObject}),
+	)
 	reads := readNextSubgroup(t, sub2)
 	writeSubgroupObjects(t, pub,
 		message.SubgroupHeader{SubgroupIDMode: message.SubgroupIDExplicit, GroupID: 4, SubgroupID: 1},

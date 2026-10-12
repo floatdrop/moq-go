@@ -168,7 +168,7 @@ func (l *quicBenchListener) Close() error   { return l.ln.Close() }
 // advertising a single MoQT ALPN.
 func benchTLSConfigs(tb testing.TB) (server, client *tls.Config) {
 	tb.Helper()
-	const alpn = "moqt-20"
+	const alpn = "moqt-22"
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		tb.Fatalf("ed25519.GenerateKey: %v", err)

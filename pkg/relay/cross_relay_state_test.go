@@ -134,7 +134,7 @@ func TestCrossRelay_FetchBackfillsPublishOnceTrack(t *testing.T) {
 	// A FETCH is the only way this subscriber can reach content published
 	// before it arrived. A's own cache is empty, as its upstream uses the Next
 	// Object filter, so answering means stitching from B (§7.4). StartGroup=1
-	// is the relative one-field form (§9.20.9): the current group up to the
+	// is the relative-start form (§9.20.9): the current group up to the
 	// Largest Object.
 	fetchReq, err := subSess.Fetch(ctx, &message.Fetch{
 		Namespace: ns("video"),

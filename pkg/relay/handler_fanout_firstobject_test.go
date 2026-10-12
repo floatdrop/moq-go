@@ -121,7 +121,7 @@ func TestFanout_FirstObjectBitOnPlainForward(t *testing.T) {
 // mid-subgroup because of the filter does not claim FIRST_OBJECT.
 func TestFanout_FirstObjectBitClearedForFilteredHead(t *testing.T) {
 	t.Parallel()
-	filter := &message.LocationFilter{Fields: 2, StartGroup: 0, StartObject: 2}
+	filter := &message.LocationFilter{Type: message.LocationFilterAbsoluteStart, StartGroup: 0, StartObject: 2}
 	pub, sub := firstObjectTopology(t,
 		message.Parameters{message.LocationFilterParam(filter)})
 

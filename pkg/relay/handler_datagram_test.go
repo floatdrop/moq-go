@@ -105,7 +105,9 @@ func TestDatagram_FilterDropsBelowStart(t *testing.T) {
 		Namespace: ns("video"),
 		Name:      []byte("cam1"),
 		Parameters: message.Parameters{
-			message.LocationFilterParam(&message.LocationFilter{Fields: 2, StartGroup: 0, StartObject: 2}),
+			message.LocationFilterParam(
+				&message.LocationFilter{Type: message.LocationFilterAbsoluteStart, StartGroup: 0, StartObject: 2},
+			),
 		},
 	})
 	if err != nil {

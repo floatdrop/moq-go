@@ -254,12 +254,14 @@ func TestIncludePropertiesOutOfRangeCloses(t *testing.T) {
 // TestParamValueOutOfRangeCloses: a value the draft makes session-fatal closes
 // the receiver, in an opener and inside its FILL_PARAMETERS: GROUP_ORDER
 // outside {1, 2} (§9.20.8), FORWARD above 1 (§9.20.18), and a LOCATION_FILTER
-// whose end Group overflows (§9.20.9) are PROTOCOL_VIOLATION; a LOCATION_FILTER
-// or FILL_PARAMETERS that does not parse is KEY_VALUE_FORMATTING_ERROR (§8.3).
+// whose end Group overflows, has an unknown Type or is cut short (§9.20.9) are
+// PROTOCOL_VIOLATION; a FILL_PARAMETERS that does not parse is
+// KEY_VALUE_FORMATTING_ERROR (§8.3).
 func TestParamValueOutOfRangeCloses(t *testing.T) {
 	t.Parallel()
 	overflow := message.AbsoluteRangeFilter(message.Location{Group: math.MaxUint64}, 1)
-	unparsable := message.BytesParam(message.ParamLocationFilter, []byte{0xFF})
+	// Type 0x02 (absolute start) with only one of its two fields.
+	unparsable := message.BytesParam(message.ParamLocationFilter, []byte{0x02, 0x05})
 	fill := func(inner ...message.Parameter) message.Parameter { return message.FillParametersParam(inner) }
 	cases := []struct {
 		name string
@@ -299,8 +301,15 @@ func TestParamValueOutOfRangeCloses(t *testing.T) {
 			Parameters: message.Parameters{overflow}}, moqt.SessionProtocolViolation},
 		{"LOCATION_FILTER overflow inside FILL_PARAMETERS", &message.SubscribeTracks{TrackNamespacePrefix: videoNS,
 			Parameters: message.Parameters{fill(overflow)}}, moqt.SessionProtocolViolation},
-		{"LOCATION_FILTER that does not parse", &message.Subscribe{Name: []byte("t"),
-			Parameters: message.Parameters{unparsable}}, moqt.SessionKeyValueFormattingError},
+		// §9.20.9: the value has no Length, so a truncated one leaves the
+		// control message itself malformed.
+		{"LOCATION_FILTER cut short", &message.Subscribe{Name: []byte("t"),
+			Parameters: message.Parameters{unparsable}}, moqt.SessionProtocolViolation},
+		// §9.20.9: an unknown Location Filter Type is a PROTOCOL_VIOLATION,
+		// inside FILL_PARAMETERS too — not a value that does not parse.
+		{"unknown Location Filter Type inside FILL_PARAMETERS", &message.Subscribe{Name: []byte("t"),
+			Parameters: message.Parameters{fill(message.VarintParam(message.ParamLocationFilter, 6))}},
+			moqt.SessionProtocolViolation},
 		{"unknown parameter inside FILL_PARAMETERS", &message.Subscribe{Name: []byte("t"),
 			Parameters: message.Parameters{fill(message.VarintParam(0x3E, 1))}}, moqt.SessionProtocolViolation},
 		{"FILL_PARAMETERS that does not parse", &message.Subscribe{Name: []byte("t"),

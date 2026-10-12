@@ -179,7 +179,11 @@ func TestRelay_SkipBeforeStartKeepsFIN(t *testing.T) {
 	defer teardown()
 	pub := publishVideoTrack(t, pubSess, "cam1", 1)
 	subSess := dialAnotherClient(t, pubSess)
-	subscribeCam1(t, subSess, message.LocationFilterParam(&message.LocationFilter{Fields: 2, StartObject: 2}))
+	subscribeCam1(
+		t,
+		subSess,
+		message.LocationFilterParam(&message.LocationFilter{Type: message.LocationFilterAbsoluteStart, StartObject: 2}),
+	)
 
 	publishSubgroupWith(t, pub, 0, 4, nil)
 	ids, end := readUntilEnd(t, subSess)
@@ -306,7 +310,7 @@ func TestRelay_StartRaisedToLaterGroupResetsPromptly(t *testing.T) {
 	}()
 	time.Sleep(50 * time.Millisecond) // Object 0 goes out first
 	if _, err := subSess.UpdateRequest(t.Context(), subReq, message.Parameters{
-		message.LocationFilterParam(&message.LocationFilter{Fields: 2, StartGroup: 3}),
+		message.LocationFilterParam(&message.LocationFilter{Type: message.LocationFilterAbsoluteStart, StartGroup: 3}),
 	}); err != nil {
 		t.Fatalf("UpdateRequest(Start {3,0}): %v", err)
 	}
@@ -342,7 +346,9 @@ func TestRelay_StartRaisedWithinGroupResets(t *testing.T) {
 	}()
 	time.Sleep(50 * time.Millisecond) // Object 0 goes out first
 	if _, err := subSess.UpdateRequest(t.Context(), subReq, message.Parameters{
-		message.LocationFilterParam(&message.LocationFilter{Fields: 2, StartGroup: 2, StartObject: 5}),
+		message.LocationFilterParam(
+			&message.LocationFilter{Type: message.LocationFilterAbsoluteStart, StartGroup: 2, StartObject: 5},
+		),
 	}); err != nil {
 		t.Fatalf("UpdateRequest(Start {2,5}): %v", err)
 	}
@@ -365,7 +371,11 @@ func TestRelay_EndLocationInsideGroupResets(t *testing.T) {
 	pub := publishVideoTrack(t, pubSess, "cam1", 1)
 	subSess := dialAnotherClient(t, pubSess)
 	// Start {0,0}, End {0,1}: EndGroupDelta 0, EndObject 1.
-	subscribeCam1(t, subSess, message.LocationFilterParam(&message.LocationFilter{Fields: 4, EndObject: 1}))
+	subscribeCam1(
+		t,
+		subSess,
+		message.LocationFilterParam(&message.LocationFilter{Type: message.LocationFilterAbsoluteRange, EndObject: 1}),
+	)
 
 	publishSubgroupWith(t, pub, 0, 4, nil)
 	ids, end := readUntilEnd(t, subSess)

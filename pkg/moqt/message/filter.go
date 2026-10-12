@@ -8,37 +8,75 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
 )
 
-// LocationFilter is the LOCATION_FILTER parameter value from §9.20.9.
+// LocationFilterType is the Location Filter Type that opens a LOCATION_FILTER
+// value (§9.20.9). It selects which of the four optional fields follow and how
+// they are read.
+type LocationFilterType uint64
+
+// The Location Filter forms of §9.20.9, Table 6. Any other value is a
+// PROTOCOL_VIOLATION.
+const (
+	// LocationFilterNone: no fields, no filter. In REQUEST_UPDATE it removes
+	// an existing filter.
+	LocationFilterNone LocationFilterType = 0x00
+	// LocationFilterRelativeStart: StartGroup counts back from the Next Group;
+	// the start is {Largest Object.Group + 1 - StartGroup, 0}. Open-ended.
+	LocationFilterRelativeStart LocationFilterType = 0x01
+	// LocationFilterAbsoluteStart: start {StartGroup, StartObject}. Open-ended.
+	LocationFilterAbsoluteStart LocationFilterType = 0x02
+	// LocationFilterAbsoluteStartGroupEnd: start {StartGroup, StartObject},
+	// end the last Object of Group StartGroup + EndGroupDelta.
+	LocationFilterAbsoluteStartGroupEnd LocationFilterType = 0x03
+	// LocationFilterAbsoluteRange: start {StartGroup, StartObject}, end
+	// {StartGroup + EndGroupDelta, EndObject}.
+	LocationFilterAbsoluteRange LocationFilterType = 0x04
+	// LocationFilterNextObject: no fields; starts at the Next Object (§3.1.4).
+	// Open-ended.
+	LocationFilterNextObject LocationFilterType = 0x05
+)
+
+// fields is how many optional vi64s follow a Location Filter Type, and false
+// for a type §9.20.9 does not define.
+func (t LocationFilterType) fields() (int, bool) {
+	switch t {
+	case LocationFilterNone, LocationFilterNextObject:
+		return 0, true
+	case LocationFilterRelativeStart:
+		return 1, true
+	case LocationFilterAbsoluteStart:
+		return 2, true
+	case LocationFilterAbsoluteStartGroupEnd:
+		return 3, true
+	case LocationFilterAbsoluteRange:
+		return 4, true
+	default:
+		return 0, false
+	}
+}
+
+// errUnknownLocationFilterType is a Location Filter Type outside Table 6:
+// "Any other Location Filter Type is a PROTOCOL_VIOLATION" (§9.20.9).
+var errUnknownLocationFilterType = errors.New("moqt/message: unknown Location Filter Type (PROTOCOL_VIOLATION §9.20.9)")
+
+// LocationFilter is a Location Filter (§3.3.1), the value of the
+// LOCATION_FILTER parameter.
 //
-// Wire format (the enclosing parameter is length-prefixed, and that Length is
-// what selects how many of the four optional fields are present):
+// Wire format (§9.20.9). The value is self-delimiting: the Type says how many
+// of the optional fields follow, and there is no Length.
 //
 //	LOCATION_FILTER Parameter {
 //	  Parameter Type (vi64) = 0x21,
-//	  Length (vi64),
+//	  Location Filter Type (vi64),
 //	  [StartGroup (vi64),]
 //	  [StartObject (vi64),]
 //	  [EndGroupDelta (vi64),]
 //	  [EndObject (vi64),]
 //	}
 //
-// draft-20 replaced draft-19's Filter Type enum (NextGroupStart /
-// LargestObject / AbsoluteStart / AbsoluteRange) with this positional
-// encoding, so the field count *is* the discriminant:
-//
-//	0 fields  unfiltered — and, in REQUEST_UPDATE, removes the filter
-//	1 field   StartGroup is RELATIVE: start = {Largest.Group + 1 - StartGroup, 0}
-//	2 fields  {0,0} means the Next Object; otherwise an absolute start
-//	3 fields  absolute start, end group = StartGroup + EndGroupDelta
-//	4 fields  ...plus an explicit last Object in the end group
-//
 // The range is inclusive at both ends. An omitted end is open-ended on a
 // subscription and means Largest Object on a Fetch (§9.20.9).
 type LocationFilter struct {
-	// Fields is how many of the four optional vi64s were on the wire (0-4).
-	// It selects the interpretation of the rest, so it is part of the value
-	// rather than a decoding artifact.
-	Fields int
+	Type LocationFilterType
 
 	StartGroup    uint64
 	StartObject   uint64
@@ -46,37 +84,37 @@ type LocationFilter struct {
 	EndObject     uint64
 }
 
-// Unfiltered reports whether the filter selects the whole track (no fields).
-func (f *LocationFilter) Unfiltered() bool { return f.Fields == 0 }
+// Unfiltered reports whether the filter selects the whole track.
+func (f *LocationFilter) Unfiltered() bool { return f.Type == LocationFilterNone }
 
 // RelativeStart reports whether StartGroup counts back from the Next Group
-// rather than naming an absolute Group (the one-field form).
-func (f *LocationFilter) RelativeStart() bool { return f.Fields == 1 }
+// rather than naming an absolute Group.
+func (f *LocationFilter) RelativeStart() bool { return f.Type == LocationFilterRelativeStart }
 
 // NextObject reports whether the filter starts at the Object after Largest
-// Object — the two-field all-zero form, draft-19's LargestObject filter.
-func (f *LocationFilter) NextObject() bool {
-	return f.Fields == 2 && f.StartGroup == 0 && f.StartObject == 0
-}
+// Object (§3.1.4).
+func (f *LocationFilter) NextObject() bool { return f.Type == LocationFilterNextObject }
 
 // HasEnd reports whether the filter bounds the end of the range.
-func (f *LocationFilter) HasEnd() bool { return f.Fields >= 3 }
+func (f *LocationFilter) HasEnd() bool {
+	return f.Type == LocationFilterAbsoluteStartGroupEnd || f.Type == LocationFilterAbsoluteRange
+}
 
 // HasEndObject reports whether the filter names a last Object in the end
 // Group. When false but HasEnd is true, every Object in the end Group passes.
-func (f *LocationFilter) HasEndObject() bool { return f.Fields == 4 }
+func (f *LocationFilter) HasEndObject() bool { return f.Type == LocationFilterAbsoluteRange }
 
-// Validate enforces the §9.20.9 rules the decoder cannot: a field count in
-// range, and the end-group sum staying inside the 64-bit Group space ("If
-// StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close the
-// session with a PROTOCOL_VIOLATION"). Callers map a non-nil error to
-// PROTOCOL_VIOLATION.
+// Validate enforces the end-group sum staying inside the 64-bit Group space
+// (§9.20.9: "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
+// close the session with a PROTOCOL_VIOLATION"), which the decoder does not
+// check, and a Type in Table 6, which it does but a filter built by hand may
+// lack. Callers map a non-nil error to PROTOCOL_VIOLATION.
 //
 // Note the asymmetry with a relative start, which §9.20.9 clamps rather than
 // rejects — see [LocationFilter.Start].
 func (f *LocationFilter) Validate() error {
-	if f.Fields < 0 || f.Fields > 4 {
-		return fmt.Errorf("moqt/message: LOCATION_FILTER has %d fields, want 0-4 (§9.20.9)", f.Fields)
+	if _, ok := f.Type.fields(); !ok {
+		return fmt.Errorf("%w: %#x", errUnknownLocationFilterType, uint64(f.Type))
 	}
 	if f.HasEnd() && f.StartGroup > math.MaxUint64-f.EndGroupDelta {
 		return fmt.Errorf("%w (start=%d delta=%d)", errEndGroupOverflow, f.StartGroup, f.EndGroupDelta)
@@ -159,45 +197,42 @@ func (f *LocationFilter) Matches(loc Location, largest Location, hasLargest bool
 	return true
 }
 
-// Append serialises the filter's fields to w. The caller writes the enclosing
-// parameter's Length, which is what tells the peer how many fields follow.
+// Append serialises the filter to w: its Location Filter Type, then the fields
+// that Type carries (§9.20.9).
 func (f *LocationFilter) Append(w *wire.Writer) {
-	if f.Fields >= 1 {
-		w.Varint(f.StartGroup)
-	}
-	if f.Fields >= 2 {
-		w.Varint(f.StartObject)
-	}
-	if f.Fields >= 3 {
-		w.Varint(f.EndGroupDelta)
-	}
-	if f.Fields >= 4 {
-		w.Varint(f.EndObject)
+	w.Varint(uint64(f.Type))
+	n, _ := f.Type.fields()
+	fields := [4]uint64{f.StartGroup, f.StartObject, f.EndGroupDelta, f.EndObject}
+	for _, v := range fields[:n] {
+		w.Varint(v)
 	}
 }
 
-// Parse deserialises a filter from r, consuming every remaining byte: r must
-// be bounded to the LOCATION_FILTER parameter's value, since the byte count is
-// the only thing that distinguishes the five forms (§9.20.9).
+// Parse reads one filter from r: a Location Filter Type, then exactly the
+// fields it selects (§9.20.9), leaving r just past them. The value is
+// self-delimiting, so r may hold more parameters after it. Parse checks only
+// the shape; [LocationFilter.Validate] checks the end-group sum.
 func (f *LocationFilter) Parse(r *wire.Reader) error {
 	*f = LocationFilter{}
-	dst := [4]*uint64{&f.StartGroup, &f.StartObject, &f.EndGroupDelta, &f.EndObject}
-	for !r.Empty() {
-		if f.Fields == len(dst) {
-			return fmt.Errorf("moqt/message: LOCATION_FILTER has %d trailing bytes after 4 fields (§9.20.9)",
-				r.Remaining())
-		}
-		v, err := r.Varint()
-		if err != nil {
-			return fmt.Errorf("moqt/message: LOCATION_FILTER field %d: %w", f.Fields, err)
-		}
-		*dst[f.Fields] = v
-		f.Fields++
+	t, err := r.Varint()
+	if err != nil {
+		return fmt.Errorf("moqt/message: LOCATION_FILTER type: %w", err)
 	}
-	return f.Validate()
+	f.Type = LocationFilterType(t)
+	n, ok := f.Type.fields()
+	if !ok {
+		return fmt.Errorf("%w: %#x", errUnknownLocationFilterType, t)
+	}
+	dst := [4]*uint64{&f.StartGroup, &f.StartObject, &f.EndGroupDelta, &f.EndObject}
+	for i, p := range dst[:n] {
+		if *p, err = r.Varint(); err != nil {
+			return fmt.Errorf("moqt/message: LOCATION_FILTER field %d: %w", i, err)
+		}
+	}
+	return nil
 }
 
-// Bytes serialises the filter's fields to a fresh slice, for use as the
+// Bytes serialises the filter to a fresh slice, for use as the
 // LOCATION_FILTER parameter value.
 func (f *LocationFilter) Bytes() []byte {
 	var w wire.Writer
@@ -205,59 +240,60 @@ func (f *LocationFilter) Bytes() []byte {
 	return w.Bytes()
 }
 
-// ParseLocationFilter deserialises a LocationFilter from a LOCATION_FILTER
-// parameter value.
+// ParseLocationFilter deserialises and validates a LocationFilter from a
+// LOCATION_FILTER parameter value, which must hold exactly one filter.
 func ParseLocationFilter(raw []byte) (*LocationFilter, error) {
 	f := &LocationFilter{}
-	if err := f.Parse(wire.NewReader(raw)); err != nil {
+	r := wire.NewReader(raw)
+	if err := f.Parse(r); err != nil {
+		return nil, err
+	}
+	if !r.Empty() {
+		return nil, fmt.Errorf("moqt/message: LOCATION_FILTER has %d trailing bytes (§9.20.9)", r.Remaining())
+	}
+	if err := f.Validate(); err != nil {
 		return nil, err
 	}
 	return f, nil
 }
 
-// UnfilteredFilter returns a zero-length LOCATION_FILTER parameter (§9.20.9):
+// UnfilteredFilter returns a LOCATION_FILTER parameter of Type None (§9.20.9):
 // the whole track. On REQUEST_UPDATE it removes an existing filter.
 func UnfilteredFilter() Parameter {
-	return LocationFilterParam(&LocationFilter{})
+	return LocationFilterParam(&LocationFilter{Type: LocationFilterNone})
 }
 
 // NextObjectFilter returns a LOCATION_FILTER parameter (§9.20.9) starting at
-// the Object after the publisher's Largest Object — the live edge, and the
-// filter to pair with a fill so each Object arrives exactly once (§3.4).
-//
-// This is draft-19's LargestObject filter.
+// the Next Object (§3.1.4) — the live edge, and the filter to pair with a fill
+// so each Object arrives exactly once (§3.4).
 func NextObjectFilter() Parameter {
-	return LocationFilterParam(&LocationFilter{Fields: 2})
+	return LocationFilterParam(&LocationFilter{Type: LocationFilterNextObject})
 }
 
-// RelativeStartFilter returns an open-ended LOCATION_FILTER parameter (§9.20.9)
-// starting groupsBack groups before the Next Group: 0 is the Next Group (which
-// is draft-19's NextGroupStart filter), 1 the current group, N the group N-1
-// before the current one.
+// RelativeStartFilter returns an open-ended LOCATION_FILTER parameter
+// (§9.20.9) starting groupsBack groups before the Next Group: 0 is the Next
+// Group, 1 the current group, N the group N-1 before the current one.
 func RelativeStartFilter(groupsBack uint64) Parameter {
-	return LocationFilterParam(&LocationFilter{Fields: 1, StartGroup: groupsBack})
+	return LocationFilterParam(&LocationFilter{Type: LocationFilterRelativeStart, StartGroup: groupsBack})
 }
 
-// AbsoluteStartFilter returns an open-ended LOCATION_FILTER parameter (§9.20.9)
-// starting at an explicit Location. A start of {0, 0} is equivalent to
-// unfiltered, and is encoded that way — the two-field all-zero form is the
-// Next Object filter, not an absolute {0, 0}.
+// AbsoluteStartFilter returns an open-ended LOCATION_FILTER parameter
+// (§9.20.9) starting at an explicit Location.
 func AbsoluteStartFilter(start Location) Parameter {
-	if start == (Location{}) {
-		return UnfilteredFilter()
-	}
 	return LocationFilterParam(&LocationFilter{
-		Fields:      2,
+		Type:        LocationFilterAbsoluteStart,
 		StartGroup:  start.Group,
 		StartObject: start.Object,
 	})
 }
 
 // AbsoluteRangeFilter returns a LOCATION_FILTER parameter (§9.20.9) covering
-// start through the end of group (start.Group + endGroupDelta), inclusive.
+// start through the end of group (start.Group + endGroupDelta), inclusive. It
+// is Type [LocationFilterAbsoluteStartGroupEnd] (0x03), not
+// [LocationFilterAbsoluteRange], which [AbsoluteRangeObjectFilter] builds.
 func AbsoluteRangeFilter(start Location, endGroupDelta uint64) Parameter {
 	return LocationFilterParam(&LocationFilter{
-		Fields:        3,
+		Type:          LocationFilterAbsoluteStartGroupEnd,
 		StartGroup:    start.Group,
 		StartObject:   start.Object,
 		EndGroupDelta: endGroupDelta,
@@ -265,10 +301,11 @@ func AbsoluteRangeFilter(start Location, endGroupDelta uint64) Parameter {
 }
 
 // AbsoluteRangeObjectFilter returns a LOCATION_FILTER parameter (§9.20.9)
-// covering the inclusive range start..{start.Group + endGroupDelta, endObject}.
+// covering the inclusive range start..{start.Group + endGroupDelta, endObject}:
+// Type [LocationFilterAbsoluteRange] (0x04).
 func AbsoluteRangeObjectFilter(start Location, endGroupDelta, endObject uint64) Parameter {
 	return LocationFilterParam(&LocationFilter{
-		Fields:        4,
+		Type:          LocationFilterAbsoluteRange,
 		StartGroup:    start.Group,
 		StartObject:   start.Object,
 		EndGroupDelta: endGroupDelta,

@@ -22,7 +22,7 @@ import (
 )
 
 // Listener yields ready-to-use MOQT transport connections. The caller is
-// responsible for TLS, ALPN ("moqt-20"), and — for WebTransport — the HTTP/3
+// responsible for TLS, ALPN ("moqt-22"), and — for WebTransport — the HTTP/3
 // CONNECT upgrade before returning a Conn. The relay never binds sockets or
 // terminates TLS itself.
 //
@@ -206,7 +206,7 @@ type Config struct {
 	// Dialer establishes an outbound transport connection to another relay
 	// instance, given the RelayAddr that instance advertised in Discovery.
 	// It is the outbound counterpart of [Listener]: the relay stays
-	// transport-agnostic, so the caller owns TLS, ALPN ("moqt-20"), and — for
+	// transport-agnostic, so the caller owns TLS, ALPN ("moqt-22"), and — for
 	// WebTransport — the HTTP/3 CONNECT upgrade, returning a ready
 	// [session.Conn] on which the relay drives the MOQT SETUP handshake as a
 	// client.

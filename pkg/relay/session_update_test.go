@@ -469,7 +469,7 @@ func TestRelay_ParamScopeFetchUpdate(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	sendUpdateRaw(t, fetchSess, fr.Stream, message.Parameters{
-		message.LocationFilterParam(&message.LocationFilter{Fields: 2}),
+		message.LocationFilterParam(&message.LocationFilter{Type: message.LocationFilterNextObject}),
 	})
 	requireSessionClosed(t, fetchSess, "LOCATION_FILTER in a FETCH update")
 }

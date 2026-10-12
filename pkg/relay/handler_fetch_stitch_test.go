@@ -66,7 +66,7 @@ func TestFetch_StitchesEvictedRangeFromUpstream(t *testing.T) {
 				// may not cache the upstream's first pushed group) — honouring the
 				// requested range keeps the answer gapless whatever it is.
 				// draft-20 carries the range in LOCATION_FILTER (§3.3.1), and the
-				// relay always sends the absolute four-field form.
+				// relay always sends the Absolute Range form (Type 0x04).
 				f, ferr := message.LocationFilterFromParam(m.Parameters)
 				if ferr != nil || f == nil {
 					return

@@ -23,7 +23,7 @@ import (
 type Options struct {
 	// Implementation is the SETUP IMPLEMENTATION value ("name/version").
 	Implementation string
-	// ALPN is the NextProtos list offered; defaults to ["moqt-20"] (§6.2: the
+	// ALPN is the NextProtos list offered; defaults to ["moqt-22"] (§6.2: the
 	// "moqt-NN" ALPN is the draft-version signal — SETUP has no version
 	// field, §9.1).
 	ALPN []string
@@ -56,7 +56,7 @@ func QUIC(ctx context.Context, addr string, o Options) (*session.Session, error)
 
 	alpn := o.ALPN
 	if len(alpn) == 0 {
-		alpn = []string{"moqt-20"}
+		alpn = []string{"moqt-22"}
 	}
 	tlsCfg := &tls.Config{
 		//nolint:gosec // G402: opt-in for dev/demo/interop relays with self-signed certs.

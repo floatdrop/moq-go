@@ -268,7 +268,7 @@ func (ps Parameters) checkValues() error {
 		return err
 	}
 	switch _, err := LocationFilterFromParam(ps); {
-	case err == nil, errors.Is(err, errEndGroupOverflow):
+	case err == nil, errors.Is(err, errEndGroupOverflow), errors.Is(err, errUnknownLocationFilterType):
 		return err
 	default:
 		return fmt.Errorf("%w: LOCATION_FILTER: %w", ErrValueFormatting, err)

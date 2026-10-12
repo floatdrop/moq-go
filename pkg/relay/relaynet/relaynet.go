@@ -35,13 +35,13 @@ import (
 // MOQTQUICALPNs lists the raw-QUIC MOQT ALPNs the relay accepts. SETUP
 // carries no version field (§9.1); MOQT negotiates the version with ALPN
 // (§6.2), so the "moqt-NN" ALPN is itself the draft-version signal — the
-// negotiated ALPN fixes the draft. We advertise only "moqt-20", the draft this
+// negotiated ALPN fixes the draft. We advertise only "moqt-22", the draft this
 // implementation speaks. The older "moqt-19"/"-18"/"-17"/"-16" and "moq-00"
 // (used before -15, followed by version negotiation in SETUP — §6.2) are
 // deliberately not offered: our -20 wire behavior can't complete a SETUP with
 // a peer that selected any of them, so advertising them would only let such a
 // peer clear TLS and then fail.
-var MOQTQUICALPNs = []string{"moqt-20"}
+var MOQTQUICALPNs = []string{"moqt-22"}
 
 // defaultQUICConfig returns the QUIC tuning the relay listens and dials with:
 // a 30s idle timeout with 5s keep-alives, datagrams enabled (MOQT may deliver

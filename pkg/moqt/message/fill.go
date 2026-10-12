@@ -49,9 +49,11 @@ func FillParametersFromParam(ps Parameters) (inner Parameters, ok bool, err erro
 	}
 	if err := inner.parse(wire.NewReader(p.Bytes)); err != nil {
 		// §9.20: an unknown parameter, or a Type past 2^64-1, is a
-		// PROTOCOL_VIOLATION here as in any message; anything else is a
+		// PROTOCOL_VIOLATION here as in any message, and so is an unknown
+		// Location Filter Type (§9.20.9); anything else is a
 		// value that does not parse (§8.3).
-		if errors.Is(err, ErrUnknownParameter) || errors.Is(err, errParamTypeOverflow) {
+		if errors.Is(err, ErrUnknownParameter) || errors.Is(err, errParamTypeOverflow) ||
+			errors.Is(err, errUnknownLocationFilterType) {
 			return nil, true, fmt.Errorf("moqt/message: FILL_PARAMETERS: %w", err)
 		}
 		return nil, true, fmt.Errorf("%w: FILL_PARAMETERS: %w", ErrValueFormatting, err)

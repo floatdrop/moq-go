@@ -94,7 +94,7 @@ func (h *sessionHandler) handleFetch(ctx context.Context, req *session.Request, 
 		return
 	}
 
-	// A 4-field filter can name an end below its own start (EndGroupDelta 0 with
+	// An Absolute Range filter can name an end below its own start (EndGroupDelta 0 with
 	// EndObject < StartObject), which §9.20.9 does not itself forbid. Answering it
 	// would put us in violation of §9.12 — "If End Location is smaller than the
 	// Start Location in the corresponding FETCH the receiver MUST close the

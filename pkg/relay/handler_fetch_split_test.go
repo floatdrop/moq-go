@@ -41,27 +41,42 @@ func TestCapFetchEndLocation(t *testing.T) {
 		{"open-ended ends at largest", message.LocationFilter{}, largest},
 		{
 			"relative start is still open-ended",
-			message.LocationFilter{Fields: 1, StartGroup: 2},
+			message.LocationFilter{Type: message.LocationFilterRelativeStart, StartGroup: 2},
 			largest,
 		},
 		{
 			"end before largest is honoured",
-			message.LocationFilter{Fields: 4, StartGroup: 1, EndGroupDelta: 2, EndObject: 3},
+			message.LocationFilter{
+				Type:          message.LocationFilterAbsoluteRange,
+				StartGroup:    1,
+				EndGroupDelta: 2,
+				EndObject:     3,
+			},
 			message.Location{Group: 3, Object: 3},
 		},
 		{
 			"end past largest is capped",
-			message.LocationFilter{Fields: 4, StartGroup: 1, EndGroupDelta: 100, EndObject: 0},
+			message.LocationFilter{
+				Type:          message.LocationFilterAbsoluteRange,
+				StartGroup:    1,
+				EndGroupDelta: 100,
+				EndObject:     0,
+			},
 			largest,
 		},
 		{
 			"whole-group end past largest is capped",
-			message.LocationFilter{Fields: 3, StartGroup: 10, EndGroupDelta: 0},
+			message.LocationFilter{Type: message.LocationFilterAbsoluteStartGroupEnd, StartGroup: 10, EndGroupDelta: 0},
 			largest,
 		},
 		{
 			"end exactly at largest",
-			message.LocationFilter{Fields: 4, StartGroup: 0, EndGroupDelta: 10, EndObject: 4},
+			message.LocationFilter{
+				Type:          message.LocationFilterAbsoluteRange,
+				StartGroup:    0,
+				EndGroupDelta: 10,
+				EndObject:     4,
+			},
 			largest,
 		},
 	}
@@ -75,7 +90,7 @@ func TestCapFetchEndLocation(t *testing.T) {
 
 	// A whole-group end (EndObject omitted) resolves to {G, MaxUint64}, which is
 	// above any real Largest in that group — so it caps rather than escaping.
-	f := message.LocationFilter{Fields: 3, StartGroup: 0, EndGroupDelta: 10}
+	f := message.LocationFilter{Type: message.LocationFilterAbsoluteStartGroupEnd, StartGroup: 0, EndGroupDelta: 10}
 	if got := capFetchEndLocation(&f, largest); got != largest {
 		t.Errorf("whole end group = %v, want the capped %v", got, largest)
 	}

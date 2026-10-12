@@ -24,7 +24,7 @@ func ExampleClient() {
 
 	tlsCfg := &tls.Config{
 		InsecureSkipVerify: true,                // dev only
-		NextProtos:         []string{"moqt-20"}, // §6.2: the ALPN fixes the draft version
+		NextProtos:         []string{"moqt-22"}, // §6.2: the ALPN fixes the draft version
 	}
 	qconn, err := quic.DialAddr(ctx, "relay.example:4433", tlsCfg, &quic.Config{
 		MaxIdleTimeout:  30 * time.Second,

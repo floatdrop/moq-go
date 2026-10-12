@@ -364,7 +364,7 @@ func TestSubscribe_FillCurrentGroup(t *testing.T) {
 	}
 }
 
-// TestSubscribe_FillWholeTrack: a zero-length LOCATION_FILTER inside
+// TestSubscribe_FillWholeTrack: a LOCATION_FILTER of Type None inside
 // FILL_PARAMETERS fills the whole track up to Largest Object (§3.4, §3.5);
 // an omitted one would inherit the subscription's filter instead.
 func TestSubscribe_FillWholeTrack(t *testing.T) {

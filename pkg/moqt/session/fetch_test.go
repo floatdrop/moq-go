@@ -221,7 +221,7 @@ func TestFetchRejected(t *testing.T) {
 // when End is {0, 0} ("no content yet").
 func TestFetchOKEndBeforeStartClosesSession(t *testing.T) {
 	t.Parallel()
-	absolute := message.LocationFilter{Fields: 2, StartGroup: 5, StartObject: 2}
+	absolute := message.LocationFilter{Type: message.LocationFilterAbsoluteStart, StartGroup: 5, StartObject: 2}
 	cases := []struct {
 		name   string
 		filter message.LocationFilter
@@ -231,10 +231,30 @@ func TestFetchOKEndBeforeStartClosesSession(t *testing.T) {
 		{"End in an earlier Group", absolute, message.Location{Group: 4, Object: 9}, true},
 		{"End earlier in the Start Group", absolute, message.Location{Group: 5, Object: 1}, true},
 		{"End at the Start", absolute, message.Location{Group: 5, Object: 2}, false},
-		{"Next Object", message.LocationFilter{Fields: 2}, message.Location{Group: 3, Object: 4}, true},
-		{"Next Object, End {0,0}", message.LocationFilter{Fields: 2}, message.Location{}, false},
-		{"relative StartGroup 0", message.LocationFilter{Fields: 1}, message.Location{Group: 2}, true},
-		{"relative StartGroup 2", message.LocationFilter{Fields: 1, StartGroup: 2}, message.Location{Group: 2}, false},
+		{
+			"Next Object",
+			message.LocationFilter{Type: message.LocationFilterNextObject},
+			message.Location{Group: 3, Object: 4},
+			true,
+		},
+		{
+			"Next Object, End {0,0}",
+			message.LocationFilter{Type: message.LocationFilterNextObject},
+			message.Location{},
+			false,
+		},
+		{
+			"relative StartGroup 0",
+			message.LocationFilter{Type: message.LocationFilterRelativeStart},
+			message.Location{Group: 2},
+			true,
+		},
+		{
+			"relative StartGroup 2",
+			message.LocationFilter{Type: message.LocationFilterRelativeStart, StartGroup: 2},
+			message.Location{Group: 2},
+			false,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

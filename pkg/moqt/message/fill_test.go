@@ -30,7 +30,7 @@ func TestFillParametersRoundTrip(t *testing.T) {
 		t.Fatalf("inner LOCATION_FILTER: %v (filter %v)", err, f)
 	}
 	if !f.RelativeStart() || f.StartGroup != 1 {
-		t.Errorf("inner filter = %+v, want the 1-field StartGroup=1 form", *f)
+		t.Errorf("inner filter = %+v, want a relative start with StartGroup=1", *f)
 	}
 	if d, ok := FillTimeoutFromParamOK(got); !ok || d.Milliseconds() != 500 {
 		t.Errorf("inner FILL_TIMEOUT = %v, %v; want 500ms, true", d, ok)
@@ -96,7 +96,7 @@ func TestFillParametersAcceptsEveryTableSixEntry(t *testing.T) {
 	inner := Parameters{
 		VarintParam(ParamFillTimeout, 1),
 		ByteParam(ParamSubscriberPriority, 1),
-		LocationFilterParam(&LocationFilter{Fields: 1}),
+		LocationFilterParam(&LocationFilter{Type: LocationFilterRelativeStart}),
 		ByteParam(ParamGroupOrder, uint8(GroupOrderAscending)),
 		BytesParam(ParamSubgroupFilter, []byte{0x00, 0x01}),
 		BytesParam(ParamObjectIDFilter, []byte{0x00, 0x01}),
@@ -132,7 +132,7 @@ func TestFillParametersIsASeparateScope(t *testing.T) {
 		t.Fatalf("inner LOCATION_FILTER: %v", err)
 	}
 	if !innerFilter.RelativeStart() || innerFilter.StartGroup != 2 {
-		t.Errorf("inner filter = %+v, want the 1-field StartGroup=2 form", *innerFilter)
+		t.Errorf("inner filter = %+v, want a relative start with StartGroup=2", *innerFilter)
 	}
 }
 
