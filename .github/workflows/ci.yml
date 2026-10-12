@@ -183,8 +183,10 @@ jobs:
       # v2.14.0's bundled modernize snapshot ships errorsastype, so the
       # lint job already covers it. This runs the analyzer at @latest to catch
       # analyzers newer than whatever golangci-lint bundles. See CLAUDE.md.
+      # From x/tools, not gopls: gopls@latest pinned an x/tools that cannot
+      # read go1.27.2's export data (version 5), so every package was skipped.
       - run: |
-          go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest \
+          go run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@latest \
             -errorsastype ./...
 
   govulncheck:

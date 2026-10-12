@@ -78,11 +78,11 @@ The `modernize` linter is enabled, which covers `errorsastype` (rewrite
 a modernize snapshot that ships that analyzer, so `golangci-lint run` covers it.
 CI additionally runs the analyzer standalone at `@latest`, which catches
 analyzers newer than the bundled snapshot; run it the same way when you want
-that check locally (no go.mod changes — pinning gopls as a tool would perturb
+that check locally (no go.mod changes — pinning x/tools as a tool would perturb
 the transport deps):
 
 ```sh
-go run golang.org/x/tools/gopls/internal/analysis/modernize/cmd/modernize@latest \
+go run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@latest \
   -errorsastype ./...        # add -fix to apply
 ```
 
