@@ -1,7 +1,6 @@
 package message
 
 import (
-	"errors"
 	"fmt"
 	"slices"
 
@@ -40,23 +39,24 @@ func FillParametersParam(inner Parameters) Parameter {
 // list. ok is false when the parameter is absent, which per §3.4 means no
 // fill fetch stream is requested — distinct from a present-but-empty list.
 //
-// An inner parameter outside Table 7 is an error the caller MUST map to a
-// session-level PROTOCOL_VIOLATION (§9.20.15).
+// Every error is one the caller MUST map to a session-level
+// PROTOCOL_VIOLATION: contents that do not parse, or an inner parameter
+// outside Table 7 (§9.20.15).
 func FillParametersFromParam(ps Parameters) (inner Parameters, ok bool, err error) {
 	p, found := ps.Find(ParamFillParameters)
 	if !found {
 		return nil, false, nil
 	}
-	if err := inner.parse(wire.NewReader(p.Bytes)); err != nil {
-		// §9.20: an unknown parameter, or a Type past 2^64-1, is a
-		// PROTOCOL_VIOLATION here as in any message, and so is an unknown
-		// Location Filter Type (§9.20.9); anything else is a
-		// value that does not parse (§8.3).
-		if errors.Is(err, ErrUnknownParameter) || errors.Is(err, errParamTypeOverflow) ||
-			errors.Is(err, errUnknownLocationFilterType) {
-			return nil, true, fmt.Errorf("moqt/message: FILL_PARAMETERS: %w", err)
-		}
-		return nil, true, fmt.Errorf("%w: FILL_PARAMETERS: %w", ErrValueFormatting, err)
+	// The contents are "encoded as if they were Parameters for a separate
+	// message" (§9.20.15), so anything that would make that message malformed
+	// — a value that does not parse, an unknown parameter, bytes left over — is
+	// a PROTOCOL_VIOLATION (§9), as it is at top level.
+	r := wire.NewReader(p.Bytes)
+	if err := inner.parse(r); err != nil {
+		return nil, true, fmt.Errorf("moqt/message: FILL_PARAMETERS: %w", err)
+	}
+	if !r.Empty() {
+		return nil, true, fmt.Errorf("moqt/message: FILL_PARAMETERS: %d bytes after its Parameters", r.Remaining())
 	}
 	for _, ip := range inner {
 		if !slices.Contains(fillParamsAllowed, ip.Type) {

@@ -837,8 +837,9 @@ func (s *Session) UpdateRequest(
 // CheckPeerParams checks the Message Parameters of a peer message m against
 // scope (§9.20.1), §9.20's duplicate rule and the values the draft makes
 // session-fatal (see [message.Parameters.CheckScope]). On a violation it
-// closes the session, with KEY_VALUE_FORMATTING_ERROR for a value that does
-// not parse (§8.3) and PROTOCOL_VIOLATION otherwise, and returns the error.
+// closes the session with PROTOCOL_VIOLATION and returns the error; a value
+// that does not parse never gets here, since parsing m already failed. Only
+// Parameters built by hand can carry one, closed with KEY_VALUE_FORMATTING_ERROR.
 //
 // The session checks the messages it reads itself; callers that read a
 // request stream with [message.Parse] call it for what they read.

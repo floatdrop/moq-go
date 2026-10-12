@@ -219,8 +219,10 @@ func (e *ParamScopeError) Error() string {
 }
 
 // ErrValueFormatting marks a parameter whose value does not match the
-// serialization its type defines. §8.3: the receiver "MUST close the session
-// with error code KEY_VALUE_FORMATTING_ERROR".
+// serialization its type defines. A parsed message cannot carry one: its
+// parameters were decoded already, and a value that did not decode failed the
+// message (PROTOCOL_VIOLATION, §9). Only Parameters built by hand reach
+// [Parameters.CheckScope] with one.
 var ErrValueFormatting = errors.New("moqt/message: value does not match its type's serialization")
 
 // CheckScope reports the first parameter of ps not allowed in a message of the
@@ -228,8 +230,9 @@ var ErrValueFormatting = errors.New("moqt/message: value does not match its type
 // the values a receiver must close the session for, in ps and inside its
 // FILL_PARAMETERS (§9.20.15): GROUP_ORDER (§9.20.8), FORWARD (§9.20.18),
 // INCLUDE_PROPERTIES (§9.20.21) and LOCATION_FILTER (§9.20.9). Every error is a
-// session-level PROTOCOL_VIOLATION, except one wrapping [ErrValueFormatting],
-// a KEY_VALUE_FORMATTING_ERROR.
+// session-level PROTOCOL_VIOLATION, except one wrapping [ErrValueFormatting]
+// (hand-built Parameters only), which the session closes with
+// KEY_VALUE_FORMATTING_ERROR.
 func (ps Parameters) CheckScope(scope ParamScope) error {
 	for _, p := range ps {
 		allowed := paramScopes[p.Type]

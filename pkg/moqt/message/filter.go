@@ -123,8 +123,8 @@ func (f *LocationFilter) Validate() error {
 }
 
 // errEndGroupOverflow is a LOCATION_FILTER whose StartGroup + EndGroupDelta
-// exceeds 2^64 - 1: a PROTOCOL_VIOLATION (§9.20.9), unlike a value that does
-// not parse ([ErrValueFormatting]).
+// exceeds 2^64 - 1: a PROTOCOL_VIOLATION (§9.20.9). Unlike a value that does
+// not parse, it is caught after decoding, by [LocationFilter.Validate].
 var errEndGroupOverflow = errors.New("moqt/message: LOCATION_FILTER end group overflow (PROTOCOL_VIOLATION §9.20.9)")
 
 // Start resolves the first Location that passes the filter, given the

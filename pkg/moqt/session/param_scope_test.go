@@ -255,8 +255,9 @@ func TestIncludePropertiesOutOfRangeCloses(t *testing.T) {
 // the receiver, in an opener and inside its FILL_PARAMETERS: GROUP_ORDER
 // outside {1, 2} (§9.20.8), FORWARD above 1 (§9.20.18), and a LOCATION_FILTER
 // whose end Group overflows, has an unknown Type or is cut short (§9.20.9) are
-// PROTOCOL_VIOLATION; a FILL_PARAMETERS that does not parse is
-// KEY_VALUE_FORMATTING_ERROR (§8.3).
+// PROTOCOL_VIOLATION, and so is a FILL_PARAMETERS whose contents do not parse:
+// they are encoded as a separate message's Parameters (§9.20.15), and a
+// malformed message is PROTOCOL_VIOLATION (§9).
 func TestParamValueOutOfRangeCloses(t *testing.T) {
 	t.Parallel()
 	overflow := message.AbsoluteRangeFilter(message.Location{Group: math.MaxUint64}, 1)
@@ -314,7 +315,12 @@ func TestParamValueOutOfRangeCloses(t *testing.T) {
 			Parameters: message.Parameters{fill(message.VarintParam(0x3E, 1))}}, moqt.SessionProtocolViolation},
 		{"FILL_PARAMETERS that does not parse", &message.Subscribe{Name: []byte("t"),
 			Parameters: message.Parameters{message.BytesParam(message.ParamFillParameters, []byte{0x05})}},
-			moqt.SessionKeyValueFormattingError},
+			moqt.SessionProtocolViolation},
+		{"FILL_PARAMETERS with bytes after its Parameters", &message.Subscribe{Name: []byte("t"),
+			Parameters: message.Parameters{message.BytesParam(message.ParamFillParameters, []byte{0x00, 0x07})}},
+			moqt.SessionProtocolViolation},
+		{"LOCATION_FILTER cut short inside FILL_PARAMETERS", &message.Subscribe{Name: []byte("t"),
+			Parameters: message.Parameters{fill(unparsable)}}, moqt.SessionProtocolViolation},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
