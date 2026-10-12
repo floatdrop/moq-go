@@ -84,8 +84,8 @@ By package, bottom-up along the dependency stack:
 | 3.1.2   | Subscription state management    | DONE   | REQUEST_ERROR / STOP_SENDING / PUBLISH_DONE handling + cleanup. The relay resets a cancelled subscription's open subgroup and fill streams. |
 | 3.1.3   | Track alias                      | DONE   | In subgroup header + datagram; validated. A SUBSCRIBE_OK or PUBLISH reusing the alias of a different registered Track closes the session with DUPLICATE_TRACK_ALIAS (`Session.RegisterInboundTrack`). A `Subscription` or `IncomingPublication` releases its alias once Terminated (§3.1): on its own or its broker's `Close`, when the publisher's FIN is read through it or its broker's `Serve`, or when `Serve` cancels the stream. |
 | 3.1.3.1 | Unknown track alias              | PARTIAL | A subgroup stream whose Track Alias is not bound yet is held unread (MAY buffer): `session.Demux` parks it, count-bounded; the relay waits up to 1 s (`IncomingSubgroupStream.AwaitInboundTrack`, at most 32 streams per session, the rest reset with EXCESSIVE_LOAD). A datagram for an unknown alias is dropped. The MUST to give control streams connection flow control first is not met by the bundled transports, so enough early data can delay the SUBSCRIBE_OK until the relay's wait runs out and the streams are reset. |
-| 3.1.4   | Largest Object                   | PARTIAL | Tracked per track by the relay and reported in SUBSCRIBE_OK, PUBLISH, REQUEST_UPDATE_OK and TRACK_STATUS_OK. It advances when an Object has been read whole and cached, not on its first byte as §3.1.4 has it, so a FETCH or fill never reaches an Object still arriving; one whose Largest Object came from a LARGEST_OBJECT parameter is asked of an upstream FETCH or marked unknown rather than delivered "in full" as §3.2 now asks. See Limitations. |
-| 3.2     | Fetch                            | DONE   | Standalone FETCH (fill fetch streams replaced Joining FETCH in draft-20). Start beyond Largest Object, or no Objects published, is INVALID_RANGE; the range defaults to {0,0} through Largest Object. |
+| 3.1.4   | Largest Object                   | DONE   | Advances on an Object's first byte: the relay on reading its header (`IncomingSubgroupStream.ReadObjectHeader`), a `Publication` as an Object's write begins or a datagram is sent through `Publication.SendDatagram`. Reported in SUBSCRIBE_OK, PUBLISH, REQUEST_UPDATE_OK and TRACK_STATUS_OK, so it can name an Object still arriving; Next Object and Next Group follow from it. See Limitations for the readings taken. |
+| 3.2     | Fetch                            | DONE   | Standalone FETCH (fill fetch streams replaced Joining FETCH in draft-20). Start beyond Largest Object, or no Objects published, is INVALID_RANGE; the range defaults to {0,0} through Largest Object. An Object in range the relay is still receiving is waited for, within FILL_TIMEOUT, and delivered in full (`registry.InFlight`); one still arriving when the budget runs out is an End of Timed-Out Range, and one abandoned mid-payload is waited for on another copy still arriving, else served from the cache, else asked of the upstream FETCH or marked End of Unknown Range. |
 | 3.2.1   | Fetch object delivery            | DONE   | One unidirectional stream; Groups in the requested order, Object IDs ascending within a Group. |
 | 3.2.2   | Gaps in a fetch stream           | DONE   | From the cache, a Location is non-existent only on a signal: a Prior Group or Object ID Gap, a Group's or the Track's end, or an upstream's FETCH. Other uncached Locations are marked End of Unknown (or Timed-Out) Range. Descending order follows draft-22's rule that a Group runs from Object 0 to 2^64-1 at both ends of the response. |
 | 3.2.3   | Relay fetch handling             | DONE   | Uncached Locations are FETCHed from a fetch-capable upstream in one span within FILL_TIMEOUT; a failed or capped upstream FETCH leaves the rest marked unknown rather than failing the downstream FETCH. |
@@ -115,7 +115,7 @@ By package, bottom-up along the dependency stack:
 | 5.1.1 | Priority definitions       | DONE    | Subscriber/publisher priority + group order modeled. |
 | 5.1.2 | Scheduling algorithm       | PARTIAL | `EffectiveStreamPriority` builds the composite `session.StreamPriority` (subscriber→publisher→group-order key→subgroup); FETCH ordering is group-order + Object-ID per §3.2.1. The fill-vs-subscription ordering of rules 3 and 4 (a subscription-delivered object first when the fill's Group Order differs; the fill-delivered one first within a group) is not implemented: fill streams carry no priority input. The datagram-wins tie-break (rule 4) holds by construction: datagrams bypass this priority key entirely and are sent as soon as ready, never queued behind a subgroup stream's priority. Transport knob is currently a no-op (quic-go exposes no per-stream priority API — [quic-go#437](https://github.com/quic-go/quic-go/issues/437)), so the order is computed and pushed through `session.PrioritizedSendStream` (propagation is test-covered) but not yet enforced on the wire. |
 | 5.1.3 | Considerations for setting | DONE    | Relay honours subscriber/publisher priority on fanout. |
-| 5.2   | Delivery timeouts / reliability| PARTIAL| OBJECT_DELIVERY_TIMEOUT enforced on subgroup streams in `session/datastream_out.go`; SUBGROUP_DELIVERY_TIMEOUT only where the transport reports acknowledgement (`session.DeliveryTrackingSendStream`), which no bundled adapter does, so not on quic-go or WebTransport; reset w/ `StreamResetDeliveryTimeout`. Datagrams are never dropped for either timeout (§5.2 "MUST drop the datagrams"). See Limitations. OBJECT_DELIVERY_TIMEOUT is measured per object from its receipt time (`WriteObjectReceivedAt`), not from stream open. `WithDeliveryTimeouts` takes the publisher's and subscriber's halves separately so the §10.1/§10.2 first-object override resolves within the publisher's half before `DeliveryTimeouts.Effective` takes the smaller of the two. The relay sources both sides — the publisher's Track Properties (decoded once onto the entry) and the subscriber's SUBSCRIBE parameters (§9.20.3/§9.20.4) — and passes them to every subgroup stream it opens downstream (a replay stream, which starts past the Subgroup's first Object, gets that Object's override from the fanout), resetting that stream alone with DELIVERY_TIMEOUT while the subscription continues. Not enforced on the raw `Write` path (no object boundaries) or inbound — see Limitations. |
+| 5.2   | Delivery timeouts / reliability| PARTIAL| OBJECT_DELIVERY_TIMEOUT enforced on subgroup streams in `session/datastream_out.go`; SUBGROUP_DELIVERY_TIMEOUT only where the transport reports acknowledgement (`session.DeliveryTrackingSendStream`), which no bundled adapter does, so not on quic-go or WebTransport; reset w/ `StreamResetDeliveryTimeout`. Datagrams are never dropped for either timeout (§5.2 "MUST drop the datagrams"). See Limitations. OBJECT_DELIVERY_TIMEOUT is measured per object from its last header byte (`WriteObjectReceivedAt`), not from stream open. `WithDeliveryTimeouts` takes the publisher's and subscriber's halves separately so the §10.1/§10.2 first-object override resolves within the publisher's half before `DeliveryTimeouts.Effective` takes the smaller of the two. The relay sources both sides — the publisher's Track Properties (decoded once onto the entry) and the subscriber's SUBSCRIBE parameters (§9.20.3/§9.20.4) — and passes them to every subgroup stream it opens downstream (a replay stream, which starts past the Subgroup's first Object, gets that Object's override from the fanout), resetting that stream alone with DELIVERY_TIMEOUT while the subscription continues. Not enforced on the raw `Write` path (no object boundaries) or inbound — see Limitations. |
 
 ## §6 Sessions
 
@@ -226,7 +226,7 @@ By package, bottom-up along the dependency stack:
 |-------|--------------------------------|------|--------|-------|
 | 10.1  | SUBGROUP_DELIVERY_TIMEOUT      | 0x06 | PARTIAL| Track + Object Property; the first object of a subgroup overrides the Track-level value (§5.2 resolution in `message.DeliveryTimeouts`, enforced in `OutgoingSubgroupStream` where the transport reports acknowledgement — none of the bundled ones do, see §5.2). |
 | 10.2  | OBJECT_DELIVERY_TIMEOUT        | 0x02 | DONE   | Track + Object Property; first-object override, as §10.1. |
-| 10.3  | MAX_CACHE_DURATION             | 0x04 | PARTIAL| Per Object: each carries the value of the upstream it arrived through (captured with the Track Alias in `session.InboundTrack`), and is not forwarded live or served from the cache past it; a present 0 is never served from the cache. An Object stitched from an upstream FETCH carries that FETCH_OK's value, and a present 0 sets no limit on it. Objects age from when the relay read them whole, not from their beginning. In FETCH and fill an expired Object is an End of Unknown Range, whether it expired before the snapshot or while the stream was written. |
+| 10.3  | MAX_CACHE_DURATION             | 0x04 | PARTIAL| Per Object: each carries the value of the upstream it arrived through (captured with the Track Alias in `session.InboundTrack`), and is not forwarded live or served from the cache past it; a present 0 is never served from the cache. An Object stitched from an upstream FETCH carries that FETCH_OK's value, and a present 0 sets no limit on it. Objects age from when the relay read them whole, not from their beginning. An Object handed to a waiting FETCH or fill as it completes is delivered as live forwarding is, a present 0 not withholding it (see Limitations). In FETCH and fill an expired Object is an End of Unknown Range, whether it expired before the snapshot or while the stream was written. |
 | 10.4  | DEFAULT_PUBLISHER_PRIORITY     | 0x0E | DONE   | |
 | 10.5  | DEFAULT_PUBLISHER_GROUP_ORDER  | 0x22 | DONE   | A value outside {1, 2} closes the session, also inside Immutable Properties; an omitted one is Ascending. |
 | 10.6  | DYNAMIC_GROUPS                 | 0x30 | DONE   | A value above 1 closes the session, also inside Immutable Properties. |
@@ -331,14 +331,10 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   path enforces no timeout — a subscriber does not police how long the relay
   takes to deliver a subgroup it was promised.
 
-  The relay's receipt time is also approximate. §5.2 names "the last header byte"
-  of the object; the fanout passes `fwdObject.enqueuedAt`, stamped once the
-  object has been read whole, deduped and cached, so the clock starts late by
-  the object's inbound transfer time. The error is always lenient and scales
-  with object size. Fixing it means recording the instant in the inbound read
-  and carrying it separately from `enqueuedAt`, which cannot be reused: it is
-  the `MaxFanoutLag` measurement, and that window means time spent queued rather
-  than object age.
+  The relay measures OBJECT_DELIVERY_TIMEOUT from the instant it read the
+  object's header, the "last header byte" §5.2 names, stamped before any lock
+  is taken and carried apart from `enqueuedAt`, the `MaxFanoutLag`
+  measurement, which counts time spent queued rather than object age.
 
   Note that the §12.5 reset codes are not interchangeable here, and the fanout
   keeps them apart deliberately. A delivery timeout resets the one stream with
@@ -546,14 +542,25 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   gets an End of Unknown Range after every Group in a cached FETCH or fill, or,
   behind a fetch-capable upstream, an upstream FETCH for them. Group ends known
   only from a subgroup FIN are kept for the last 32 Groups.
-- **Largest Object advances on a whole Object, not its first byte (§3.1.4,
-  §3.2)** — the relay caches an Object and then moves its Largest Object
-  watermark, so the watermark never names an Object still arriving and a
-  FETCH or fill never has to deliver one "in full; the publisher delivers the
-  remainder as it becomes available" (§3.2). The draft has advanced it on the
-  first byte since draft-20. A Largest Object learned from a LARGEST_OBJECT
-  parameter can still be in flight; such a Location is asked of an upstream
-  FETCH or marked unknown. Tracked as a follow-up to the draft-22 migration.
+- **Largest Object on the first byte: readings taken (§3.1.4, §3.2)** —
+  decided with the maintainer. Largest Object stays where it moved if that
+  Object is then abandoned, and it moves even for an Object the relay already
+  knows not to exist, which it then drops (inside an announced Prior Gap) or
+  treats as making the track malformed (past a recorded End of Group or
+  Track, §12.1). A subscriber with a relative start of
+  0 (the Next Group) that joins while Object 0 of a Group is arriving starts
+  at the following Group, which costs video a Group of join latency; Next
+  Object plus a fill (§3.5) is the way to join without it. FILL_TIMEOUT 0 wins
+  over §3.2's "includes that Object in full": the Object still arriving is an
+  End of Timed-Out Range. A present MAX_CACHE_DURATION of 0, read as barring
+  only serving from the cache, does not withhold an Object handed to a
+  waiting FETCH as it completes; the relay's own cache TTL still applies. An
+  Object goes live only to subscribers whose writer was open when its first
+  header, from any upstream, was read; a later joiner gets it from its fill,
+  so each Object reaches a subscriber once. One edge remains: when the first
+  copy is abandoned and another upstream's copy starts only after the fill
+  gave up on it, the fill may ask an upstream FETCH for it while that copy
+  goes out live.
 - **Per-message parameter lists (§9.20.1, §3.6.2)** — draft-22 lists the
   parameters each message allows, and the lists are narrower than the
   parameter definitions: SUBSCRIBE_TRACKS omits the SUBSCRIBE parameters
