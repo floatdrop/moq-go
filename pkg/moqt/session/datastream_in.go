@@ -73,6 +73,10 @@ type IncomingSubgroupStream struct {
 	decSubgroupID       uint64 // resolved per §11.3.1 (zero / first-object / explicit)
 	decSubgroupResolved bool
 
+	// pendingPayload is the payload length of the Object whose header
+	// ReadObjectHeader returned and ReadObjectPayload has not read yet.
+	pendingPayload uint64
+
 	// sess is the owning session, used by TrackKey to resolve Header.TrackAlias
 	// against the inbound alias registry live, at call time.
 	sess *Session
@@ -131,20 +135,51 @@ func (s *IncomingSubgroupStream) Cancel(code moqt.StreamResetCode) {
 // implicit SubgroupID resolution done for you.
 //
 // An Object whose Properties make the track malformed returns an error
-// wrapping [ErrMalformedTrack].
+// wrapping [ErrMalformedTrack], its payload consumed.
+//
+// It is [IncomingSubgroupStream.ReadObjectHeader] followed by
+// [IncomingSubgroupStream.ReadObjectPayload].
 func (s *IncomingSubgroupStream) ReadObject() (*message.SubgroupObject, error) {
+	obj, err := s.ReadObjectHeader()
+	if err != nil && !errors.Is(err, ErrMalformedTrack) {
+		return nil, err
+	}
+	malformed := err // ReadObjectHeader returns obj alongside ErrMalformedTrack
+	if err := s.ReadObjectPayload(obj); err != nil {
+		return nil, err
+	}
+	if malformed != nil {
+		return nil, malformed
+	}
+	return obj, nil
+}
+
+// ReadObjectHeader reads the next Object's header — everything before its
+// payload — and returns it with Payload nil; [IncomingSubgroupStream.ObjectID]
+// already reports its absolute Object ID. This is the Object's first byte in
+// §3.1.4's sense, so a receiver can act on its Location while the payload is
+// still arriving. Call [IncomingSubgroupStream.ReadObjectPayload] before the
+// next ReadObjectHeader. Returns (nil, io.EOF) when the peer has FIN'd the
+// stream cleanly.
+//
+// An Object whose Properties make the track malformed returns it with an error
+// wrapping [ErrMalformedTrack]; its payload is still pending.
+func (s *IncomingSubgroupStream) ReadObjectHeader() (*message.SubgroupObject, error) {
 	obj := &message.SubgroupObject{}
-	if err := obj.Parse(s.rd, s.Header.Properties); err != nil {
+	n, err := obj.ParseHeader(s.rd, s.Header.Properties)
+	if err != nil {
 		return nil, s.sess.checkFINMidObject(err)
 	}
-	// §11.1.1, §11.1.2.
-	if err := obj.Validate(); err != nil {
-		return nil, s.sess.closeProtocolViolation(fmt.Errorf("moqt/session: subgroup object: %w", err))
+	s.pendingPayload = n
+	// §11.1.1, §11.1.2: only a status Object (no payload) has anything to check.
+	if n == 0 {
+		if err := obj.Validate(); err != nil {
+			return nil, s.sess.closeProtocolViolation(fmt.Errorf("moqt/session: subgroup object: %w", err))
+		}
 	}
 	// §11.3.1. Resolved here so the Properties check has the absolute ID.
 	objectID := obj.ObjectIDDelta
 	if s.decHavePrev {
-		var err error
 		if objectID, err = message.NextSubgroupObjectID(s.decPrevObject, obj.ObjectIDDelta); err != nil {
 			return nil, s.sess.closeProtocolViolation(err)
 		}
@@ -165,10 +200,22 @@ func (s *IncomingSubgroupStream) ReadObject() (*message.SubgroupObject, error) {
 	}
 	if len(obj.Properties) > 0 {
 		if err := message.CheckObjectProperties(obj.Properties, s.Header.GroupID, objectID); err != nil {
-			return nil, fmt.Errorf("%w: Group %d Object %d: %w", ErrMalformedTrack, s.Header.GroupID, objectID, err)
+			return obj, fmt.Errorf("%w: Group %d Object %d: %w", ErrMalformedTrack, s.Header.GroupID, objectID, err)
 		}
 	}
 	return obj, nil
+}
+
+// ReadObjectPayload reads the payload of the Object
+// [IncomingSubgroupStream.ReadObjectHeader] last returned into obj.Payload. A
+// FIN before its last byte closes the session with PROTOCOL_VIOLATION (§11.3).
+func (s *IncomingSubgroupStream) ReadObjectPayload(obj *message.SubgroupObject) error {
+	n := s.pendingPayload
+	s.pendingPayload = 0
+	if err := obj.ParsePayload(s.rd, n); err != nil {
+		return s.sess.checkFINMidObject(err)
+	}
+	return nil
 }
 
 // DecodedSubgroupObject is the absolute-coordinates view of one §11.3.1

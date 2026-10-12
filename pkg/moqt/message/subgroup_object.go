@@ -73,7 +73,8 @@ func (o *SubgroupObject) Append(w *wire.Writer, hasProperties bool) {
 	}
 }
 
-// Parse deserializes a SubgroupObject from r.
+// Parse deserializes a SubgroupObject from r: [SubgroupObject.ParseHeader]
+// then [SubgroupObject.ParsePayload].
 // r may be a *wire.Reader (in-memory) or a *wire.StreamReader (streaming).
 // The hasProperties parameter indicates whether the parent SubgroupHeader
 // had the Properties bit set, which determines if Properties are included.
@@ -81,46 +82,71 @@ func (o *SubgroupObject) Append(w *wire.Writer, hasProperties bool) {
 // io.EOF is returned only for a stream that ends before the object's first
 // byte; a FIN mid-Object (§11.3) is io.ErrUnexpectedEOF.
 func (o *SubgroupObject) Parse(r wire.Decoder, hasProperties bool) error {
+	n, err := o.ParseHeader(r, hasProperties)
+	if err != nil {
+		return err
+	}
+	return o.ParsePayload(r, n)
+}
+
+// ParseHeader reads the Object's fields up to its payload: Object ID Delta,
+// Properties, Object Payload Length, and the Object Status when that length is
+// 0 (§11.3.1). It returns the payload length still to be read, which
+// [SubgroupObject.ParsePayload] consumes; until then Payload is nil. Reading
+// the header first lets a receiver act on an Object from its first bytes
+// (§3.1.4) without waiting for the payload.
+//
+// io.EOF is returned only for a stream that ends before the object's first
+// byte; a FIN mid-header (§11.3) is io.ErrUnexpectedEOF.
+func (o *SubgroupObject) ParseHeader(r wire.Decoder, hasProperties bool) (payloadLen uint64, err error) {
 	delta, err := r.Varint()
 	if err != nil {
-		return fmt.Errorf("moqt/message: object ID delta: %w", err)
+		return 0, fmt.Errorf("moqt/message: object ID delta: %w", err)
 	}
 	o.ObjectIDDelta = delta
+	o.Payload = nil
 
 	// Properties are present only if the stream header has Properties == true
 	if hasProperties {
 		props, err := r.VarintBytes()
 		if err != nil {
-			return fmt.Errorf("moqt/message: properties: %w", truncated(err))
+			return 0, fmt.Errorf("moqt/message: properties: %w", truncated(err))
 		}
 		o.Properties = props
 	} else {
 		o.Properties = nil
 	}
 
-	payloadLength, err := r.Varint()
+	payloadLen, err = r.Varint()
 	if err != nil {
-		return fmt.Errorf("moqt/message: payload length: %w", truncated(err))
+		return 0, fmt.Errorf("moqt/message: payload length: %w", truncated(err))
 	}
 
 	// Object Status is present only when Payload Length == 0
-	if payloadLength == 0 {
+	o.ObjectStatus = 0
+	if payloadLen == 0 {
 		status, err := r.Varint()
 		if err != nil {
-			return fmt.Errorf("moqt/message: object status: %w", truncated(err))
+			return 0, fmt.Errorf("moqt/message: object status: %w", truncated(err))
 		}
 		o.ObjectStatus = status
-		o.Payload = nil
-	} else {
-		//nolint:gosec // G115: a payloadLength >= 2^63 wraps negative; both FixedBytes implementations reject it.
-		payload, err := r.FixedBytes(int(payloadLength))
-		if err != nil {
-			return fmt.Errorf("moqt/message: payload: %w", truncated(err))
-		}
-		o.Payload = payload
-		o.ObjectStatus = 0
 	}
+	return payloadLen, nil
+}
 
+// ParsePayload reads the payloadLen bytes [SubgroupObject.ParseHeader]
+// reported into Payload. A length of 0 reads nothing. A FIN before the last
+// byte (§11.3) is io.ErrUnexpectedEOF.
+func (o *SubgroupObject) ParsePayload(r wire.Decoder, payloadLen uint64) error {
+	if payloadLen == 0 {
+		return nil
+	}
+	//nolint:gosec // G115: a payloadLen >= 2^63 wraps negative; both FixedBytes implementations reject it.
+	payload, err := r.FixedBytes(int(payloadLen))
+	if err != nil {
+		return fmt.Errorf("moqt/message: payload: %w", truncated(err))
+	}
+	o.Payload = payload
 	return nil
 }
 
