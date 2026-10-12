@@ -26,6 +26,9 @@ type fwdObject struct {
 	obj        *message.SubgroupObject
 	absID      uint64
 	enqueuedAt time.Time // stamped in publish; used for the §5.2 lag window
+	// headerAt is when the relay read the Object's last header byte, from
+	// which §5.2 measures OBJECT_DELIVERY_TIMEOUT.
+	headerAt time.Time
 
 	// maxCacheAge is the upstream's MAX_CACHE_DURATION (§10.3), zero for no
 	// limit: the Object is not forwarded once older than that.
@@ -479,13 +482,15 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// heard is the set's opened count at the first header read for this
 		// Object by any contributor; reading reports this stream noted it.
 		var (
-			heard   uint64
-			reading bool
+			heard    uint64
+			reading  bool
+			headerAt time.Time
 		)
 		if obj == nil {
 			obj, err = stream.ReadObjectHeader()
 		}
 		if err == nil {
+			headerAt = time.Now()
 			loc := message.Location{Group: hdr.GroupID, Object: stream.ObjectID()}
 			heard, reading = h.headerRead(ctx, entry, sg, set, flight, loc, ref), true
 			err = stream.ReadObjectPayload(obj)
@@ -590,7 +595,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		// Cached first, so a FETCH that registers after this finds it there.
 		entry.EndInFlight(flight, cached)
 
-		set.forward(entry, pos, hdr, objectID, obj, isTrueFirst, liveMaxAge, heard)
+		set.forward(entry, pos, hdr, objectID, obj, isTrueFirst, liveMaxAge, heard, headerAt)
 		sg.Mu.Unlock()
 	}
 }
@@ -669,7 +674,7 @@ func (s *subgroupWriterSet) doneReading(id uint64) {
 // contributor claims it starts the Subgroup (see [subgroupWriterSet.claimFirst]);
 // maxCacheAge is [fwdObject.maxCacheAge]. Writers opened after the Object's
 // header was read, when the set's opened count was heard, do not get it.
-// Callers hold sg.Mu.
+// headerAt is when its last header byte was read (§5.2). Callers hold sg.Mu.
 func (s *subgroupWriterSet) forward(
 	entry *registry.TrackEntry,
 	pos inboundPos,
@@ -679,6 +684,7 @@ func (s *subgroupWriterSet) forward(
 	claimed bool,
 	maxCacheAge time.Duration,
 	heard uint64,
+	headerAt time.Time,
 ) {
 	first := s.claimFirst(objectID, claimed)
 	// §5.2: the first Object's Properties settle the publisher's timeouts for
@@ -699,6 +705,7 @@ func (s *subgroupWriterSet) forward(
 				absID:       objectID,
 				first:       first,
 				maxCacheAge: maxCacheAge,
+				headerAt:    headerAt,
 				follows:     follows,
 				pubTimeouts: s.pubTimeouts,
 			})
@@ -1164,10 +1171,9 @@ func (w *subgroupWriter) run() {
 		} else {
 			out.ObjectIDDelta = fwd.absID - prevID - 1
 		}
-		// §5.2 measures OBJECT_DELIVERY_TIMEOUT from when the object was
-		// received. Deviation: enqueuedAt is stamped after the whole object
-		// was read, not at its first byte, so the timeout is lenient.
-		if err := w.out.WriteObjectReceivedAt(fwd.enqueuedAt, &out); err != nil {
+		// §5.2 measures OBJECT_DELIVERY_TIMEOUT from "the time at which the
+		// last header byte" of the object was received.
+		if err := w.out.WriteObjectReceivedAt(fwd.headerAt, &out); err != nil {
 			// The stream is already reset with DELIVERY_TIMEOUT (§12.5);
 			// resetting again would overwrite that code.
 			if errors.Is(err, session.ErrDeliveryTimeout) {
