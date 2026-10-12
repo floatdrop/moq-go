@@ -101,13 +101,68 @@ func knownFromCache(objs []*cache.CachedObject) []registry.LocRange {
 
 // unknownIn returns the Locations of [start, end] whose status the relay does
 // not know: neither among objs, the cached Objects of the range, nor known
-// absent from them or entry's ledger.
+// absent from them or entry's ledger, nor in accounted, Locations the caller
+// reports otherwise (Objects still arriving).
 func unknownIn(
 	entry *registry.TrackEntry,
 	objs []*cache.CachedObject,
 	start, end message.Location,
+	accounted ...registry.LocRange,
 ) []registry.LocRange {
-	return uncovered(start, end, append(knownFromCache(objs), entry.KnownAbsent()...))
+	return uncovered(start, end, append(append(knownFromCache(objs), entry.KnownAbsent()...), accounted...))
+}
+
+// locRanges returns locs, sorted, as single-Location ranges.
+func locRanges(locs []message.Location) []registry.LocRange {
+	slices.SortFunc(locs, message.Location.Compare)
+	out := make([]registry.LocRange, len(locs))
+	for i, l := range locs {
+		out[i] = registry.LocRange{Lo: l, Hi: l}
+	}
+	return out
+}
+
+// notHeld returns the Locations of locs that no Object of objs is at.
+func notHeld(locs []message.Location, objs []*cache.CachedObject) []message.Location {
+	return slices.DeleteFunc(locs, func(l message.Location) bool { return holds(objs, l) })
+}
+
+// dropHeld returns the single-Location ranges of rs that no Object of objs is
+// at.
+func dropHeld(rs []registry.LocRange, objs []*cache.CachedObject) []registry.LocRange {
+	return slices.DeleteFunc(rs, func(r registry.LocRange) bool { return holds(objs, r.Lo) })
+}
+
+// holds reports whether an Object of objs is at loc.
+func holds(objs []*cache.CachedObject, loc message.Location) bool {
+	return slices.ContainsFunc(objs, func(o *cache.CachedObject) bool {
+		return o.GroupID == loc.Group && o.ObjectID == loc.Object
+	})
+}
+
+// handedLive returns the Objects a FETCH was handed as they completed, served
+// as live forwarding serves them: a positive MAX_CACHE_DURATION still applies
+// (§10.3), but a present 0, which the relay reads as barring only serving from
+// the cache, does not. Each such Object is copied without it.
+func handedLive(objs []*cache.CachedObject) []*cache.CachedObject {
+	for i, o := range objs {
+		if o.HasMaxCacheDuration && o.MaxCacheDuration <= 0 {
+			c := *o
+			c.HasMaxCacheDuration = false
+			objs[i] = &c
+		}
+	}
+	return objs
+}
+
+// withObjects returns objs plus each of more at a Location objs does not hold.
+func withObjects(objs, more []*cache.CachedObject) []*cache.CachedObject {
+	for _, m := range more {
+		if !holds(objs, message.Location{Group: m.GroupID, Object: m.ObjectID}) {
+			objs = append(objs, m)
+		}
+	}
+	return objs
 }
 
 // streamCompare orders Locations as a FETCH response in order carries them

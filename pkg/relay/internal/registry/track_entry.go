@@ -112,6 +112,10 @@ type TrackEntry struct {
 	// (removals introduce no joiner to detect). Guarded by mu.
 	downstreamGen uint64
 
+	// inflight holds a slot per inbound subgroup stream, naming the Object it
+	// is part way through (see [InFlight]).
+	inflight map[*InFlight]struct{}
+
 	// Cache is the per-track [cache.ObjectCache] the fanout writes every
 	// forwarded object into. It is constructed eagerly when the entry is
 	// created (via [TrackRegistry.getOrCreateLocked]) so the fanout

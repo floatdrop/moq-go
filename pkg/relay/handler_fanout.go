@@ -242,7 +242,9 @@ func (h *sessionHandler) resolveImplicitSubgroupID(
 			"fanout: implicit-first-object Subgroup ID on a replay stream",
 			slog.Uint64("group", hdr.GroupID))
 	}
-	obj, err := stream.ReadObject()
+	// The header names the first Object's ID; its payload is left to the
+	// fanout loop, which tracks it as arriving like any other.
+	obj, err := stream.ReadObjectHeader()
 	if err != nil {
 		switch {
 		case errors.Is(err, io.EOF):
@@ -356,11 +358,17 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		liveMaxAge = in.MaxCacheDuration
 	}
 
-	// Everything below keys on hdr.SubgroupID, so resolve it first.
+	// Everything below keys on hdr.SubgroupID, so resolve it first. pending is
+	// the first Object, its header read and its payload not.
 	pending, ok := h.resolveImplicitSubgroupID(ctx, entry, stream, &hdr)
 	if !ok {
 		return
 	}
+
+	// The Object this stream is part way through, which a FETCH or fill
+	// covering it waits for (§3.2) rather than reporting unknown.
+	flight := entry.NewInFlight()
+	defer entry.ReleaseInFlight(flight)
 
 	sgKey := registry.SubgroupKey{Group: hdr.GroupID, Subgroup: hdr.SubgroupID}
 	sg, created := entry.AcquireSubgroup(sgKey, func() any {
@@ -453,9 +461,16 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		obj, err := pending, error(nil)
 		pending = nil
 		if obj == nil {
-			obj, err = stream.ReadObject()
+			obj, err = stream.ReadObjectHeader()
+		}
+		if err == nil {
+			entry.BeginInFlight(flight, message.Location{Group: hdr.GroupID, Object: stream.ObjectID()})
+			err = stream.ReadObjectPayload(obj)
 		}
 		if err != nil {
+			// Abandoned now, not after the teardown below, which can wait on
+			// slow downstream writers.
+			entry.EndInFlight(flight, nil)
 			inboundReset, inboundResetCode = h.inboundEnded(ctx, entry, stream, hdr, last, err)
 			return
 		}
@@ -472,7 +487,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		isTrueFirst := firstObj && !hdr.ReplayingSubgroup
 		firstObj = false
 		pos.seq++
-		objectID := stream.ObjectID() // resolved by ReadObject (§11.3.1)
+		objectID := stream.ObjectID() // resolved by ReadObjectHeader (§11.3.1)
 		if !covers {
 			coverFrom, covers = objectID, true
 		}
@@ -511,6 +526,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 				malformed(err)
 				return
 			}
+			entry.EndInFlight(flight, nil)
 			continue // redundant copy already forwarded by a peer upstream.
 		}
 
@@ -519,6 +535,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		sg.Mu.Lock()
 		if !set.admitAgedOut(claim, hdr, objectID, obj.Properties) {
 			sg.Mu.Unlock()
+			entry.EndInFlight(flight, nil)
 			continue
 		}
 
@@ -527,7 +544,7 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 
 		// Cache before bumping LARGEST_OBJECT, so a FETCH that snapshots the
 		// new watermark finds the object cached.
-		entry.Cache.Put(&cache.CachedObject{
+		cached := &cache.CachedObject{
 			GroupID:           hdr.GroupID,
 			ObjectID:          objectID,
 			SubgroupID:        hdr.SubgroupID,
@@ -539,7 +556,10 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 
 			MaxCacheDuration:    in.MaxCacheDuration,
 			HasMaxCacheDuration: in.HasMaxCacheDuration,
-		})
+		}
+		entry.Cache.Put(cached)
+		// Cached first, so a FETCH that registers after this finds it there.
+		entry.EndInFlight(flight, cached)
 
 		// Serialised with AddDownstreamSnapshotLargest: a new sub either saw
 		// the old Largest and appears in newSubs (delivered live), or saw the

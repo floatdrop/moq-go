@@ -297,19 +297,50 @@ func (h *sessionHandler) stitchedFetchObjects(
 	order message.GroupOrder,
 	fillTimeout time.Duration,
 ) (objs []*cache.CachedObject, refusal error) {
+	// Objects the relay is part way through receiving exist, and §3.2 has a
+	// FETCH include them in full: wait for them within the FILL_TIMEOUT budget
+	// (§9.20.5), which at 0 allows no wait. The wait is registered before the
+	// cache is read, so an Object completing in between is in one or the
+	// other, and an Object already cached is not waited for even if another
+	// stream is still reading a copy. One still arriving when the budget runs
+	// out is timed out; one abandoned mid-payload falls to the cache and ledger
+	// below.
+	deadline := time.Now().Add(fillTimeout)
+	w := entry.WaitInFlight(start, end)
 	// An expired Object (§10.3) is not returned: its status is unknown.
 	cached := entry.Cache.GetRange(start, end, message.GroupOrderAscending)
-	unknown := unknownIn(entry, cached, start, end)
+	var arriving []registry.LocRange
+	if w != nil {
+		for _, o := range cached {
+			w.Forget(message.Location{Group: o.GroupID, Object: o.ObjectID})
+		}
+		var handed []*cache.CachedObject
+		var still []message.Location
+		if fillTimeout > 0 {
+			handed, still = w.Wait(ctx, deadline)
+		} else {
+			still = w.StillArriving()
+			w.Stop()
+		}
+		// Re-read for what an abandoned stream's peers cached meanwhile.
+		cached = withObjects(entry.Cache.GetRange(start, end, message.GroupOrderAscending), handedLive(handed))
+		arriving = locRanges(notHeld(still, cached))
+	}
+	unknown := unknownIn(entry, cached, start, end, arriving...)
 	if len(unknown) == 0 {
-		return fetchElements(cached, nil, nil, order), nil
+		return fetchElements(cached, nil, arriving, order), nil
 	}
 	up := h.pickFetchUpstream(entry)
 	if up == nil {
-		return fetchElements(cached, unknown, nil, order), nil
+		return fetchElements(cached, unknown, arriving, order), nil
+	}
+	budget := fillTimeout
+	if fillTimeout > 0 {
+		budget = max(time.Until(deadline), 0)
 	}
 	span := registry.LocRange{Lo: unknown[0].Lo, Hi: unknown[len(unknown)-1].Hi}
 	done := h.tracks.BeginRequest(message.TypeFetch, up.Session, fullName.Key())
-	ans, refusal := h.fetchUpstreamRange(ctx, up, fullName, span, order, fillTimeout)
+	ans, refusal := h.fetchUpstreamRange(ctx, up, fullName, span, order, budget)
 	done()
 	if errors.Is(refusal, session.ErrMalformedTrack) {
 		h.endMalformedTrack(ctx, entry, up.Session, refusal)
@@ -319,9 +350,9 @@ func (h *sessionHandler) stitchedFetchObjects(
 	}
 	switch ans.failed {
 	case upstreamUnknown:
-		return fetchElements(cached, unknown, nil, order), nil
+		return fetchElements(cached, unknown, arriving, order), nil
 	case upstreamTimedOut:
-		return fetchElements(cached, nil, unknown, order), nil
+		return fetchElements(cached, nil, append(unknown, arriving...), order), nil
 	case upstreamAnswered:
 	}
 
@@ -338,7 +369,11 @@ func (h *sessionHandler) stitchedFetchObjects(
 			merged = append(merged, o)
 		}
 	}
-	return fetchElements(merged, intersect(ans.unknown, unknown), intersect(ans.timedOut, unknown), order), nil
+	// The upstream's span can cover an Object still arriving here; what it
+	// supplied is no longer missing.
+	arriving = dropHeld(arriving, merged)
+	return fetchElements(merged, intersect(ans.unknown, unknown),
+		append(intersect(ans.timedOut, unknown), arriving...), order), nil
 }
 
 // intersect returns the Locations both a and b hold, each a set of disjoint
