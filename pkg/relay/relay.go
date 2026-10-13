@@ -70,9 +70,20 @@ type Config struct {
 	GoawayTimeout time.Duration
 
 	// SessionOptions are forwarded to session.Server() for every accepted
-	// connection. Use this to advertise implementation name, GREASE,
-	// MAX_AUTH_TOKEN_CACHE_SIZE, etc. Optional.
+	// connection and to session.Client() for every upstream relay dial (see
+	// UpstreamSessionOptions). Use this to advertise implementation name,
+	// GREASE, MAX_AUTH_TOKEN_CACHE_SIZE, etc. Optional.
 	SessionOptions []session.Option
+
+	// UpstreamSessionOptions, when set, is called with the RelayAddr of each
+	// peer the relay dials through [Config.Dialer], and what it returns is
+	// forwarded to session.Client() after SessionOptions, never to an
+	// accepted session. It carries what only a dialing relay should send: an
+	// AUTHORIZATION TOKEN setup option (§9.1.4) identifying this relay to its
+	// peers, say, which in SessionOptions a server would also send to every
+	// client it accepts (§9.1). Called once per dial, so a credential it
+	// returns can be renewed between dials. Optional.
+	UpstreamSessionOptions func(relayAddr string) []session.Option
 
 	// KnownMandatoryTrackProperties lists the Mandatory Track Property types
 	// (0x4000–0x7FFF) the relay may forward; a track carrying any other is
@@ -432,6 +443,7 @@ func New(listener Listener, cfg Config) *Relay {
 			discovery:    cfg.Discovery,
 			relayAddr:    cfg.RelayAddr,
 			sessionOpts:  cfg.SessionOptions,
+			upstreamOpts: cfg.UpstreamSessionOptions,
 			log:          r.log,
 			metrics:      cfg.Metrics,
 			serveSession: r.serveUpstreamSession,

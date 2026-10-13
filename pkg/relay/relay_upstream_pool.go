@@ -38,6 +38,7 @@ type upstreamPool struct {
 	discovery    discovery.DiscoveryStore
 	relayAddr    string
 	sessionOpts  []session.Option
+	upstreamOpts func(relayAddr string) []session.Option
 	log          *slog.Logger
 	metrics      Metrics
 	baseCtx      context.Context
@@ -72,6 +73,7 @@ type upstreamPoolConfig struct {
 	discovery    discovery.DiscoveryStore
 	relayAddr    string
 	sessionOpts  []session.Option
+	upstreamOpts func(relayAddr string) []session.Option
 	log          *slog.Logger
 	metrics      Metrics
 	serveSession func(sess *session.Session, onClose func())
@@ -96,6 +98,7 @@ func newUpstreamPool(cfg upstreamPoolConfig) *upstreamPool {
 		discovery:    cfg.discovery,
 		relayAddr:    cfg.relayAddr,
 		sessionOpts:  cfg.sessionOpts,
+		upstreamOpts: cfg.upstreamOpts,
 		log:          cfg.log,
 		metrics:      cfg.metrics,
 		baseCtx:      base,
@@ -306,7 +309,11 @@ func (p *upstreamPool) dial(relayAddr string) (*session.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	sess, err := session.Client(dialCtx, conn, p.sessionOpts...)
+	opts := p.sessionOpts
+	if p.upstreamOpts != nil {
+		opts = slices.Concat(opts, p.upstreamOpts(relayAddr))
+	}
+	sess, err := session.Client(dialCtx, conn, opts...)
 	if err != nil {
 		return nil, err
 	}
