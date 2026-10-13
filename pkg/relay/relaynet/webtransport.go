@@ -36,7 +36,7 @@ func DialWebTransport(ctx context.Context, rawURL string, tlsCfg *tls.Config, op
 		// here rather than as a mapping that quietly stops working. The error is
 		// a bare errors.New, not a sentinel, so it is reportable but not testable
 		// with errors.Is.
-		QUICConfig: quicConfig(opts),
+		QUICConfig: configure(opts).quic,
 		// §6.2.1: "The client includes MOQT protocol identifiers in the
 		// WT-Available-Protocols header." That header is how a WebTransport
 		// session negotiates the draft version, the way ALPN does it for raw

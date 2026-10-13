@@ -1,12 +1,21 @@
 package relaynet
 
-import "github.com/quic-go/quic-go"
+import (
+	"github.com/quic-go/quic-go"
+	"github.com/quic-go/webtransport-go"
+)
 
-// Option customises the QUIC plumbing that [Listen], [DialQUIC] and
-// [DialWebTransport] build. Every entry point takes them variadically, so a
-// caller can tune each leg of a relay independently — the downstream listener
-// and a cross-relay upstream dial do not have to agree.
-type Option func(*quic.Config)
+// Option customises the QUIC and WebTransport plumbing that [Listen],
+// [DialQUIC] and [DialWebTransport] build. Every entry point takes them
+// variadically, so a caller can tune each leg of a relay independently — the
+// downstream listener and a cross-relay upstream dial do not have to agree.
+type Option func(*config)
+
+// config is what the Options of one entry point build.
+type config struct {
+	quic *quic.Config
+	wt   webtransport.Config
+}
 
 // WithQUICConfig returns an [Option] that runs tune over the [quic.Config] the
 // entry point is about to use, once the relay's defaults have been populated.
@@ -29,13 +38,25 @@ type Option func(*quic.Config)
 // to quic-go, and a caller who disables DATAGRAM on a cross-relay leg owns the
 // consequence, which is that objects this relay would have sent as datagrams
 // (§11.2) stop crossing that hop with only a Debug line to show for it.
-func WithQUICConfig(tune func(*quic.Config)) Option { return Option(tune) }
+func WithQUICConfig(tune func(*quic.Config)) Option {
+	return func(c *config) { tune(c.quic) }
+}
 
-// quicConfig applies opts to a fresh copy of the relay's default QUIC tuning.
-func quicConfig(opts []Option) *quic.Config {
-	cfg := defaultQUICConfig()
+// WithWebTransportConfig returns an [Option] that runs tune over the
+// [webtransport.Config] the entry point is about to use, once the relay's
+// defaults (see [defaultWebTransportConfig]) have been populated. Passing it
+// more than once applies the hooks in order. It applies to the WebTransport
+// half of [Listen]; the dial entry points ignore it.
+func WithWebTransportConfig(tune func(*webtransport.Config)) Option {
+	return func(c *config) { tune(&c.wt) }
+}
+
+// configure applies opts to a fresh copy of the relay's default QUIC and
+// WebTransport tuning.
+func configure(opts []Option) config {
+	cfg := config{quic: defaultQUICConfig(), wt: defaultWebTransportConfig()}
 	for _, opt := range opts {
-		opt(cfg)
+		opt(&cfg)
 	}
 	return cfg
 }

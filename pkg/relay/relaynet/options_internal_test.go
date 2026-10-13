@@ -17,7 +17,7 @@ func TestQUICConfigAppliesHooksInOrder(t *testing.T) {
 	t.Parallel()
 
 	var seen []time.Duration
-	cfg := quicConfig([]Option{
+	cfg := configure([]Option{
 		WithQUICConfig(func(c *quic.Config) {
 			seen = append(seen, c.MaxIdleTimeout)
 			c.MaxIdleTimeout = time.Minute
@@ -26,7 +26,7 @@ func TestQUICConfigAppliesHooksInOrder(t *testing.T) {
 			seen = append(seen, c.MaxIdleTimeout)
 			c.KeepAlivePeriod = time.Second
 		}),
-	})
+	}).quic
 
 	want := []time.Duration{30 * time.Second, time.Minute}
 	if !slices.Equal(seen, want) {

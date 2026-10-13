@@ -51,8 +51,9 @@ const dualBacklog = 16
 // default, so a deployment that cares about which pages may open sessions needs
 // its own policy here.
 //
-// opts tune the QUIC config this listener serves on, independently of whatever a
-// cross-relay [DialQUIC] uses — see [WithQUICConfig].
+// opts tune the QUIC config this listener serves on and the WebTransport session
+// flow control its WebTransport half advertises, independently of whatever a
+// cross-relay dial uses — see [WithQUICConfig] and [WithWebTransportConfig].
 func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger, opts ...Option) (*DualListener, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -62,7 +63,8 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger, opts .
 		// instead of taking the process down inside NewListener.
 		return nil, fmt.Errorf("relaynet: empty WebTransport path (use %q for the default)", "/moq")
 	}
-	qcfg := quicConfig(opts)
+	cfg := configure(opts)
+	qcfg := cfg.quic
 	// Neither of these is the caller's to switch off here, whatever WithQUICConfig
 	// asked for: webtransport.Server.ServeQUICConn checks them one at a time and
 	// refuses the connection on the first one missing, so a listener lacking
@@ -100,6 +102,7 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger, opts .
 		// two version signals share one source.
 		ApplicationProtocols: MOQTQUICALPNs,
 		CheckOrigin:          func(*http.Request) bool { return true },
+		Config:               &cfg.wt,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

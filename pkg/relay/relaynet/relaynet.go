@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/quic-go/quic-go"
+	"github.com/quic-go/webtransport-go"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/quicconn"
@@ -55,6 +56,27 @@ func defaultQUICConfig() *quic.Config {
 		KeepAlivePeriod:                  5 * time.Second,
 		EnableDatagrams:                  true,
 		EnableStreamResetPartialDelivery: true,
+	}
+}
+
+// defaultWebTransportConfig is the session flow control a WebTransport leg
+// advertises: how many streams the peer may have open towards the relay, and
+// how many bytes in flight on them, before the relay has to grant more, which
+// webtransport-go does as they are consumed. A peer of the current WebTransport
+// draft (Safari) opens no stream until it has been granted some, since the
+// limits default to zero; one that predates session flow control (Chrome)
+// ignores them and keeps to QUIC's, and webtransport-go enforces none on a
+// session whose peer advertised none.
+//
+// The bidirectional limit bounds the peer's concurrent requests, since each
+// request stream stays open for the subscription's or publication's life; the
+// unidirectional one its control stream plus concurrent subgroup streams.
+// [WithWebTransportConfig] is how a caller adjusts it per leg.
+func defaultWebTransportConfig() webtransport.Config {
+	return webtransport.Config{
+		MaxIncomingStreams:    1024,
+		MaxIncomingUniStreams: 1024,
+		MaxIncomingData:       64 << 20,
 	}
 }
 
@@ -105,7 +127,7 @@ func InsecureClientTLSConfig(alpns []string) *tls.Config {
 // opts tune the QUIC config this leg dials with, leaving the listener and any
 // other dial untouched — see [WithQUICConfig].
 func DialQUIC(ctx context.Context, addr string, tlsCfg *tls.Config, opts ...Option) (session.Conn, error) {
-	return quicconn.Dial(ctx, addr, tlsCfg, quicConfig(opts))
+	return quicconn.Dial(ctx, addr, tlsCfg, configure(opts).quic)
 }
 
 // SelfSignedCert generates an ephemeral ECDSA-P256 self-signed certificate for
