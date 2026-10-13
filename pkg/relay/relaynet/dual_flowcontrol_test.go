@@ -13,12 +13,22 @@ import (
 	"github.com/floatdrop/moq-go/pkg/relay/relaynet"
 )
 
-// The SETTINGS_WT_INITIAL_MAX_STREAMS_* identifiers of the WebTransport
-// over HTTP/3 draft, as webtransport-go sends them.
+// The SETTINGS_WT_INITIAL_MAX_* identifiers of the WebTransport over HTTP/3
+// draft, as webtransport-go sends them.
 const (
+	settingsInitialMaxData        = 0x2b61
 	settingsInitialMaxStreamsUni  = 0x2b64
 	settingsInitialMaxStreamsBidi = 0x2b65
 )
+
+// flowControlSettings names the limits a WebTransport peer of the current draft
+// needs granted before it can send anything: streams to open, and bytes to send
+// on them.
+var flowControlSettings = map[string]uint64{
+	"uni streams":  settingsInitialMaxStreamsUni,
+	"bidi streams": settingsInitialMaxStreamsBidi,
+	"data":         settingsInitialMaxData,
+}
 
 // listenerSettings returns the SETTINGS a [relaynet.Listen] listener built
 // with opts sends an HTTP/3 client. They are read over a plain HTTP/3 client
@@ -54,15 +64,16 @@ func listenerSettings(t *testing.T, opts ...relaynet.Option) map[uint64]uint64 {
 }
 
 // TestListen_WebTransportFlowControl: the listener's SETTINGS grant a
-// WebTransport client streams. A client of the current draft (Safari) may
-// open none until granted some, the limits defaulting to zero, so a listener
-// that advertises nothing leaves it waiting for ever on its first stream.
+// WebTransport client streams and data. A client of the current draft (Safari)
+// may open no stream, and send no byte on one, until granted some, the limits
+// defaulting to zero, so a listener that advertises nothing leaves it waiting
+// for ever on its first stream.
 func TestListen_WebTransportFlowControl(t *testing.T) {
 	t.Parallel()
 	settings := listenerSettings(t)
-	for name, id := range map[string]uint64{"uni": settingsInitialMaxStreamsUni, "bidi": settingsInitialMaxStreamsBidi} {
+	for name, id := range flowControlSettings {
 		if settings[id] == 0 {
-			t.Errorf("SETTINGS grant no initial %s streams to a WebTransport client (%+v)", name, settings)
+			t.Errorf("SETTINGS grant a WebTransport client no initial %s (%+v)", name, settings)
 		}
 	}
 }

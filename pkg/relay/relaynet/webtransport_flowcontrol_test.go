@@ -16,7 +16,7 @@ import (
 )
 
 // TestDialWebTransport_FlowControl: the dialing side's SETTINGS grant the peer
-// streams too. The upstream of a cross-relay WebTransport leg opens a stream
+// streams and data too. The upstream of a cross-relay WebTransport leg opens a stream
 // towards the dialer for every subgroup it forwards, which a peer enforcing the
 // draft's zero default could not do if the dialer advertised nothing.
 func TestDialWebTransport_FlowControl(t *testing.T) {
@@ -60,9 +60,9 @@ func TestDialWebTransport_FlowControl(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("the dialer's CONNECT never reached the server")
 	}
-	for name, id := range map[string]uint64{"uni": settingsInitialMaxStreamsUni, "bidi": settingsInitialMaxStreamsBidi} {
+	for name, id := range flowControlSettings {
 		if settings[id] == 0 {
-			t.Errorf("dialer's SETTINGS grant the peer no initial %s streams (%+v)", name, settings)
+			t.Errorf("dialer's SETTINGS grant the peer no initial %s (%+v)", name, settings)
 		}
 	}
 }
