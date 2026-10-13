@@ -19,15 +19,10 @@ type Suite struct {
 	// bidiLimit, when > 0, caps how many bidirectional streams the CLIENT may
 	// open before the transport reports the peer's limit exhausted. How a
 	// transport expresses that is its own business — quic-go takes
-	// MaxIncomingStreams on the server, sessiontest caps the opener's credit
-	// directly — but the observable contract is the same. Implementations
-	// with SupportsBidiLimit false may ignore the argument.
+	// MaxIncomingStreams on the server, webtransport-go the server's
+	// WebTransport session flow control, sessiontest caps the opener's credit
+	// directly — but the observable contract is the same.
 	NewPair func(t *testing.T, bidiLimit int64) (client, server session.Conn)
-
-	// SupportsBidiLimit reports whether NewPair can honour bidiLimit. When
-	// false, the ErrNoStreamCredit subtest skips with a reason rather than
-	// silently passing — see the note on that subtest.
-	SupportsBidiLimit bool
 }
 
 // RunSuite drives the behaviour every [session.Conn] adapter must implement
@@ -177,14 +172,6 @@ func RunSuite(t *testing.T, s Suite) {
 	runStopSendingSubtests(t, s)
 
 	t.Run("OpenStreamReportsNoStreamCredit", func(t *testing.T) {
-		if !s.SupportsBidiLimit {
-			// Not a silent pass: this transport cannot be made to exhaust its
-			// own limit from a test. webtransport-go negotiates WebTransport
-			// stream limits over capsules and exposes no knob to lower them,
-			// so its ErrNoStreamCredit mapping is covered only by inspection
-			// and by the interop jobs.
-			t.Skip("transport cannot impose a bidi-stream limit in-test")
-		}
 		const limit = 2
 		client, _ := s.NewPair(t, limit)
 
@@ -200,7 +187,7 @@ func RunSuite(t *testing.T, s Suite) {
 		if !errors.Is(err, session.ErrNoStreamCredit) {
 			t.Errorf("OpenStream past the peer's limit = %v, want session.ErrNoStreamCredit — "+
 				"the adapter must map its transport's stream-limit error onto the sentinel, "+
-				"or PUBLISH_SKIPPED (§9.19) cannot detect the condition", err)
+				"or PUBLISH_SKIPPED (§3.6.3, §9.19) cannot detect the condition", err)
 		}
 	})
 }

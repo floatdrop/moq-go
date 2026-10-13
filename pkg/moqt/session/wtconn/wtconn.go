@@ -41,10 +41,27 @@ var _ session.Conn = (*conn)(nil)
 // single Go type, so we delegate explicitly.
 type conn struct{ s *webtransport.Session }
 
+// isStreamLimit reports whether err from webtransport-go's OpenStream or
+// OpenUniStream means the peer's stream limit is exhausted. With WebTransport
+// session flow control on (both sides advertised a SETTINGS_WT_INITIAL_MAX_*
+// limit), webtransport-go enforces the peer's grant itself and returns its own
+// *webtransport.StreamLimitReachedError; either way it then opens the stream on
+// the underlying *quic.Conn, whose own MAX_STREAMS limit can still return
+// *quic.StreamLimitReachedError. Both are checked, whatever the session.
+func isStreamLimit(err error) bool {
+	if _, ok := errors.AsType[*webtransport.StreamLimitReachedError](err); ok {
+		return true
+	}
+	_, ok := errors.AsType[*quic.StreamLimitReachedError](err)
+	return ok
+}
+
+// OpenUniStream opens a unidirectional stream without blocking, mapping an
+// exhausted stream limit as [conn.OpenStream] does.
 func (c *conn) OpenUniStream() (session.SendStream, error) {
 	s, err := c.s.OpenUniStream()
 	if err != nil {
-		if _, ok := errors.AsType[*quic.StreamLimitReachedError](err); ok {
+		if isStreamLimit(err) {
 			return nil, session.ErrNoStreamCredit
 		}
 		return nil, err
@@ -60,14 +77,13 @@ func (c *conn) AcceptUniStream(ctx context.Context) (session.ReceiveStream, erro
 	return &recvStream{s: s}, nil
 }
 
-// OpenStream opens a bidirectional stream without blocking. webtransport-go's
-// OpenStream delegates to the underlying *quic.Conn, so an exhausted stream
-// limit surfaces as a *quic.StreamLimitReachedError; we map that onto
-// session.ErrNoStreamCredit for transport-neutral detection.
+// OpenStream opens a bidirectional stream without blocking. An exhausted
+// stream limit maps onto session.ErrNoStreamCredit for transport-neutral
+// detection; see [isStreamLimit] for which limit that is.
 func (c *conn) OpenStream() (session.Stream, error) {
 	s, err := c.s.OpenStream()
 	if err != nil {
-		if _, ok := errors.AsType[*quic.StreamLimitReachedError](err); ok {
+		if isStreamLimit(err) {
 			return nil, session.ErrNoStreamCredit
 		}
 		return nil, err

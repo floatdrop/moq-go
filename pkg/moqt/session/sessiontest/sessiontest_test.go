@@ -70,7 +70,6 @@ func TestOpenStream_CreditIsPerEndpoint(t *testing.T) {
 // asserting against semantics the real transports do not have.
 func TestConnConformance(t *testing.T) {
 	conntest.RunSuite(t, conntest.Suite{
-		SupportsBidiLimit: true,
 		NewPair: func(_ *testing.T, bidiLimit int64) (session.Conn, session.Conn) {
 			// The suite's 0 means "no cap"; NewConnPairWithLimits spells that
 			// as a negative limit and would read 0 as "no streams at all".

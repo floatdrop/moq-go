@@ -334,7 +334,6 @@ func TestDatagramRoundTripOverQUIC(t *testing.T) {
 // which is what bounds how many streams the client may open.
 func TestConnConformance(t *testing.T) {
 	conntest.RunSuite(t, conntest.Suite{
-		SupportsBidiLimit: true,
-		NewPair:           newLoopbackConnsWithLimit,
+		NewPair: newLoopbackConnsWithLimit,
 	})
 }

@@ -30,6 +30,14 @@ import (
 // and connections are closed via t.Cleanup.
 func newLoopbackConns(t *testing.T) (client, server session.Conn) {
 	t.Helper()
+	return newLoopbackConnsWithConfig(t, nil)
+}
+
+// newLoopbackConnsWithConfig is [newLoopbackConns] with the server advertising
+// cfg's session flow control. webtransport-go enforces it only once both sides
+// advertise some, so the client then advertises generous limits of its own.
+func newLoopbackConnsWithConfig(t *testing.T, cfg *webtransport.Config) (client, server session.Conn) {
+	t.Helper()
 	ctx := t.Context()
 
 	tlsCfg := conntest.TLSConfig(t, http3.NextProtoH3)
@@ -53,6 +61,7 @@ func newLoopbackConns(t *testing.T) (client, server session.Conn) {
 	wtServer := &webtransport.Server{
 		H3:          h3Server,
 		CheckOrigin: func(*http.Request) bool { return true },
+		Config:      cfg,
 	}
 
 	mux := http.NewServeMux()
@@ -95,6 +104,9 @@ func newLoopbackConns(t *testing.T) (client, server session.Conn) {
 			RootCAs:    certPool,
 			NextProtos: []string{http3.NextProtoH3},
 		},
+	}
+	if cfg != nil {
+		dialer.Config = &webtransport.Config{MaxIncomingStreams: 100, MaxIncomingUniStreams: 100}
 	}
 	_, clientSession, err := dialer.Dial(ctx, fmt.Sprintf("https://%s/moqt", addr), nil)
 	if err != nil {
@@ -517,13 +529,42 @@ func TestDatagramRoundTripOverWebTransport(t *testing.T) {
 }
 
 // TestConnConformance holds the WebTransport adapter to the shared
-// [session.Conn] contract. webtransport-go negotiates its stream limits over
-// capsules with no public knob to lower them, so the ErrNoStreamCredit subtest
-// skips here; everything else applies.
+// [session.Conn] contract. The bidi limit is WebTransport session flow
+// control, the limit a browser of the current draft or a relaynet peer
+// advertises, rather than QUIC's.
 func TestConnConformance(t *testing.T) {
 	conntest.RunSuite(t, conntest.Suite{
-		NewPair: func(t *testing.T, _ int64) (session.Conn, session.Conn) {
-			return newLoopbackConns(t)
+		NewPair: func(t *testing.T, bidiLimit int64) (session.Conn, session.Conn) {
+			if bidiLimit <= 0 {
+				return newLoopbackConns(t)
+			}
+			return newLoopbackConnsWithConfig(t, &webtransport.Config{
+				MaxIncomingStreams: bidiLimit, MaxIncomingUniStreams: 100,
+			})
 		},
 	})
+}
+
+// TestOpenUniStreamReportsNoStreamCredit: the uni counterpart of the
+// conformance suite's bidi subtest, which the suite has no uni form of. Past
+// the peer's WebTransport uni limit, OpenUniStream must report
+// session.ErrNoStreamCredit, as OpenStream does, rather than webtransport-go's
+// own error.
+func TestOpenUniStreamReportsNoStreamCredit(t *testing.T) {
+	const limit = 2
+	client, _ := newLoopbackConnsWithConfig(t, &webtransport.Config{
+		MaxIncomingStreams: 100, MaxIncomingUniStreams: limit,
+	})
+	for i := range limit {
+		if _, err := client.OpenUniStream(); err != nil {
+			t.Fatalf("OpenUniStream #%d within the limit: %v", i+1, err)
+		}
+	}
+	_, err := client.OpenUniStream()
+	if err == nil {
+		t.Fatal("OpenUniStream past the peer's limit succeeded; the limit was not applied")
+	}
+	if !errors.Is(err, session.ErrNoStreamCredit) {
+		t.Errorf("OpenUniStream past the peer's limit = %v, want session.ErrNoStreamCredit", err)
+	}
 }
