@@ -169,7 +169,11 @@ const defaultBacklog = 16
 //
 //   - The *webtransport.Server (typically constructed with
 //     [webtransport.ConfigureHTTP3Server] on the underlying
-//     *http3.Server).
+//     *http3.Server), including its session flow control: a client
+//     of the current WebTransport draft (Safari) opens no stream —
+//     not even the one carrying its SETUP — until the server's
+//     SETTINGS grant it some, so leave [webtransport.Config] unset
+//     and such a client never gets past SETUP.
 //   - The HTTP/3 server's lifecycle: ListenAndServe / Serve on the
 //     desired socket, and Close on shutdown. [Listener.Close] only
 //     stops Accept from yielding new sessions so the relay's accept
@@ -207,7 +211,9 @@ type Listener struct {
 //
 //	h3 := &http3.Server{TLSConfig: tlsCfg}
 //	webtransport.ConfigureHTTP3Server(h3)
-//	wts := &webtransport.Server{H3: h3, CheckOrigin: …}
+//	wts := &webtransport.Server{H3: h3, CheckOrigin: …, Config: &webtransport.Config{
+//		MaxIncomingStreams: 1024, MaxIncomingUniStreams: 1024, MaxIncomingData: 64 << 20,
+//	}}
 //	mux := http.NewServeMux()
 //	udpConn, _ := net.ListenPacket("udp", ":4433")
 //	wts.H3.Handler = mux

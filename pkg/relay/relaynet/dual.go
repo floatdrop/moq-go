@@ -46,10 +46,9 @@ const dualBacklog = 16
 // A connection whose ALPN is not "h3" is treated as raw QUIC: the ALPN set the
 // handshake selected from is tlsCfg's, so nothing else can get that far.
 //
-// CheckOrigin accepts every origin, as [ListenWebTransport] does — see the
-// package doc. Serving both mappings means a relay is reachable from a browser by
-// default, so a deployment that cares about which pages may open sessions needs
-// its own policy here.
+// CheckOrigin accepts every origin. Serving both mappings means a relay is
+// reachable from a browser by default, so a deployment that cares about which
+// pages may open sessions needs its own policy here.
 //
 // opts tune the QUIC config this listener serves on and the WebTransport session
 // flow control its WebTransport half advertises, independently of whatever a
