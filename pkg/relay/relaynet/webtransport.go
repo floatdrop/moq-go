@@ -26,17 +26,23 @@ var WebTransportALPNs = []string{http3.NextProtoH3}
 // [session.Conn], ready for the caller to drive the client-side MOQT SETUP on.
 // It is the WebTransport counterpart of [DialQUIC] and has the shape a relay
 // Dialer expects; tlsCfg must advertise [WebTransportALPNs]. opts tune the QUIC
-// config this leg dials with — see [WithQUICConfig].
+// config this leg dials with and the WebTransport session flow control it
+// advertises — see [WithQUICConfig] and [WithWebTransportConfig]. The upstream
+// opens a stream towards this side for every subgroup it forwards, so a peer
+// that enforces the draft's zero default needs that grant as much as a browser
+// dialing [Listen] does.
 func DialWebTransport(ctx context.Context, rawURL string, tlsCfg *tls.Config, opts ...Option) (session.Conn, error) {
+	cfg := configure(opts)
 	d := webtransport.Transport{
 		TLSClientConfig: tlsCfg,
+		Config:          &cfg.wt,
 		// Unlike [Listen], nothing forces DATAGRAM and stream-reset partial
 		// delivery back on after the opts run: webtransport-go's Dial rejects a
 		// config missing either before it sends a packet, so the mistake surfaces
 		// here rather than as a mapping that quietly stops working. The error is
 		// a bare errors.New, not a sentinel, so it is reportable but not testable
 		// with errors.Is.
-		QUICConfig: configure(opts).quic,
+		QUICConfig: cfg.quic,
 		// §6.2.1: "The client includes MOQT protocol identifiers in the
 		// WT-Available-Protocols header." That header is how a WebTransport
 		// session negotiates the draft version, the way ALPN does it for raw

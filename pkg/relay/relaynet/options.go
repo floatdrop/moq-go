@@ -46,7 +46,7 @@ func WithQUICConfig(tune func(*quic.Config)) Option {
 // [webtransport.Config] the entry point is about to use, once the relay's
 // defaults (see [defaultWebTransportConfig]) have been populated. Passing it
 // more than once applies the hooks in order. It applies to the WebTransport
-// half of [Listen]; the dial entry points ignore it.
+// legs, [Listen] and [DialWebTransport]; [DialQUIC] has none and ignores it.
 func WithWebTransportConfig(tune func(*webtransport.Config)) Option {
 	return func(c *config) { tune(&c.wt) }
 }
