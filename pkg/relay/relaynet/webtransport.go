@@ -28,9 +28,9 @@ var WebTransportALPNs = []string{http3.NextProtoH3}
 // Dialer expects; tlsCfg must advertise [WebTransportALPNs]. opts tune the QUIC
 // config this leg dials with and the WebTransport session flow control it
 // advertises — see [WithQUICConfig] and [WithWebTransportConfig]. The upstream
-// opens a stream towards this side for every subgroup it forwards, so a peer
-// that enforces the draft's zero default needs that grant as much as a browser
-// dialing [Listen] does.
+// opens its control stream (§6.3) and every data stream towards this side, so a
+// peer that enforces the draft's zero default needs that grant as much as a
+// browser dialing [Listen] does; without it the dial never gets past SETUP.
 func DialWebTransport(ctx context.Context, rawURL string, tlsCfg *tls.Config, opts ...Option) (session.Conn, error) {
 	cfg := configure(opts)
 	d := webtransport.Transport{

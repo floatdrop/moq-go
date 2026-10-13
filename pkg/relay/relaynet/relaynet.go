@@ -70,7 +70,8 @@ func defaultQUICConfig() *quic.Config {
 //
 // The bidirectional limit bounds the peer's concurrent requests, since each
 // request stream stays open for the subscription's or publication's life; the
-// unidirectional one its control stream plus concurrent subgroup streams.
+// unidirectional one its control stream (§6.3) plus its concurrent data
+// streams, subgroup and FETCH alike.
 // [WithWebTransportConfig] is how a caller adjusts it per leg.
 func defaultWebTransportConfig() webtransport.Config {
 	return webtransport.Config{

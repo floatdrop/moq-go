@@ -43,10 +43,17 @@ func WithQUICConfig(tune func(*quic.Config)) Option {
 }
 
 // WithWebTransportConfig returns an [Option] that runs tune over the
-// [webtransport.Config] the entry point is about to use, once the relay's
-// defaults (see [defaultWebTransportConfig]) have been populated. Passing it
-// more than once applies the hooks in order. It applies to the WebTransport
-// legs, [Listen] and [DialWebTransport]; [DialQUIC] has none and ignores it.
+// [webtransport.Config] the entry point is about to use: the session flow
+// control it advertises to the peer, which a peer of the current WebTransport
+// draft needs before it can open any stream. Passing it more than once applies
+// the hooks in order. It applies to the WebTransport legs, [Listen] and
+// [DialWebTransport]; [DialQUIC] has none and ignores it.
+//
+// The hook sees the relay's defaults already populated — 1024 bidirectional
+// streams, 1024 unidirectional streams and 64 MiB of data — and mutates them,
+// as [WithQUICConfig] does. Mind webtransport-go's encoding when lowering one:
+// a zero field is not advertised at all, which a peer of the current draft
+// reads as a zero limit anyway, while a negative one advertises an explicit 0.
 func WithWebTransportConfig(tune func(*webtransport.Config)) Option {
 	return func(c *config) { tune(&c.wt) }
 }

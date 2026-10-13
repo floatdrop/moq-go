@@ -16,9 +16,10 @@ import (
 )
 
 // TestDialWebTransport_FlowControl: the dialing side's SETTINGS grant the peer
-// streams and data too. The upstream of a cross-relay WebTransport leg opens a stream
-// towards the dialer for every subgroup it forwards, which a peer enforcing the
-// draft's zero default could not do if the dialer advertised nothing.
+// streams and data too. The upstream of a cross-relay WebTransport leg opens
+// its control stream (§6.3) and every data stream towards the dialer, which a
+// peer enforcing the draft's zero default could not do if the dialer advertised
+// nothing.
 func TestDialWebTransport_FlowControl(t *testing.T) {
 	t.Parallel()
 	tlsCfg, err := relaynet.TLSConfig("", "", relaynet.WebTransportALPNs)
