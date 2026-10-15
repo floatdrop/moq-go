@@ -24,8 +24,11 @@ import (
 // New wraps c so it satisfies session.Conn.
 func New(c *quic.Conn) session.Conn { return &conn{q: c} }
 
-// Compile-time satisfaction check.
-var _ session.Conn = (*conn)(nil)
+// Compile-time satisfaction checks.
+var (
+	_ session.Conn      = (*conn)(nil)
+	_ session.StatsConn = (*conn)(nil)
+)
 
 // conn holds a *quic.Conn by named field rather than embedding. Embedding
 // would promote quic-go's CloseWithError(quic.ApplicationErrorCode, string)
@@ -81,6 +84,28 @@ func (c *conn) CloseWithError(code uint64, reason string) error {
 }
 
 func (c *conn) Context() context.Context { return c.q.Context() }
+
+// TransportStats reports quic-go's figures for the connection.
+func (c *conn) TransportStats() (session.TransportStats, bool) {
+	return TransportStats(c.q.ConnectionStats()), true
+}
+
+// TransportStats converts quic-go's connection figures to the session's, for
+// any adapter over a *quic.Conn (wtconn's too).
+func TransportStats(s quic.ConnectionStats) session.TransportStats {
+	return session.TransportStats{
+		MinRTT:          s.MinRTT,
+		SmoothedRTT:     s.SmoothedRTT,
+		LatestRTT:       s.LatestRTT,
+		RTTVariation:    s.MeanDeviation,
+		BytesSent:       s.BytesSent,
+		PacketsSent:     s.PacketsSent,
+		BytesReceived:   s.BytesReceived,
+		PacketsReceived: s.PacketsReceived,
+		BytesLost:       s.BytesLost,
+		PacketsLost:     s.PacketsLost,
+	}
+}
 
 func (c *conn) SendDatagram(payload []byte) error {
 	return c.q.SendDatagram(payload)

@@ -92,7 +92,9 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger, opts .
 		})
 	}
 	// This half is what the two re-asserted fields above are for; see there.
-	h3 := &http3.Server{TLSConfig: tlsCfg, Handler: mux}
+	// ConnContext: the sessions the listener upgrades know their QUIC
+	// connection, and report its figures (session.TransportStats).
+	h3 := &http3.Server{TLSConfig: tlsCfg, Handler: mux, ConnContext: wtconn.ConnContext}
 	webtransport.ConfigureHTTP3Server(h3)
 	wts := &webtransport.Server{
 		H3: h3,

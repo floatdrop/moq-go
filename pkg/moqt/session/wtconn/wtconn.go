@@ -26,20 +26,40 @@ import (
 	"github.com/quic-go/webtransport-go"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/session/quicconn"
 )
 
 // New wraps s so it satisfies session.Conn.
 func New(s *webtransport.Session) session.Conn { return &conn{s: s} }
 
-// Compile-time satisfaction check.
-var _ session.Conn = (*conn)(nil)
+// NewOver wraps s, which runs over q: knowing q, the Conn reports its
+// [session.TransportStats], which webtransport-go does not expose.
+func NewOver(s *webtransport.Session, q *quic.Conn) session.Conn { return &conn{s: s, q: q} }
+
+// Compile-time satisfaction checks.
+var (
+	_ session.Conn      = (*conn)(nil)
+	_ session.StatsConn = (*conn)(nil)
+)
+
+type quicConnKey struct{}
+
+// ConnContext is an http3.Server ConnContext that records each connection's
+// *quic.Conn in its requests' context, where [Listener] finds it for the
+// sessions it upgrades: with it they report [session.TransportStats].
+func ConnContext(ctx context.Context, q *quic.Conn) context.Context {
+	return context.WithValue(ctx, quicConnKey{}, q)
+}
 
 // conn holds a *webtransport.Session by named field rather than embedding.
 // Embedding would promote webtransport's CloseWithError(SessionErrorCode, string)
 // onto the wrapper; the session.Conn interface demands CloseWithError(uint64, string).
 // Two methods of the same name with different signatures aren't allowed on a
 // single Go type, so we delegate explicitly.
-type conn struct{ s *webtransport.Session }
+type conn struct {
+	s *webtransport.Session
+	q *quic.Conn // under s, when known (NewOver)
+}
 
 // isStreamLimit reports whether err from webtransport-go's OpenStream or
 // OpenUniStream means the peer's stream limit is exhausted. With WebTransport
@@ -105,6 +125,16 @@ func (c *conn) CloseWithError(code uint64, reason string) error {
 }
 
 func (c *conn) Context() context.Context { return c.s.Context() }
+
+// TransportStats reports the figures of the QUIC connection under the
+// session, when the Conn knows it (see [NewOver], [ConnContext]). They are the
+// connection's, shared by every WebTransport session over it.
+func (c *conn) TransportStats() (session.TransportStats, bool) {
+	if c.q == nil {
+		return session.TransportStats{}, false
+	}
+	return quicconn.TransportStats(c.q.ConnectionStats()), true
+}
 
 // IsWebTransport reports that this Conn runs over WebTransport, which
 // §9.1.1 and §9.1.2 make relevant: the PATH and AUTHORITY setup options
@@ -225,7 +255,7 @@ type Listener struct {
 //
 // Typical wiring:
 //
-//	h3 := &http3.Server{TLSConfig: tlsCfg}
+//	h3 := &http3.Server{TLSConfig: tlsCfg, ConnContext: wtconn.ConnContext}
 //	webtransport.ConfigureHTTP3Server(h3)
 //	wts := &webtransport.Server{H3: h3, CheckOrigin: …, Config: &webtransport.Config{
 //		MaxIncomingStreams: 1024, MaxIncomingUniStreams: 1024, MaxIncomingData: 64 << 20,
@@ -277,8 +307,9 @@ func (l *Listener) upgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	slog.DebugContext(ctx, "wtconn: upgrade ok",
 		"remote", r.RemoteAddr, "wt_protocol", sess.SessionState().ApplicationProtocol)
+	q, _ := ctx.Value(quicConnKey{}).(*quic.Conn)
 	select {
-	case l.queue <- New(sess):
+	case l.queue <- NewOver(sess, q):
 	case <-l.done:
 		_ = sess.CloseWithError(0, "listener closed")
 	default:
