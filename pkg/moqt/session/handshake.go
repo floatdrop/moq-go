@@ -35,6 +35,10 @@ func (s *Session) handshake(ctx context.Context, options []wire.KVPair) error {
 		if err != nil {
 			return fmt.Errorf("open send control: %w", err)
 		}
+		// §5.1.2: "the control streams SHOULD be prioritized highest".
+		if p, ok := stream.(ControlSendStream); ok {
+			p.SetControlPriority()
+		}
 		stop := context.AfterFunc(gctx, func() {
 			stream.CancelWrite(uint64(moqt.StreamResetCancelled))
 		})

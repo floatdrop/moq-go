@@ -21,6 +21,7 @@ import (
 	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/webtransport-go"
@@ -86,7 +87,7 @@ func (c *conn) OpenUniStream() (session.SendStream, error) {
 		}
 		return nil, err
 	}
-	return &sendStream{s: s}, nil
+	return wrapSendStream(s), nil
 }
 
 func (c *conn) AcceptUniStream(ctx context.Context) (session.ReceiveStream, error) {
@@ -170,6 +171,44 @@ func (s *sendStream) CancelWrite(code uint64) {
 // sends STOP_SENDING. webtransport-go's SendStream.Context() provides this
 // directly.
 func (s *sendStream) Context() context.Context { return s.s.Context() }
+
+// SetWriteDeadline satisfies [session.DeadlineSendStream].
+func (s *sendStream) SetWriteDeadline(t time.Time) error { return s.s.SetWriteDeadline(t) }
+
+// prioritizer is SetPriority as the fork of webtransport-go at
+// github.com/floatdrop/webtransport-go has it on its streams (quic-go's RFC
+// 9218 urgency and incremental); upstream v0.13 has not.
+type prioritizer interface {
+	SetPriority(urgency int8, incremental bool)
+}
+
+// wrapSendStream wraps s as a sendStream, and as a prioritizedSendStream
+// when its webtransport-go can prioritise streams: then, and only then, the
+// stream satisfies [session.PrioritizedSendStream] and
+// [session.ControlSendStream], so that a caller's type assertion says what
+// the transport will do.
+func wrapSendStream(s *webtransport.SendStream) session.SendStream {
+	if p, ok := any(s).(prioritizer); ok {
+		return &prioritizedSendStream{sendStream: sendStream{s: s}, p: p}
+	}
+	return &sendStream{s: s}
+}
+
+type prioritizedSendStream struct {
+	sendStream
+	p prioritizer
+}
+
+// SetSendPriority satisfies [session.PrioritizedSendStream]: the §5.1.2 key
+// projected onto the QUIC stream's urgency ([session.Urgency]), streams of one
+// urgency taking turns.
+func (s *prioritizedSendStream) SetSendPriority(p session.StreamPriority) {
+	s.p.SetPriority(session.Urgency(p), true)
+}
+
+// SetControlPriority satisfies [session.ControlSendStream]: urgency 0, above
+// every data stream.
+func (s *prioritizedSendStream) SetControlPriority() { s.p.SetPriority(0, true) }
 
 // recvStream wraps *webtransport.ReceiveStream.
 type recvStream struct{ s *webtransport.ReceiveStream }

@@ -257,6 +257,12 @@ func assertPlainSend(s any) {
 	case session.DeliveryTrackingSendStream:
 		panic("sessiontest.Faulty: refusing to wrap a session.DeliveryTrackingSendStream — " +
 			"the wrapper cannot forward Finished")
+	case session.DeadlineSendStream:
+		panic("sessiontest.Faulty: refusing to wrap a session.DeadlineSendStream — " +
+			"the wrapper cannot forward SetWriteDeadline")
+	case session.ControlSendStream:
+		panic("sessiontest.Faulty: refusing to wrap a session.ControlSendStream — " +
+			"the wrapper cannot forward SetControlPriority")
 	}
 }
 

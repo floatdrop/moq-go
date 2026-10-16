@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -198,13 +200,45 @@ func (s *OutgoingSubgroupStream) WriteObjectReceivedAt(
 	wr, _ := writerPool.Get().(*wire.Writer)
 	wr.Reset()
 	obj.Append(wr, s.header.Properties)
+	// §5.2: the write is bounded by the object's own timeout, where the
+	// transport allows, so that a write blocked on a congested peer does not
+	// hold the object past its time and then deliver it stale. The deadline
+	// is lifted after, so the stream's other writes (Close, a raw Write) are
+	// not failed by it later.
+	var deadline DeadlineSendStream
+	if s.objectTimeout > 0 {
+		if d, ok := s.dst.(DeadlineSendStream); ok {
+			deadline = d
+			_ = d.SetWriteDeadline(receivedAt.Add(s.objectTimeout))
+		}
+	}
 	_, err := s.dst.Write(wr.Bytes())
 	writerPool.Put(wr)
+	if deadline != nil {
+		_ = deadline.SetWriteDeadline(time.Time{})
+	}
 	if err != nil {
+		if s.objectTimeout > 0 && isWriteTimeout(err) {
+			s.Cancel(moqt.StreamResetDeliveryTimeout)
+			return fmt.Errorf("%w (write blocked past the %s timeout)", ErrDeliveryTimeout, s.objectTimeout)
+		}
 		return err
 	}
 	s.encPrevObject, s.encHavePrev = objectID, true
 	return nil
+}
+
+// isWriteTimeout says whether a Write failed for its deadline: quic-go's error
+// unwraps to os.ErrDeadlineExceeded, webtransport-go returns it as is, and any
+// net.Error that says Timeout counts.
+func isWriteTimeout(err error) bool {
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return true
+	}
+	if nerr, ok := errors.AsType[net.Error](err); ok {
+		return nerr.Timeout()
+	}
+	return false
 }
 
 // WriteObjectAt writes obj with its §11.3.1 ObjectIDDelta computed from the

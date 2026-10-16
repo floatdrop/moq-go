@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -644,3 +645,143 @@ func newFinishingSendStream() *finishingSendStream {
 }
 
 func (f *finishingSendStream) Finished() <-chan struct{} { return f.finished }
+
+// blockedSendStream is a fakeSendStream whose Write blocks, as a write on a
+// congested peer does, until the write deadline set on it, and then fails as
+// quic-go's does.
+type blockedSendStream struct {
+	*fakeSendStream
+
+	mu       sync.Mutex
+	deadline time.Time
+}
+
+func (b *blockedSendStream) SetWriteDeadline(t time.Time) error {
+	b.mu.Lock()
+	b.deadline = t
+	b.mu.Unlock()
+	return nil
+}
+
+// errNeverArmed is what a Write with no deadline fails with after a while:
+// a deadline that was not armed is a failure, not a hang.
+var errNeverArmed = errors.New("blockedSendStream: no write deadline was armed")
+
+func (b *blockedSendStream) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	deadline := b.deadline
+	b.mu.Unlock()
+	if deadline.IsZero() {
+		time.Sleep(time.Second)
+		return 0, errNeverArmed
+	}
+	time.Sleep(time.Until(deadline))
+	return 0, os.ErrDeadlineExceeded
+}
+
+// Deadline reads the deadline under the mutex.
+func (b *blockedSendStream) Deadline() time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.deadline
+}
+
+// TestObjectDeliveryTimeoutBoundsABlockedWrite: §5.2 wants the data buffered
+// at the transport kept least, since it can no longer be timed out; on a
+// stream that takes a write deadline, a write blocked past the object's
+// timeout gives up, and the stream is reset with DELIVERY_TIMEOUT.
+func TestObjectDeliveryTimeoutBoundsABlockedWrite(t *testing.T) {
+	const timeout = 50 * time.Millisecond
+	dst := &blockedSendStream{fakeSendStream: newFakeSendStream()}
+	out := session.NewOutgoingSubgroupStream(dst).
+		WithDeliveryTimeouts(message.DeliveryTimeouts{}, message.DeliveryTimeouts{Object: timeout})
+
+	start := time.Now()
+	err := out.WriteObjectReceivedAt(start, &message.SubgroupObject{Payload: []byte("x")})
+	if !errors.Is(err, session.ErrDeliveryTimeout) {
+		t.Fatalf("got %v, want ErrDeliveryTimeout", err)
+	}
+	if waited := time.Since(start); waited < timeout || waited > time.Second {
+		t.Errorf("the write gave up after %s, want about the %s timeout", waited, timeout)
+	}
+	if code := dst.CancelCode(); code != uint64(moqt.StreamResetDeliveryTimeout) {
+		t.Errorf("reset with %#x, want DELIVERY_TIMEOUT", code)
+	}
+	if !dst.Deadline().IsZero() {
+		t.Errorf("the deadline was left armed after the write")
+	}
+}
+
+// TestObjectDeliveryTimeoutDeadlineIsFromReceipt: the deadline is the
+// object's receipt plus the timeout (§5.2 measures from "the time at which
+// the last header byte" was received), not the write's own time plus it: a
+// relay that held the object a while has that much less to give.
+func TestObjectDeliveryTimeoutDeadlineIsFromReceipt(t *testing.T) {
+	const timeout = 50 * time.Millisecond
+	dst := &blockedSendStream{fakeSendStream: newFakeSendStream()}
+	out := session.NewOutgoingSubgroupStream(dst).
+		WithDeliveryTimeouts(message.DeliveryTimeouts{}, message.DeliveryTimeouts{Object: timeout})
+
+	start := time.Now()
+	receivedAt := start.Add(-40 * time.Millisecond)
+	err := out.WriteObjectReceivedAt(receivedAt, &message.SubgroupObject{Payload: []byte("x")})
+	if !errors.Is(err, session.ErrDeliveryTimeout) {
+		t.Fatalf("got %v, want ErrDeliveryTimeout", err)
+	}
+	if waited := time.Since(start); waited > 35*time.Millisecond {
+		t.Errorf("the write gave up after %s, want about the 10ms the object had left", waited)
+	}
+}
+
+// TestObjectDeliveryTimeoutLiftsTheDeadline: a stream that wrote an object in
+// time has no deadline left on it for its later writes.
+func TestObjectDeliveryTimeoutLiftsTheDeadline(t *testing.T) {
+	dst := &deadlineRecordingSendStream{fakeSendStream: newFakeSendStream()}
+	out := session.NewOutgoingSubgroupStream(dst).
+		WithDeliveryTimeouts(message.DeliveryTimeouts{}, message.DeliveryTimeouts{Object: time.Second})
+	if err := out.WriteObjectReceivedAt(time.Now(), &message.SubgroupObject{Payload: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if got := dst.deadlines; len(got) != 2 || got[0].IsZero() || !got[1].IsZero() {
+		t.Errorf("deadlines set %v, want one armed for the write and the zero time after it", got)
+	}
+}
+
+// deadlineRecordingSendStream is a fakeSendStream that records the deadlines
+// set on it and writes at once.
+type deadlineRecordingSendStream struct {
+	*fakeSendStream
+	deadlines []time.Time
+}
+
+func (d *deadlineRecordingSendStream) SetWriteDeadline(t time.Time) error {
+	d.deadlines = append(d.deadlines, t)
+	return nil
+}
+
+// BenchmarkWriteObjectWithDeadline is the per-object write on a stream that
+// takes deadlines, with an object timeout set: two SetWriteDeadline calls
+// around each write, against the plain write's none.
+func BenchmarkWriteObjectWithDeadline(b *testing.B) {
+	dst := &deadlineRecordingSendStream{fakeSendStream: newFakeSendStream()}
+	out := session.NewOutgoingSubgroupStream(dst).
+		WithDeliveryTimeouts(message.DeliveryTimeouts{}, message.DeliveryTimeouts{Object: time.Second})
+	obj := &message.SubgroupObject{Payload: make([]byte, 1200)}
+	for b.Loop() {
+		dst.deadlines = dst.deadlines[:0]
+		dst.buf.Reset()
+		if err := out.WriteObjectReceivedAt(time.Now(), obj); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// TestObjectDeliveryTimeoutNoDeadlineWithoutTimeout: a stream with no object
+// timeout is never given a deadline, and a write on it is not a timeout.
+func TestObjectDeliveryTimeoutNoDeadlineWithoutTimeout(t *testing.T) {
+	dst := newFakeSendStream()
+	out := session.NewOutgoingSubgroupStream(dst)
+	if err := out.WriteObjectReceivedAt(time.Now().Add(-time.Hour), &message.SubgroupObject{Payload: []byte("x")}); err != nil {
+		t.Fatalf("an hour-old object with no timeout should still be written: %v", err)
+	}
+}

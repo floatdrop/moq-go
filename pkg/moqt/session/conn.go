@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"time"
 )
 
 // ErrNoStreamCredit is returned by [Conn.OpenStream] and [Conn.OpenUniStream]
@@ -82,11 +83,15 @@ type StreamPriority struct {
 //
 // Callers SHOULD type-assert a [SendStream] to this interface and call
 // SetSendPriority when available; adapters that don't satisfy it silently fall
-// back to the transport's default scheduling. None of the bundled adapters
-// (quicconn, wtconn, sessiontest) implement it yet — quic-go exposes no public
-// per-stream priority API (quic-go#437) and webtransport-go follows suit — but
-// the relay pushes the full §5.1.2 priority through anyway so it lights up once a
-// transport adds the knob.
+// back to the transport's default scheduling. quicconn implements it over
+// quic-go's SetPriority (RFC 9218 urgency and incremental), projecting the key
+// onto the Subscriber byte with [Urgency]: the Publisher byte and the group
+// order are not projected, eight urgencies being what the transport has, and
+// streams of one urgency take turns. wtconn offers it only when its
+// webtransport-go has SetPriority on streams (the fork at
+// github.com/floatdrop/webtransport-go; upstream v0.13 has not), so that a
+// caller's type assertion tells the truth. sessiontest implements none of the
+// optional interfaces: Faulty wraps its streams and could not forward them.
 type PrioritizedSendStream interface {
 	// SetSendPriority sets the transport-level scheduling priority for
 	// this stream. It is safe to call repeatedly during the stream's
@@ -94,6 +99,39 @@ type PrioritizedSendStream interface {
 	// the transport adopts the most recent value on the next scheduling
 	// decision.
 	SetSendPriority(p StreamPriority)
+}
+
+// Urgency projects a [StreamPriority] onto RFC 9218's urgency levels, which
+// quic-go schedules by: the Subscriber byte alone (§5.1.2 rule 1, the primary
+// key) onto 1 through 7, so that priority 0 is urgency 1 and the default 128 is
+// urgency 4. Urgency 0 is the control stream's alone ([ControlSendStream]),
+// which §5.1.2 wants "prioritized highest", above every data stream. The finer
+// rules are left to the transport's round robin within an urgency
+// (incremental), which keeps every subscription moving, as §5.1.2 expects.
+func Urgency(p StreamPriority) int8 {
+	return 1 + int8(uint16(p.Subscriber)*6/255) //nolint:gosec // G115: 1..7
+}
+
+// ControlSendStream is optionally implemented by [SendStream] implementations
+// that can put a stream above every data stream: the session asks it of its
+// control stream (§5.1.2: "the control streams SHOULD be prioritized highest").
+type ControlSendStream interface {
+	SetControlPriority()
+}
+
+// DeadlineSendStream is optionally implemented by [SendStream] implementations
+// whose Write can be bounded in time; quic-go's and webtransport-go's are.
+// §5.2 asks that an implementation "minimize the amount of data buffered at
+// the underlying transport layer, as any data buffered at this layer can no
+// longer be timed out": [OutgoingSubgroupStream] bounds each object's write by
+// that object's OBJECT_DELIVERY_TIMEOUT through this, so a write that blocks on
+// a congested peer gives up when the object would have expired anyway, and the
+// stream is reset with DELIVERY_TIMEOUT rather than deliver it late.
+type DeadlineSendStream interface {
+	// SetWriteDeadline bounds the Writes that follow; the zero time lifts it.
+	// A Write past it fails with an error for which errors.Is(err,
+	// os.ErrDeadlineExceeded) holds, or a net.Error whose Timeout is true.
+	SetWriteDeadline(t time.Time) error
 }
 
 // ReliableResetStream is optionally implemented by [SendStream]

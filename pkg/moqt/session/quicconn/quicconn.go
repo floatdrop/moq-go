@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"time"
 
 	"github.com/quic-go/quic-go"
 
@@ -132,6 +133,20 @@ func (s *sendStream) SetReliableBoundary() { s.s.SetReliableBoundary() }
 // Context is cancelled when the send side is closed or reset, or the peer
 // sends STOP_SENDING. quic-go's SendStream.Context() provides this directly.
 func (s *sendStream) Context() context.Context { return s.s.Context() }
+
+// SetSendPriority satisfies [session.PrioritizedSendStream]: the §5.1.2 key
+// projected onto quic-go's urgency ([session.Urgency]), streams of one urgency
+// taking turns.
+func (s *sendStream) SetSendPriority(p session.StreamPriority) {
+	s.s.SetPriority(session.Urgency(p), true)
+}
+
+// SetControlPriority satisfies [session.ControlSendStream]: urgency 0, above
+// every data stream ([session.Urgency] gives those 1 to 7).
+func (s *sendStream) SetControlPriority() { s.s.SetPriority(0, true) }
+
+// SetWriteDeadline satisfies [session.DeadlineSendStream].
+func (s *sendStream) SetWriteDeadline(t time.Time) error { return s.s.SetWriteDeadline(t) }
 
 // recvStream wraps *quic.ReceiveStream.
 type recvStream struct{ s *quic.ReceiveStream }
