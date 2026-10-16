@@ -1195,8 +1195,14 @@ func (w *subgroupWriter) run() {
 		prevID = fwd.absID
 		hasWritten = true
 		dropped = false
-		// §11.3.2: a later reset still delivers what was written.
-		w.out.MarkReliable()
+		// Not marked reliable: §11.3.2 lets a relay keep the objects it
+		// wrote across a reset (MAY), but this relay resets a subgroup for
+		// lag and delivery timeouts, where delivering what was written
+		// anyway, after the reset, is what the reset was to spare the
+		// subscriber: on a way that cannot carry the track, the reliable
+		// tails of abandoned groups would take the room of the groups
+		// after them. The header stays reliable (reopen), as §11.3.2 says
+		// it SHOULD.
 	}
 
 	w.dropsMu.Lock()
