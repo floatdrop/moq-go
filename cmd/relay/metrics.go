@@ -272,7 +272,8 @@ func (e *promExporter) SubscriptionClosed(t relay.TrackRef) {
 	e.add(seriesKey{fam: famSubscriptions, track: e.track(t.Name), leg: t.Leg.String()}, -1)
 }
 
-func (e *promExporter) ObjectReceived(t relay.TrackRef, subgroup uint64) {
+func (e *promExporter) ObjectReceived(t relay.TrackRef, o relay.ReceivedObject) {
+	subgroup := o.Subgroup
 	e.add(e.objectKey(famObjectsReceived, t, subgroup), 1)
 }
 

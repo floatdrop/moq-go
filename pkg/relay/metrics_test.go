@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"bytes"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay"
@@ -36,10 +37,11 @@ type recordingMetrics struct {
 	// mu guards the label observations below. The counters above stay atomic
 	// because they are written from the per-object fanout path; these are
 	// read once at the end of a test.
-	mu         sync.Mutex
-	trackNames map[string]int
-	subgroups  map[uint64]int
-	resets     map[relay.ResetCause]int
+	mu           sync.Mutex
+	lastReceived relay.ReceivedObject
+	trackNames   map[string]int
+	subgroups    map[uint64]int
+	resets       map[relay.ResetCause]int
 }
 
 func (m *recordingMetrics) note(t relay.TrackRef, subgroup uint64) {
@@ -63,7 +65,10 @@ func (m *recordingMetrics) SessionClosed(relay.Leg)           { m.sessionsClosed
 func (m *recordingMetrics) SubscriptionOpened(relay.TrackRef) { m.subsOpened.Add(1) }
 func (m *recordingMetrics) SubscriptionClosed(relay.TrackRef) { m.subsClosed.Add(1) }
 
-func (m *recordingMetrics) ObjectReceived(relay.TrackRef, uint64) {
+func (m *recordingMetrics) ObjectReceived(_ relay.TrackRef, o relay.ReceivedObject) {
+	m.mu.Lock()
+	m.lastReceived = relay.ReceivedObject{Name: o.Name, Subgroup: o.Subgroup, HeaderAt: o.HeaderAt, Properties: bytes.Clone(o.Properties)}
+	m.mu.Unlock()
 	m.received.Add(1)
 }
 
@@ -210,6 +215,17 @@ func TestMetricsHooks(t *testing.T) {
 	// With one subscriber, received and forwarded are one-to-one.
 	if got := rec.received.Load(); got != int64(sgCount) {
 		t.Errorf("ObjectReceived = %d, want %d", got, sgCount)
+	}
+	// Each received object is told as the relay saw it: the track's full
+	// name and a receipt time of the relay's clock during the test.
+	rec.mu.Lock()
+	last := rec.lastReceived
+	rec.mu.Unlock()
+	if string(last.Name.Name) != "cam1" || !last.Name.Namespace.HasPrefix(video) {
+		t.Errorf("ObjectReceived told of track %s/%s, want video/cam1", last.Name.Namespace, last.Name.Name)
+	}
+	if last.HeaderAt.IsZero() || last.HeaderAt.After(time.Now()) {
+		t.Errorf("ObjectReceived told of a receipt at %v", last.HeaderAt)
 	}
 	// The labels must carry the track name and the leg the session sits on.
 	// Both peers dialled in, so everything here is LegLocal — an upstream leg

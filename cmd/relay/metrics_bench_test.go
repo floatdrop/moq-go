@@ -19,7 +19,7 @@ func BenchmarkExporterObjectReceived(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; b.Loop(); i++ {
-		e.ObjectReceived(ref, uint64(i%4))
+		e.ObjectReceived(ref, relay.ReceivedObject{Subgroup: uint64(i % 4)})
 	}
 }
 
@@ -33,7 +33,7 @@ func BenchmarkExporterObjectReceivedUnlisted(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; b.Loop(); i++ {
-		e.ObjectReceived(ref, uint64(i%4))
+		e.ObjectReceived(ref, relay.ReceivedObject{Subgroup: uint64(i % 4)})
 	}
 }
 
@@ -51,7 +51,7 @@ func BenchmarkExporterObjectReceivedParallel(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for i := 0; pb.Next(); i++ {
-			e.ObjectReceived(ref, uint64(i%4))
+			e.ObjectReceived(ref, relay.ReceivedObject{Subgroup: uint64(i % 4)})
 		}
 	})
 }

@@ -1,5 +1,11 @@
 package relay
 
+import (
+	"time"
+
+	"github.com/floatdrop/moq-go/pkg/moqt/track"
+)
+
 // Leg says which side of a relay mesh the session carrying an event sits on.
 //
 // It is deliberately a property of the *session*, not of the peer's role: a
@@ -175,8 +181,12 @@ type Metrics interface {
 	// subgroup stream and won by this contributor — objects discarded as
 	// §7.3 duplicates of a redundant upstream are not counted. Compared
 	// against ObjectForwarded it separates "the relay never got it" from
-	// "the relay got it and shed it".
-	ObjectReceived(t TrackRef, subgroup uint64)
+	// "the relay got it and shed it". It is told the object as the relay saw
+	// it ([ReceivedObject]): the track's full name, when the header was read
+	// and the properties, so that a deployment can measure what the way to
+	// the relay did to a publisher's objects (how late their timestamps
+	// arrive, say) without the relay reading their format.
+	ObjectReceived(t TrackRef, o ReceivedObject)
 
 	// ObjectForwarded is called once for each object successfully enqueued for
 	// delivery to a downstream subscriber. It is counted per subscriber, so a
@@ -245,7 +255,7 @@ func (NopMetrics) SessionOpened(Leg)                                {}
 func (NopMetrics) SessionClosed(Leg)                                {}
 func (NopMetrics) SubscriptionOpened(TrackRef)                      {}
 func (NopMetrics) SubscriptionClosed(TrackRef)                      {}
-func (NopMetrics) ObjectReceived(TrackRef, uint64)                  {}
+func (NopMetrics) ObjectReceived(TrackRef, ReceivedObject)          {}
 func (NopMetrics) ObjectForwarded(TrackRef, uint64)                 {}
 func (NopMetrics) ObjectDropped(TrackRef, uint64)                   {}
 func (NopMetrics) SubgroupStreamReset(TrackRef, uint64, ResetCause) {}
@@ -253,3 +263,14 @@ func (NopMetrics) SubscriptionResetSlowReader(TrackRef, ResetCause) {}
 func (NopMetrics) FetchServed(TrackRef, int)                        {}
 func (NopMetrics) UpstreamDialFailed(string)                        {}
 func (NopMetrics) NamespaceResolved(int)                            {}
+
+// ReceivedObject is an object as [Metrics.ObjectReceived] is told of it: its
+// track's full name, its subgroup, when the relay read the last byte of its
+// header (the §5.2 receipt time), and its properties as published. Properties
+// is the relay's buffer: read it in the call, do not keep it.
+type ReceivedObject struct {
+	Name       track.FullTrackName
+	Subgroup   uint64
+	HeaderAt   time.Time
+	Properties []byte
+}

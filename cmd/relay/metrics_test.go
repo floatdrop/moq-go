@@ -47,8 +47,8 @@ func TestExporterExposition(t *testing.T) {
 	e.SessionOpened(relay.LegUpstream)
 	e.SessionClosed(relay.LegUpstream)
 	e.SubscriptionOpened(cat)
-	e.ObjectReceived(cat, 0)
-	e.ObjectReceived(cat, 0)
+	e.ObjectReceived(cat, relay.ReceivedObject{})
+	e.ObjectReceived(cat, relay.ReceivedObject{})
 	e.ObjectForwarded(cam, 1)
 	e.ObjectDropped(cam, 0)
 	e.SubgroupStreamReset(cam, 0, relay.ResetCauseGap)
@@ -113,7 +113,7 @@ func TestExporterBoundsCardinality(t *testing.T) {
 	e := newPromExporter([]string{"catalog"})
 	for i := range 500 {
 		name := string(rune('a'+i%26)) + strings.Repeat("x", i%7)
-		e.ObjectReceived(relay.TrackRef{Name: name, Leg: relay.LegLocal}, uint64(i))
+		e.ObjectReceived(relay.TrackRef{Name: name, Leg: relay.LegLocal}, relay.ReceivedObject{Subgroup: uint64(i)})
 	}
 	body := scrape(t, e)
 
@@ -157,7 +157,7 @@ func TestExporterConcurrent(t *testing.T) {
 		wg.Go(func() {
 			ref := relay.TrackRef{Name: "catalog", Leg: relay.LegLocal}
 			for range 500 {
-				e.ObjectReceived(ref, uint64(i%5))
+				e.ObjectReceived(ref, relay.ReceivedObject{Subgroup: uint64(i % 5)})
 				e.SessionOpened(relay.LegLocal)
 				e.SessionClosed(relay.LegLocal)
 			}
