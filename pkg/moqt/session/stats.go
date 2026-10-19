@@ -20,6 +20,14 @@ type TransportStats struct {
 	PacketsReceived uint64
 	BytesLost       uint64
 	PacketsLost     uint64
+
+	// Transport is the transport's own figures, whole, for a caller that
+	// knows the transport and wants what the fields above leave out: the
+	// quicconn and wtconn adapters put the quic.ConnectionStats here, which
+	// carries the congestion window, and with a quic-go whose congestion
+	// controller models the bandwidth (BBR), its estimate. nil when the
+	// transport has none to give.
+	Transport any
 }
 
 // StatsConn is a [Conn] whose transport can report [TransportStats]: the

@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go"
+
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay/relaynet"
 )
@@ -81,6 +83,12 @@ func TestTransportStatsBothTransports(t *testing.T) {
 		// and an RTT estimate.
 		if st.PacketsSent == 0 || st.PacketsReceived == 0 || st.BytesSent == 0 || st.SmoothedRTT <= 0 {
 			t.Errorf("%s: TransportStats = %+v, want packets and bytes both ways and an RTT", name, st)
+		}
+		// The transport's own figures come whole, for what the fields leave
+		// out (a quic-go fork's congestion window or bandwidth estimate).
+		q, ok := st.Transport.(quic.ConnectionStats)
+		if !ok || q.BytesSent != st.BytesSent || q.SmoothedRTT != st.SmoothedRTT {
+			t.Errorf("%s: Transport = %#v, want the quic.ConnectionStats the fields came of", name, st.Transport)
 		}
 	}
 }

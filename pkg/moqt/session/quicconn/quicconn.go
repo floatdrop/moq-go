@@ -105,6 +105,7 @@ func TransportStats(s quic.ConnectionStats) session.TransportStats {
 		PacketsReceived: s.PacketsReceived,
 		BytesLost:       s.BytesLost,
 		PacketsLost:     s.PacketsLost,
+		Transport:       s,
 	}
 }
 
