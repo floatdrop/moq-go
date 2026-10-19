@@ -121,7 +121,10 @@ func (h *sessionHandler) serveForwardedPublish(
 		return
 	}
 	sub.SetLargestAtSubscribe(largest, has)
-	defer h.tracks.RemoveDownstream(fullName, sub.ID)
+	defer func() {
+		h.tracks.RemoveDownstream(fullName, sub.ID)
+		h.pauseUnwatched(fullName)
+	}()
 	ref := h.trackRef(fullName)
 	h.metrics.SubscriptionOpened(ref)
 	defer h.metrics.SubscriptionClosed(ref)

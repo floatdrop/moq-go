@@ -20,14 +20,21 @@ import (
 // delivers each FORWARD value the relay sends back in REQUEST_UPDATE.
 func pausedPublish(t *testing.T, via *session.Session) <-chan bool {
 	t.Helper()
+	return forwardsOfPublish(t, via, message.ForwardParam(false))
+}
+
+// forwardsOfPublish PUBLISHes video/cam1 with params from a new session and
+// delivers each FORWARD value the relay sends back in REQUEST_UPDATE.
+func forwardsOfPublish(t *testing.T, via *session.Session, params ...message.Parameter) <-chan bool {
+	t.Helper()
 	pubSess := dialAnotherClient(t, via)
 	pub, err := pubSess.Publish(t.Context(), &message.Publish{
 		Namespace:  ns("video"),
 		Name:       []byte("cam1"),
-		Parameters: message.Parameters{message.ForwardParam(false)},
+		Parameters: params,
 	})
 	if err != nil {
-		t.Fatalf("Publish FORWARD=0: %v", err)
+		t.Fatalf("Publish: %v", err)
 	}
 	t.Cleanup(func() { _ = pub.Close() })
 	forwards := make(chan bool, 4)
@@ -56,6 +63,72 @@ func requireForwardOn(t *testing.T, forwards <-chan bool, when string) {
 	case <-time.After(2 * time.Second):
 		t.Fatalf("relay never sent REQUEST_UPDATE FORWARD=1 %s", when)
 	}
+}
+
+// requireForward fails unless the next REQUEST_UPDATE sets FORWARD to want
+// within 2s.
+func requireForward(t *testing.T, forwards <-chan bool, want bool, when string) {
+	t.Helper()
+	select {
+	case on := <-forwards:
+		if on != want {
+			t.Fatalf("relay sent FORWARD=%v %s, want FORWARD=%v", on, when, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("relay never sent REQUEST_UPDATE FORWARD=%v %s", want, when)
+	}
+}
+
+// requireNoForwardUpdate fails if the relay sends any REQUEST_UPDATE FORWARD within d.
+func requireNoForwardUpdate(t *testing.T, forwards <-chan bool, d time.Duration, when string) {
+	t.Helper()
+	select {
+	case on := <-forwards:
+		t.Fatalf("relay sent FORWARD=%v %s, want none", on, when)
+	case <-time.After(d):
+	}
+}
+
+// TestRelay_UnwatchedPublishPaused: with PauseUnwatchedPublishes, a PUBLISH
+// nobody subscribes to is paused (FORWARD=0) after the delay, resumed when a
+// subscriber comes, and paused again once it has left.
+func TestRelay_UnwatchedPublishPaused(t *testing.T) {
+	t.Parallel()
+	anchor, teardown := connectRelay(t, relay.Config{PauseUnwatchedPublishes: 100 * time.Millisecond})
+	defer teardown()
+	forwards := forwardsOfPublish(t, anchor)
+	requireForward(t, forwards, false, "for a PUBLISH nobody subscribed to")
+	sub := newCam1Subscriber(t, anchor)
+	requireForward(t, forwards, true, "when a subscriber came")
+	_ = sub.Close(0, "done")
+	requireForward(t, forwards, false, "once the subscriber left")
+}
+
+// TestRelay_UnwatchedPublishNotPausedByDefault: without
+// PauseUnwatchedPublishes, a PUBLISH nobody subscribes to flows on.
+func TestRelay_UnwatchedPublishNotPausedByDefault(t *testing.T) {
+	t.Parallel()
+	anchor, teardown := connectRelay(t, relay.Config{})
+	defer teardown()
+	forwards := forwardsOfPublish(t, anchor)
+	sub := newCam1Subscriber(t, anchor)
+	_ = sub.Close(0, "done")
+	requireNoForwardUpdate(t, forwards, 500*time.Millisecond, "with pausing off")
+}
+
+// TestRelay_UnwatchedPublishSparesAQuickReturn: a subscriber that leaves and
+// another that comes within the delay (a viewer switching layers) cause no
+// pause, nor a resume.
+func TestRelay_UnwatchedPublishSparesAQuickReturn(t *testing.T) {
+	t.Parallel()
+	const delay = 400 * time.Millisecond
+	anchor, teardown := connectRelay(t, relay.Config{PauseUnwatchedPublishes: delay})
+	defer teardown()
+	forwards := forwardsOfPublish(t, anchor)
+	first := newCam1Subscriber(t, anchor)
+	_ = first.Close(0, "switching")
+	_ = newCam1Subscriber(t, anchor)
+	requireNoForwardUpdate(t, forwards, 2*delay, "for a subscriber gone and another come within the delay")
 }
 
 // TestRelay_PausedPublishResumedForExistingSubscriber: a FORWARD=0 PUBLISH of a

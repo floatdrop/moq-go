@@ -111,7 +111,10 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	h.metrics.SubscriptionOpened(subRef)
 	defer h.metrics.SubscriptionClosed(subRef)
 
-	defer h.tracks.RemoveDownstream(fullName, sub.ID)
+	defer func() {
+		h.tracks.RemoveDownstream(fullName, sub.ID)
+		h.pauseUnwatched(fullName)
+	}()
 	// §3.1.2: once the subscriber cancels, or the session ends, reset the
 	// streams still open for it.
 	defer sub.Cancel()
@@ -263,9 +266,12 @@ func (h *sessionHandler) handleSubscribeUpdate(
 		return
 	}
 
-	// §7.2: a 0→1 Forward flip resumes paused upstreams.
+	// §7.2: a 0→1 Forward flip resumes paused upstreams; a 1→0 one may
+	// leave them unwatched.
 	if prevForward == 0 && sub.ForwardState() == 1 {
 		h.propagateForwardUpstream(ctx, fullName)
+	} else if prevForward == 1 && sub.ForwardState() == 0 {
+		h.pauseUnwatched(fullName)
 	}
 
 	// §9.20.19
@@ -326,22 +332,51 @@ func (h *sessionHandler) propagateNewGroupUpstream(
 // propagateForwardUpstream sends REQUEST_UPDATE Forward=1 to each paused
 // upstream of fullName (§7.2), saving any LARGEST_OBJECT in the reply.
 func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName track.FullTrackName) {
+	h.reconcileForwardUpstream(ctx, fullName, false)
+}
+
+// pauseUnwatched schedules a pause of fullName's PUBLISH-fed upstreams after
+// [Config.PauseUnwatchedPublishes], when a downstream stopped forwarding it
+// (left, or paused itself), or it came with none: decided afresh then.
+func (h *sessionHandler) pauseUnwatched(fullName track.FullTrackName) {
+	h.pauser.schedule(func(ctx context.Context) { h.reconcileForwardUpstream(ctx, fullName, true) })
+}
+
+// reconcileForwardUpstream brings the Forward State of fullName's upstreams
+// to what its downstreams want now: 1 while any forwards (§7.2: resume a
+// paused upstream); with pause, 0 for the PUBLISH-fed ones while none does
+// ([Config.PauseUnwatchedPublishes]; the on-demand ones are torn down with
+// their last downstream instead). Serialized per entry ([registry.TrackEntry]
+// ForwardMu): a pause and a resume racing end at what the downstreams want
+// when the last of them ran.
+func (h *sessionHandler) reconcileForwardUpstream(ctx context.Context, fullName track.FullTrackName, pause bool) {
 	entry, ok := h.tracks.Get(fullName.Key())
 	if !ok {
 		return
 	}
+	entry.ForwardMu.Lock()
+	defer entry.ForwardMu.Unlock()
+	want := 1
+	if !anyDownstreamForwards(entry) {
+		if !pause {
+			return
+		}
+		want = 0
+	}
 	for _, up := range entry.CopyUpstream() {
-		if up.ForwardState() == 1 || !up.IsEstablished() {
+		if up.ForwardState() == want || !up.IsEstablished() || (want == 0 && up.OnDemand) {
 			continue
 		}
-		resp, err := up.Update(ctx, message.Parameters{message.ForwardParam(true)})
+		resp, err := up.Update(ctx, message.Parameters{message.ForwardParam(want == 1)})
 		if err != nil {
 			h.log.LogAttrs(ctx, slog.LevelDebug, "upstream REQUEST_UPDATE failed",
 				slog.String("err", err.Error()))
 			continue
 		}
-		up.SetForwardState(1)
-		saveLargestLocation(entry, resp.Parameters)
+		up.SetForwardState(want)
+		if want == 1 {
+			saveLargestLocation(entry, resp.Parameters)
+		}
 	}
 }
 

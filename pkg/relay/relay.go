@@ -137,6 +137,20 @@ type Config struct {
 	// are eligible for time-based eviction on the next Put.
 	MaxCacheDuration time.Duration
 
+	// PauseUnwatchedPublishes pauses the publisher of a track the relay
+	// accepted by PUBLISH once no downstream subscription has forwarded it
+	// for this long: the relay, the subscriber of an accepted PUBLISH, sends
+	// it REQUEST_UPDATE with FORWARD=0 (§3.1.1). A downstream that forwards
+	// resumes it with FORWARD=1, as it resumes any paused upstream. A
+	// publisher that honors the pause stops sending what nobody watches (a
+	// simulcast layer no viewer takes); one that does not loses nothing.
+	//
+	// Zero, the default, never pauses: a publisher may count on the relay
+	// receiving its Objects with nobody subscribed, to have them cached for
+	// whoever comes. The delay spares a subscriber that leaves and comes back
+	// at once (switching layers) a pause and a resume.
+	PauseUnwatchedPublishes time.Duration
+
 	// CacheTTLPolicy, when non-nil, may override [MaxCacheDuration] on
 	// a per-track basis. See [CacheTTLPolicy] for the contract; the
 	// function is invoked once per [registry.TrackEntry] at creation time and
@@ -334,6 +348,10 @@ type Relay struct {
 	sessions   map[*session.Session]struct{}
 	stopCtx    context.Context
 
+	// pauser pauses unwatched PUBLISH-fed tracks
+	// ([Config.PauseUnwatchedPublishes]); nil when off.
+	pauser *unwatchedPauser
+
 	// stopOnce guards Stop so the second caller short-circuits. stopCh is
 	// closed by Stop to signal the accept loop to exit and to release any
 	// per-session handlers blocked waiting on shutdown.
@@ -418,6 +436,9 @@ func New(listener Listener, cfg Config) *Relay {
 		statusRounds: newTrackStatusRounds(),
 		sessions:     make(map[*session.Session]struct{}),
 		stopCh:       make(chan struct{}),
+	}
+	if cfg.PauseUnwatchedPublishes > 0 {
+		r.pauser = &unwatchedPauser{delay: cfg.PauseUnwatchedPublishes, stop: r.stopCh, run: r.handlers.Go}
 	}
 
 	// When a Dialer is configured, the relay can follow Discovery
@@ -665,6 +686,7 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session, leg Leg
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,
 		max(r.cfg.MaxRendezvousTimeout, 0),
 		r.handlers.Go,
+		r.pauser,
 	)
 	if err := handler.run(ctx); err != nil {
 		r.log.LogAttrs(ctx, slog.LevelDebug, "relay session handler returned",

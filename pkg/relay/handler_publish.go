@@ -115,6 +115,9 @@ func (h *sessionHandler) handlePublish(ctx context.Context, req *session.Request
 	// response is read by the Serve loop serveUpstreamStream starts below.
 	if sub.ForwardState() == 0 && anyDownstreamForwards(entry) {
 		h.spawn(func() { h.propagateForwardUpstream(ctx, fullName) })
+	} else if sub.ForwardState() == 1 && !anyDownstreamForwards(entry) {
+		// Nobody watches it yet: paused unless somebody comes.
+		h.pauseUnwatched(fullName)
 	}
 
 	h.forwardToTrackSubscribers(entry)

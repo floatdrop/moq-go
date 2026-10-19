@@ -79,6 +79,10 @@ type sessionHandler struct {
 	// serves every downstream subscriber of the track, not just the one on
 	// this session (§7.4 aggregation).
 	relayGo func(func())
+
+	// pauser pauses PUBLISH-fed tracks no downstream forwards
+	// ([Config.PauseUnwatchedPublishes]); nil when off.
+	pauser *unwatchedPauser
 }
 
 // newSessionHandler constructs a handler. Callers provide the shared
@@ -104,6 +108,7 @@ func newSessionHandler(
 	maxNamespaceReqsPerSession int,
 	maxRendezvous time.Duration,
 	relayGo func(func()),
+	pauser *unwatchedPauser,
 ) *sessionHandler {
 	return &sessionHandler{
 		sess:                sess,
@@ -124,6 +129,7 @@ func newSessionHandler(
 		maxRendezvous:       maxRendezvous,
 		limiter:             sessionLimiter{maxSubs: maxSubsPerSession, maxNS: maxNamespaceReqsPerSession},
 		relayGo:             relayGo,
+		pauser:              pauser,
 	}
 }
 

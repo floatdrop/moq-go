@@ -45,6 +45,12 @@ import (
 type TrackEntry struct {
 	mu sync.RWMutex
 
+	// ForwardMu serializes changes of the Forward State of the entry's
+	// upstreams (a pause, a resume), each a REQUEST_UPDATE round trip, so
+	// that two racing end at what the downstreams want when the last ran,
+	// whatever order their messages reached the publisher in.
+	ForwardMu sync.Mutex
+
 	// Key is the canonical map identity for this track (§2.4.1).
 	Key track.Key
 

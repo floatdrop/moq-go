@@ -184,3 +184,44 @@ func TestCrossRelay_PublishDoneCodeCrossesRelays(t *testing.T) {
 			pd.StatusCode, moqt.PublishDoneMalformedTrack)
 	}
 }
+
+// TestCrossRelay_UnwatchedPublishPaused: a PUBLISH on relay B with
+// PauseUnwatchedPublishes is resumed for a subscriber on relay A, whose
+// upstream subscription to B is its downstream, and paused again once that
+// subscriber has left, A tearing its upstream down.
+func TestCrossRelay_UnwatchedPublishPaused(t *testing.T) {
+	t.Parallel()
+	store := discovery.NewMemoryStore()
+	defer store.Close()
+	ctx := t.Context()
+	relayB := startTestRelay(ctx, relay.Config{
+		Discovery: store, RelayAddr: "relay-B", PauseUnwatchedPublishes: 100 * time.Millisecond,
+	})
+	relayA := startTestRelay(ctx, relay.Config{Discovery: store, RelayAddr: "relay-A", Dialer: dialerTo(nil, relayB)})
+	defer relayB.stop(t)
+	defer relayA.stop(t)
+
+	pubSess := dialClient(t, relayB)
+	defer func() { _ = pubSess.Close(0, "done") }()
+	publishNS(t, pubSess, "video")
+	pub := publishVideoTrack(t, pubSess, "cam1", 7)
+	forwards := make(chan bool, 4)
+	go func() {
+		_ = pub.Broker().Serve(ctx, func(m message.Message) bool {
+			if upd, ok := m.(*message.RequestUpdate); ok {
+				if f, found := upd.Parameters.Find(message.ParamForward); found {
+					forwards <- f.Byte == 1
+				}
+			}
+			return true
+		})
+	}()
+	requireForward(t, forwards, false, "for a PUBLISH nobody subscribed to")
+
+	subSess := dialClient(t, relayA)
+	sub := subscribeCam1(t, subSess)
+	requireForward(t, forwards, true, "when a subscriber on the other relay came")
+	_ = sub.Close()
+	requireForward(t, forwards, false, "once the subscriber on the other relay left")
+	_ = subSess.Close(0, "done")
+}
