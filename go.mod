@@ -5,9 +5,9 @@ go 1.27
 toolchain go1.27.2
 
 require (
-	github.com/Eyevinn/mp4ff v0.59.0
+	github.com/Eyevinn/mp4ff v0.60.0
 	github.com/lmittmann/tint v1.2.1
-	github.com/quic-go/quic-go v0.63.0
+	github.com/quic-go/quic-go v0.64.0
 	github.com/quic-go/webtransport-go v0.13.0
 	golang.org/x/sync v0.24.0
 )
