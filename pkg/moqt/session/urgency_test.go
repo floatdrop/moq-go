@@ -14,7 +14,9 @@ func TestUrgency(t *testing.T) {
 		subscriber uint8
 		want       int8
 	}{{0, 1}, {1, 1}, {64, 2}, {128, 4}, {200, 5}, {255, 7}} {
-		if got := session.Urgency(session.StreamPriority{Subscriber: tc.subscriber, Publisher: 255, GroupKey: 1 << 60}); got != tc.want {
+		if got := session.Urgency(
+			session.StreamPriority{Subscriber: tc.subscriber, Publisher: 255, GroupKey: 1 << 60},
+		); got != tc.want {
 			t.Errorf("Urgency(subscriber %d) = %d, want %d", tc.subscriber, got, tc.want)
 		}
 	}

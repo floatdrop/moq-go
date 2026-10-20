@@ -189,13 +189,14 @@ type prioritizer interface {
 // the transport will do.
 func wrapSendStream(s *webtransport.SendStream) session.SendStream {
 	if p, ok := any(s).(prioritizer); ok {
-		return &prioritizedSendStream{sendStream: sendStream{s: s}, p: p}
+		return &prioritizedSendStream{s: s, p: p}
 	}
 	return &sendStream{s: s}
 }
 
 type prioritizedSendStream struct {
 	sendStream
+
 	p prioritizer
 }
 
