@@ -168,10 +168,9 @@ func (h *sessionHandler) subscribeLatePublisher(
 		return
 	}
 	// Or switched to Forward=1 before this upstream was registered for §7.2
-	// propagation. Not bound to ctx: a withdrawal (§7.6) stops only new
-	// subscriptions.
+	// propagation.
 	if up.ForwardState() == 0 && anyDownstreamForwards(entry) {
-		h.propagateForwardUpstream(context.WithoutCancel(ctx), fullName)
+		h.propagateForwardUpstream(ctx, fullName)
 	}
 }
 

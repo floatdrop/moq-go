@@ -104,6 +104,45 @@ func TestRelay_UnwatchedPublishPaused(t *testing.T) {
 	requireForward(t, forwards, false, "once the subscriber left")
 }
 
+// TestRelay_UnwatchedPublishPausedAfterAnInterruptedResume: a subscriber that
+// leaves while the resume it caused awaits the publisher's REQUEST_UPDATE_OK
+// still leaves the track paused after the delay. The resume reached the
+// publisher, so cutting its round trip short must not leave the relay
+// believing the upstream is still paused.
+func TestRelay_UnwatchedPublishPausedAfterAnInterruptedResume(t *testing.T) {
+	t.Parallel()
+	anchor, teardown := connectRelay(t, relay.Config{PauseUnwatchedPublishes: 100 * time.Millisecond})
+	defer teardown()
+	pubSess := dialAnotherClient(t, anchor)
+	pub, err := pubSess.Publish(t.Context(), &message.Publish{Namespace: ns("video"), Name: []byte("cam1")})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	t.Cleanup(func() { _ = pub.Close() })
+	forwards := make(chan bool, 4)
+	release := make(chan struct{})
+	b := pub.Broker()
+	// Holds a resume's REQUEST_UPDATE_OK until release.
+	b.HandleUpdates(func(upd *message.RequestUpdate) (*message.RequestOK, error) {
+		if f, found := upd.Parameters.Find(message.ParamForward); found {
+			forwards <- f.Byte == 1
+			if f.Byte == 1 {
+				<-release
+			}
+		}
+		return pub.ApplyUpdate(upd)
+	})
+	go func() { _ = b.Serve(t.Context(), nil) }()
+
+	requireForward(t, forwards, false, "for a PUBLISH nobody subscribed to")
+	sub := newCam1Subscriber(t, anchor)
+	requireForward(t, forwards, true, "when a subscriber came")
+	_ = sub.Close(0, "done")
+	time.Sleep(50 * time.Millisecond) // the relay sees the subscriber gone
+	close(release)
+	requireForward(t, forwards, false, "once the subscriber left mid-resume")
+}
+
 // TestRelay_UnwatchedPublishNotPausedByDefault: without
 // PauseUnwatchedPublishes, a PUBLISH nobody subscribes to flows on.
 func TestRelay_UnwatchedPublishNotPausedByDefault(t *testing.T) {

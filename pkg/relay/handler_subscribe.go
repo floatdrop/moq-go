@@ -330,9 +330,13 @@ func (h *sessionHandler) propagateNewGroupUpstream(
 }
 
 // propagateForwardUpstream sends REQUEST_UPDATE Forward=1 to each paused
-// upstream of fullName (§7.2), saving any LARGEST_OBJECT in the reply.
+// upstream of fullName (§7.2), saving any LARGEST_OBJECT in the reply. Not
+// bound to ctx (each round trip is bounded by [registry.UpstreamSub.Update]):
+// a downstream leaving mid round trip would leave the upstream recorded
+// paused after the publisher resumed, and never paused again
+// ([Config.PauseUnwatchedPublishes]).
 func (h *sessionHandler) propagateForwardUpstream(ctx context.Context, fullName track.FullTrackName) {
-	h.reconcileForwardUpstream(ctx, fullName, false)
+	h.reconcileForwardUpstream(context.WithoutCancel(ctx), fullName, false)
 }
 
 // pauseUnwatched schedules a pause of fullName's PUBLISH-fed upstreams after
