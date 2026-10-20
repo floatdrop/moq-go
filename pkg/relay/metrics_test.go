@@ -1,6 +1,7 @@
 package relay_test
 
 import (
+	"bytes"
 	"errors"
 	"maps"
 	"sync"
@@ -8,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"bytes"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/relay"
@@ -67,7 +67,12 @@ func (m *recordingMetrics) SubscriptionClosed(relay.TrackRef) { m.subsClosed.Add
 
 func (m *recordingMetrics) ObjectReceived(_ relay.TrackRef, o relay.ReceivedObject) {
 	m.mu.Lock()
-	m.lastReceived = relay.ReceivedObject{Name: o.Name, Subgroup: o.Subgroup, HeaderAt: o.HeaderAt, Properties: bytes.Clone(o.Properties)}
+	m.lastReceived = relay.ReceivedObject{
+		Name:       o.Name,
+		Subgroup:   o.Subgroup,
+		HeaderAt:   o.HeaderAt,
+		Properties: bytes.Clone(o.Properties),
+	}
 	m.mu.Unlock()
 	m.received.Add(1)
 }

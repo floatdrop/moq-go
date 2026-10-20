@@ -576,7 +576,15 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 		}
 
 		// Counted after the dedup claim, so redundant copies don't count.
-		h.metrics.ObjectReceived(ref, ReceivedObject{Name: entry.FullName, Subgroup: hdr.SubgroupID, HeaderAt: headerAt, Properties: obj.Properties})
+		h.metrics.ObjectReceived(
+			ref,
+			ReceivedObject{
+				Name:       entry.FullName,
+				Subgroup:   hdr.SubgroupID,
+				HeaderAt:   headerAt,
+				Properties: obj.Properties,
+			},
+		)
 
 		cached := &cache.CachedObject{
 			GroupID:           hdr.GroupID,

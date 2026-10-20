@@ -667,7 +667,7 @@ func (b *blockedSendStream) SetWriteDeadline(t time.Time) error {
 // a deadline that was not armed is a failure, not a hang.
 var errNeverArmed = errors.New("blockedSendStream: no write deadline was armed")
 
-func (b *blockedSendStream) Write(p []byte) (int, error) {
+func (b *blockedSendStream) Write([]byte) (int, error) {
 	b.mu.Lock()
 	deadline := b.deadline
 	b.mu.Unlock()
@@ -751,6 +751,7 @@ func TestObjectDeliveryTimeoutLiftsTheDeadline(t *testing.T) {
 // set on it and writes at once.
 type deadlineRecordingSendStream struct {
 	*fakeSendStream
+
 	deadlines []time.Time
 }
 
@@ -781,7 +782,10 @@ func BenchmarkWriteObjectWithDeadline(b *testing.B) {
 func TestObjectDeliveryTimeoutNoDeadlineWithoutTimeout(t *testing.T) {
 	dst := newFakeSendStream()
 	out := session.NewOutgoingSubgroupStream(dst)
-	if err := out.WriteObjectReceivedAt(time.Now().Add(-time.Hour), &message.SubgroupObject{Payload: []byte("x")}); err != nil {
+	if err := out.WriteObjectReceivedAt(
+		time.Now().Add(-time.Hour),
+		&message.SubgroupObject{Payload: []byte("x")},
+	); err != nil {
 		t.Fatalf("an hour-old object with no timeout should still be written: %v", err)
 	}
 }
