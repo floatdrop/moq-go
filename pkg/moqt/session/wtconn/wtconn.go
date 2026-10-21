@@ -85,7 +85,7 @@ func (c *conn) OpenUniStream() (session.SendStream, error) {
 		if isStreamLimit(err) {
 			return nil, session.ErrNoStreamCredit
 		}
-		return nil, err
+		return nil, peerClosed(err)
 	}
 	return wrapSendStream(s), nil
 }
@@ -93,7 +93,7 @@ func (c *conn) OpenUniStream() (session.SendStream, error) {
 func (c *conn) AcceptUniStream(ctx context.Context) (session.ReceiveStream, error) {
 	s, err := c.s.AcceptUniStream(ctx)
 	if err != nil {
-		return nil, err
+		return nil, peerClosed(err)
 	}
 	return &recvStream{s: s}, nil
 }
@@ -107,7 +107,7 @@ func (c *conn) OpenStream() (session.Stream, error) {
 		if isStreamLimit(err) {
 			return nil, session.ErrNoStreamCredit
 		}
-		return nil, err
+		return nil, peerClosed(err)
 	}
 	return &bidiStream{s: s}, nil
 }
@@ -115,7 +115,7 @@ func (c *conn) OpenStream() (session.Stream, error) {
 func (c *conn) AcceptStream(ctx context.Context) (session.Stream, error) {
 	s, err := c.s.AcceptStream(ctx)
 	if err != nil {
-		return nil, err
+		return nil, peerClosed(err)
 	}
 	return &bidiStream{s: s}, nil
 }
@@ -126,6 +126,19 @@ func (c *conn) CloseWithError(code uint64, reason string) error {
 }
 
 func (c *conn) Context() context.Context { return c.s.Context() }
+
+// CloseCause satisfies [session.CloseCauser]: once closed, a WebTransport
+// session answers an accept with its close error at once, the peer's
+// CLOSE_WEBTRANSPORT_SESSION with its code and reason among them.
+func (c *conn) CloseCause() error {
+	if c.s.Context().Err() == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := c.s.AcceptUniStream(ctx)
+	return peerClosed(err)
+}
 
 // TransportStats reports the figures of the QUIC connection under the
 // session, when the Conn knows it (see [NewOver], [ConnContext]). They are the
@@ -160,8 +173,11 @@ func (c *conn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 // as conn.
 type sendStream struct{ s *webtransport.SendStream }
 
-func (s *sendStream) Write(p []byte) (int, error) { return s.s.Write(p) }
-func (s *sendStream) Close() error                { return s.s.Close() }
+func (s *sendStream) Write(p []byte) (int, error) {
+	n, err := s.s.Write(p)
+	return n, peerClosed(err)
+}
+func (s *sendStream) Close() error { return s.s.Close() }
 func (s *sendStream) CancelWrite(code uint64) {
 	//nolint:gosec // G115: MoQT stream error codes fit uint32 (WebTransport's error-code width).
 	s.s.CancelWrite(webtransport.StreamErrorCode(code))
@@ -214,7 +230,10 @@ func (s *prioritizedSendStream) SetControlPriority() { s.p.SetPriority(0, true) 
 // recvStream wraps *webtransport.ReceiveStream.
 type recvStream struct{ s *webtransport.ReceiveStream }
 
-func (s *recvStream) Read(p []byte) (int, error) { return s.s.Read(p) }
+func (s *recvStream) Read(p []byte) (int, error) {
+	n, err := s.s.Read(p)
+	return n, peerClosed(err)
+}
 func (s *recvStream) CancelRead(code uint64) {
 	//nolint:gosec // G115: MoQT stream error codes fit uint32 (WebTransport's error-code width).
 	s.s.CancelRead(webtransport.StreamErrorCode(code))
@@ -223,9 +242,16 @@ func (s *recvStream) CancelRead(code uint64) {
 // bidiStream wraps *webtransport.Stream.
 type bidiStream struct{ s *webtransport.Stream }
 
-func (s *bidiStream) Read(p []byte) (int, error)  { return s.s.Read(p) }
-func (s *bidiStream) Write(p []byte) (int, error) { return s.s.Write(p) }
-func (s *bidiStream) Close() error                { return s.s.Close() }
+func (s *bidiStream) Read(p []byte) (int, error) {
+	n, err := s.s.Read(p)
+	return n, peerClosed(err)
+}
+
+func (s *bidiStream) Write(p []byte) (int, error) {
+	n, err := s.s.Write(p)
+	return n, peerClosed(err)
+}
+func (s *bidiStream) Close() error { return s.s.Close() }
 func (s *bidiStream) CancelRead(code uint64) {
 	//nolint:gosec // G115: MoQT stream error codes fit uint32 (WebTransport's error-code width).
 	s.s.CancelRead(webtransport.StreamErrorCode(code))
@@ -384,4 +410,14 @@ func (l *Listener) Addr() net.Addr { return l.addr }
 func (l *Listener) Close() error {
 	l.closeOnce.Do(func() { close(l.done) })
 	return nil
+}
+
+// peerClosed is err as the session reads it: a WebTransport session the
+// peer closed (its CLOSE_WEBTRANSPORT_SESSION, whose code is MoQT's session
+// error code) is a session.PeerClosedError, with its code and reason.
+func peerClosed(err error) error {
+	if se, ok := errors.AsType[*webtransport.SessionError](err); ok && se.Remote {
+		return &session.PeerClosedError{Code: uint64(se.ErrorCode), Reason: se.Message, Err: err}
+	}
+	return err
 }

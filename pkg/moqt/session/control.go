@@ -30,7 +30,7 @@ func (s *Session) controlSendLoop() {
 				if s.sessionDoneAlready() {
 					return
 				}
-				_ = s.Close(moqt.SessionInternalError, "control send failure")
+				s.closeOnControlLoss(err, moqt.SessionInternalError, "control send failure")
 				return
 			}
 		case <-s.done:
@@ -53,10 +53,10 @@ func (s *Session) controlRecvLoop() {
 				// Peer closed the control stream cleanly. §6.3 forbids
 				// this during the session lifetime; treat it as a
 				// protocol violation.
-				_ = s.Close(moqt.SessionProtocolViolation, "peer closed control stream")
+				s.closeOnControlLoss(err, moqt.SessionProtocolViolation, "peer closed control stream")
 				return
 			}
-			_ = s.Close(moqt.SessionProtocolViolation, err.Error())
+			s.closeOnControlLoss(err, moqt.SessionProtocolViolation, err.Error())
 			return
 		}
 		if err := s.dispatchControl(msg); err != nil {

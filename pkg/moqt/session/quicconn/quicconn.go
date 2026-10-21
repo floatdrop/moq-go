@@ -44,7 +44,7 @@ func (c *conn) OpenUniStream() (session.SendStream, error) {
 		if _, ok := errors.AsType[*quic.StreamLimitReachedError](err); ok {
 			return nil, session.ErrNoStreamCredit
 		}
-		return nil, err
+		return nil, peerClosed(err)
 	}
 	return &sendStream{s: s}, nil
 }
@@ -52,7 +52,7 @@ func (c *conn) OpenUniStream() (session.SendStream, error) {
 func (c *conn) AcceptUniStream(ctx context.Context) (session.ReceiveStream, error) {
 	s, err := c.q.AcceptUniStream(ctx)
 	if err != nil {
-		return nil, err
+		return nil, peerClosed(err)
 	}
 	return &recvStream{s: s}, nil
 }
@@ -67,7 +67,7 @@ func (c *conn) OpenStream() (session.Stream, error) {
 		if _, ok := errors.AsType[*quic.StreamLimitReachedError](err); ok {
 			return nil, session.ErrNoStreamCredit
 		}
-		return nil, err
+		return nil, peerClosed(err)
 	}
 	return &bidiStream{s: s}, nil
 }
@@ -75,7 +75,7 @@ func (c *conn) OpenStream() (session.Stream, error) {
 func (c *conn) AcceptStream(ctx context.Context) (session.Stream, error) {
 	s, err := c.q.AcceptStream(ctx)
 	if err != nil {
-		return nil, err
+		return nil, peerClosed(err)
 	}
 	return &bidiStream{s: s}, nil
 }
@@ -85,6 +85,16 @@ func (c *conn) CloseWithError(code uint64, reason string) error {
 }
 
 func (c *conn) Context() context.Context { return c.q.Context() }
+
+// CloseCause satisfies [session.CloseCauser]: quic-go cancels a
+// connection's Context with its close error, the peer's CONNECTION_CLOSE
+// with its code and reason among them.
+func (c *conn) CloseCause() error {
+	if c.q.Context().Err() == nil {
+		return nil
+	}
+	return peerClosed(context.Cause(c.q.Context()))
+}
 
 // TransportStats reports quic-go's figures for the connection.
 func (c *conn) TransportStats() (session.TransportStats, bool) {
@@ -120,8 +130,11 @@ func (c *conn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 // sendStream wraps *quic.SendStream. Named field for the same reason as conn.
 type sendStream struct{ s *quic.SendStream }
 
-func (s *sendStream) Write(p []byte) (int, error) { return s.s.Write(p) }
-func (s *sendStream) Close() error                { return s.s.Close() }
+func (s *sendStream) Write(p []byte) (int, error) {
+	n, err := s.s.Write(p)
+	return n, peerClosed(err)
+}
+func (s *sendStream) Close() error { return s.s.Close() }
 func (s *sendStream) CancelWrite(code uint64) {
 	s.s.CancelWrite(quic.StreamErrorCode(code))
 }
@@ -152,7 +165,10 @@ func (s *sendStream) SetWriteDeadline(t time.Time) error { return s.s.SetWriteDe
 // recvStream wraps *quic.ReceiveStream.
 type recvStream struct{ s *quic.ReceiveStream }
 
-func (s *recvStream) Read(p []byte) (int, error) { return s.s.Read(p) }
+func (s *recvStream) Read(p []byte) (int, error) {
+	n, err := s.s.Read(p)
+	return n, peerClosed(err)
+}
 func (s *recvStream) CancelRead(code uint64) {
 	s.s.CancelRead(quic.StreamErrorCode(code))
 }
@@ -160,9 +176,16 @@ func (s *recvStream) CancelRead(code uint64) {
 // bidiStream wraps *quic.Stream.
 type bidiStream struct{ s *quic.Stream }
 
-func (s *bidiStream) Read(p []byte) (int, error)  { return s.s.Read(p) }
-func (s *bidiStream) Write(p []byte) (int, error) { return s.s.Write(p) }
-func (s *bidiStream) Close() error                { return s.s.Close() }
+func (s *bidiStream) Read(p []byte) (int, error) {
+	n, err := s.s.Read(p)
+	return n, peerClosed(err)
+}
+
+func (s *bidiStream) Write(p []byte) (int, error) {
+	n, err := s.s.Write(p)
+	return n, peerClosed(err)
+}
+func (s *bidiStream) Close() error { return s.s.Close() }
 func (s *bidiStream) CancelRead(code uint64) {
 	s.s.CancelRead(quic.StreamErrorCode(code))
 }
@@ -214,3 +237,13 @@ func (l *Listener) Addr() net.Addr { return l.ql.Addr() }
 // Close closes the underlying *quic.Listener. Subsequent Accept calls
 // unblock with the quic-go close error.
 func (l *Listener) Close() error { return l.ql.Close() }
+
+// peerClosed is err as the session reads it: a connection the peer closed
+// (its CONNECTION_CLOSE with an application error, MoQT's session error
+// code on raw QUIC) is a session.PeerClosedError, with its code and reason.
+func peerClosed(err error) error {
+	if ae, ok := errors.AsType[*quic.ApplicationError](err); ok && ae.Remote {
+		return &session.PeerClosedError{Code: uint64(ae.ErrorCode), Reason: ae.ErrorMessage, Err: err}
+	}
+	return err
+}

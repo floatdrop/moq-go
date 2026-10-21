@@ -3,6 +3,7 @@ package quicconn_test
 import (
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"io"
 	"sync"
 	"testing"
@@ -336,4 +337,46 @@ func TestConnConformance(t *testing.T) {
 	conntest.RunSuite(t, conntest.Suite{
 		NewPair: newLoopbackConnsWithLimit,
 	})
+}
+
+// TestPeerCloseReportsItsCode: a session the peer closes ends with the
+// peer's code and reason, marked Remote, however its streams learnt of it:
+// a clean close (NO_ERROR, as a page leaving) as well as an error's, not a
+// PROTOCOL_VIOLATION of this side's for its control stream gone.
+func TestPeerCloseReportsItsCode(t *testing.T) {
+	for _, c := range []struct {
+		code   moqt.SessionErrorCode
+		reason string
+	}{
+		{moqt.SessionNoError, "page closed"},
+		{moqt.SessionUnauthorized, "token expired"},
+	} {
+		t.Run(c.reason, func(t *testing.T) {
+			ctx := t.Context()
+			clientConn, serverConn := newLoopbackConns(t)
+			var (
+				wg                     sync.WaitGroup
+				clientSess, serverSess *session.Session
+				clientErr, serverErr   error
+			)
+			wg.Go(func() { serverSess, serverErr = session.Server(ctx, serverConn) })
+			wg.Go(func() { clientSess, clientErr = session.Client(ctx, clientConn) })
+			wg.Wait()
+			if clientErr != nil || serverErr != nil {
+				t.Fatalf("open: %v %v", clientErr, serverErr)
+			}
+			t.Cleanup(func() { _ = serverSess.Close(moqt.SessionNoError, "test cleanup") })
+
+			_ = clientSess.Close(c.code, c.reason)
+			select {
+			case <-serverSess.Done():
+			case <-time.After(5 * time.Second):
+				t.Fatal("the server's session did not end when the peer closed it")
+			}
+			ce, ok := errors.AsType[*session.ClosedError](serverSess.Err())
+			if !ok || !ce.Remote || ce.Code != c.code || ce.Reason != c.reason {
+				t.Fatalf("server's Err() = %v, want the peer's close, code %#x, reason %q", serverSess.Err(), uint64(c.code), c.reason)
+			}
+		})
+	}
 }
