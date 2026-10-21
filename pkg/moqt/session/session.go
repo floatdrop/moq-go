@@ -373,6 +373,11 @@ func (s *Session) AllocRequestID() uint64 {
 // Done returns a channel that is closed when the session has terminated.
 func (s *Session) Done() <-chan struct{} { return s.done }
 
+// Conn returns the connection the session runs on, as given to [Client] or
+// [Server]: an application that wraps its listener's connections finds its
+// own wrapper again, to tie what it knows of a session to its transport.
+func (s *Session) Conn() Conn { return s.conn }
+
 // Err returns the close cause — a *ClosedError carrying the §12.2
 // error code and reason of the first Close call — or nil when the session
 // was closed cleanly (SessionNoError) or is still open. The value is
