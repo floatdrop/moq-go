@@ -612,3 +612,21 @@ func TestPeerCloseReportsItsCode(t *testing.T) {
 		})
 	}
 }
+
+// TestSendStreamsArePrioritized: with the webtransport-go fork go.mod pins,
+// a WebTransport send stream takes the §5.1.2 priority and the control
+// stream's "prioritized highest". Over upstream v0.13, which has no
+// per-stream priority, it would silently be neither.
+func TestSendStreamsArePrioritized(t *testing.T) {
+	client, _ := newLoopbackConns(t)
+	send, err := client.OpenUniStream()
+	if err != nil {
+		t.Fatalf("OpenUniStream: %v", err)
+	}
+	if _, ok := send.(session.PrioritizedSendStream); !ok {
+		t.Errorf("%T is not a session.PrioritizedSendStream", send)
+	}
+	if _, ok := send.(session.ControlSendStream); !ok {
+		t.Errorf("%T is not a session.ControlSendStream", send)
+	}
+}

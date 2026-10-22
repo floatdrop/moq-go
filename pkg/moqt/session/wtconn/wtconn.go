@@ -195,7 +195,9 @@ func (s *sendStream) SetWriteDeadline(t time.Time) error { return s.s.SetWriteDe
 
 // prioritizer is SetPriority as the fork of webtransport-go at
 // github.com/floatdrop/webtransport-go has it on its streams (quic-go's RFC
-// 9218 urgency and incremental); upstream v0.13 has not.
+// 9218 urgency and incremental); upstream v0.13 has not. This module's go.mod
+// replaces upstream with the fork; an importer that does not gets the plain
+// sendStream.
 type prioritizer interface {
 	SetPriority(urgency int8, incremental bool)
 }

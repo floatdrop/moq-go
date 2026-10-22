@@ -20,3 +20,9 @@ require (
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )
+
+// The fork: stream priority (SendStream.SetPriority), and a peer's
+// WT_CLOSE_SESSION kept when a capsule write fails on its STOP_SENDING.
+// Drop it once upstream ships both; until then a bump of the require above
+// changes nothing that builds.
+replace github.com/quic-go/webtransport-go => github.com/floatdrop/webtransport-go v0.0.0-20261022053507-e6ca2fb17990

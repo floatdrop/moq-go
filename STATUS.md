@@ -113,7 +113,7 @@ By package, bottom-up along the dependency stack:
 | §     | Feature                    | Status  | Notes |
 |-------|----------------------------|---------|-------|
 | 5.1.1 | Priority definitions       | DONE    | Subscriber/publisher priority + group order modeled. |
-| 5.1.2 | Scheduling algorithm       | PARTIAL | `EffectiveStreamPriority` builds the composite `session.StreamPriority` (subscriber→publisher→group-order key→subgroup); FETCH ordering is group-order + Object-ID per §3.2.1. The fill-vs-subscription ordering of rules 3 and 4 (a subscription-delivered object first when the fill's Group Order differs; the fill-delivered one first within a group) is not implemented: fill streams carry no priority input. The datagram-wins tie-break (rule 4) holds by construction: datagrams bypass this priority key entirely and are sent as soon as ready, never queued behind a subgroup stream's priority. Transport knob is currently a no-op (quic-go exposes no per-stream priority API — [quic-go#437](https://github.com/quic-go/quic-go/issues/437)), so the order is computed and pushed through `session.PrioritizedSendStream` (propagation is test-covered) but not yet enforced on the wire. |
+| 5.1.2 | Scheduling algorithm       | PARTIAL | `EffectiveStreamPriority` builds the composite `session.StreamPriority` (subscriber→publisher→group-order key→subgroup); FETCH ordering is group-order + Object-ID per §3.2.1. The fill-vs-subscription ordering of rules 3 and 4 (a subscription-delivered object first when the fill's Group Order differs; the fill-delivered one first within a group) is not implemented: fill streams carry no priority input. The datagram-wins tie-break (rule 4) holds by construction: datagrams bypass this priority key entirely and are sent as soon as ready, never queued behind a subgroup stream's priority. On the wire the order is enforced coarsely: `session.Urgency` projects the Subscriber byte (rule 1) onto RFC 9218 urgency 1–7, control streams take urgency 0, and the finer rules are left to the transport's round robin within an urgency. Both bundled adapters apply it — quicconn through quic-go's `SetPriority`, wtconn through the webtransport-go fork go.mod replaces upstream with; an importer of `pkg/` on upstream webtransport-go v0.13 gets unprioritized WebTransport streams. |
 | 5.1.3 | Considerations for setting | DONE    | Relay honours subscriber/publisher priority on fanout. |
 | 5.2   | Delivery timeouts / reliability| PARTIAL| OBJECT_DELIVERY_TIMEOUT enforced on subgroup streams in `session/datastream_out.go`; SUBGROUP_DELIVERY_TIMEOUT only where the transport reports acknowledgement (`session.DeliveryTrackingSendStream`), which no bundled adapter does, so not on quic-go or WebTransport; reset w/ `StreamResetDeliveryTimeout`. Datagrams are never dropped for either timeout (§5.2 "MUST drop the datagrams"). See Limitations. OBJECT_DELIVERY_TIMEOUT is measured per object from its last header byte (`WriteObjectReceivedAt`), not from stream open. `WithDeliveryTimeouts` takes the publisher's and subscriber's halves separately so the §10.1/§10.2 first-object override resolves within the publisher's half before `DeliveryTimeouts.Effective` takes the smaller of the two. The relay sources both sides — the publisher's Track Properties (decoded once onto the entry) and the subscriber's SUBSCRIBE parameters (§9.20.3/§9.20.4) — and passes them to every subgroup stream it opens downstream (a replay stream, which starts past the Subgroup's first Object, gets that Object's override from the fanout), resetting that stream alone with DELIVERY_TIMEOUT while the subscription continues. Not enforced on the raw `Write` path (no object boundaries) or inbound — see Limitations. |
 
@@ -370,13 +370,15 @@ Known protocol gaps, roughly ordered by how load-bearing they are:
   and the publisher's registration last when the interval is 0. A *remote relay* that Discovery
   starts resolving later is not pulled in until the set drains and a fresh
   SUBSCRIBE re-establishes it.
-- **Subscriber-priority scheduling (§5.1.2 / §9.20.7)** — fully plumbed but not
-  enforced on the wire: the §5.1.2 composite key is computed
-  (`EffectiveStreamPriority`) and pushed through `session.PrioritizedSendStream`,
-  but quic-go and webtransport-go expose no per-stream priority API today
-  ([quic-go#437](https://github.com/quic-go/quic-go/issues/437)), so the bundled
-  adapters absorb the knob and quic-go round-robins instead. A REQUEST_UPDATE
-  that changes priority mid-stream applies only to subsequently opened subgroups.
+- **Subscriber-priority scheduling (§5.1.2 / §9.20.7)** — enforced only
+  coarsely on the wire: the §5.1.2 composite key is computed
+  (`EffectiveStreamPriority`), but `session.Urgency` hands the transport only its
+  Subscriber byte, as RFC 9218 urgency 1–7, and the finer rules fall to round
+  robin within an urgency. WebTransport streams are prioritized only with the
+  webtransport-go fork go.mod replaces upstream with: an importer of `pkg/` on
+  upstream v0.13, which has no per-stream priority API, does not inherit the
+  replace and gets unprioritized streams. A REQUEST_UPDATE that changes priority
+  mid-stream applies only to subsequently opened subgroups.
 - **LOC encryption / SecureObjects and Private Properties** — intentionally out
   of scope pending a chosen SecureObjects revision. The property IDs are
   those draft-ietf-moq-loc-04 requests from IANA (§6.1), e.g. `PropAudioLevel =
