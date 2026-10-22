@@ -31,7 +31,8 @@ func (e *PeerClosedError) Unwrap() error { return e.Err }
 // else with code and reason, this side's.
 func (s *Session) closeOnTransport(err error, code moqt.SessionErrorCode, reason string) {
 	if pc, ok := errors.AsType[*PeerClosedError](err); ok {
-		s.terminate(&ClosedError{Code: moqt.SessionErrorCode(pc.Code), Reason: pc.Reason, Remote: true}, pc.Code, pc.Reason)
+		cause := &ClosedError{Code: moqt.SessionErrorCode(pc.Code), Reason: pc.Reason, Remote: true}
+		_ = s.terminate(cause, pc.Code, pc.Reason)
 		return
 	}
 	_ = s.Close(code, reason)

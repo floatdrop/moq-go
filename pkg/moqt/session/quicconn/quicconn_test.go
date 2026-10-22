@@ -375,7 +375,10 @@ func TestPeerCloseReportsItsCode(t *testing.T) {
 			}
 			ce, ok := errors.AsType[*session.ClosedError](serverSess.Err())
 			if !ok || !ce.Remote || ce.Code != c.code || ce.Reason != c.reason {
-				t.Fatalf("server's Err() = %v, want the peer's close, code %#x, reason %q", serverSess.Err(), uint64(c.code), c.reason)
+				t.Fatalf(
+					"server's Err() = %v, want the peer's close, code %#x, reason %q",
+					serverSess.Err(), uint64(c.code), c.reason,
+				)
 			}
 		})
 	}

@@ -30,7 +30,9 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session/quicconn"
 )
 
-// New wraps s so it satisfies session.Conn.
+// New wraps s so it satisfies session.Conn. Wrap a session a
+// [webtransport.Transport] dials with [Dial] instead: Transport.Dial closes the
+// QUIC connection under it ahead of its close's code and reason reaching the peer.
 func New(s *webtransport.Session) session.Conn { return &conn{s: s} }
 
 // NewOver wraps s, which runs over q: knowing q, the Conn reports its

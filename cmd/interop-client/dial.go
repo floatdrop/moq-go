@@ -91,11 +91,11 @@ func (h *harness) dialWebTransport(ctx context.Context, u *url.URL) (*session.Se
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: h.insecure, NextProtos: []string{http3.NextProtoH3}},
 		QUICConfig:      quicConfig(),
 	}
-	_, wtSess, err := d.Dial(ctx, u.String(), nil)
+	conn, err := wtconn.Dial(ctx, &d, u.String())
 	if err != nil {
 		return nil, fmt.Errorf("dial webtransport %s: %w", u.String(), err)
 	}
-	sess, err := session.Client(ctx, wtconn.New(wtSess), session.WithImplementation("moq-interop-client/0.1"))
+	sess, err := session.Client(ctx, conn, session.WithImplementation("moq-interop-client/0.1"))
 	if err != nil {
 		return nil, fmt.Errorf("moqt handshake: %w", err)
 	}

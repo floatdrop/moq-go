@@ -108,7 +108,7 @@ func newLoopbackConnsWithConfig(t *testing.T, cfg *webtransport.Config) (client,
 	if cfg != nil {
 		dialer.Config = &webtransport.Config{MaxIncomingStreams: 100, MaxIncomingUniStreams: 100}
 	}
-	_, clientSession, err := dialer.Dial(ctx, fmt.Sprintf("https://%s/moqt", addr), nil)
+	client, err = wtconn.Dial(ctx, &dialer, fmt.Sprintf("https://%s/moqt", addr))
 	if err != nil {
 		t.Fatalf("client Dial: %v", err)
 	}
@@ -121,7 +121,6 @@ func newLoopbackConnsWithConfig(t *testing.T, cfg *webtransport.Config) (client,
 		t.Fatal("timed out waiting for server session")
 	}
 
-	client = wtconn.New(clientSession)
 	server = wtconn.New(serverSession)
 	t.Cleanup(func() {
 		_ = client.CloseWithError(0, "test cleanup")
@@ -605,7 +604,10 @@ func TestPeerCloseReportsItsCode(t *testing.T) {
 			}
 			ce, ok := errors.AsType[*session.ClosedError](serverSess.Err())
 			if !ok || !ce.Remote || ce.Code != c.code || ce.Reason != c.reason {
-				t.Fatalf("server's Err() = %v, want the peer's close, code %#x, reason %q", serverSess.Err(), uint64(c.code), c.reason)
+				t.Fatalf(
+					"server's Err() = %v, want the peer's close, code %#x, reason %q",
+					serverSess.Err(), uint64(c.code), c.reason,
+				)
 			}
 		})
 	}

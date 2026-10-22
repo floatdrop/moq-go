@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"fmt"
 
-	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 
@@ -52,22 +51,11 @@ func DialWebTransport(ctx context.Context, rawURL string, tlsCfg *tls.Config, op
 		// from this list and rejects a selection it did not offer.
 		ApplicationProtocols: MOQTQUICALPNs,
 	}
-	// The extended-CONNECT response body is the stream the WebTransport session
-	// rides on, so it must NOT be closed here: doing so would tear down the very
-	// session being returned. Its lifetime belongs to the returned conn.
-	// The QUIC connection under the session, so that the Conn can report its
-	// figures (session.TransportStats): webtransport-go does not expose it.
-	// quic.DialAddrEarly is what Transport dials with when DialAddr is unset.
-	var under *quic.Conn
-	d.DialAddr = func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {
-		q, err := quic.DialAddrEarly(ctx, addr, tlsCfg, cfg)
-		under = q
-		return q, err
-	}
-	//nolint:bodyclose // response body is the session stream; owned by wtSess.
-	_, wtSess, err := d.Dial(ctx, rawURL, nil)
+	// wtconn.Dial, not d.Dial: d.Dial closes the QUIC connection the moment the
+	// session closes, ahead of its close's code and reason reaching the peer (§6.6).
+	conn, err := wtconn.Dial(ctx, &d, rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("relaynet: dial webtransport %s: %w", rawURL, err)
 	}
-	return wtconn.NewOver(wtSess, under), nil
+	return conn, nil
 }
