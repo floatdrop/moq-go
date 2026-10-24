@@ -2,6 +2,7 @@ package wtconn_test
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 
@@ -628,5 +630,33 @@ func TestSendStreamsArePrioritized(t *testing.T) {
 	}
 	if _, ok := send.(session.ControlSendStream); !ok {
 		t.Errorf("%T is not a session.ControlSendStream", send)
+	}
+}
+
+// TestDialDefaultsToPort443: an https URL without a port, such as the §6.2.1
+// conversion of moqt://cdn.moq.dev/anon, dials port 443, https's default
+// (RFC 9110 §4.2.2). The URL's host alone is no dial address: the interop
+// runner's https://cdn.moq.dev/anon failed with "missing port in address".
+func TestDialDefaultsToPort443(t *testing.T) {
+	t.Parallel()
+	errStop := errors.New("dialed")
+	for _, c := range []struct{ url, want string }{
+		{"https://relay.example/anon", "relay.example:443"},
+		{"https://[2001:db8::1]/moq", "[2001:db8::1]:443"},
+		{"https://relay.example:4443/moq", "relay.example:4443"},
+	} {
+		var got string
+		d := &webtransport.Transport{
+			DialAddr: func(_ context.Context, addr string, _ *tls.Config, _ *quic.Config) (*quic.Conn, error) {
+				got = addr
+				return nil, errStop
+			},
+		}
+		if _, err := wtconn.Dial(t.Context(), d, c.url); !errors.Is(err, errStop) {
+			t.Fatalf("Dial(%q) = %v, want the dial hook's error", c.url, err)
+		}
+		if got != c.want {
+			t.Errorf("Dial(%q) dialed %q, want %q", c.url, got, c.want)
+		}
 	}
 }

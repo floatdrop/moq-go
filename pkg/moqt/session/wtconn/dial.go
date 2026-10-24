@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"net"
 	"net/url"
 	"time"
 
@@ -29,7 +30,8 @@ const closeLinger = time.Second
 // code and reason, which [session.PeerClosedError] carries. Dial instead
 // closes the connection closeLinger after the session, or once the peer has.
 //
-// d's fields mean what they do for d.Dial, defaults included.
+// d's fields mean what they do for d.Dial, defaults included. Unlike d.Dial,
+// Dial dials port 443 for a URL that names no port.
 func Dial(ctx context.Context, d *webtransport.Transport, rawURL string) (session.Conn, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -61,8 +63,14 @@ func Dial(ctx context.Context, d *webtransport.Transport, rawURL string) (sessio
 	if dialAddr == nil {
 		dialAddr = quic.DialAddrEarly
 	}
+	// An https URL without a port names https's default, 443 (RFC 9110
+	// §4.2.2); the dial address has to spell it out. d.Dial dials u.Host as is.
+	host := u.Host
+	if u.Port() == "" {
+		host = net.JoinHostPort(u.Hostname(), "443")
+	}
 
-	q, err := dialAddr(ctx, u.Host, tlsCfg, quicCfg)
+	q, err := dialAddr(ctx, host, tlsCfg, quicCfg)
 	if err != nil {
 		return nil, err
 	}
