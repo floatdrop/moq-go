@@ -105,6 +105,12 @@ func (h *harness) webTransport() *webtransport.Transport {
 		// its header, leaving a subscriber to time out the subscription
 		// state it cannot match it to (§11.3.2).
 		AllowMissingStreamResetPartialDelivery: true,
+		// Deliberately outside §6.2.1's [WebTransport] (draft-ietf-webtrans-
+		// http3-16, §3.1, §3.2), for relays built on draft-14 or earlier:
+		// moxygen, cdn.moq.dev and stitcher-moq reject the later handshake,
+		// and moqtail enables WebTransport only with earlier settings. Every
+		// relay probed accepts this handshake, this repository's included.
+		LegacyHandshake: true,
 	}
 }
 

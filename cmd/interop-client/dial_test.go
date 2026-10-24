@@ -109,3 +109,49 @@ func TestWebTransportReachesServersWithoutResetStreamAt(t *testing.T) {
 	}
 	_ = conn.CloseWithError(0, "")
 }
+
+// TestWebTransportReachesServersOfEarlierDrafts: the interop client reaches a
+// WebTransport server that predates draft-ietf-webtrans-http3-15. Such a
+// server enables WebTransport with an earlier setting and accepts only the
+// "webtransport" :protocol from a client advertising
+// SETTINGS_ENABLE_WEBTRANSPORT: moxygen answered the draft-15 CONNECT with 400,
+// moqtail's settings were refused ("server didn't enable WebTransport"), and
+// cdn.moq.dev and stitcher-moq closed the connection.
+func TestWebTransportReachesServersOfEarlierDrafts(t *testing.T) {
+	cert, err := relaynet.SelfSignedCert()
+	if err != nil {
+		t.Fatalf("SelfSignedCert: %v", err)
+	}
+	ln, err := quic.ListenAddr("127.0.0.1:0",
+		&tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{http3.NextProtoH3}},
+		&quic.Config{EnableDatagrams: true, EnableStreamResetPartialDelivery: true})
+	if err != nil {
+		t.Fatalf("ListenAddr: %v", err)
+	}
+	const enableWebTransport = 0x2b603742 // SETTINGS_ENABLE_WEBTRANSPORT, up to draft-06
+	h3 := &http3.Server{
+		EnableDatagrams:    true,
+		AdditionalSettings: map[uint64]uint64{enableWebTransport: 1},
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			settings := w.(http3.Settingser)
+			<-settings.ReceivedSettings()
+			if r.Proto != "webtransport" || settings.Settings().Other[enableWebTransport] == 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+		}),
+	}
+	go func() { _ = h3.ServeListener(ln) }()
+	t.Cleanup(func() { _ = h3.Close() })
+
+	rawURL := "https://" + ln.Addr().String() + "/"
+	h := &harness{relayURL: rawURL, insecure: true}
+	conn, err := wtconn.Dial(t.Context(), h.webTransport(), rawURL)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	_ = conn.CloseWithError(0, "")
+}

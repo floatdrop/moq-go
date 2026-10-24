@@ -23,9 +23,10 @@ require (
 
 // The fork: stream priority (SendStream.SetPriority), a peer's
 // WT_CLOSE_SESSION kept when a capsule write fails on its STOP_SENDING, and
-// Transport.AllowMissingStreamResetPartialDelivery, which the interop client
-// sets to reach relays without RESET_STREAM_AT. Upstream is unlikely to take
-// the last, which relaxes a MUST of draft-ietf-webtrans-http3: dropping the
-// fork once upstream ships the first two would also drop those relays. Until
-// then a bump of the require above changes nothing that builds.
-replace github.com/quic-go/webtransport-go => github.com/floatdrop/webtransport-go v0.0.0-20261024155318-52ded690dcb5
+// Transport.AllowMissingStreamResetPartialDelivery and LegacyHandshake, which
+// the interop client sets to reach relays without RESET_STREAM_AT or built on
+// draft-ietf-webtrans-http3-14 and earlier. Upstream is unlikely to take the
+// last two, which relax MUSTs of draft-ietf-webtrans-http3: dropping the fork
+// once upstream ships the first two would also drop those relays. Until then
+// a bump of the require above changes nothing that builds.
+replace github.com/quic-go/webtransport-go => github.com/floatdrop/webtransport-go v0.0.0-20261024172812-f0b987390509
