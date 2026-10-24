@@ -634,6 +634,8 @@ func readRequestStream(
 				done <- false
 				return
 			}
+			// No read follows a false onMsg: one that rejected the request
+			// handed the stream's reads to RejectError's drain.
 			if !onMsg(m) {
 				done <- false
 				return

@@ -67,6 +67,8 @@ func (h *sessionHandler) publishNamespaceUpdate(
 ) func(context.Context, *message.RequestUpdate, []session.ResolvedToken) bool {
 	return func(ctx context.Context, _ *message.RequestUpdate, toks []session.ResolvedToken) bool {
 		if rej := h.refuseUpdateTokens(ctx, toks); rej != nil {
+			// RejectError reads the stream from here on; returning false
+			// stops readRequestStream's reads.
 			_ = req.RejectError(rej.ErrorCode, rej.ErrorReason)
 			return false
 		}

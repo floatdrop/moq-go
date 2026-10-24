@@ -224,6 +224,8 @@ func (h *sessionHandler) handleFetchUpdate(
 	toks []session.ResolvedToken,
 ) bool {
 	if rej := h.refuseUpdateTokens(ctx, toks); rej != nil {
+		// RejectError reads the stream from here on; returning false stops
+		// readRequestStream's reads.
 		_ = req.RejectError(rej.ErrorCode, rej.ErrorReason)
 		// §9.5.1: "When a REQUEST_UPDATE fails for a FETCH, the publisher
 		// MUST reset the FETCH data stream." It was FINed already, so this
