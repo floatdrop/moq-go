@@ -2,6 +2,7 @@ package session_test
 
 import (
 	"errors"
+	"io"
 	"math"
 	"testing"
 	"time"
@@ -170,5 +171,50 @@ func TestRejectError_ResetsTheStreamWhenTheErrorCannotBeSent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Subscribe is still waiting: RejectError left the request stream open " +
 			"after failing to write the REQUEST_ERROR, so the peer can never learn the request failed")
+	}
+}
+
+// TestRejectLeavesTheRequesterSendSideOpen: a rejection is a REQUEST_ERROR
+// and a FIN (§6.4.2.3: "it SHOULD send a REQUEST_ERROR and FIN the stream"),
+// not a cancellation, so no STOP_SENDING ends the requester's side; the
+// requester FINs it once it has read the response (§6.4.2.2). A STOP_SENDING
+// is how a request is cancelled (§6.4.2.3), and imquic takes it so: it drops
+// the stream with the REQUEST_ERROR unread, and its SUBSCRIBE timed out.
+func TestRejectLeavesTheRequesterSendSideOpen(t *testing.T) {
+	t.Parallel()
+	_, server, cliConn, _ := openPairWithConns(t)
+
+	rejected := make(chan error, 1)
+	go func() {
+		r, err := server.AcceptRequest(t.Context())
+		if err != nil {
+			rejected <- err
+			return
+		}
+		rejected <- r.RejectError(moqt.RequestDoesNotExist, "no")
+	}()
+
+	stream, err := cliConn.OpenStream()
+	if err != nil {
+		t.Fatalf("OpenStream: %v", err)
+	}
+	if err := message.Marshal(stream, &message.Subscribe{RequestID: 0, Name: []byte("t")}); err != nil {
+		t.Fatalf("write SUBSCRIBE: %v", err)
+	}
+	m, err := message.Parse(stream)
+	if _, ok := m.(*message.RequestError); !ok {
+		t.Fatalf("response = %T, %v; want REQUEST_ERROR", m, err)
+	}
+	if _, err := stream.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("read after REQUEST_ERROR = %v, want the FIN", err)
+	}
+	if err := <-rejected; err != nil {
+		t.Fatalf("RejectError: %v", err)
+	}
+	if err := stream.Context().Err(); err != nil {
+		t.Fatalf("the requester's send side ended (%v): the rejection sent STOP_SENDING", err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatalf("requester FIN: %v", err)
 	}
 }

@@ -133,7 +133,7 @@ By package, bottom-up along the dependency stack:
 | 6.4.1   | Unidirectional stream types          | DONE   | SUBGROUP / FETCH / PADDING / SETUP type IDs dispatched. |
 | 6.4.2.1 | Request ID                           | DONE   | Enforced in `AcceptRequest` and on REQUEST_UPDATE: per-role parity, and duplicate detection that tolerates reordering. |
 | 6.4.2.2 | Graceful request stream closure      | DONE   | A FIN is not a cancel: the relay keeps a FIN'd request alive until the peer cancels, and FINs back to complete a finished FETCH. |
-| 6.4.2.3 | Request cancellation / rejection     | DONE   | STOP_SENDING, stream resets, REQUEST_ERROR in `request.go`; `Close()` on request handles cancels. |
+| 6.4.2.3 | Request cancellation / rejection     | DONE   | STOP_SENDING, stream resets, REQUEST_ERROR in `request.go`; `Close()` on request handles cancels. A rejection is REQUEST_ERROR + FIN with no STOP_SENDING; the requester's side is read to its FIN. |
 | 6.5     | Session-level tracks/namespaces      | DONE   | `.session` requests are rejected with DOES_NOT_EXIST before the application/relay sees them (no session-level extensions implemented), so relays never forward them; covers the empty-track-name rule. |
 | 6.6     | Termination                          | DONE   | `Close()` sends CONNECTION_CLOSE w/ reason; codes in §12.2 below. |
 | 6.6.1   | Graceful session migration (GOAWAY)  | DONE   | `SendGoaway`/`OnGoaway`/`PeerGoaway`, new-session URI. |

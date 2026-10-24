@@ -12,6 +12,7 @@ import (
 	"github.com/quic-go/quic-go"
 
 	"github.com/floatdrop/moq-go/pkg/moqt"
+	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/internal/conntest"
 	"github.com/floatdrop/moq-go/pkg/moqt/session/quicconn"
@@ -381,5 +382,77 @@ func TestPeerCloseReportsItsCode(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+// TestRejectedRequestsReturnTheirStreamCredit: a rejected request's stream
+// stops counting against the requester's bidi stream limit once the
+// requester FINs it (§6.4.2.2). quic-go frees a stream, and grants its credit
+// back with MAX_STREAMS, only once both directions are done, and a rejection
+// does not stop reading (§6.4.2.3), so the responder has to read the
+// requester's side to its FIN. A responder that left it unread would exhaust
+// the requester's limit a few rejections in.
+func TestRejectedRequestsReturnTheirStreamCredit(t *testing.T) {
+	const limit = 2
+	ctx := t.Context()
+	clientConn, serverConn := newLoopbackConnsWithLimit(t, limit)
+	var (
+		wg                     sync.WaitGroup
+		clientSess, serverSess *session.Session
+		clientErr, serverErr   error
+	)
+	wg.Go(func() { serverSess, serverErr = session.Server(ctx, serverConn) })
+	wg.Go(func() { clientSess, clientErr = session.Client(ctx, clientConn) })
+	wg.Wait()
+	if clientErr != nil || serverErr != nil {
+		t.Fatalf("open: %v %v", clientErr, serverErr)
+	}
+	t.Cleanup(func() {
+		_ = clientSess.Close(moqt.SessionNoError, "test cleanup")
+		_ = serverSess.Close(moqt.SessionNoError, "test cleanup")
+	})
+	go func() {
+		for {
+			r, err := serverSess.AcceptRequest(ctx)
+			if err != nil {
+				return
+			}
+			_ = r.RejectError(moqt.RequestDoesNotExist, "no")
+		}
+	}()
+
+	// Raw streams on the client's conn: its session opens no bidi stream.
+	for i := range 3 * limit {
+		var (
+			stream session.Stream
+			err    error
+		)
+		for deadline := time.Now().Add(2 * time.Second); ; {
+			if stream, err = clientConn.OpenStream(); !errors.Is(err, session.ErrNoStreamCredit) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("request %d: no stream credit within 2s: rejected requests kept theirs", i)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatalf("request %d: OpenStream: %v", i, err)
+		}
+		// Client Request IDs are even and increasing (§6.4.2.1).
+		if err := message.Marshal(stream, &message.Subscribe{RequestID: uint64(2 * i), Name: []byte("t")}); err != nil {
+			t.Fatalf("request %d: write SUBSCRIBE: %v", i, err)
+		}
+		if m, err := message.Parse(stream); err != nil {
+			t.Fatalf("request %d: read response: %v", i, err)
+		} else if _, ok := m.(*message.RequestError); !ok {
+			t.Fatalf("request %d: response %T, want REQUEST_ERROR", i, m)
+		}
+		if _, err := io.ReadAll(stream); err != nil {
+			t.Fatalf("request %d: read to the FIN: %v", i, err)
+		}
+		if err := stream.Close(); err != nil {
+			t.Fatalf("request %d: FIN: %v", i, err)
+		}
 	}
 }

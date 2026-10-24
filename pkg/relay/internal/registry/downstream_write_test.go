@@ -3,6 +3,7 @@ package registry_test
 import (
 	"bytes"
 	"errors"
+	"io"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -55,15 +56,24 @@ func TestDownstreamSub_WritesSerialized(t *testing.T) {
 }
 
 // recordingStream buffers every write for decoding; closed signals Close,
-// which ends the termination's answer (written on its own goroutine).
+// which ends the termination's answer (written on its own goroutine). Its
+// reads find the requester's FIN at once.
 type recordingStream struct {
 	stubStream
 
 	mu        sync.Mutex
 	buf       []byte
 	readCodes []uint64 // each CancelRead's code
+	readToFIN bool     // a Read reached the FIN
 	closeOnce sync.Once
 	closed    chan struct{}
+}
+
+func (s *recordingStream) Read([]byte) (int, error) {
+	s.mu.Lock()
+	s.readToFIN = true
+	s.mu.Unlock()
+	return 0, io.EOF
 }
 
 func (s *recordingStream) CancelRead(code uint64) {
@@ -165,12 +175,22 @@ func TestDownstreamSub_TerminateBeforeOKAnswersWithRequestError(t *testing.T) {
 	if re.ErrorCode != moqt.RequestDoesNotExist {
 		t.Errorf("REQUEST_ERROR code = 0x%X, want DOES_NOT_EXIST", uint64(re.ErrorCode))
 	}
-	// §12.5: the request ended by REQUEST_ERROR is cancelled, not failed.
-	stream.mu.Lock()
-	codes := stream.readCodes
-	stream.mu.Unlock()
-	if want := []uint64{uint64(moqt.StreamResetCancelled)}; !slices.Equal(codes, want) {
-		t.Errorf("STOP_SENDING codes = %v, want %v (CANCELLED)", codes, want)
+	// §6.4.2.3: a rejection is REQUEST_ERROR and a FIN; a STOP_SENDING would
+	// cancel the request instead. The requester's side is read to its FIN, so
+	// the stream is freed.
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(time.Millisecond) {
+		stream.mu.Lock()
+		codes, drained := slices.Clone(stream.readCodes), stream.readToFIN
+		stream.mu.Unlock()
+		if len(codes) > 0 {
+			t.Fatalf("STOP_SENDING codes = %v, want none", codes)
+		}
+		if drained {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the requester's side was never read to its FIN")
+		}
 	}
 }
 

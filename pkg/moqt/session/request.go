@@ -922,8 +922,10 @@ func (r *Request) Reply(msg message.Message) error {
 	return nil
 }
 
-// RejectError writes a REQUEST_ERROR with Retry Interval 0 (§9.4.2), stops
-// reading with CANCELLED (§12.5) and FINs the stream (§6.4.2.3). If the
+// RejectError writes a REQUEST_ERROR with Retry Interval 0 (§9.4.2) and FINs
+// the stream (§6.4.2.3). It does not stop reading, which would cancel the
+// request instead: what the requester sends until its own FIN is read and
+// discarded, so the stream must not be read after RejectError. If the
 // REQUEST_ERROR cannot be written, the stream is reset with INTERNAL_ERROR
 // instead so the requester is not left waiting. Use [Request.Reject] to invite
 // a retry.
@@ -956,10 +958,21 @@ func (r *Request) Reject(rej *RequestRejectedError) error {
 		resetStream(r.Stream)
 		return err
 	}
-	// §12.5: "SHOULD use a relevant error code". The request ended, so this
-	// side stopped reading because it was cancelled, not because it failed.
-	r.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
-	return r.Stream.Close()
+	// §6.4.2.3: "it SHOULD send a REQUEST_ERROR and FIN the stream". No
+	// STOP_SENDING: that cancels the request (§6.4.2.3), and a peer may drop
+	// the stream on it with the REQUEST_ERROR unread, as imquic does.
+	err := r.Stream.Close()
+	go drainRejected(r.Stream)
+	return err
+}
+
+// drainRejected reads a rejected request's stream until the requester FINs or
+// resets it (§6.4.2.2), or the connection ends, discarding what arrives. quic-go
+// frees a stream, and returns its credit to the requester, only once both
+// directions are done, so unread it would hold that credit until the session
+// ends.
+func drainRejected(s Stream) {
+	_, _ = io.Copy(io.Discard, s)
 }
 
 // AcceptSubscribe accepts an inbound SUBSCRIBE (§9.6): it writes

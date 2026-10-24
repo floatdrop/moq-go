@@ -2,6 +2,7 @@ package registry_test
 
 import (
 	"context"
+	"io"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/moqt/wire"
@@ -27,6 +28,6 @@ type stubStream struct{}
 func (stubStream) Write(p []byte) (int, error) { return len(p), nil }
 func (stubStream) Close() error                { return nil }
 func (stubStream) CancelWrite(uint64)          {}
-func (stubStream) Read([]byte) (int, error)    { return 0, nil }
+func (stubStream) Read([]byte) (int, error)    { return 0, io.EOF }
 func (stubStream) CancelRead(uint64)           {}
 func (stubStream) Context() context.Context    { return context.Background() }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -829,10 +830,11 @@ func (d *DownstreamSub) sendPublishDone(done *pendingPublishDone, streamCount ui
 		d.writeMu.Lock()
 		defer d.writeMu.Unlock()
 		if !d.okSent {
-			// Mirror [session.Request.RejectError] (§12.5): an answer that
-			// cannot be written resets the stream as a failure; once written,
-			// nothing reads this stream any more, so the read side is
-			// cancelled.
+			// Mirror [session.Request.RejectError]: an answer that cannot be
+			// written resets the stream as a failure (§12.5); once written,
+			// the stream is FINned without a STOP_SENDING, which would
+			// cancel the request instead (§6.4.2.3), and nothing else reads
+			// it, so the requester's side is read to its FIN and discarded.
 			if err := message.Marshal(d.Stream, &message.RequestError{
 				ErrorCode:   moqt.RequestDoesNotExist,
 				ErrorReason: done.reason,
@@ -841,14 +843,15 @@ func (d *DownstreamSub) sendPublishDone(done *pendingPublishDone, streamCount ui
 				d.Stream.CancelWrite(uint64(moqt.StreamResetInternalError))
 				return
 			}
-			d.Stream.CancelRead(uint64(moqt.StreamResetCancelled))
-		} else {
-			_ = message.Marshal(d.Stream, &message.PublishDone{
-				StatusCode:  done.code,
-				StreamCount: streamCount,
-				ErrorReason: done.reason,
-			})
+			_ = d.Stream.Close()
+			go func() { _, _ = io.Copy(io.Discard, d.Stream) }()
+			return
 		}
+		_ = message.Marshal(d.Stream, &message.PublishDone{
+			StatusCode:  done.code,
+			StreamCount: streamCount,
+			ErrorReason: done.reason,
+		})
 		_ = d.Stream.Close()
 	}()
 }
