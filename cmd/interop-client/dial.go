@@ -97,6 +97,14 @@ func (h *harness) webTransport() *webtransport.Transport {
 		// WT-Available-Protocols header", where WebTransport negotiates the
 		// draft version as raw QUIC does with ALPN.
 		ApplicationProtocols: moqtProtocols,
+		// Interop is the point: reach relays deployed before
+		// draft-ietf-webtrans-http3 required RESET_STREAM_AT, which then
+		// see plain RESET_STREAMs (see the field's doc). MOQT "is also
+		// designed to work correctly when the extension is not used or not
+		// supported" (§1.4); the cost is that a reset data stream may lose
+		// its header, leaving a subscriber to time out the subscription
+		// state it cannot match it to (§11.3.2).
+		AllowMissingStreamResetPartialDelivery: true,
 	}
 }
 

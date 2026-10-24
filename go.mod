@@ -21,8 +21,11 @@ require (
 	golang.org/x/text v0.42.0 // indirect
 )
 
-// The fork: stream priority (SendStream.SetPriority), and a peer's
-// WT_CLOSE_SESSION kept when a capsule write fails on its STOP_SENDING.
-// Drop it once upstream ships both; until then a bump of the require above
-// changes nothing that builds.
-replace github.com/quic-go/webtransport-go => github.com/floatdrop/webtransport-go v0.0.0-20261022053507-e6ca2fb17990
+// The fork: stream priority (SendStream.SetPriority), a peer's
+// WT_CLOSE_SESSION kept when a capsule write fails on its STOP_SENDING, and
+// Transport.AllowMissingStreamResetPartialDelivery, which the interop client
+// sets to reach relays without RESET_STREAM_AT. Upstream is unlikely to take
+// the last, which relaxes a MUST of draft-ietf-webtrans-http3: dropping the
+// fork once upstream ships the first two would also drop those relays. Until
+// then a bump of the require above changes nothing that builds.
+replace github.com/quic-go/webtransport-go => github.com/floatdrop/webtransport-go v0.0.0-20261024155318-52ded690dcb5

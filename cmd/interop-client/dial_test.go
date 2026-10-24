@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/webtransport-go"
 
@@ -70,4 +71,41 @@ func TestWebTransportOffersTheMOQTProtocol(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the server never saw the session")
 	}
+}
+
+// TestWebTransportReachesServersWithoutResetStreamAt: the interop client
+// reaches a WebTransport server that did not enable RESET_STREAM_AT, which
+// webtransport-go's client refuses by default (draft-ietf-webtrans-http3
+// requires it). moq-dev-rs, moxygen, moqtail and stitcher-moq did not enable
+// it, and the client failed every test against them with "server didn't
+// enable QUIC stream reset partial delivery".
+func TestWebTransportReachesServersWithoutResetStreamAt(t *testing.T) {
+	cert, err := relaynet.SelfSignedCert()
+	if err != nil {
+		t.Fatalf("SelfSignedCert: %v", err)
+	}
+	// webtransport.Server always enables RESET_STREAM_AT, so this is HTTP/3
+	// with the WebTransport settings on a QUIC listener without it.
+	ln, err := quic.ListenAddr("127.0.0.1:0",
+		&tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{http3.NextProtoH3}},
+		&quic.Config{EnableDatagrams: true})
+	if err != nil {
+		t.Fatalf("ListenAddr: %v", err)
+	}
+	h3 := &http3.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	})}
+	webtransport.ConfigureHTTP3Server(h3)
+	go func() { _ = h3.ServeListener(ln) }()
+	t.Cleanup(func() { _ = h3.Close() })
+
+	rawURL := "https://" + ln.Addr().String() + "/"
+	h := &harness{relayURL: rawURL, insecure: true}
+	conn, err := wtconn.Dial(t.Context(), h.webTransport(), rawURL)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	_ = conn.CloseWithError(0, "")
 }
