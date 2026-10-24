@@ -13,6 +13,7 @@ import (
 	"github.com/quic-go/webtransport-go"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/uri"
 )
 
 // closeLinger is how long the QUIC connection [Dial] dialed outlives the
@@ -63,11 +64,12 @@ func Dial(ctx context.Context, d *webtransport.Transport, rawURL string) (sessio
 	if dialAddr == nil {
 		dialAddr = quic.DialAddrEarly
 	}
-	// An https URL without a port names https's default, 443 (RFC 9110
-	// §4.2.2); the dial address has to spell it out. d.Dial dials u.Host as is.
+	// §6.1.2: "If the port is omitted in the URI, a default port of 443 is
+	// used", https's default too (RFC 9110 §4.2.2); the dial address has to
+	// spell it out. d.Dial dials u.Host as is.
 	host := u.Host
 	if u.Port() == "" {
-		host = net.JoinHostPort(u.Hostname(), "443")
+		host = net.JoinHostPort(u.Hostname(), uri.DefaultPort)
 	}
 
 	q, err := dialAddr(ctx, host, tlsCfg, quicCfg)
