@@ -9,10 +9,13 @@ import (
 	"math/big"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/quic-go/quic-go"
+
+	"github.com/floatdrop/moq-go/pkg/moqt/session/internal/conntest"
 )
 
 // TestDialVerifiesTheNameItWasGiven: a relay dialed by name presents a
@@ -81,6 +84,38 @@ func TestDialVerifiesTheNameItWasGiven(t *testing.T) {
 	_ = conn.CloseWithError(0, "")
 	if got := <-sni; got != "localhost" {
 		t.Errorf("ClientHello SNI = %q, want %q", got, "localhost")
+	}
+}
+
+// TestDialReportsEveryCandidatesFailure: when every address of a name fails,
+// the error says why each did. The last failure alone can hide the one that
+// matters: against cdn.moq.dev the interop runner reported only "network is
+// unreachable" for the IPv6 address tried last, not why the IPv4 one before
+// it was refused.
+func TestDialReportsEveryCandidatesFailure(t *testing.T) {
+	t.Parallel()
+	listen := func(alpn string) string {
+		ln, err := quic.ListenAddr("127.0.0.1:0", conntest.TLSConfig(t, alpn), nil)
+		if err != nil {
+			t.Fatalf("ListenAddr: %v", err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		return ln.Addr().String()
+	}
+	// The first refuses the certificate (not trusted), the second the ALPN.
+	untrusted, otherALPN := listen("moqt-test"), listen("other")
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, err := dialCandidates(ctx, []string{untrusted, otherALPN},
+		&tls.Config{NextProtos: []string{"moqt-test"}}, nil)
+	if err == nil {
+		t.Fatal("dialCandidates succeeded, want both candidates refused")
+	}
+	for _, want := range []string{"dial " + untrusted + ":", "x509", "dial " + otherALPN + ":"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
 	}
 }
 

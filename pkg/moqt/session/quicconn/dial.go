@@ -3,6 +3,7 @@ package quicconn
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -51,20 +52,33 @@ func Dial(ctx context.Context, addr string, tlsCfg *tls.Config, quicCfg *quic.Co
 			tlsCfg.ServerName = host
 		}
 	}
-	var lastErr error
+	return dialCandidates(ctx, candidates, tlsCfg, quicCfg)
+}
+
+// dialCandidates dials each candidate in turn and returns the first
+// connection made. If none is, the error carries every candidate's failure:
+// the last alone can hide the one that matters, as an unreachable IPv6
+// address tried last hides why the IPv4 one before it was refused.
+func dialCandidates(
+	ctx context.Context,
+	candidates []string,
+	tlsCfg *tls.Config,
+	quicCfg *quic.Config,
+) (session.Conn, error) {
+	var errs []error
 	for _, candidate := range candidates {
 		qc, err := quic.DialAddr(ctx, candidate, tlsCfg, quicCfg)
 		if err == nil {
 			return New(qc), nil
 		}
-		lastErr = fmt.Errorf("dial %s: %w", candidate, err)
+		errs = append(errs, fmt.Errorf("dial %s: %w", candidate, err))
 		// A cancelled/expired ctx fails every remaining candidate the same way;
-		// report the first real failure instead of the derived ones.
+		// stop before adding the derived failures.
 		if ctx.Err() != nil {
 			break
 		}
 	}
-	return nil, lastErr
+	return nil, errors.Join(errs...)
 }
 
 // resolveDialCandidates expands a "host:port" into the addresses to dial, in the
