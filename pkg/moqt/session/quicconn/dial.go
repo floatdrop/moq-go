@@ -38,7 +38,8 @@ import (
 //
 // Handed a literal, quic.DialAddr would also take the TLS server name from it,
 // so a tlsCfg without a ServerName is given the host from addr: the name is
-// sent as SNI and the certificate verified against it, not against an IP SAN
+// sent as SNI (§6.1.2: "The authority component is sent in the TLS SNI
+// extension") and the certificate verified against it, not against an IP SAN
 // that a certificate issued for the name does not carry.
 func Dial(ctx context.Context, addr string, tlsCfg *tls.Config, quicCfg *quic.Config) (session.Conn, error) {
 	candidates, err := resolveDialCandidates(ctx, addr)
