@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -18,18 +17,6 @@ import (
 // publisher and subscriber here are both this client, so the relay only has to
 // route it consistently, which it does regardless of how the string is split.
 func ns(s string) wire.TrackNamespace { return wire.Namespace(s) }
-
-func namespaceEqual(a, b wire.TrackNamespace) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if !bytes.Equal(a[i], b[i]) {
-			return false
-		}
-	}
-	return true
-}
 
 // testSetupOnly connects, completes SETUP, and closes gracefully.
 func testSetupOnly(ctx context.Context, h *harness) error {
@@ -105,15 +92,17 @@ func testSubscribeError(ctx context.Context, h *harness) error {
 	return nil
 }
 
-// testAnnounceSubscribe runs a publisher and a subscriber on separate sessions:
-// the publisher announces and publishes a track; the subscriber discovers the
-// announcement via SUBSCRIBE_NAMESPACE and subscribes to the track.
+// testAnnounceSubscribe follows the runner's procedure: a publisher announces
+// the test namespace with PUBLISH_NAMESPACE and answers the SUBSCRIBE the relay
+// routes to it; a subscriber on its own session SUBSCRIBEs the test track and
+// must get SUBSCRIBE_OK.
 func testAnnounceSubscribe(ctx context.Context, h *harness) error {
 	pub, err := h.connect(ctx)
 	if err != nil {
 		return fmt.Errorf("publisher connect: %w", err)
 	}
 	defer pub.Close(moqt.SessionNoError, "done")
+	go servePublisher(ctx, pub)
 
 	nsStream, err := pub.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns(testNamespace)})
 	if err != nil {
@@ -121,140 +110,96 @@ func testAnnounceSubscribe(ctx context.Context, h *harness) error {
 	}
 	defer nsStream.Close()
 
-	if err := publishTrackOnce(ctx, pub); err != nil {
-		return fmt.Errorf("publisher PUBLISH: %w", err)
-	}
-
-	// Let the announcement register before the subscriber joins.
-	time.Sleep(300 * time.Millisecond)
-
 	sub, err := h.connect(ctx)
 	if err != nil {
 		return fmt.Errorf("subscriber connect: %w", err)
 	}
 	defer sub.Close(moqt.SessionNoError, "done")
 
-	if err := discoverNamespace(ctx, sub, ns(testNamespace)); err != nil {
-		return fmt.Errorf("subscriber namespace discovery: %w", err)
-	}
-
-	subStream, err := sub.Subscribe(ctx, &message.Subscribe{
-		Namespace:  ns(testNamespace),
-		Name:       []byte(testTrack),
-		Parameters: message.Parameters{message.NextObjectFilter()},
-	})
-	if err != nil {
+	if err := subscribeTestTrack(ctx, sub); err != nil {
 		return fmt.Errorf("subscriber SUBSCRIBE: %w", err)
 	}
-	_ = subStream.Close()
 	return nil
 }
 
-// testSubscribeBeforeAnnounce has the subscriber express namespace interest
-// first; the publisher then announces, and the subscriber must receive the
-// forwarded NAMESPACE.
+// testSubscribeBeforeAnnounce follows the runner's procedure: a subscriber
+// SUBSCRIBEs the test track before anyone announces it, and a publisher
+// announces the namespace 500ms later. The SUBSCRIBE carries no
+// RENDEZVOUS_TIMEOUT, so draft-22 has the relay refuse it at once (§9.20.6:
+// "The relay MUST immediately return SUBSCRIBE_ERROR with error code
+// DOES_NOT_EXIST if no publisher is available"). The runner also passes a
+// relay that holds it until the announcement and answers SUBSCRIBE_OK, so
+// this does too, and the publisher answers the SUBSCRIBE such a relay routes.
 func testSubscribeBeforeAnnounce(ctx context.Context, h *harness) error {
 	sub, err := h.connect(ctx)
 	if err != nil {
 		return fmt.Errorf("subscriber connect: %w", err)
 	}
 	defer sub.Close(moqt.SessionNoError, "done")
+	subscribed := make(chan error, 1)
+	go func() { subscribed <- subscribeTestTrack(ctx, sub) }()
 
-	nsStream, err := sub.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{},
-	})
-	if err != nil {
-		return fmt.Errorf("subscriber SUBSCRIBE_NAMESPACE: %w", err)
+	select {
+	case <-time.After(500 * time.Millisecond):
+	case <-ctx.Done():
+		return fmt.Errorf("before the publisher started: %w", ctx.Err())
 	}
-	defer nsStream.Close()
-	found := watchForNamespace(nsStream, ns(testNamespace))
-
-	// Subscriber interest is registered; now the publisher announces.
-	time.Sleep(300 * time.Millisecond)
-
 	pub, err := h.connect(ctx)
 	if err != nil {
 		return fmt.Errorf("publisher connect: %w", err)
 	}
 	defer pub.Close(moqt.SessionNoError, "done")
+	go servePublisher(ctx, pub)
 
-	pubStream, err := pub.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns(testNamespace)})
+	nsStream, err := pub.PublishNamespace(ctx, &message.PublishNamespace{Namespace: ns(testNamespace)})
 	if err != nil {
 		return fmt.Errorf("publisher PUBLISH_NAMESPACE: %w", err)
 	}
-	defer pubStream.Close()
+	defer nsStream.Close()
 
 	select {
-	case err := <-found:
-		return err
+	case err := <-subscribed:
+		if _, rejected := errors.AsType[*session.RequestRejectedError](err); err == nil || rejected {
+			return nil
+		}
+		return fmt.Errorf("subscriber SUBSCRIBE: %w", err)
 	case <-ctx.Done():
-		return fmt.Errorf("timeout waiting for announcement: %w", ctx.Err())
+		return fmt.Errorf("no SUBSCRIBE response: %w", ctx.Err())
 	}
 }
 
-// publishTrackOnce publishes the shared test track (push model) and writes a
-// single object so the relay has something to register and serve.
-func publishTrackOnce(ctx context.Context, sess *session.Session) error {
-	alias := sess.AllocOutboundTrackAlias()
-	if _, err := sess.Publish(ctx, &message.Publish{
+// subscribeTestTrack SUBSCRIBEs the test track and returns once the relay
+// answers: nil for SUBSCRIBE_OK, a *session.RequestRejectedError for
+// REQUEST_ERROR.
+func subscribeTestTrack(ctx context.Context, sess *session.Session) error {
+	sub, err := sess.Subscribe(ctx, &message.Subscribe{
 		Namespace:  ns(testNamespace),
 		Name:       []byte(testTrack),
-		TrackAlias: alias,
-	}); err != nil {
-		return err
-	}
-	sg, err := sess.OpenSubgroup(message.SubgroupHeader{
-		SubgroupIDMode: message.SubgroupIDImplicitZero,
-		TrackAlias:     alias,
-		GroupID:        0,
+		Parameters: message.Parameters{message.NextObjectFilter()},
 	})
 	if err != nil {
-		return fmt.Errorf("open subgroup: %w", err)
-	}
-	if err := sg.WriteObject(&message.SubgroupObject{Payload: []byte("interop")}); err != nil {
-		sg.Cancel(moqt.StreamResetInternalError)
-		return fmt.Errorf("write object: %w", err)
-	}
-	return sg.Close()
-}
-
-// discoverNamespace opens a SUBSCRIBE_NAMESPACE (empty prefix = all) and waits
-// for a NAMESPACE matching want, honoring ctx.
-func discoverNamespace(ctx context.Context, sess *session.Session, want wire.TrackNamespace) error {
-	stream, err := sess.SubscribeNamespace(ctx, &message.SubscribeNamespace{
-		TrackNamespacePrefix: wire.TrackNamespace{},
-	})
-	if err != nil {
-		return fmt.Errorf("SUBSCRIBE_NAMESPACE: %w", err)
-	}
-	defer stream.Close()
-	select {
-	case err := <-watchForNamespace(stream, want):
 		return err
-	case <-ctx.Done():
-		return fmt.Errorf("timeout waiting for announcement: %w", ctx.Err())
 	}
+	_ = sub.Close()
+	return nil
 }
 
-// watchForNamespace reads NAMESPACE messages off an open SUBSCRIBE_NAMESPACE
-// stream in the background and signals when one matching want arrives (or the
-// stream errors). With an empty subscribed prefix the NAMESPACE suffix is the
-// full advertised namespace. The goroutine unblocks when the caller closes the
-// stream (on scenario return).
-func watchForNamespace(stream session.Stream, want wire.TrackNamespace) <-chan error {
-	ch := make(chan error, 1)
-	go func() {
-		for {
-			m, err := message.Parse(stream)
-			if err != nil {
-				ch <- fmt.Errorf("read NAMESPACE: %w", err)
-				return
-			}
-			if n, ok := m.(*message.Namespace); ok && namespaceEqual(n.TrackNamespaceSuffix, want) {
-				ch <- nil
-				return
-			}
+// servePublisher answers the requests the relay sends the publisher until the
+// session ends: each SUBSCRIBE with SUBSCRIBE_OK, anything else with
+// NOT_SUPPORTED. The relay SUBSCRIBEs each publisher of the namespace (§7.6)
+// and needs that subscription Established before its own SUBSCRIBE_OK (§7.4).
+// The SUBSCRIBE_OK carries no LARGEST_OBJECT, as nothing was published
+// (§9.20.17), and no objects follow: the scenarios check routing only.
+func servePublisher(ctx context.Context, pub *session.Session) {
+	for {
+		r, err := pub.AcceptRequest(ctx)
+		if err != nil {
+			return
 		}
-	}()
-	return ch
+		if _, ok := r.First.(*message.Subscribe); !ok {
+			_ = r.RejectError(moqt.RequestNotSupported, "interop-client: the publisher answers SUBSCRIBE only")
+			continue
+		}
+		_, _ = r.AcceptSubscribe(nil)
+	}
 }

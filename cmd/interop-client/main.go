@@ -45,8 +45,8 @@ var scenarios = []scenario{
 	{"subscribe-before-announce", testSubscribeBeforeAnnounce},
 }
 
-// perTestTimeout bounds each scenario; the multi-connection discovery cases get
-// a longer budget than the single round-trips.
+// perTestTimeout bounds each scenario; the two-connection cases get a longer
+// budget than the single round-trips.
 func perTestTimeout(name string) time.Duration {
 	switch name {
 	case "announce-subscribe", "subscribe-before-announce":
