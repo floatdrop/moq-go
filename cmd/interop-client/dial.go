@@ -16,6 +16,11 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt/session/wtconn"
 )
 
+// moqtProtocols is the one draft version offered: as the ALPN over raw QUIC
+// and in WT-Available-Protocols over WebTransport (§6.2). The negotiated
+// "moqt-NN" fixes the draft; SETUP carries no version field (§9.1).
+var moqtProtocols = []string{"moqt-22"}
+
 // harness carries the connection parameters shared by every scenario.
 type harness struct {
 	relayURL string
@@ -78,20 +83,25 @@ func (h *harness) dialQUIC(ctx context.Context, u *url.URL) (*session.Session, e
 	return dialpkg.QUIC(ctx, u.String(), dialpkg.Options{
 		Implementation:     "moq-interop-client/0.1",
 		InsecureSkipVerify: h.insecure, // CLI flag for self-signed interop relays
-		// Offer the one MOQT-over-QUIC ALPN we speak. Per §6.2 the selected
-		// "moqt-NN" ALPN fixes the draft version — SETUP carries no version
-		// field (§9.1).
-		ALPN: []string{"moqt-22"},
+		ALPN:               moqtProtocols,
 	})
 }
 
-func (h *harness) dialWebTransport(ctx context.Context, u *url.URL) (*session.Session, error) {
-	d := webtransport.Transport{
+// webTransport is the WebTransport client the harness dials with.
+func (h *harness) webTransport() *webtransport.Transport {
+	return &webtransport.Transport{
 		//nolint:gosec // G402: TLS verification is a CLI flag for self-signed interop relays.
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: h.insecure, NextProtos: []string{http3.NextProtoH3}},
 		QUICConfig:      quicConfig(),
+		// §6.2.1: "The client includes MOQT protocol identifiers in the
+		// WT-Available-Protocols header", where WebTransport negotiates the
+		// draft version as raw QUIC does with ALPN.
+		ApplicationProtocols: moqtProtocols,
 	}
-	conn, err := wtconn.Dial(ctx, &d, u.String())
+}
+
+func (h *harness) dialWebTransport(ctx context.Context, u *url.URL) (*session.Session, error) {
+	conn, err := wtconn.Dial(ctx, h.webTransport(), u.String())
 	if err != nil {
 		return nil, fmt.Errorf("dial webtransport %s: %w", u.String(), err)
 	}
