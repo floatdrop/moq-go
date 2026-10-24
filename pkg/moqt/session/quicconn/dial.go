@@ -34,10 +34,22 @@ import (
 // which brackets IPv6: that pins the family chosen here and costs no second
 // lookup. ctx bounds the whole sequence, so a caller's dial timeout applies
 // across all candidates rather than per candidate.
+//
+// Handed a literal, quic.DialAddr would also take the TLS server name from it,
+// so a tlsCfg without a ServerName is given the host from addr: the name is
+// sent as SNI and the certificate verified against it, not against an IP SAN
+// that a certificate issued for the name does not carry.
 func Dial(ctx context.Context, addr string, tlsCfg *tls.Config, quicCfg *quic.Config) (session.Conn, error) {
 	candidates, err := resolveDialCandidates(ctx, addr)
 	if err != nil {
 		return nil, err
+	}
+	if tlsCfg != nil && tlsCfg.ServerName == "" {
+		// resolveDialCandidates has already split addr.
+		if host, _, err := net.SplitHostPort(addr); err == nil {
+			tlsCfg = tlsCfg.Clone()
+			tlsCfg.ServerName = host
+		}
 	}
 	var lastErr error
 	for _, candidate := range candidates {

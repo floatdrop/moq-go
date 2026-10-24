@@ -2,9 +2,87 @@ package quicconn
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"math/big"
 	"net"
+	"strconv"
 	"testing"
+	"time"
+
+	"github.com/quic-go/quic-go"
 )
+
+// TestDialVerifiesTheNameItWasGiven: a relay dialed by name presents a
+// certificate for that name, and Dial verifies it against that name. Dial
+// resolves the name itself and hands quic.DialAddr an IP literal, from which
+// quic-go would take the TLS server name: no SNI, and the certificate checked
+// for an IP SAN that a CA-issued relay certificate does not carry — "x509:
+// cannot validate certificate for 129.146.35.142 because it doesn't contain
+// any IP SANs" against every public relay in the interop runner.
+func TestDialVerifiesTheNameItWasGiven(t *testing.T) {
+	t.Parallel()
+	const alpn = "moqt-test"
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("ed25519.GenerateKey: %v", err)
+	}
+	// A name and no IP SANs, like a CA-issued certificate.
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		DNSNames:     []string{"localhost"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, pub, priv)
+	if err != nil {
+		t.Fatalf("x509.CreateCertificate: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("x509.ParseCertificate: %v", err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(leaf)
+
+	sni := make(chan string, 4)
+	cert := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: priv, Leaf: leaf}
+	serverTLS := &tls.Config{
+		NextProtos: []string{alpn},
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			sni <- hello.ServerName
+			return cert, nil
+		},
+	}
+	// The unspecified address listens on both families, so whichever of
+	// localhost's addresses Dial tries first reaches it.
+	udp, err := net.ListenUDP("udp", &net.UDPAddr{})
+	if err != nil {
+		t.Fatalf("ListenUDP: %v", err)
+	}
+	ln, err := quic.Listen(udp, serverTLS, nil)
+	if err != nil {
+		t.Fatalf("quic.Listen: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = ln.Close()
+		_ = udp.Close()
+	})
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	addr := net.JoinHostPort("localhost", strconv.Itoa(udp.LocalAddr().(*net.UDPAddr).Port))
+	conn, err := Dial(ctx, addr, &tls.Config{RootCAs: roots, NextProtos: []string{alpn}}, nil)
+	if err != nil {
+		t.Fatalf("Dial(%q) with verification on: %v", addr, err)
+	}
+	_ = conn.CloseWithError(0, "")
+	if got := <-sni; got != "localhost" {
+		t.Errorf("ClientHello SNI = %q, want %q", got, "localhost")
+	}
+}
 
 // TestResolveDialCandidatesPassesThroughLiterals pins the property that keeps a
 // deliberately-pinned address pinned: an IP literal dials exactly what the caller
