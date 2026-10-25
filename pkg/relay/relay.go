@@ -17,6 +17,7 @@ import (
 	"github.com/floatdrop/moq-go/pkg/moqt"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/session/memconn"
 	"github.com/floatdrop/moq-go/pkg/relay/discovery"
 	"github.com/floatdrop/moq-go/pkg/relay/internal/registry"
 )
@@ -484,7 +485,7 @@ func New(listener Listener, cfg Config) *Relay {
 func (r *Relay) serveUpstreamSession(sess *session.Session, onClose func()) {
 	r.handlers.Go(func() {
 		defer onClose()
-		r.serveSession(r.upstreams.baseCtx, sess, LegUpstream)
+		r.serveSession(r.upstreams.baseCtx, sess, LegUpstream, r.cfg.Authorizer)
 	})
 }
 
@@ -615,6 +616,42 @@ func (r *Relay) Start(ctx context.Context) error {
 	}
 }
 
+// Connect returns a session of this relay's own process: the client end of
+// an in-process connection ([memconn]) whose server end the relay serves as
+// it serves an accepted one, as [LegInProcess] and with every request
+// authorized (it is the relay's program asking, not a peer). Its program
+// publishes on it what it would have its relay originate, which every
+// subscriber then reaches as it reaches a peer's track (PUBLISH, its cache,
+// its fanout), or subscribes on it to what the relay carries. opts are the
+// client's session options; ctx bounds the session, which also ends with
+// the relay's Stop (its GOAWAY, then its close).
+func (r *Relay) Connect(ctx context.Context, opts ...session.Option) (*session.Session, error) {
+	select {
+	case <-r.stopCh:
+		return nil, errors.New("relay: stopped")
+	default:
+	}
+	client, server := memconn.Pair(0)
+	r.handlers.Go(func() {
+		sess, err := session.Server(ctx, server, r.cfg.SessionOptions...)
+		if err != nil {
+			r.log.LogAttrs(ctx, slog.LevelWarn, "relay in-process SETUP failed", slog.String("err", err.Error()))
+			return
+		}
+		closeSess := func() { _ = sess.Close(moqt.SessionNoError, "relay: stopped") }
+		stop := context.AfterFunc(ctx, closeSess)
+		r.serveSession(ctx, sess, LegInProcess, AllowAllAuthorizer{})
+		stop()
+		closeSess()
+	})
+	sess, err := session.Client(ctx, client, opts...)
+	if err != nil {
+		_ = client.CloseWithError(0, "")
+		return nil, fmt.Errorf("relay: in-process session: %w", err)
+	}
+	return sess, nil
+}
+
 // handleConn performs the MOQT SETUP handshake on conn and, on success, runs
 // the per-session handler loops. SETUP failures close the underlying conn and
 // log the cause; they do not propagate up to Start because one bad client
@@ -640,7 +677,7 @@ func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
 	// it. NO_ERROR (§12.2): no GOAWAY was sent, so none ran out.
 	closeSess := func() { _ = sess.Close(moqt.SessionNoError, "relay: stopped") }
 	stop := context.AfterFunc(ctx, closeSess)
-	r.serveSession(ctx, sess, LegLocal)
+	r.serveSession(ctx, sess, LegLocal, r.cfg.Authorizer)
 	// The handler can end on ctx before AfterFunc has run closeSess, and stop
 	// then keeps it from running at all.
 	stop()
@@ -661,7 +698,7 @@ func (r *Relay) handleConn(ctx context.Context, conn session.Conn) {
 // The only difference is the SETUP role (Server vs Client), handled by the
 // caller before calling this — and leg, which records that difference for
 // [Metrics] so cross-relay traffic is separable from client traffic.
-func (r *Relay) serveSession(ctx context.Context, sess *session.Session, leg Leg) {
+func (r *Relay) serveSession(ctx context.Context, sess *session.Session, leg Leg, auth Authorizer) {
 	r.addSession(sess, leg)
 	defer func() {
 		r.removeSession(sess, leg)
@@ -680,7 +717,7 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session, leg Leg
 
 	handler := newSessionHandler(
 		sess, r.log, r.tracks, r.names,
-		r.cfg.Authorizer, r.cfg.Metrics, leg, r.fetch, r.statusRounds, r.upstreams,
+		auth, r.cfg.Metrics, leg, r.fetch, r.statusRounds, r.upstreams,
 		r.cfg.Discovery, r.cfg.RelayAddr,
 		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,

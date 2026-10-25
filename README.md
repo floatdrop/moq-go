@@ -125,6 +125,29 @@ demux.HandleTrack(sub.TrackAlias(), func(s *session.IncomingSubgroupStream) {
 go demux.Run(ctx, sess) // HandleTrack is safe to call after Run starts
 ```
 
+A relay's own program publishes on `Relay.Connect`'s session what it would
+have the relay originate (a figure it computes per subscriber, say), and every
+subscriber reaches the track as it reaches a peer's. The session runs over an
+in-process connection (`session/memconn`), served as `LegInProcess` with every
+request authorized, and ends with the relay's `Stop`:
+
+```go
+own, err := r.Connect(ctx) // r is a started *relay.Relay
+if err != nil {
+	return err
+}
+pub, err := own.Publish(ctx, &message.Publish{
+	Namespace: wire.Namespace("room"),
+	Name:      []byte("link/p1"),
+})
+if err != nil {
+	return err
+}
+_ = own.SendDatagram(&message.ObjectDatagram{
+	TrackAlias: pub.TrackAlias(), GroupID: 0, ObjectPayload: []byte("rtt=42"),
+})
+```
+
 ### Examples
 
 Worked, compile-checked examples for each part of the API live as Go example

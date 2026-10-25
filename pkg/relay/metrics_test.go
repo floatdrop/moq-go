@@ -323,9 +323,10 @@ func drainFetch(t *testing.T, sess *session.Session) {
 func TestLegString(t *testing.T) {
 	t.Parallel()
 	for leg, want := range map[relay.Leg]string{
-		relay.LegLocal:    "local",
-		relay.LegUpstream: "upstream",
-		relay.Leg(99):     "unknown",
+		relay.LegLocal:     "local",
+		relay.LegUpstream:  "upstream",
+		relay.LegInProcess: "in_process",
+		relay.Leg(99):      "unknown",
 	} {
 		if got := leg.String(); got != want {
 			t.Errorf("Leg(%d).String() = %q, want %q", int(leg), got, want)

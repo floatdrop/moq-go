@@ -33,6 +33,11 @@ const (
 	// through [discovery.DiscoveryStore] — the cross-relay hop, from the
 	// consuming side.
 	LegUpstream
+
+	// LegInProcess is a session of the relay's own process ([Relay.Connect]):
+	// tracks its program publishes or subscribes to itself, which are neither
+	// a client's traffic nor a peer relay's.
+	LegInProcess
 )
 
 // String returns a stable, lowercase name suitable for use as a metric label
@@ -44,6 +49,8 @@ func (l Leg) String() string {
 		return "local"
 	case LegUpstream:
 		return "upstream"
+	case LegInProcess:
+		return "in_process"
 	default:
 		return "unknown"
 	}
