@@ -228,7 +228,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # Loopback regression guard over BOTH transport mappings: our client and
-      # relay agree on all six cases via moqt:// and via https://. This is the
+      # relay agree on every case via moqt:// and via https://. This is the
       # only interop coverage left while the job above is manual, and the only
       # thing exercising the relay container's WebTransport path — a stale
       # -webtransport flag in entrypoint-relay.sh once broke exactly that.

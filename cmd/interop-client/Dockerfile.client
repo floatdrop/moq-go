@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 #
-# Test-client image for the moq-interop-runner. Runs the six interop scenarios
+# Test-client image for the moq-interop-runner. Runs the interop scenarios
 # against a relay, driving this repository's session library from the client
 # side. The binary reads the runner's standard environment directly
 # (RELAY_URL, TESTCASE, TLS_DISABLE_VERIFY, VERBOSE) and emits TAP v14 on

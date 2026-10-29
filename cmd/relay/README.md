@@ -180,7 +180,7 @@ speaks draft-18, while this relay advertises only the `moqt-22` ALPN, so the
 handshake cannot complete and every case fails with "failed to connect to
 server". The CI job is kept but gated to manual `workflow_dispatch`; drop the
 `if:` in [`ci.yml`](../../.github/workflows/ci.yml) once those images move to
-draft-22. `make interop-loopback` is what gates PRs meanwhile — same six cases
+draft-22. `make interop-loopback` is what gates PRs meanwhile — every client case
 against our own relay image over both `moqt://` and `https://`, so the container's
 WebTransport path stays covered.
 

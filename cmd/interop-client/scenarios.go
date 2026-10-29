@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -17,6 +19,16 @@ import (
 // publisher and subscriber here are both this client, so the relay only has to
 // route it consistently, which it does regardless of how the string is split.
 func ns(s string) wire.TrackNamespace { return wire.Namespace(s) }
+
+// runNamespace is a Track Namespace unique to this run of the test, laid out
+// as the runner's data-plane routing prefix ("moq-test", "<test-id>",
+// "<run-id>"), with a run ID of 128 random bits in lowercase hex. Concurrent
+// runs at one relay then never see each other's namespaces.
+func runNamespace(test string) wire.TrackNamespace {
+	id := make([]byte, 16)
+	_, _ = rand.Read(id) // never fails
+	return wire.Namespace("moq-test", test, hex.EncodeToString(id))
+}
 
 // testSetupOnly connects, completes SETUP, and closes gracefully.
 func testSetupOnly(ctx context.Context, h *harness) error {
@@ -64,6 +76,98 @@ func testPublishNamespaceDone(ctx context.Context, h *harness) error {
 	return nil
 }
 
+// testSubscribeNamespaceLifecycle follows the runner's procedure: a
+// subscriber SUBSCRIBE_NAMESPACEs a namespace unique to the run, a publisher
+// on its own session publishes that namespace and then withdraws it, and the
+// subscriber must be told NAMESPACE and then NAMESPACE_DONE for it (§4.2).
+func testSubscribeNamespaceLifecycle(ctx context.Context, h *harness) error {
+	namespace := runNamespace("subscribe-namespace-lifecycle")
+
+	sub, err := h.connect(ctx)
+	if err != nil {
+		return fmt.Errorf("subscriber connect: %w", err)
+	}
+	defer sub.Close(moqt.SessionNoError, "done")
+	nsSub, err := sub.SubscribeNamespace(ctx, &message.SubscribeNamespace{TrackNamespacePrefix: namespace})
+	if err != nil {
+		return fmt.Errorf("subscriber SUBSCRIBE_NAMESPACE: %w", err)
+	}
+	defer nsSub.Close()
+	notes := watchNamespaces(ctx, nsSub)
+
+	pub, err := h.connect(ctx)
+	if err != nil {
+		return fmt.Errorf("publisher connect: %w", err)
+	}
+	defer pub.Close(moqt.SessionNoError, "done")
+	publication, err := pub.PublishNamespace(ctx, &message.PublishNamespace{Namespace: namespace})
+	if err != nil {
+		return fmt.Errorf("publisher PUBLISH_NAMESPACE: %w", err)
+	}
+	err = notes.expect(ctx, message.TypeNamespace)
+	_ = publication.Close() // withdraws the namespace (§4.1)
+	if err != nil {
+		return err
+	}
+	return notes.expect(ctx, message.TypeNamespaceDone)
+}
+
+// namespaceNotes delivers, in order, the notifications a SUBSCRIBE_NAMESPACE
+// receives, and once its stream ends, why.
+type namespaceNotes struct {
+	msgs <-chan message.Message
+	end  error // set before msgs is closed
+}
+
+// watchNamespaces reads sub's notifications, through its broker so the
+// session enforces a NAMESPACE_DONE only after its NAMESPACE (§4.2).
+func watchNamespaces(ctx context.Context, sub *session.NamespaceSubscription) *namespaceNotes {
+	msgs := make(chan message.Message)
+	n := &namespaceNotes{msgs: msgs}
+	go func() {
+		defer close(msgs)
+		n.end = sub.Broker().Serve(ctx, func(m message.Message) bool {
+			select {
+			case msgs <- m:
+				return true
+			case <-ctx.Done():
+				return false
+			}
+		})
+	}()
+	return n
+}
+
+// expect returns nil if the next notification is a want for the subscribed
+// namespace itself. The subscription's prefix is that whole namespace, so
+// the notification's suffix is empty (§9.16, §9.17). A FIN does not stand in
+// for NAMESPACE_DONE, though §4.2.2 has a subscriber treat it as one: the
+// runner's criteria name the message.
+func (n *namespaceNotes) expect(ctx context.Context, want message.Type) error {
+	select {
+	case m, ok := <-n.msgs:
+		if !ok && n.end == nil {
+			return fmt.Errorf("SUBSCRIBE_NAMESPACE stream FIN before %s", want)
+		}
+		if !ok {
+			return fmt.Errorf("SUBSCRIBE_NAMESPACE stream ended before %s: %w", want, n.end)
+		}
+		var suffix wire.TrackNamespace
+		switch m := m.(type) {
+		case *message.Namespace:
+			suffix = m.TrackNamespaceSuffix
+		case *message.NamespaceDone:
+			suffix = m.TrackNamespaceSuffix
+		}
+		if m.Type() != want || len(suffix) != 0 {
+			return fmt.Errorf("got %s with suffix %q, want %s for the published namespace", m.Type(), suffix, want)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("no %s: %w", want, ctx.Err())
+	}
+}
+
 // testSubscribeError subscribes to a non-existent track and expects the relay
 // to reject it (REQUEST_ERROR / any subscribe-level error), not return OK.
 func testSubscribeError(ctx context.Context, h *harness) error {
@@ -88,6 +192,36 @@ func testSubscribeError(ctx context.Context, h *harness) error {
 	// which is not a rejection.
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("no SUBSCRIBE response for non-existent track (timeout): %w", err)
+	}
+	return nil
+}
+
+// testRendezvousTimeout SUBSCRIBEs a track nobody publishes with a 500ms
+// RENDEZVOUS_TIMEOUT: the relay should hold the SUBSCRIBE for a publisher,
+// and once none has come answer REQUEST_ERROR with TIMEOUT (§9.20.6), which
+// the runner's criteria require. It may hold it for less than asked, so how
+// soon it answers is not checked; a DOES_NOT_EXIST says it held it not at all.
+func testRendezvousTimeout(ctx context.Context, h *harness) error {
+	sess, err := h.connect(ctx)
+	if err != nil {
+		return err
+	}
+	defer sess.Close(moqt.SessionNoError, "done")
+
+	sub, err := sess.Subscribe(ctx, &message.Subscribe{
+		Namespace: ns("nonexistent/rendezvous"),
+		Name:      []byte(testTrack),
+		Parameters: message.Parameters{
+			message.NextObjectFilter(),
+			message.RendezvousTimeoutParam(500 * time.Millisecond),
+		},
+	})
+	if err == nil {
+		_ = sub.Close()
+		return errors.New("expected REQUEST_ERROR TIMEOUT for a track nobody publishes, got SUBSCRIBE_OK")
+	}
+	if rej, ok := errors.AsType[*session.RequestRejectedError](err); !ok || rej.Code != moqt.RequestTimeout {
+		return fmt.Errorf("SUBSCRIBE: want REQUEST_ERROR TIMEOUT (%#x): %w", uint64(moqt.RequestTimeout), err)
 	}
 	return nil
 }

@@ -40,7 +40,9 @@ var scenarios = []scenario{
 	{"setup-only", testSetupOnly},
 	{"announce-only", testAnnounceOnly},
 	{"publish-namespace-done", testPublishNamespaceDone},
+	{"subscribe-namespace-lifecycle", testSubscribeNamespaceLifecycle},
 	{"subscribe-error", testSubscribeError},
+	{"rendezvous-timeout", testRendezvousTimeout},
 	{"announce-subscribe", testAnnounceSubscribe},
 	{"subscribe-before-announce", testSubscribeBeforeAnnounce},
 }
@@ -49,7 +51,7 @@ var scenarios = []scenario{
 // budget than the single round-trips.
 func perTestTimeout(name string) time.Duration {
 	switch name {
-	case "announce-subscribe", "subscribe-before-announce":
+	case "subscribe-namespace-lifecycle", "announce-subscribe", "subscribe-before-announce":
 		return 8 * time.Second
 	default:
 		return 5 * time.Second
