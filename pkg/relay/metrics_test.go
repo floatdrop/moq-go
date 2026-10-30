@@ -9,10 +9,155 @@ import (
 	"testing"
 	"time"
 
+	"github.com/floatdrop/moq-go/pkg/moqt/loc"
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/track"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
+
+type receivedMetrics struct {
+	relay.NopMetrics
+
+	objects chan relay.ReceivedObject
+	refs    chan relay.TrackRef
+}
+
+func (m *receivedMetrics) ObjectReceived(ref relay.TrackRef, o relay.ReceivedObject) {
+	o.Properties = bytes.Clone(o.Properties)
+	o.Payload = bytes.Clone(o.Payload)
+	m.refs <- ref
+	m.objects <- o
+}
+
+// Datagrams must be observable even without subscribers, with duplicate and
+// unknown-alias copies excluded from the hook.
+func TestMetricsDatagramReceived(t *testing.T) {
+	t.Parallel()
+
+	m := &receivedMetrics{objects: make(chan relay.ReceivedObject, 8), refs: make(chan relay.TrackRef, 8)}
+	pub, teardown := connectRelay(t, relay.Config{Metrics: m})
+	var stopOnce sync.Once
+	stop := func() { stopOnce.Do(teardown) }
+	defer stop()
+	p, err := pub.Publish(t.Context(), &message.Publish{
+		Namespace: ns("room", "speaker"), Name: []byte("audio"), TrackAlias: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+
+	props := (&loc.Properties{Timestamp: 123456, HasTimestamp: true}).Encode()
+	d := &message.ObjectDatagram{
+		Type:       message.DatagramPropertiesBit | message.DatagramEndOfGroupBit,
+		TrackAlias: 99, GroupID: 7, ObjectID: 3, Properties: props, ObjectPayload: []byte("opus"),
+	}
+	if err := pub.SendDatagram(d); err != nil {
+		t.Fatal(err)
+	}
+	d.TrackAlias = p.TrackAlias()
+	for range 2 {
+		if err := pub.SendDatagram(d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := pub.SendDatagram(&message.ObjectDatagram{
+		Type: message.DatagramStatusBit, TrackAlias: p.TrackAlias(), GroupID: 8,
+		ObjectStatus: message.ObjectStatusEndOfGroup,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 {
+		select {
+		case o := <-m.objects:
+			ref := <-m.refs
+			if ref.Name != "audio" || ref.Leg != relay.LegLocal {
+				t.Errorf("ref = %+v", ref)
+			}
+			if o.Name.Key() != (track.FullTrackName{Namespace: ns("room", "speaker"), Name: []byte("audio")}).Key() {
+				t.Errorf("track = %+v", o.Name)
+			}
+			if o.HeaderAt.IsZero() || o.HeaderAt.After(time.Now()) {
+				t.Errorf("receipt time = %v", o.HeaderAt)
+			}
+			if !o.Datagram || o.Subgroup != 0 {
+				t.Errorf("datagram = %v, subgroup = %d", o.Datagram, o.Subgroup)
+			}
+			if i == 0 {
+				if o.Group != 7 || o.Object != 3 || o.Status != message.ObjectStatusNormal || !o.EndOfGroup {
+					t.Errorf("data metadata = %+v", o)
+				}
+				if !bytes.Equal(o.Properties, props) || string(o.Payload) != "opus" {
+					t.Errorf("data properties = %x, payload = %q", o.Properties, o.Payload)
+				}
+			} else if o.Group != 8 || o.Object != 0 || o.Status != message.ObjectStatusEndOfGroup ||
+				o.EndOfGroup || len(o.Payload) != 0 || len(o.Properties) != 0 {
+				t.Errorf("status object = %+v", o)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("ObjectReceived was not called for datagram")
+		}
+	}
+	stop()
+	if len(m.objects) != 0 {
+		t.Fatal("duplicate or unknown-alias datagram reported")
+	}
+}
+
+// The same hook exposes stream payloads and resolved absolute IDs, including
+// objects with a nonzero delta and terminal markers with no payload.
+func TestMetricsSubgroupReceived(t *testing.T) {
+	t.Parallel()
+
+	m := &receivedMetrics{objects: make(chan relay.ReceivedObject, 8), refs: make(chan relay.TrackRef, 8)}
+	pub, teardown := connectRelay(t, relay.Config{Metrics: m})
+	defer teardown()
+	p, err := pub.Publish(t.Context(), &message.Publish{
+		Namespace: ns("room", "speaker"), Name: []byte("audio"), TrackAlias: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	sg, err := p.OpenSubgroup(message.SubgroupHeader{
+		GroupID: 7, SubgroupID: 2, SubgroupIDMode: message.SubgroupIDExplicit, Properties: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	props := (&loc.Properties{Timestamp: 123456, HasTimestamp: true}).Encode()
+	for _, id := range []uint64{5, 9, 10} {
+		o := &message.SubgroupObject{Payload: []byte("opus"), Properties: props}
+		if id == 10 {
+			o = &message.SubgroupObject{ObjectStatus: message.ObjectStatusEndOfGroup}
+		}
+		if err := sg.WriteObjectAt(id, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := sg.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []uint64{5, 9, 10} {
+		select {
+		case o := <-m.objects:
+			if o.Datagram || o.EndOfGroup || o.Group != 7 || o.Subgroup != 2 || o.Object != id {
+				t.Errorf("stream metadata = %+v, want object %d", o, id)
+			}
+			if id == 10 {
+				if o.Status != message.ObjectStatusEndOfGroup || len(o.Payload) != 0 {
+					t.Errorf("terminal object = %+v", o)
+				}
+			} else if o.Status != message.ObjectStatusNormal || string(o.Payload) != "opus" ||
+				!bytes.Equal(o.Properties, props) {
+				t.Errorf("data object = %+v", o)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("ObjectReceived was not called for stream object")
+		}
+	}
+}
 
 // recordingMetrics is a concurrency-safe [relay.Metrics] for assertions. It
 // embeds NopMetrics so it keeps satisfying the interface as the interface

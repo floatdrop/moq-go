@@ -158,9 +158,9 @@ func (c ResetCause) String() string {
 // of them. Install one via [Config.Metrics]; the default is [NopMetrics].
 //
 // All methods are invoked from relay goroutines, concurrently and — for
-// ObjectReceived / ObjectForwarded / ObjectDropped — on the per-object fanout
-// hot path, while the subgroup's fanout lock is held. An implementation MUST be
-// safe for concurrent use and MUST NOT block: do the cheap thing (e.g. an
+// ObjectReceived / ObjectForwarded / ObjectDropped — on the per-object hot
+// path, under the subgroup's fanout lock for stream objects. Implementations
+// MUST be safe for concurrent use and MUST NOT block: do the cheap thing (e.g. an
 // atomic increment, or a counter handle looked up once and cached) and
 // aggregate elsewhere. Blocking here stalls the inbound read loop for every
 // subscriber of the subgroup, not just one.
@@ -184,22 +184,23 @@ type Metrics interface {
 	SubscriptionOpened(t TrackRef)
 	SubscriptionClosed(t TrackRef)
 
-	// ObjectReceived is called once for each object read off an inbound
-	// subgroup stream and won by this contributor — objects discarded as
-	// §7.3 duplicates of a redundant upstream are not counted. Compared
-	// against ObjectForwarded it separates "the relay never got it" from
-	// "the relay got it and shed it". It is told the object as the relay saw
-	// it ([ReceivedObject]): the track's full name, when the header was read
-	// and the properties, so that a deployment can measure what the way to
-	// the relay did to a publisher's objects (how late their timestamps
-	// arrive, say) without the relay reading their format.
+	// ObjectReceived is called once for each complete object received on an
+	// inbound subgroup stream or datagram and won by this contributor.
+	// Objects discarded as §7.3 duplicates of a redundant upstream are not
+	// counted. ReceivedObject carries the full track name, receipt time,
+	// properties and payload so a deployment can measure timestamp lateness
+	// or enqueue audio for quality scoring. The relay does not read their
+	// format. It fires even when there are no subscribers.
+	// Callbacks may arrive out of order and concurrently for the same track.
+	// Cached objects served by FETCH do not fire this hook again.
 	ObjectReceived(t TrackRef, o ReceivedObject)
 
-	// ObjectForwarded is called once for each object successfully enqueued for
-	// delivery to a downstream subscriber. It is counted per subscriber, so a
+	// ObjectForwarded is called once for each subgroup stream object enqueued
+	// for delivery to a downstream subscriber. Datagrams are not counted.
+	// It is counted per subscriber, so a
 	// single received object fanned out to N subscribers reports N times —
 	// which is why it is not directly comparable to ObjectReceived without
-	// dividing by the subscriber count.
+	// dividing by the subscriber count and excluding received datagrams.
 	ObjectForwarded(t TrackRef, subgroup uint64)
 
 	// ObjectDropped is called when a downstream subscriber's bounded send
@@ -272,12 +273,23 @@ func (NopMetrics) UpstreamDialFailed(string)                        {}
 func (NopMetrics) NamespaceResolved(int)                            {}
 
 // ReceivedObject is an object as [Metrics.ObjectReceived] is told of it: its
-// track's full name, its subgroup, when the relay read the last byte of its
-// header (the §5.2 receipt time), and its properties as published. Properties
-// is the relay's buffer: read it in the call, do not keep it.
+// track's full name, absolute location, status, and media bytes as published.
+// All slices, including Name's, belong to the relay and MUST NOT be mutated.
+// Properties and Payload are only borrowed for the callback: copy them before
+// queuing work. Decoding and inference must run outside the callback.
 type ReceivedObject struct {
-	Name       track.FullTrackName
-	Subgroup   uint64
+	Name     track.FullTrackName
+	Group    uint64
+	Object   uint64
+	Subgroup uint64
+	Status   uint64
+	// Datagram distinguishes a datagram, which has no Subgroup (reported as 0).
+	Datagram bool
+	// EndOfGroup is the datagram END_OF_GROUP bit; status markers use Status.
+	EndOfGroup bool
+	// HeaderAt is when the relay read the last header byte (§5.2). For a
+	// datagram, it is when ReceiveDatagram returned the complete object.
 	HeaderAt   time.Time
 	Properties []byte
+	Payload    []byte
 }

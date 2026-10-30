@@ -580,9 +580,13 @@ func (h *sessionHandler) runFanout(ctx context.Context, stream *session.Incoming
 			ref,
 			ReceivedObject{
 				Name:       entry.FullName,
+				Group:      hdr.GroupID,
+				Object:     objectID,
 				Subgroup:   hdr.SubgroupID,
+				Status:     obj.ObjectStatus,
 				HeaderAt:   headerAt,
 				Properties: obj.Properties,
+				Payload:    obj.Payload,
 			},
 		)
 

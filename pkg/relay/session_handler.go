@@ -137,9 +137,8 @@ func newSessionHandler(
 // this session sits on.
 //
 // track.FullTrackName holds the name as []byte, so this conversion allocates.
-// Callers MUST hoist it out of any per-object loop — build one TrackRef when a
-// stream, subscription or FETCH begins and reuse it — because [Metrics]
-// promises implementations a hot path with nothing to spare.
+// Stream, subscription and FETCH callers hoist it out of per-object loops.
+// Datagrams resolve the track independently for each object.
 func (h *sessionHandler) trackRef(name track.FullTrackName) TrackRef {
 	return TrackRef{Name: string(name.Name), Leg: h.leg}
 }

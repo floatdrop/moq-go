@@ -148,6 +148,35 @@ _ = own.SendDatagram(&message.ObjectDatagram{
 })
 ```
 
+### Observing media at the relay
+
+Implement `relay.Metrics.ObjectReceived` and set `relay.Config.Metrics` to observe
+complete objects from both subgroup streams and datagrams. `relay.ReceivedObject`
+includes the full track name, absolute `Group`/`Object` IDs, `Status`, receipt time
+(`HeaderAt`), `Properties`, and `Payload`. `Datagram` distinguishes objects with
+no subgroup; `EndOfGroup` carries a datagram's end bit. The hook runs after
+deduplication, before downstream filtering, including when no subscriber is
+present. Cached FETCH delivery does not trigger it again.
+
+Callbacks run concurrently and must return promptly. Treat all slices as
+read-only, copy the properties and payload before queuing them, and use a bounded
+queue with a non-blocking send. Perform decoding and analysis in a worker.
+Order packets by their media timestamps; callback order is not a playout order.
+Use the full track identity to separate sources, and retire worker state when a
+source ends or goes idle; subscription lifecycle metrics describe downstream
+subscriptions, not publisher tracks.
+
+For [gosqa](https://github.com/floatdrop/gosqa), consumer code still needs to select
+audio tracks from the MSF catalog, parse LOC properties, decode Opus into
+normalized mono float32 PCM at 48 kHz, and feed a gosqa stream per source. Preserve
+the media timeline through packet reordering, loss concealment, and intentional
+silence suppression. Report analysis queue overflow and reset decoder/analysis
+state after a discontinuity. Run inference outside the callback, share the model
+across workers, and ship the required ONNX Runtime library with the application.
+Gosqa's default frame buffers two seconds of PCM before producing a score.
+Scores at this hook describe audio received by the relay; downstream losses need
+receiver-side measurement.
+
 ### Examples
 
 Worked, compile-checked examples for each part of the API live as Go example

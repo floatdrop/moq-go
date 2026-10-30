@@ -75,6 +75,58 @@ func BenchmarkFanout1toN(b *testing.B) {
 	benchFanout(b, 64, 1200)
 }
 
+// BenchmarkDatagramFanout measures receipt, the ObjectReceived hook, caching
+// and delivery of an audio-sized datagram to one subscriber.
+func BenchmarkDatagramFanout(b *testing.B) {
+	pub, teardown := connectRelay(b, relay.Config{Logger: benchQuietLogger()})
+	defer teardown()
+	p, err := pub.Publish(b.Context(), &message.Publish{
+		Namespace: benchNS, Name: benchName, TrackAlias: benchPubAlias,
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer p.Close()
+	sub := dialAnotherClient(b, pub)
+	s, err := sub.Subscribe(b.Context(), &message.Subscribe{Namespace: benchNS, Name: benchName})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+	first, done := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, err := sub.ReceiveDatagram(b.Context())
+		first <- err
+		for range b.N {
+			if _, err := sub.ReceiveDatagram(b.Context()); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	d := &message.ObjectDatagram{TrackAlias: p.TrackAlias(), ObjectPayload: benchObjPayload(80)}
+	if err := pub.SendDatagram(d); err != nil {
+		b.Fatal(err)
+	}
+	if err := <-first; err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(d.ObjectPayload)))
+	b.ResetTimer()
+	for i := range b.N {
+		d.ObjectID = uint64(i + 1)
+		if err := pub.SendDatagram(d); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if err := <-done; err != nil {
+		b.Fatal(err)
+	}
+	b.StopTimer()
+}
+
 // benchFanout is the shared driver: it stands up a relay, a publisher, and
 // subCount subscriber sessions each with a reader goroutine, then times the
 // publisher writing b.N objects on a single subgroup and waits for every

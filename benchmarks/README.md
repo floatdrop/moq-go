@@ -19,7 +19,7 @@ before it can hide inside a larger number.
 | 1. Wire primitives | `pkg/moqt/wire` | `VarintEncode`, `VarintBytesRoundTrip`, `KVPairsEncode`, `FrameRoundTrip` |
 | 2. Message codec | `pkg/moqt/message` | `SubgroupObjectAppend`, `SubgroupObjectParse`, `MarshalRoundTrip` (SUBSCRIBE + REQUEST_OK), `ParametersRoundTrip` |
 | 3. Session passing | `pkg/moqt/session` | `ControlRoundTrip`, `SubgroupThroughput`, `SubgroupForwardCodec` |
-| 4. Relay fanout | `pkg/relay` | `Fanout1to1`, `Fanout1toN` (64 subs), `FetchFromCache` |
+| 4. Relay fanout | `pkg/relay` | `Fanout1to1`, `Fanout1toN` (64 subs), `DatagramFanout` (audio, 1 sub), `FetchFromCache` |
 | 5. Cache | `pkg/relay/cache` | `CachePut`, `CacheGet` (hit/miss), `CacheGetRange` |
 
 Suites 1, 2, and 5 are pure in-memory micro-benchmarks — directly comparable

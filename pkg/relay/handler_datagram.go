@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
@@ -33,13 +34,13 @@ func (h *sessionHandler) runDatagramLoop(ctx context.Context) error {
 			}
 			return err
 		}
-		h.handleDatagram(ctx, d)
+		h.handleDatagram(ctx, d, time.Now())
 	}
 }
 
 // handleDatagram is the per-datagram counterpart of [runFanout]'s
 // per-object body.
-func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDatagram) {
+func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDatagram, receivedAt time.Time) {
 	in, ok := h.sess.LookupInboundTrack(d.TrackAlias)
 	if !ok {
 		// §3.1.3.1: an unknown Track Alias MAY be dropped.
@@ -93,6 +94,18 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		}
 		return
 	}
+
+	h.metrics.ObjectReceived(h.trackRef(entry.FullName), ReceivedObject{
+		Name:       entry.FullName,
+		Group:      d.GroupID,
+		Object:     d.ObjectID,
+		Status:     d.ObjectStatus,
+		Datagram:   true,
+		EndOfGroup: d.HasEndOfGroup(),
+		HeaderAt:   receivedAt,
+		Properties: d.Properties,
+		Payload:    d.ObjectPayload,
+	})
 
 	// The cache keeps the buffers by reference; nothing mutates them after.
 	entry.Cache.PutDatagram(d, in.MaxCacheDuration, in.HasMaxCacheDuration)
