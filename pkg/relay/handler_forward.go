@@ -106,6 +106,7 @@ func (h *sessionHandler) serveForwardedPublish(
 ) {
 	fullName := te.FullName
 	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, stream, fwd.TrackAlias)
+	h.attachDatagramWriter(sub, fullName)
 	sub.OpenedByPublish()
 	// handleSubscribeTracks already refused parameters this would reject.
 	_ = installSubscribeParams(sub, params)

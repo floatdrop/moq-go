@@ -368,6 +368,11 @@ func (u *UpstreamSub) GetFilter() *message.LocationFilter {
 type DownstreamSub struct {
 	Subscription
 
+	// EnqueueDatagram hands an immutable Object to the connection's bounded
+	// writer without transport I/O. The relay installs it before registration;
+	// the writer owns BeginDatagram / EndDatagram, including queued Objects.
+	EnqueueDatagram func(message.ObjectDatagram, time.Time)
+
 	// writeMu serializes control-message writes on Stream.
 	// session.Stream does not serialize concurrent writers and one
 	// Marshal is multiple stream Writes, but two goroutines legitimately

@@ -2,12 +2,14 @@ package relay_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/floatdrop/moq-go/pkg/moqt/message"
 	"github.com/floatdrop/moq-go/pkg/moqt/session"
+	"github.com/floatdrop/moq-go/pkg/moqt/session/sessiontest"
 	"github.com/floatdrop/moq-go/pkg/relay"
 )
 
@@ -391,5 +393,136 @@ func TestDatagram_RedundantPublishersDeduped(t *testing.T) {
 	case id := <-received:
 		t.Fatalf("duplicate datagram %d delivered (dedup broken)", id)
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// A congested receiver's transport must not hold up a publisher's receive
+// loop, including delivery to healthy subscribers on other connections.
+func TestDatagram_SlowSubscriberDoesNotBlockOthers(t *testing.T) {
+	t.Parallel()
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	l := newPipeListener()
+	l.faultFor = faultConn(2, func(f sessiontest.FaultOp) error {
+		if f.Op == sessiontest.OpSendDatagram {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+		}
+		return nil
+	})
+	pub, teardown := connectRelayOn(t, relay.Config{}, l)
+	defer teardown()
+	defer close(release)
+	publication, err := pub.Publish(t.Context(), &message.Publish{
+		Namespace: ns("video"), Name: []byte("cam"), TrackAlias: 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publication.Close()
+	slow := dialAnotherClient(t, pub)
+	healthy := dialAnotherClient(t, pub)
+	for _, sess := range []*session.Session{slow, healthy} {
+		sub, err := sess.Subscribe(t.Context(), &message.Subscribe{Namespace: ns("video"), Name: []byte("cam")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sub.Close()
+	}
+	send := func(id uint64) {
+		t.Helper()
+		if err := pub.SendDatagram(&message.ObjectDatagram{Type: 0x08, TrackAlias: 7,
+			GroupID: 1, ObjectID: id, ObjectPayload: []byte("media")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	send(0)
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("slow transport was not reached")
+	}
+	send(1)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	for {
+		d, err := healthy.ReceiveDatagram(ctx)
+		if err != nil {
+			t.Fatalf("healthy subscriber stalled behind slow receiver: %v", err)
+		}
+		if d.ObjectID == 1 {
+			break
+		}
+	}
+}
+
+// Exercise real transport backpressure, overflow and connection teardown:
+// sessiontest's datagram pipe fills if the slow subscriber never reads it.
+func TestDatagram_SaturatedSubscriberCanClose(t *testing.T) {
+	t.Parallel()
+	m := &recordingMetrics{}
+	pub, teardown := connectRelay(t, relay.Config{SendQueueSize: 4, Metrics: m})
+	defer teardown()
+	publication := publishVideoTrack(t, pub, "cam1", 7)
+	defer publication.Close()
+	slow := newCam1Subscriber(t, pub)
+	healthy := newCam1Subscriber(t, pub)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	for id := range uint64(128) {
+		if err := pub.SendDatagram(&message.ObjectDatagram{Type: 0x08, TrackAlias: 7,
+			GroupID: 1, ObjectID: id, ObjectPayload: []byte("audio")}); err != nil {
+			t.Fatal(err)
+		}
+		d, err := healthy.ReceiveDatagram(ctx)
+		if err != nil {
+			t.Fatalf("healthy receiver stalled at object %d: %v", id, err)
+		}
+		if d.ObjectID != id {
+			t.Fatalf("got object %d, want %d", d.ObjectID, id)
+		}
+	}
+	if m.dropped.Load() == 0 {
+		t.Fatal("slow receiver never overflowed its queue")
+	}
+	if err := slow.Close(0, "slow receiver left"); err != nil {
+		t.Fatal(err)
+	}
+	// teardown joins the worker; a blocked send must be released by closing
+	// its transport, without requiring the healthy subscriber to close first.
+}
+
+func TestDatagram_SendErrorDoesNotStopWriter(t *testing.T) {
+	t.Parallel()
+	m := &recordingMetrics{}
+	l := newPipeListener()
+	l.faultFor = faultConn(2, func(f sessiontest.FaultOp) error {
+		if f.Op == sessiontest.OpSendDatagram && f.N == 1 {
+			return errors.New("transport rejected datagram")
+		}
+		return nil
+	})
+	pub, teardown := connectRelayOn(t, relay.Config{Metrics: m}, l)
+	defer teardown()
+	publication := publishVideoTrack(t, pub, "cam1", 7)
+	defer publication.Close()
+	sub := newCam1Subscriber(t, pub)
+	for id := range uint64(2) {
+		if err := pub.SendDatagram(&message.ObjectDatagram{Type: 0x08, TrackAlias: 7,
+			GroupID: 1, ObjectID: id, ObjectPayload: []byte("audio")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	d, err := sub.ReceiveDatagram(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.ObjectID != 1 || m.dropped.Load() != 1 {
+		t.Fatalf("object=%d drops=%d", d.ObjectID, m.dropped.Load())
 	}
 }

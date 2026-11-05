@@ -94,13 +94,21 @@ func BenchmarkDatagramFanout(b *testing.B) {
 	}
 	defer s.Close()
 	first, done := make(chan error, 1), make(chan error, 1)
+	// Keep at most one window in flight so this measures forwarding cost,
+	// not loss to the bounded datagram queue. Waiting for b.N deliveries
+	// after an unpaced burst can hang forever once that burst overflows it.
+	const window = 32
+	progress := make(chan struct{})
 	go func() {
 		_, err := sub.ReceiveDatagram(b.Context())
 		first <- err
-		for range b.N {
+		for i := range b.N {
 			if _, err := sub.ReceiveDatagram(b.Context()); err != nil {
 				done <- err
 				return
+			}
+			if (i+1)%window == 0 {
+				progress <- struct{}{}
 			}
 		}
 		done <- nil
@@ -119,6 +127,13 @@ func BenchmarkDatagramFanout(b *testing.B) {
 		d.ObjectID = uint64(i + 1)
 		if err := pub.SendDatagram(d); err != nil {
 			b.Fatal(err)
+		}
+		if (i+1)%window == 0 {
+			select {
+			case <-progress:
+			case err := <-done:
+				b.Fatalf("subscriber stopped: %v", err)
+			}
 		}
 	}
 	if err := <-done; err != nil {

@@ -34,13 +34,14 @@ type sessionHandler struct {
 	// PREFIX_OVERLAP. The two types have independent overlap spaces.
 	nsPrefixes, trackPrefixes prefixSet
 
-	sess    *session.Session
-	log     *slog.Logger
-	tracks  *registry.TrackRegistry
-	names   *registry.NamespaceRegistry
-	auth    Authorizer
-	metrics Metrics
-	fetch   *registry.FetchRouter
+	datagrams *datagramWriter
+	sess      *session.Session
+	log       *slog.Logger
+	tracks    *registry.TrackRegistry
+	names     *registry.NamespaceRegistry
+	auth      Authorizer
+	metrics   Metrics
+	fetch     *registry.FetchRouter
 	// statusRounds shares forwarded TRACK_STATUS rounds across the relay's
 	// sessions; see [sessionHandler.forwardTrackStatus].
 	statusRounds *trackStatusRounds
@@ -110,7 +111,7 @@ func newSessionHandler(
 	relayGo func(func()),
 	pauser *unwatchedPauser,
 ) *sessionHandler {
-	return &sessionHandler{
+	h := &sessionHandler{
 		sess:                sess,
 		log:                 log.With("moqt.session", fmt.Sprintf("%p", sess)),
 		tracks:              tracks,
@@ -131,6 +132,8 @@ func newSessionHandler(
 		relayGo:             relayGo,
 		pauser:              pauser,
 	}
+	h.datagrams = newDatagramWriter(h)
+	return h
 }
 
 // trackRef labels a [Metrics] event with the track it happened on and the leg
@@ -199,6 +202,7 @@ func (h *sessionHandler) allocSubID() uint64 {
 // protocol loops, joins them and all in-flight per-request goroutines, and does
 // not close the session itself except on a protocol violation detected by a loop.
 func (h *sessionHandler) run(ctx context.Context) error {
+	defer h.datagrams.stop()
 	// Watcher ties runCtx to the parent ctx and the session's Done channel so
 	// loops unblock as soon as the session terminates.
 	runCtx, cancel := context.WithCancel(ctx)

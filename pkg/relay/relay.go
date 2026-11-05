@@ -167,6 +167,8 @@ type Config struct {
 	// a non-blocking send and drops the object on overflow. A larger
 	// queue absorbs more transient burst but lets a slow reader keep
 	// more memory locked up.
+	// Datagrams share one queue of this size per downstream session, across
+	// all its subscriptions, so a congested connection cannot stall others.
 	// Zero means: use the default of 64.
 	SendQueueSize int
 
@@ -178,7 +180,9 @@ type Config struct {
 	// been unable to keep up for that long, so it is dropped. This is a
 	// latency window, not a drop count: a subscriber that loses the
 	// occasional object but stays current is left alone, while one that
-	// steadily falls behind is shed. Zero means: use the default of 2s.
+	// steadily falls behind is shed. Queued datagrams older than this limit
+	// are dropped without terminating the subscription (§11.2).
+	// Zero means: use the default of 2s.
 	MaxFanoutLag time.Duration
 
 	// MaxDropsBeforeReset is an OPTIONAL hard cap on the cumulative number of

@@ -130,18 +130,8 @@ func (h *sessionHandler) handleDatagram(ctx context.Context, d *message.ObjectDa
 		if !sub.IncludesProperties() {
 			out.Type &^= message.DatagramDefaultPriorityBit
 		}
-		// §9.9: PUBLISH_DONE waits for a send in progress, and none starts
-		// after it.
-		if !sub.BeginDatagram() {
-			continue
-		}
-		err := sub.Session.SendDatagram(&out)
-		sub.EndDatagram()
-		if err != nil {
-			// §11.2: datagrams may be dropped.
-			h.log.LogAttrs(ctx, slog.LevelDebug, "datagram: SendDatagram failed",
-				slog.Uint64("sub_id", sub.ID),
-				slog.String("err", err.Error()))
-		}
+		// Never wait for a receiver's transport on the publisher's receive
+		// loop. The queue also accounts for pending sends before PUBLISH_DONE.
+		sub.EnqueueDatagram(out, receivedAt)
 	}
 }

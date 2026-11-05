@@ -47,6 +47,7 @@ func (h *sessionHandler) handleSubscribe(ctx context.Context, req *session.Reque
 	alias := h.sess.AllocOutboundTrackAlias()
 
 	sub := registry.NewDownstreamSub(h.allocSubID(), h.sess, req.Stream, alias)
+	h.attachDatagramWriter(sub, fullName)
 	if err := installSubscribeParams(sub, msg.Parameters); err != nil {
 		h.refuseSubscriptionParams(ctx, req, err)
 		return

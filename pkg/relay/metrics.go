@@ -195,16 +195,19 @@ type Metrics interface {
 	// Cached objects served by FETCH do not fire this hook again.
 	ObjectReceived(t TrackRef, o ReceivedObject)
 
-	// ObjectForwarded is called once for each subgroup stream object enqueued
-	// for delivery to a downstream subscriber. Datagrams are not counted.
+	// ObjectForwarded is called once for each object enqueued for delivery
+	// to a downstream subscriber. Datagrams use subgroup 0 and the receiving
+	// session's leg.
 	// It is counted per subscriber, so a
 	// single received object fanned out to N subscribers reports N times —
 	// which is why it is not directly comparable to ObjectReceived without
-	// dividing by the subscriber count and excluding received datagrams.
+	// dividing by the subscriber count.
 	ObjectForwarded(t TrackRef, subgroup uint64)
 
 	// ObjectDropped is called when a downstream subscriber's bounded send
 	// queue overflows and the object is dropped (§5.2 slow-reader pressure).
+	// For datagrams it also counts expiry, cancellation, shutdown and send
+	// errors; these report subgroup 0 and the receiving session's leg.
 	// The subgroup is reported because it is how a layered publisher marks
 	// what is disposable: shedding an enhancement layer is the design
 	// working, and shedding the base layer is the picture breaking.
