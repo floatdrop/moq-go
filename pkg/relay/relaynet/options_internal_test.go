@@ -2,6 +2,7 @@ package relaynet
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,5 +40,16 @@ func TestQUICConfigAppliesHooksInOrder(t *testing.T) {
 	// Untouched defaults survive: that is why the hook mutates rather than replaces.
 	if !cfg.EnableDatagrams || !cfg.EnableStreamResetPartialDelivery {
 		t.Error("hooks dropped the MOQT defaults (§11.2, §11.3.2) they never touched")
+	}
+}
+
+func TestUDPSendBatchSizeValidation(t *testing.T) {
+	for _, size := range []int{-1, 65} {
+		if l, err := Listen("127.0.0.1:0", "/moq", nil, nil, WithUDPSendBatchSize(size)); err == nil {
+			l.Close()
+			t.Errorf("batch size %d accepted", size)
+		} else if !strings.Contains(err.Error(), "UDP send batch size") {
+			t.Errorf("wrong validation error: %v", err)
+		}
 	}
 }

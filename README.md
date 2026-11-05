@@ -46,6 +46,23 @@ For the simpler raw-MOQT case (no MSF/CMSF), swap `video` for `clock`.
 `cmd/relay` is one instance. Several instances routing across each other need a
 distributed [`DiscoveryStore`](pkg/relay/discovery).
 
+On Linux, the relay can opt into batching ready UDP writes across connections:
+
+```sh
+go run ./cmd/relay -udp-send-batch-size 32
+```
+
+The default `0` retains the ordinary socket. Values `1`–`64` set the maximum
+batch size; the writer never waits to fill a batch. Other operating systems
+retain the ordinary socket. Library callers pass
+`relaynet.WithUDPSendBatchSize(32)` to `relaynet.Listen`. This option affects
+only that listener, including its raw-QUIC and WebTransport connections.
+The queue holds at most 256 pending writes and applies backpressure when full.
+Writes retain their GSO/ECN/source-address metadata and wait for their send
+result before returning. Listener shutdown still allows accepted connections
+to drain before releasing the socket. Treat this as an experimental option:
+measure playback quality and CPU under your workload before enabling it.
+
 ## Using the library
 
 The mental model:

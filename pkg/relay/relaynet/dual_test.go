@@ -2,6 +2,7 @@ package relaynet_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -18,13 +19,19 @@ import (
 // keep dialing raw QUIC directly: the two do not have to agree on a transport.
 func TestDualListenerServesBothTransports(t *testing.T) {
 	t.Parallel()
+	for _, size := range []int{0, 32} {
+		t.Run(fmt.Sprintf("batch-%d", size), func(t *testing.T) { testDualListenerTransports(t, size) })
+	}
+}
+
+func testDualListenerTransports(t *testing.T, batchSize int) {
 	const wtPath = "/moq"
 
 	tlsCfg, err := relaynet.TLSConfig("", "", relaynet.DualALPNs)
 	if err != nil {
 		t.Fatalf("TLSConfig: %v", err)
 	}
-	l, err := relaynet.Listen("127.0.0.1:0", wtPath, tlsCfg, nil)
+	l, err := relaynet.Listen("127.0.0.1:0", wtPath, tlsCfg, nil, relaynet.WithUDPSendBatchSize(batchSize))
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -95,12 +102,17 @@ func TestDualListenerServesBothTransports(t *testing.T) {
 // GOAWAY. An earlier version of this listener did exactly that.
 func TestDualListenerCloseKeepsLiveSessions(t *testing.T) {
 	t.Parallel()
+	for _, size := range []int{0, 32} {
+		t.Run(fmt.Sprintf("batch-%d", size), func(t *testing.T) { testDualListenerDrain(t, size) })
+	}
+}
 
+func testDualListenerDrain(t *testing.T, batchSize int) {
 	tlsCfg, err := relaynet.TLSConfig("", "", relaynet.DualALPNs)
 	if err != nil {
 		t.Fatalf("TLSConfig: %v", err)
 	}
-	l, err := relaynet.Listen("127.0.0.1:0", "/moq", tlsCfg, nil)
+	l, err := relaynet.Listen("127.0.0.1:0", "/moq", tlsCfg, nil, relaynet.WithUDPSendBatchSize(batchSize))
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}

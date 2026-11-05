@@ -13,8 +13,21 @@ type Option func(*config)
 
 // config is what the Options of one entry point build.
 type config struct {
-	quic *quic.Config
-	wt   webtransport.Config
+	quic             *quic.Config
+	wt               webtransport.Config
+	udpSendBatchSize int
+}
+
+// WithUDPSendBatchSize opts Listen into a shared Linux UDP writer that batches
+// at most size ready packets across connections, without waiting to fill a
+// batch. Zero (the default) keeps the ordinary QUIC socket; values 1 through
+// 64 enable batching. Other values make Listen fail. Other operating systems
+// keep the ordinary socket. DialQUIC and DialWebTransport ignore this option.
+//
+// The queue is bounded to 256 pending writes. Each write waits for its own send
+// result, preserving QUIC's buffer lifetime, GSO fallback and pacing contract.
+func WithUDPSendBatchSize(size int) Option {
+	return func(c *config) { c.udpSendBatchSize = size }
 }
 
 // WithQUICConfig returns an [Option] that runs tune over the [quic.Config] the

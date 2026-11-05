@@ -77,7 +77,7 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger, opts .
 	// negotiated (the dispatch below reads it) and would have the relay write
 	// SETUP as 0.5-RTT data to a peer whose certificate is unverified. 0-RTT would
 	// need Config.Allow0RTT, which defaultQUICConfig deliberately leaves unset.
-	ql, err := quic.ListenAddr(addr, tlsCfg, qcfg)
+	ql, closeSocket, err := listenQUIC(addr, tlsCfg, qcfg, cfg.udpSendBatchSize)
 	if err != nil {
 		return nil, fmt.Errorf("relaynet: listen %s: %w", addr, err)
 	}
@@ -108,12 +108,13 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger, opts .
 
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &DualListener{
-		ql:     ql,
-		wts:    wts,
-		conns:  make(chan session.Conn, dualBacklog),
-		ctx:    ctx,
-		cancel: cancel,
-		log:    logger,
+		ql:          ql,
+		closeSocket: closeSocket,
+		wts:         wts,
+		conns:       make(chan session.Conn, dualBacklog),
+		ctx:         ctx,
+		cancel:      cancel,
+		log:         logger,
 	}
 	l.wt = wtconn.NewListener(wts, mux, wtPath, ql.Addr(), dualBacklog)
 
@@ -135,7 +136,8 @@ type DualListener struct {
 	cancel context.CancelFunc
 	log    *slog.Logger
 
-	closeOnce sync.Once
+	closeOnce   sync.Once
+	closeSocket func()
 }
 
 // acceptQUIC is the demultiplexer: HTTP/3 connections go to the WebTransport
@@ -217,6 +219,9 @@ func (l *DualListener) Close() error {
 	l.closeOnce.Do(func() {
 		l.cancel()
 		err = errors.Join(l.wt.Close(), l.wts.Close(), l.ql.Close())
+		if l.closeSocket != nil {
+			l.closeSocket()
+		}
 	})
 	return err
 }

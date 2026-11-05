@@ -41,6 +41,8 @@ func main() {
 	log.SetFlags(log.Ltime)
 
 	addr := flag.String("addr", "0.0.0.0:4433", "listen address")
+	udpSendBatchSize := flag.Int("udp-send-batch-size", 0,
+		"maximum ready UDP writes per Linux batch (0 disables, 1-64 enables)")
 	certFile := flag.String("cert", "", "TLS certificate file (PEM); generated if empty")
 	keyFile := flag.String("key", "", "TLS private key file (PEM); generated if empty")
 	wtPath := flag.String(
@@ -134,7 +136,8 @@ func main() {
 		return nil, nil //nolint:nilnil // tls GetConfigForClient contract: (nil, nil) means "use the base config".
 	}
 
-	listener, err := relaynet.Listen(*addr, *wtPath, tlsCfg, logger)
+	listener, err := relaynet.Listen(*addr, *wtPath, tlsCfg, logger,
+		relaynet.WithUDPSendBatchSize(*udpSendBatchSize))
 	if err != nil {
 		log.Fatalf("listen %s: %v", *addr, err)
 	}
