@@ -43,6 +43,7 @@ func main() {
 	addr := flag.String("addr", "0.0.0.0:4433", "listen address")
 	udpSendBatchSize := flag.Int("udp-send-batch-size", 0,
 		"maximum ready UDP writes per Linux batch (0 disables, 1-64 enables)")
+	udpSendWriters := flag.Int("udp-send-writers", 1, "Linux UDP batch writers (1 or 2; two requires batching)")
 	certFile := flag.String("cert", "", "TLS certificate file (PEM); generated if empty")
 	keyFile := flag.String("key", "", "TLS private key file (PEM); generated if empty")
 	wtPath := flag.String(
@@ -137,7 +138,7 @@ func main() {
 	}
 
 	listener, err := relaynet.Listen(*addr, *wtPath, tlsCfg, logger,
-		relaynet.WithUDPSendBatchSize(*udpSendBatchSize))
+		relaynet.WithUDPSendBatchSize(*udpSendBatchSize), relaynet.WithUDPSendWriters(*udpSendWriters))
 	if err != nil {
 		log.Fatalf("listen %s: %v", *addr, err)
 	}

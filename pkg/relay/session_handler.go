@@ -54,6 +54,7 @@ type sessionHandler struct {
 	discovery           discovery.DiscoveryStore
 	relayAddr           string
 	sendQueueSize       int
+	subgroupInboxes     *subgroupInboxPool
 	maxDropsBeforeReset int
 	maxFanoutLag        time.Duration
 	// maxRendezvous caps RENDEZVOUS_TIMEOUT (§9.20.6); 0 holds no SUBSCRIBE.
@@ -105,6 +106,7 @@ func newSessionHandler(
 	sendQueueSize int,
 	maxDropsBeforeReset int,
 	maxFanoutLag time.Duration,
+	subgroupInboxes *subgroupInboxPool,
 	maxSubsPerSession int,
 	maxNamespaceReqsPerSession int,
 	maxRendezvous time.Duration,
@@ -125,6 +127,7 @@ func newSessionHandler(
 		discovery:           discovery,
 		relayAddr:           relayAddr,
 		sendQueueSize:       sendQueueSize,
+		subgroupInboxes:     subgroupInboxes,
 		maxDropsBeforeReset: maxDropsBeforeReset,
 		maxFanoutLag:        maxFanoutLag,
 		maxRendezvous:       maxRendezvous,

@@ -19,19 +19,29 @@ import (
 // keep dialing raw QUIC directly: the two do not have to agree on a transport.
 func TestDualListenerServesBothTransports(t *testing.T) {
 	t.Parallel()
-	for _, size := range []int{0, 32} {
-		t.Run(fmt.Sprintf("batch-%d", size), func(t *testing.T) { testDualListenerTransports(t, size) })
+	for _, mode := range []struct{ batch, writers int }{{0, 1}, {32, 1}, {32, 2}} {
+		t.Run(
+			fmt.Sprintf("batch-%d-writers-%d", mode.batch, mode.writers),
+			func(t *testing.T) { testDualListenerTransports(t, mode.batch, mode.writers) },
+		)
 	}
 }
 
-func testDualListenerTransports(t *testing.T, batchSize int) {
+func testDualListenerTransports(t *testing.T, batchSize, writers int) {
 	const wtPath = "/moq"
 
 	tlsCfg, err := relaynet.TLSConfig("", "", relaynet.DualALPNs)
 	if err != nil {
 		t.Fatalf("TLSConfig: %v", err)
 	}
-	l, err := relaynet.Listen("127.0.0.1:0", wtPath, tlsCfg, nil, relaynet.WithUDPSendBatchSize(batchSize))
+	l, err := relaynet.Listen(
+		"127.0.0.1:0",
+		wtPath,
+		tlsCfg,
+		nil,
+		relaynet.WithUDPSendBatchSize(batchSize),
+		relaynet.WithUDPSendWriters(writers),
+	)
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}
@@ -102,17 +112,27 @@ func testDualListenerTransports(t *testing.T, batchSize int) {
 // GOAWAY. An earlier version of this listener did exactly that.
 func TestDualListenerCloseKeepsLiveSessions(t *testing.T) {
 	t.Parallel()
-	for _, size := range []int{0, 32} {
-		t.Run(fmt.Sprintf("batch-%d", size), func(t *testing.T) { testDualListenerDrain(t, size) })
+	for _, mode := range []struct{ batch, writers int }{{0, 1}, {32, 1}, {32, 2}} {
+		t.Run(
+			fmt.Sprintf("batch-%d-writers-%d", mode.batch, mode.writers),
+			func(t *testing.T) { testDualListenerDrain(t, mode.batch, mode.writers) },
+		)
 	}
 }
 
-func testDualListenerDrain(t *testing.T, batchSize int) {
+func testDualListenerDrain(t *testing.T, batchSize, writers int) {
 	tlsCfg, err := relaynet.TLSConfig("", "", relaynet.DualALPNs)
 	if err != nil {
 		t.Fatalf("TLSConfig: %v", err)
 	}
-	l, err := relaynet.Listen("127.0.0.1:0", "/moq", tlsCfg, nil, relaynet.WithUDPSendBatchSize(batchSize))
+	l, err := relaynet.Listen(
+		"127.0.0.1:0",
+		"/moq",
+		tlsCfg,
+		nil,
+		relaynet.WithUDPSendBatchSize(batchSize),
+		relaynet.WithUDPSendWriters(writers),
+	)
 	if err != nil {
 		t.Fatalf("Listen: %v", err)
 	}

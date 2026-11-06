@@ -801,13 +801,23 @@ func (h *sessionHandler) openWriterForSub(
 	// reading (see [joinWriters]), and resets the open stream of one that
 	// cancelled (§3.1.2).
 	ioCtx, cancelIO := context.WithCancel(ctx)
+	var inbox chan fwdObject
+	var inboxDone chan struct{}
+	if h.subgroupInboxes != nil {
+		inbox = h.subgroupInboxes.get()
+		inboxDone = make(chan struct{})
+	} else {
+		inbox = make(chan fwdObject, h.sendQueueSize)
+	}
 	w := &subgroupWriter{
 		sub:                 sub,
 		ctx:                 ioCtx,
 		cancelIO:            cancelIO,
 		unwatchSub:          context.AfterFunc(sub.Cancelled(), cancelIO),
 		hdr:                 subHdr,
-		inbox:               make(chan fwdObject, h.sendQueueSize),
+		inbox:               inbox,
+		inboxDone:           inboxDone,
+		inboxPool:           h.subgroupInboxes,
 		done:                make(chan struct{}),
 		log:                 h.log,
 		metrics:             h.metrics,
@@ -852,6 +862,8 @@ type subgroupWriter struct {
 	out        *session.OutgoingSubgroupStream // nil until run opens it lazily
 	unbridge   func() bool                     // stops the current stream's ctx→Cancel bridge
 	inbox      chan fwdObject
+	inboxDone  chan struct{}
+	inboxPool  *subgroupInboxPool
 	done       chan struct{}
 	log        *slog.Logger
 	metrics    Metrics
@@ -981,27 +993,28 @@ func (w *subgroupWriter) publish(fwd fwdObject) {
 		w.dropsMu.Unlock()
 		return
 	}
-	w.dropsMu.Unlock()
-
 	fwd.enqueuedAt = time.Now()
 	select {
 	case w.inbox <- fwd:
+		w.dropsMu.Unlock()
 		w.metrics.ObjectForwarded(w.ref, w.hdr.SubgroupID)
 	default:
-		w.metrics.ObjectDropped(w.ref, w.hdr.SubgroupID)
-		w.lastPos = inboundPos{} // the next Object does not follow a sent one
-		w.dropsMu.Lock()
+		w.lastPos = inboundPos{}
 		w.drops++
 		w.markIncompleteLocked(moqt.StreamResetExcessiveLoad)
 		drops := w.drops
 		capped := w.maxDropsBeforeReset > 0 && w.drops > w.maxDropsBeforeReset
 		w.dropsMu.Unlock()
-
-		w.log.Debug("fanout: dropped object on full inbox",
-			"sub_id", w.sub.ID, "drops", drops)
+		w.metrics.ObjectDropped(w.ref, w.hdr.SubgroupID)
+		w.log.Debug("fanout: dropped object on full inbox", "sub_id", w.sub.ID, "drops", drops)
 		if capped {
-			w.log.Warn("fanout: subscriber hit MaxDropsBeforeReset cap, terminating",
-				"sub_id", w.sub.ID, "drops", drops)
+			w.log.Warn(
+				"fanout: subscriber hit MaxDropsBeforeReset cap, terminating",
+				"sub_id",
+				w.sub.ID,
+				"drops",
+				drops,
+			)
 			w.close(true, moqt.StreamResetExcessiveLoad)
 		}
 	}
@@ -1063,6 +1076,7 @@ func (w *subgroupWriter) dropOut() {
 // draining, so publish never blocks.
 func (w *subgroupWriter) run() {
 	defer close(w.done)
+	defer w.releaseInbox()
 	defer w.unwatchSub()
 
 	var (
@@ -1120,7 +1134,7 @@ func (w *subgroupWriter) run() {
 	}()
 
 	// failWrites latches this writer broken and stops contributors
-	// enqueueing. Only close, under sg.Mu, closes the inbox.
+	// enqueueing. Only close, under sg.Mu, ends normal draining.
 	var writeFailedLatched bool
 	failWrites := func() {
 		writeFailed = true
@@ -1134,7 +1148,7 @@ func (w *subgroupWriter) run() {
 
 	var lagExceeded bool
 	queueMetrics, _ := w.metrics.(ObjectQueueMetrics)
-	for fwd := range w.inbox {
+	for fwd, ok := w.nextObject(); ok; fwd, ok = w.nextObject() {
 		if queueMetrics != nil {
 			queueMetrics.ObjectDequeued(w.ref, false, fwd.enqueuedAt, fwd.headerAt)
 		}
@@ -1221,6 +1235,11 @@ func (w *subgroupWriter) run() {
 		// it SHOULD.
 	}
 
+	w.finishStream(lagExceeded, writeFailed)
+}
+
+// finishStream applies the terminal stream/reset state after the inbox drained.
+func (w *subgroupWriter) finishStream(lagExceeded, writeFailed bool) {
 	w.dropsMu.Lock()
 	dropCapped := w.maxDropsBeforeReset > 0 && w.drops > w.maxDropsBeforeReset
 	inboundReset := w.inboundReset
@@ -1238,7 +1257,7 @@ func (w *subgroupWriter) run() {
 			cause = ResetCauseExcessiveLoad
 		}
 		w.metrics.SubscriptionResetSlowReader(w.ref, cause)
-		// Refuse further enqueues; only close may close the inbox.
+		// Refuse further enqueues; close still owns the drain boundary.
 		w.dropsMu.Lock()
 		w.closed = true
 		w.dropsMu.Unlock()
@@ -1349,7 +1368,7 @@ func (w *subgroupWriter) applyPriority() {
 	))
 }
 
-// close closes the inbox, recording whether the writer ends its stream with
+// close stops admission, recording whether the writer ends its stream with
 // a reset (and code) or a FIN. The first call wins. Queued objects are still
 // written; a wedged writer is bounded by [joinWriters].
 func (w *subgroupWriter) close(reset bool, code moqt.StreamResetCode) {
@@ -1359,7 +1378,11 @@ func (w *subgroupWriter) close(reset bool, code moqt.StreamResetCode) {
 		w.inboundReset = reset
 		w.inboundResetCode = code
 		w.dropsMu.Unlock()
-		close(w.inbox)
+		if w.inboxDone != nil {
+			close(w.inboxDone)
+		} else {
+			close(w.inbox)
+		}
 	})
 }
 

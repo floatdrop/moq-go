@@ -78,7 +78,7 @@ func Listen(addr, wtPath string, tlsCfg *tls.Config, logger *slog.Logger, opts .
 	// SETUP as 0.5-RTT data to a peer whose certificate is unverified. 0-RTT would
 	// need Config.Allow0RTT, which defaultQUICConfig deliberately leaves unset.
 	ql, closeSocket, err := listenQUIC(
-		addr, tlsCfg, qcfg, cfg.udpSendBatchSize, cfg.udpSendMetrics, cfg.udpSendSampleEvery,
+		addr, tlsCfg, qcfg, cfg.udpSendBatchSize, cfg.udpSendWriters, cfg.udpSendMetrics, cfg.udpSendSampleEvery,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("relaynet: listen %s: %w", addr, err)

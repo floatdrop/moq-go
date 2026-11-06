@@ -20,12 +20,19 @@ type udpCallSample struct {
 	err             error
 }
 type udpMetricSamples struct {
+	mu    sync.Mutex
 	waits []time.Duration
 	calls []udpCallSample
 }
 
-func (m *udpMetricSamples) UDPSendQueueWait(d time.Duration) { m.waits = append(m.waits, d) }
+func (m *udpMetricSamples) UDPSendQueueWait(d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waits = append(m.waits, d)
+}
 func (m *udpMetricSamples) UDPSendCall(batch bool, requested, sent int, elapsed time.Duration, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.calls = append(m.calls, udpCallSample{batch, requested, sent, elapsed, err})
 }
 
@@ -107,7 +114,7 @@ func TestUDPMetricsPartialAndFallback(t *testing.T) {
 
 func TestUDPMetricsRejectZeroSampleInterval(t *testing.T) {
 	m := &udpMetricSamples{}
-	if _, _, err := listenQUIC("127.0.0.1:0", nil, defaultQUICConfig(), 32, m, 0); err == nil {
+	if _, _, err := listenQUIC("127.0.0.1:0", nil, defaultQUICConfig(), 32, 1, m, 0); err == nil {
 		t.Fatal("accepted zero interval")
 	}
 }
