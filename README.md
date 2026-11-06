@@ -63,6 +63,21 @@ result before returning. Listener shutdown still allows accepted connections
 to drain before releasing the socket. Treat this as an experimental option:
 measure playback quality and CPU under your workload before enabling it.
 
+For send-path diagnostics, pass `relaynet.WithUDPSendMetrics(observer, 128)`
+alongside batching. `UDPSendMetrics` observes sampled queue/admission wait and
+every socket call's requested/sent message counts, duration and error. Partial
+batches and fallback calls are separate events; GSO segments are not counted as
+separate messages. Callbacks must not block and receive no packet contents or
+peer addresses. Nil disables the hooks; ordinary sockets and outbound dials
+are not instrumented. Compare diagnostics off/on when measuring capacity.
+
+A `Config.Metrics` implementation may also implement the optional
+`relay.ObjectQueueMetrics` interface. Its `ObjectDequeued` hook receives stream
+or datagram admission/header timestamps before lag, expiry and write checks,
+including objects later discarded. Implementations can sample before reading
+the clock. FETCH and shutdown queue drains are not reported. `TrackRef.Name`
+comes from the publisher and must be folded into bounded labels.
+
 ## Using the library
 
 The mental model:

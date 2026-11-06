@@ -296,3 +296,14 @@ type ReceivedObject struct {
 	Properties []byte
 	Payload    []byte
 }
+
+// ObjectQueueMetrics is an optional extension of Metrics for stream and datagram fanout
+// diagnostics. ObjectDequeued is called before lag, expiry and write checks,
+// including objects subsequently discarded. enqueuedAt is admission to this
+// subscriber's inbox; headerAt is receipt of the last inbound header byte.
+// Zero timestamps mean unavailable. Hooks must not block and can run
+// concurrently. Implementations may sample before reading their clock.
+// datagram identifies the forwarding queue; FETCH is not reported.
+type ObjectQueueMetrics interface {
+	ObjectDequeued(t TrackRef, datagram bool, enqueuedAt, headerAt time.Time)
+}

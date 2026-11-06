@@ -80,7 +80,7 @@ func TestUDPBatchWriterBatchesReadyWrites(t *testing.T) {
 			return 0, 0, syscall.EIO
 		},
 		close: func() error { unblock(); return nil },
-	}, 8)
+	}, 8, nil, 0)
 	t.Cleanup(func() { w.Close() })
 	results := make(chan error, 17)
 	write := func(id int) {
@@ -228,7 +228,7 @@ func TestUDPBatchWriterCloseUnblocksFullQueue(t *testing.T) {
 		batch:  func([]ipv4.Message) (int, error) { close(entered); <-closed; return 0, net.ErrClosed },
 		single: func([]byte, []byte, *net.UDPAddr) (int, int, error) { return 0, 0, net.ErrClosed },
 		close:  func() error { closeCalls.Add(1); close(closed); return nil },
-	}, 32)
+	}, 32, nil, 0)
 	results := make(chan error, udpSendQueueSize+9)
 	go func() { _, _, err := w.WriteMsgUDP([]byte{1}, nil, nil); results <- err }()
 	<-entered
@@ -294,7 +294,7 @@ func TestUDPBatchWriterDeadlines(t *testing.T) {
 			return nil
 		},
 		close: func() error { unblock(); return nil },
-	}, 32)
+	}, 32, nil, 0)
 	t.Cleanup(func() { w.Close() })
 	results := make(chan error, udpSendQueueSize+2)
 	write := func() { _, _, err := w.WriteMsgUDP([]byte{1}, nil, nil); results <- err }
@@ -333,7 +333,7 @@ func BenchmarkUDPBatchWriter(b *testing.B) {
 			}
 			return len(ms), nil
 		},
-	}, 32)
+	}, 32, nil, 0)
 	b.Cleanup(func() { w.Close() })
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {

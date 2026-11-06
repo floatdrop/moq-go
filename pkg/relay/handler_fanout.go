@@ -1133,7 +1133,11 @@ func (w *subgroupWriter) run() {
 	}
 
 	var lagExceeded bool
+	queueMetrics, _ := w.metrics.(ObjectQueueMetrics)
 	for fwd := range w.inbox {
+		if queueMetrics != nil {
+			queueMetrics.ObjectDequeued(w.ref, false, fwd.enqueuedAt, fwd.headerAt)
+		}
 		if w.lagging(fwd) {
 			w.log.Warn("fanout: subscriber exceeded MaxFanoutLag, terminating",
 				"sub_id", w.sub.ID, "lag", time.Since(fwd.enqueuedAt).String())

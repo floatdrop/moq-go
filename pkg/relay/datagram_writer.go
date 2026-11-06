@@ -17,6 +17,7 @@ type queuedDatagram struct {
 	sub        *registry.DownstreamSub
 	object     message.ObjectDatagram
 	receivedAt time.Time
+	enqueuedAt time.Time
 	ref        TrackRef
 }
 
@@ -78,8 +79,12 @@ func (w *datagramWriter) enqueue(
 	}
 	// Reserve before enqueue: PUBLISH_DONE must wait for queued objects as well
 	// as the send currently in progress (§9.9). Every drop releases its reserve.
+	queued := queuedDatagram{sub: sub, object: d, receivedAt: receivedAt, ref: ref}
+	if _, ok := w.metrics.(ObjectQueueMetrics); ok {
+		queued.enqueuedAt = time.Now()
+	}
 	select {
-	case w.queue <- queuedDatagram{sub: sub, object: d, receivedAt: receivedAt, ref: ref}:
+	case w.queue <- queued:
 		w.mu.Unlock()
 		w.metrics.ObjectForwarded(ref, 0)
 	default:
@@ -128,6 +133,9 @@ func (w *datagramWriter) drop(d queuedDatagram) {
 }
 
 func (w *datagramWriter) send(d queuedDatagram) {
+	if m, ok := w.metrics.(ObjectQueueMetrics); ok {
+		m.ObjectDequeued(d.ref, true, d.enqueuedAt, d.receivedAt)
+	}
 	select {
 	case <-w.stopCh:
 		w.drop(d)

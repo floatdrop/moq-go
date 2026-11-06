@@ -13,9 +13,11 @@ type Option func(*config)
 
 // config is what the Options of one entry point build.
 type config struct {
-	quic             *quic.Config
-	wt               webtransport.Config
-	udpSendBatchSize int
+	quic               *quic.Config
+	wt                 webtransport.Config
+	udpSendBatchSize   int
+	udpSendMetrics     UDPSendMetrics
+	udpSendSampleEvery uint32
 }
 
 // WithUDPSendBatchSize opts Listen into a shared Linux UDP writer that batches

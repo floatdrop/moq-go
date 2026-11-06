@@ -3,6 +3,7 @@ package relaynet
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net"
 	"runtime"
@@ -57,7 +58,17 @@ func (c *udpBatchConn) Close() error { return c.writer.Close() }
 // supplied PacketConn is application-owned, unlike ListenAddr's socket. Track
 // connection contexts (including failed handshakes) so closing the listener
 // doesn't tear down sessions that are still draining.
-func listenQUIC(addr string, tlsCfg *tls.Config, qcfg *quic.Config, batchSize int) (*quic.Listener, func(), error) {
+func listenQUIC(
+	addr string,
+	tlsCfg *tls.Config,
+	qcfg *quic.Config,
+	batchSize int,
+	metrics UDPSendMetrics,
+	sampleEvery uint32,
+) (*quic.Listener, func(), error) {
+	if metrics != nil && sampleEvery == 0 {
+		return nil, nil, errors.New("UDP send metrics sample interval must be positive")
+	}
 	if batchSize < 0 || batchSize > maxUDPSendBatchSize {
 		return nil, nil, fmt.Errorf("UDP send batch size must be between 0 and %d", maxUDPSendBatchSize)
 	}
@@ -74,7 +85,9 @@ func listenQUIC(addr string, tlsCfg *tls.Config, qcfg *quic.Config, batchSize in
 		return nil, nil, err
 	}
 	conn := &udpBatchConn{UDPConn: socket}
-	conn.writer = newUDPBatchWriter(udpBatchBackend{UDPConn: socket, batch: ipv4.NewPacketConn(socket)}, batchSize)
+	conn.writer = newUDPBatchWriter(
+		udpBatchBackend{UDPConn: socket, batch: ipv4.NewPacketConn(socket)}, batchSize, metrics, sampleEvery,
+	)
 	var connections sync.WaitGroup
 	transport := &quic.Transport{
 		Conn: conn,

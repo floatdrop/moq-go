@@ -3,6 +3,7 @@ package relaynet
 import (
 	"errors"
 	"io"
+	"math/rand/v2"
 	"net"
 	"os"
 	"sync"
@@ -28,10 +29,11 @@ type udpWriteResult struct {
 }
 
 type udpWriteRequest struct {
-	buffer [1][]byte
-	oob    []byte
-	addr   *net.UDPAddr
-	done   chan udpWriteResult
+	buffer   [1][]byte
+	oob      []byte
+	addr     *net.UDPAddr
+	done     chan udpWriteResult
+	queuedAt time.Time
 }
 
 type udpWriteDeadline struct {
@@ -43,12 +45,14 @@ type udpWriteDeadline struct {
 // enqueue (or timing out without joining the worker) would let QUIC release a
 // packet buffer while sendmmsg still uses it.
 type udpBatchWriter struct {
-	socket udpBatchSocket
-	size   int
-	queue  chan *udpWriteRequest
-	closed chan struct{}
-	done   chan struct{}
-	pool   sync.Pool
+	socket      udpBatchSocket
+	metrics     UDPSendMetrics
+	sampleEvery uint32
+	size        int
+	queue       chan *udpWriteRequest
+	closed      chan struct{}
+	done        chan struct{}
+	pool        sync.Pool
 
 	// Admission holds a read lock only until enqueue/cancellation, never while
 	// waiting for a write. Close first cancels admission and interrupts the
@@ -61,13 +65,15 @@ type udpBatchWriter struct {
 	deadlineMu sync.Mutex
 }
 
-func newUDPBatchWriter(socket udpBatchSocket, size int) *udpBatchWriter {
+func newUDPBatchWriter(socket udpBatchSocket, size int, metrics UDPSendMetrics, sampleEvery uint32) *udpBatchWriter {
 	w := &udpBatchWriter{
-		socket: socket,
-		size:   size,
-		queue:  make(chan *udpWriteRequest, udpSendQueueSize),
-		closed: make(chan struct{}),
-		done:   make(chan struct{}),
+		socket:      socket,
+		metrics:     metrics,
+		sampleEvery: sampleEvery,
+		size:        size,
+		queue:       make(chan *udpWriteRequest, udpSendQueueSize),
+		closed:      make(chan struct{}),
+		done:        make(chan struct{}),
 		pool: sync.Pool{New: func() any {
 			return &udpWriteRequest{done: make(chan udpWriteResult, 1)}
 		}},
@@ -80,6 +86,10 @@ func newUDPBatchWriter(socket udpBatchSocket, size int) *udpBatchWriter {
 func (w *udpBatchWriter) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (int, int, error) {
 	r, _ := w.pool.Get().(*udpWriteRequest) // pool.New only creates udpWriteRequest values.
 	r.buffer[0], r.oob, r.addr = b, oob, addr
+	//nolint:gosec // Diagnostic sampling is not a security decision.
+	if w.metrics != nil && rand.Uint32N(w.sampleEvery) == 0 {
+		r.queuedAt = time.Now()
+	}
 	err := w.enqueue(r)
 	var result udpWriteResult
 	if err == nil {
@@ -88,6 +98,7 @@ func (w *udpBatchWriter) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (int, int
 		result.err = err
 	}
 	r.buffer[0], r.oob, r.addr = nil, nil, nil
+	r.queuedAt = time.Time{}
 	w.pool.Put(r)
 	return result.n, result.oobn, result.err
 }
@@ -195,7 +206,11 @@ func (w *udpBatchWriter) flush(requests []*udpWriteRequest, messages []ipv4.Mess
 			return
 		}
 		if !*singleOnly {
+			start := w.beforeSend(requests)
 			n, err := w.socket.WriteBatch(messages, 0)
+			if w.metrics != nil {
+				w.metrics.UDPSendCall(true, len(messages), n, time.Since(start), err)
+			}
 			for i := range n {
 				r := requests[i]
 				result := udpWriteResult{n: messages[i].N, oobn: len(r.oob)}
@@ -223,7 +238,15 @@ func (w *udpBatchWriter) flush(requests []*udpWriteRequest, messages []ipv4.Mess
 		if err := w.writeError(); err != nil {
 			result.err = err
 		} else {
+			start := w.beforeSend(requests[:1])
 			result.n, result.oobn, result.err = w.socket.WriteMsgUDP(r.buffer[0], r.oob, r.addr)
+			if w.metrics != nil {
+				sent := 0
+				if result.err == nil {
+					sent = 1
+				}
+				w.metrics.UDPSendCall(false, 1, sent, time.Since(start), result.err)
+			}
 		}
 		completeUDPWrite(requests, messages, 0, result)
 		requests, messages = requests[1:], messages[1:]
@@ -236,4 +259,21 @@ func completeUDPWrite(requests []*udpWriteRequest, messages []ipv4.Message, i in
 	// immediately recycle both its packet buffer and this pooled request.
 	requests[i], messages[i] = nil, ipv4.Message{}
 	r.done <- result
+}
+
+// beforeSend records each selected request only once, even if a partial batch
+// or a failed sendmmsg needs another call. No timestamps are taken when off.
+func (w *udpBatchWriter) beforeSend(requests []*udpWriteRequest) time.Time {
+	if w.metrics == nil {
+		return time.Time{}
+	}
+	now := time.Now()
+	for _, r := range requests {
+		if !r.queuedAt.IsZero() {
+			w.metrics.UDPSendQueueWait(now.Sub(r.queuedAt))
+			r.queuedAt = time.Time{}
+		}
+	}
+	// Keep observer time out of the socket-call duration.
+	return time.Now()
 }

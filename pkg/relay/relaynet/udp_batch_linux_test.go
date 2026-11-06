@@ -50,9 +50,10 @@ func TestUDPBatchConnGSOMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	m := &udpMetricSamples{}
 	c := &udpBatchConn{
 		UDPConn: socket,
-		writer:  newUDPBatchWriter(udpBatchBackend{UDPConn: socket, batch: ipv4.NewPacketConn(socket)}, 32),
+		writer:  newUDPBatchWriter(udpBatchBackend{UDPConn: socket, batch: ipv4.NewPacketConn(socket)}, 32, m, 1),
 	}
 	t.Cleanup(func() { c.Close() })
 	const segmentSize = 900
@@ -98,6 +99,10 @@ func TestUDPBatchConnGSOMetadata(t *testing.T) {
 		if !foundECN {
 			t.Fatalf("segment %d lost ECN metadata", id)
 		}
+	}
+	c.Close()
+	if len(m.waits) != 2 || len(m.calls) != 2 || m.calls[0].sent != 1 || m.calls[1].sent != 1 {
+		t.Fatalf("GSO metrics counted segments as messages: %+v", m)
 	}
 }
 
@@ -156,7 +161,7 @@ func TestUDPBatchListenerFailureClosesSocket(t *testing.T) {
 	}
 	addr := s.LocalAddr().String()
 	s.Close()
-	if l, _, err := listenQUIC(addr, nil, defaultQUICConfig(), 32); err == nil {
+	if l, _, err := listenQUIC(addr, nil, defaultQUICConfig(), 32, nil, 0); err == nil {
 		l.Close()
 		t.Fatal("nil TLS config accepted")
 	}
@@ -183,7 +188,7 @@ func TestUDPBatchConnDeadlineAndClosedError(t *testing.T) {
 	}
 	c := &udpBatchConn{
 		UDPConn: s,
-		writer:  newUDPBatchWriter(udpBatchBackend{UDPConn: s, batch: ipv4.NewPacketConn(s)}, 32),
+		writer:  newUDPBatchWriter(udpBatchBackend{UDPConn: s, batch: ipv4.NewPacketConn(s)}, 32, nil, 0),
 	}
 	t.Cleanup(func() { c.Close() })
 	if err = c.SetDeadline(time.Now().Add(-time.Second)); err != nil {
