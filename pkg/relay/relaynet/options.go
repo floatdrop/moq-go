@@ -16,6 +16,7 @@ type config struct {
 	quic               *quic.Config
 	wt                 webtransport.Config
 	udpSendBatchSize   int
+	udpSendWriters     int
 	udpSendMetrics     UDPSendMetrics
 	udpSendSampleEvery uint32
 }
@@ -30,6 +31,15 @@ type config struct {
 // result, preserving QUIC's buffer lifetime, GSO fallback and pacing contract.
 func WithUDPSendBatchSize(size int) Option {
 	return func(c *config) { c.udpSendBatchSize = size }
+}
+
+// WithUDPSendWriters opts Listen into one or two Linux UDP batch writers.
+// Zero and one select the default single writer. Two requires a positive
+// WithUDPSendBatchSize and uses separate Go handles to the same socket, with
+// stable destination affinity and a shared total budget of 256 queued writes.
+// Other operating systems keep their ordinary socket. Dial options ignore it.
+func WithUDPSendWriters(count int) Option {
+	return func(c *config) { c.udpSendWriters = count }
 }
 
 // WithQUICConfig returns an [Option] that runs tune over the [quic.Config] the

@@ -4,7 +4,7 @@ import "time"
 
 // UDPSendMetrics observes the shared Linux UDP writer enabled by
 // WithUDPSendBatchSize. Hooks run synchronously and must not block. They may
-// be called concurrently if the same implementation observes several listeners.
+// be called concurrently with two writers or when observing several listeners.
 // No peer addresses or packet contents are exposed.
 type UDPSendMetrics interface {
 	// UDPSendQueueWait measures sampled writes from admission in WriteMsgUDP until

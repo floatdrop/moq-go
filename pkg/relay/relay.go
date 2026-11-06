@@ -169,7 +169,9 @@ type Config struct {
 	// more memory locked up.
 	// Datagrams share one queue of this size per downstream session, across
 	// all its subscriptions, so a congested connection cannot stall others.
-	// Zero means: use the default of 64.
+	// Zero means: use the default of 64. Subgroup inbox storage is reused in
+	// a relay-wide cache of at most 1024 empty queues when this is at most 256;
+	// larger configured queues keep the ordinary allocation path.
 	SendQueueSize int
 
 	// MaxFanoutLag bounds how far behind the live edge a downstream
@@ -331,7 +333,8 @@ type Relay struct {
 
 	// statusRounds shares forwarded TRACK_STATUS rounds across every
 	// session handler; see [sessionHandler.forwardTrackStatus].
-	statusRounds *trackStatusRounds
+	statusRounds    *trackStatusRounds
+	subgroupInboxes *subgroupInboxPool
 
 	// upstreams dials and pools relay-to-relay sessions for Discovery-driven
 	// cross-relay upstream SUBSCRIBE. nil when Config.Dialer is unset (the
@@ -432,15 +435,16 @@ func New(listener Listener, cfg Config) *Relay {
 	}
 
 	r := &Relay{
-		listener:     listener,
-		cfg:          cfg,
-		log:          log.With("component", "relay"),
-		tracks:       registry.NewTrackRegistry(trackOpts...),
-		names:        registry.NewNamespaceRegistry(nameOpts...),
-		fetch:        registry.NewFetchRouter(),
-		statusRounds: newTrackStatusRounds(),
-		sessions:     make(map[*session.Session]struct{}),
-		stopCh:       make(chan struct{}),
+		listener:        listener,
+		cfg:             cfg,
+		log:             log.With("component", "relay"),
+		tracks:          registry.NewTrackRegistry(trackOpts...),
+		names:           registry.NewNamespaceRegistry(nameOpts...),
+		fetch:           registry.NewFetchRouter(),
+		statusRounds:    newTrackStatusRounds(),
+		subgroupInboxes: newSubgroupInboxPool(cfg.SendQueueSize),
+		sessions:        make(map[*session.Session]struct{}),
+		stopCh:          make(chan struct{}),
 	}
 	if cfg.PauseUnwatchedPublishes > 0 {
 		r.pauser = &unwatchedPauser{delay: cfg.PauseUnwatchedPublishes, stop: r.stopCh, run: r.handlers.Go}
@@ -724,6 +728,7 @@ func (r *Relay) serveSession(ctx context.Context, sess *session.Session, leg Leg
 		auth, r.cfg.Metrics, leg, r.fetch, r.statusRounds, r.upstreams,
 		r.cfg.Discovery, r.cfg.RelayAddr,
 		r.cfg.SendQueueSize, r.cfg.MaxDropsBeforeReset, r.cfg.MaxFanoutLag,
+		r.subgroupInboxes,
 		r.cfg.MaxSubscriptionsPerSession, r.cfg.MaxNamespaceRequestsPerSession,
 		max(r.cfg.MaxRendezvousTimeout, 0),
 		r.handlers.Go,

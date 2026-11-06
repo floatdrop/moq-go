@@ -66,12 +66,22 @@ type udpBatchWriter struct {
 }
 
 func newUDPBatchWriter(socket udpBatchSocket, size int, metrics UDPSendMetrics, sampleEvery uint32) *udpBatchWriter {
+	return newUDPBatchWriterWithQueue(socket, size, metrics, sampleEvery, udpSendQueueSize)
+}
+
+func newUDPBatchWriterWithQueue(
+	socket udpBatchSocket,
+	size int,
+	metrics UDPSendMetrics,
+	sampleEvery uint32,
+	queueSize int,
+) *udpBatchWriter {
 	w := &udpBatchWriter{
 		socket:      socket,
 		metrics:     metrics,
 		sampleEvery: sampleEvery,
 		size:        size,
-		queue:       make(chan *udpWriteRequest, udpSendQueueSize),
+		queue:       make(chan *udpWriteRequest, queueSize),
 		closed:      make(chan struct{}),
 		done:        make(chan struct{}),
 		pool: sync.Pool{New: func() any {
@@ -206,19 +216,7 @@ func (w *udpBatchWriter) flush(requests []*udpWriteRequest, messages []ipv4.Mess
 			return
 		}
 		if !*singleOnly {
-			start := w.beforeSend(requests)
-			n, err := w.socket.WriteBatch(messages, 0)
-			if w.metrics != nil {
-				w.metrics.UDPSendCall(true, len(messages), n, time.Since(start), err)
-			}
-			for i := range n {
-				r := requests[i]
-				result := udpWriteResult{n: messages[i].N, oobn: len(r.oob)}
-				if result.n != len(r.buffer[0]) {
-					result.err = io.ErrShortWrite
-				}
-				completeUDPWrite(requests, messages, i, result)
-			}
+			n, err := w.sendBatch(requests, messages)
 			requests, messages = requests[n:], messages[n:]
 			if len(requests) == 0 {
 				return
@@ -251,6 +249,24 @@ func (w *udpBatchWriter) flush(requests []*udpWriteRequest, messages []ipv4.Mess
 		completeUDPWrite(requests, messages, 0, result)
 		requests, messages = requests[1:], messages[1:]
 	}
+}
+
+// sendBatch completes only the accepted prefix; flush owns unsent retries.
+func (w *udpBatchWriter) sendBatch(requests []*udpWriteRequest, messages []ipv4.Message) (int, error) {
+	start := w.beforeSend(requests)
+	n, err := w.socket.WriteBatch(messages, 0)
+	if w.metrics != nil {
+		w.metrics.UDPSendCall(true, len(messages), n, time.Since(start), err)
+	}
+	for i := range n {
+		r := requests[i]
+		result := udpWriteResult{n: messages[i].N, oobn: len(r.oob)}
+		if result.n != len(r.buffer[0]) {
+			result.err = io.ErrShortWrite
+		}
+		completeUDPWrite(requests, messages, i, result)
+	}
+	return n, err
 }
 
 func completeUDPWrite(requests []*udpWriteRequest, messages []ipv4.Message, i int, result udpWriteResult) {

@@ -63,6 +63,18 @@ result before returning. Listener shutdown still allows accepted connections
 to drain before releasing the socket. Treat this as an experimental option:
 measure playback quality and CPU under your workload before enabling it.
 
+For two parallel writers, also pass `-udp-send-writers 2` (or
+`relaynet.WithUDPSendWriters(2)`). This is opt-in and requires batching.
+Destinations stay on a fixed writer; both Go handles share the source socket
+and port. The total queue remains 256 writes, divided between the writers.
+The default is one writer. With two writers an observer can be called
+concurrently, and summed socket-call durations can exceed elapsed time.
+
+Subgroup fanout reuses empty inbox storage after each writer has finished.
+The relay-wide cache retains at most 1024 queues, only for queue capacities up
+to 256 objects; larger queues use the ordinary allocation path. Closing a
+subgroup still drains its queued objects before completing.
+
 For send-path diagnostics, pass `relaynet.WithUDPSendMetrics(observer, 128)`
 alongside batching. `UDPSendMetrics` observes sampled queue/admission wait and
 every socket call's requested/sent message counts, duration and error. Partial

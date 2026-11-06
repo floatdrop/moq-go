@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"hash/maphash"
 	"net"
+	"strconv"
 	"testing"
 	"time"
 	"unsafe"
@@ -24,6 +26,12 @@ func udpControlMessage(level, kind int32, data []byte) []byte {
 }
 
 func TestUDPBatchConnGSOMetadata(t *testing.T) {
+	t.Run("one", func(t *testing.T) { testUDPBatchConnGSOMetadata(t, 1, 0) })
+	t.Run("two-shard-0", func(t *testing.T) { testUDPBatchConnGSOMetadata(t, 2, 0) })
+	t.Run("two-shard-1", func(t *testing.T) { testUDPBatchConnGSOMetadata(t, 2, 1) })
+}
+
+func testUDPBatchConnGSOMetadata(t *testing.T, writers, shard int) {
 	t.Parallel()
 	receiver, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback})
 	if err != nil {
@@ -51,10 +59,25 @@ func TestUDPBatchConnGSOMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := &udpMetricSamples{}
-	c := &udpBatchConn{
-		UDPConn: socket,
-		writer:  newUDPBatchWriter(udpBatchBackend{UDPConn: socket, batch: ipv4.NewPacketConn(socket)}, 32, m, 1),
+	var writer udpPacketWriter
+	if writers == 1 {
+		writer = newUDPBatchWriter(udpBatchBackend{UDPConn: socket, batch: ipv4.NewPacketConn(socket)}, 32, m, 1)
+	} else {
+		group, err := newUDPWriterGroup(socket, 32, m, 1)
+		if err != nil {
+			socket.Close()
+			t.Fatal(err)
+		}
+		for attempt := 0; group.shard(receiver.LocalAddr().(*net.UDPAddr)) != shard && attempt < 1000; attempt++ {
+			group.seed = maphash.MakeSeed()
+		}
+		if group.shard(receiver.LocalAddr().(*net.UDPAddr)) != shard {
+			group.Close()
+			t.Fatal("could not select metadata shard")
+		}
+		writer = group
 	}
+	c := &udpBatchConn{UDPConn: socket, writer: writer}
 	t.Cleanup(func() { c.Close() })
 	const segmentSize = 900
 	gso := udpControlMessage(unix.IPPROTO_UDP, unix.UDP_SEGMENT, binary.NativeEndian.AppendUint16(nil, segmentSize))
@@ -107,13 +130,19 @@ func TestUDPBatchConnGSOMetadata(t *testing.T) {
 }
 
 func TestUDPBatchListenerReleasesSocket(t *testing.T) {
+	for _, writers := range []int{1, 2} {
+		t.Run(strconv.Itoa(writers), func(t *testing.T) { testUDPBatchListenerReleasesSocket(t, writers) })
+	}
+}
+
+func testUDPBatchListenerReleasesSocket(t *testing.T, writers int) {
 	for _, acceptConnection := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "drained"}[acceptConnection], func(t *testing.T) {
 			tlsCfg, err := TLSConfig("", "", DualALPNs)
 			if err != nil {
 				t.Fatal(err)
 			}
-			l, err := Listen("127.0.0.1:0", "/moq", tlsCfg, nil, WithUDPSendBatchSize(32))
+			l, err := Listen("127.0.0.1:0", "/moq", tlsCfg, nil, WithUDPSendBatchSize(32), WithUDPSendWriters(writers))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -155,13 +184,19 @@ func TestUDPBatchListenerReleasesSocket(t *testing.T) {
 }
 
 func TestUDPBatchListenerFailureClosesSocket(t *testing.T) {
+	for _, writers := range []int{1, 2} {
+		t.Run(strconv.Itoa(writers), func(t *testing.T) { testUDPBatchListenerFailureClosesSocket(t, writers) })
+	}
+}
+
+func testUDPBatchListenerFailureClosesSocket(t *testing.T, writers int) {
 	s, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	addr := s.LocalAddr().String()
 	s.Close()
-	if l, _, err := listenQUIC(addr, nil, defaultQUICConfig(), 32, nil, 0); err == nil {
+	if l, _, err := listenQUIC(addr, nil, defaultQUICConfig(), 32, writers, nil, 0); err == nil {
 		l.Close()
 		t.Fatal("nil TLS config accepted")
 	}
