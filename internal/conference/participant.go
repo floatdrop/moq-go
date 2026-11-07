@@ -129,7 +129,6 @@ func (p *participant) serve(ctx context.Context, sub *session.Subscription) {
 }
 
 // isCancelled reports whether this side cancelled alias's subscription.
-// §3.1.3: Objects can still arrive after, and are discarded.
 func (p *participant) isCancelled(alias uint64) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -169,8 +168,8 @@ func (p *participant) receiveDatagrams(ctx context.Context) {
 		case err != nil:
 			return
 		}
-		if t, ok := p.tracks[d.TrackAlias]; ok && t.kind == kindAudio && !p.isCancelled(d.TrackAlias) {
-			p.record(kindAudio, d.ObjectPayload)
+		if t, ok := p.tracks[d.TrackAlias]; ok && t.kind == kindAudio {
+			p.record(d.TrackAlias, kindAudio, d.ObjectPayload)
 		}
 	}
 }
@@ -189,7 +188,7 @@ func (p *participant) acceptStreams(ctx context.Context) {
 			ds.Cancel(moqt.StreamResetCancelled) // no FETCH was sent
 			continue
 		}
-		if t, ok := p.tracks[sg.Header.TrackAlias]; !ok || t.kind != kindVideo || p.isCancelled(sg.Header.TrackAlias) {
+		if t, ok := p.tracks[sg.Header.TrackAlias]; !ok || t.kind != kindVideo {
 			sg.Cancel(moqt.StreamResetCancelled)
 			continue
 		}
@@ -214,25 +213,31 @@ func (p *participant) readVideo(sg *session.IncomingSubgroupStream) {
 			}
 			return
 		}
-		p.record(kindVideo, obj.Payload)
+		if !p.record(sg.Header.TrackAlias, kindVideo, obj.Payload) {
+			// Cancelled while this stream was open: nothing more on it is wanted.
+			sg.Cancel(moqt.StreamResetCancelled)
+			return
+		}
 	}
 }
 
-// record counts an Object whose send time falls in the window.
-func (p *participant) record(kind mediaKind, payload []byte) {
+// record counts an Object of alias's track whose send time falls in the
+// window. It reports false, counting nothing, once this side cancelled the
+// track: §3.1.3, Objects can still arrive, and are discarded.
+func (p *participant) record(alias uint64, kind mediaKind, payload []byte) bool {
 	sent, ok := stampOf(payload)
 	latency := p.run.now() - sent
-	inWindow := ok && p.run.win.Load().contains(sent)
-	if ok && !inWindow {
-		return
-	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if !ok {
+	switch {
+	case p.cancelled[alias]:
+		return false
+	case !ok:
 		p.unstamped++
-		return
+	case p.run.win.Load().contains(sent):
+		p.received[kind]++
+		p.latency[kind].record(latency)
+		p.bytes += int64(len(payload))
 	}
-	p.received[kind]++
-	p.latency[kind].record(latency)
-	p.bytes += int64(len(payload))
+	return true
 }

@@ -2,6 +2,7 @@ package conference
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -105,7 +106,8 @@ func TestParticipantAfterCancellingAMalformedTrack(t *testing.T) {
 		return p.received[kind]
 	}
 
-	// A well-formed Object of each kind arrives and counts.
+	// Well-formed Objects of each kind arrive and count: on two video
+	// streams, both still open when the track turns malformed.
 	first, err := srv.OpenSubgroup(message.SubgroupHeader{TrackAlias: video, GroupID: 0})
 	if err != nil {
 		t.Fatal(err)
@@ -113,12 +115,19 @@ func TestParticipantAfterCancellingAMalformedTrack(t *testing.T) {
 	if err := first.WriteObjectAt(0, &message.SubgroupObject{Payload: stamped()}); err != nil {
 		t.Fatal(err)
 	}
+	quiet, err := srv.OpenSubgroup(message.SubgroupHeader{TrackAlias: video, GroupID: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := quiet.WriteObjectAt(0, &message.SubgroupObject{Payload: stamped()}); err != nil {
+		t.Fatal(err)
+	}
 	if err := srv.SendDatagram(
 		&message.ObjectDatagram{TrackAlias: audio, GroupID: 0, ObjectPayload: stamped()},
 	); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the first Objects", func() bool { return received(kindVideo) == 1 && received(kindAudio) == 1 })
+	eventually(t, "the first Objects", func() bool { return received(kindVideo) == 2 && received(kindAudio) == 1 })
 
 	// Then each track turns malformed (§10.9: a Prior Object ID Gap beyond
 	// the Object ID), and the participant cancels both.
@@ -136,18 +145,24 @@ func TestParticipantAfterCancellingAMalformedTrack(t *testing.T) {
 	}
 	eventually(t, "both cancels", func() bool { return p.isCancelled(video) && p.isCancelled(audio) })
 
-	// The publisher resets the stream the cancel ended: not a reset to blame.
-	first.Cancel(moqt.StreamResetCancelled)
+	// One stream open at the cancel carries one more Object, which is not
+	// counted, and is refused from then on. The other carries none, and the
+	// publisher resets it: a reset that follows the cancel is not its fault.
+	if err := first.WriteObjectAt(1, &message.SubgroupObject{Payload: stamped()}); err != nil {
+		t.Fatal(err)
+	}
+	stopSendingArrives(t, "the stream open at the cancel", first, 2)
+	quiet.Cancel(moqt.StreamResetCancelled)
 	// It STOP_SENDING'd the malformed stream rather than leave it unread:
 	// writes to it fail once that lands.
-	stopSendingArrives(t, "the malformed stream", bad)
+	stopSendingArrives(t, "the malformed stream", bad, 1)
 	// Late Objects: a new stream, which it cancels unread, and a datagram,
 	// which it drops.
 	late, err := srv.OpenSubgroup(message.SubgroupHeader{TrackAlias: video, GroupID: 2})
 	if err != nil {
 		t.Fatal(err)
 	}
-	stopSendingArrives(t, "the late stream", late)
+	stopSendingArrives(t, "the late stream", late, 0)
 	// Two datagrams were handled, so the receive loop waits in its third
 	// call; it begins a fourth once it has handled the late one.
 	eventually(t, "the receive loop to wait", func() bool { return counted.calls.Load() == 3 })
@@ -160,7 +175,7 @@ func TestParticipantAfterCancellingAMalformedTrack(t *testing.T) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.received != [2]int64{1, 1} {
+	if p.received != [2]int64{2, 1} {
 		t.Errorf(
 			"received video %d, audio %d; want only the Objects before the cancel",
 			p.received[kindVideo],
@@ -172,22 +187,26 @@ func TestParticipantAfterCancellingAMalformedTrack(t *testing.T) {
 	}
 }
 
-// stopSendingArrives writes to sg until a write fails, as one does once the
-// reader's STOP_SENDING lands; a reader that never sends it lets the writes
-// fill the stream and block, which fails the test instead of hanging it.
-func stopSendingArrives(t *testing.T, what string, sg *session.OutgoingSubgroupStream) {
+// stopSendingArrives writes Objects from ID next on to sg until a write
+// fails, as one does once the reader's STOP_SENDING lands; a reader that
+// never sends it lets the writes fill the stream and block, which fails the
+// test instead of hanging it.
+func stopSendingArrives(t *testing.T, what string, sg *session.OutgoingSubgroupStream, next uint64) {
 	t.Helper()
-	failed := make(chan struct{})
+	failed := make(chan error, 1)
 	go func() {
-		for id := uint64(1); ; id++ {
-			if sg.WriteObjectAt(id, &message.SubgroupObject{Payload: make([]byte, 1024)}) != nil {
-				close(failed)
+		for id := next; ; id++ {
+			if err := sg.WriteObjectAt(id, &message.SubgroupObject{Payload: make([]byte, 1024)}); err != nil {
+				failed <- err
 				return
 			}
 		}
 	}()
 	select {
-	case <-failed:
+	case err := <-failed:
+		if errors.Is(err, session.ErrObjectIDNotIncreasing) {
+			t.Fatalf("%s: %v; the test wrote a used Object ID", what, err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("%s: writes still succeed; the participant sent no STOP_SENDING", what)
 	}
