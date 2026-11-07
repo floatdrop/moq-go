@@ -206,6 +206,22 @@ type run struct {
 // now is the run's clock: monotonic, shared by every publisher and subscriber.
 func (r *run) now() time.Duration { return time.Since(r.epoch) }
 
+// windowLead is how far ahead of its publication a window starts.
+const windowLead = 50 * time.Millisecond
+
+// openWindow publishes a window of length d that starts windowLead from now,
+// so it is visible before any Object it counts is stamped. Opened at once, an
+// Object stamped between reading the clock and storing the window would be
+// counted by every subscriber and not by its publisher, which found no window
+// yet; the allocation is done first, as a GC assist there can take that long.
+func (r *run) openWindow(d time.Duration) *window {
+	w := new(window)
+	w.start = r.now() + windowLead
+	w.end = w.start + d
+	r.win.Store(w)
+	return w
+}
+
 func (r *run) namespace(speaker int) wire.TrackNamespace {
 	return wire.Namespace(r.room, fmt.Sprintf("p%d", speaker))
 }
@@ -252,8 +268,10 @@ func Run(ctx context.Context, cfg Config) (*Report, error) {
 	if err := sleep(ctx, cfg.Settle); err != nil {
 		return nil, err
 	}
-	start := r.now()
-	r.win.Store(&window{start: start, end: start + cfg.Window})
+	w := r.openWindow(cfg.Window)
+	if err := sleep(ctx, w.start-r.now()); err != nil {
+		return nil, err
+	}
 	cpu0 := processCPU()
 	if cfg.OnWindow != nil {
 		cfg.OnWindow(true)

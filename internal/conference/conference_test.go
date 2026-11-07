@@ -540,6 +540,23 @@ func TestConcurrentRunsShareARelay(t *testing.T) {
 	}
 }
 
+// A window is published before it starts, so a publisher and its
+// subscribers judge every Object against the same window: none is stamped
+// inside it while it is still unseen.
+func TestWindowIsPublishedBeforeItStarts(t *testing.T) {
+	t.Parallel()
+	r := &run{epoch: time.Now()}
+	for range 1000 {
+		w := r.openWindow(time.Second)
+		if now := r.now(); now >= w.start {
+			t.Fatalf("window starting at %s published at %s", w.start, now)
+		}
+		if r.win.Load() != w || w.end-w.start != time.Second {
+			t.Fatalf("published %+v, opened %+v", r.win.Load(), w)
+		}
+	}
+}
+
 func TestHistogram(t *testing.T) {
 	t.Parallel()
 	var h histogram
