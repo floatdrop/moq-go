@@ -557,6 +557,29 @@ func TestWindowIsPublishedBeforeItStarts(t *testing.T) {
 	}
 }
 
+// OnWindow fires once the window has started and again once it has ended, so
+// what a caller measures between the two calls (a relay's CPU, a profile) is
+// the window and not the lead before it.
+func TestOnWindowBracketsTheWindow(t *testing.T) {
+	t.Parallel()
+	r := &run{epoch: time.Now()}
+	var opened, closed time.Duration
+	r.cfg = Config{Window: 20 * time.Millisecond, OnWindow: func(open bool) {
+		if open {
+			opened = r.now()
+		} else {
+			closed = r.now()
+		}
+	}}.withDefaults()
+	if _, err := r.measure(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	w := r.win.Load()
+	if opened < w.start || closed < w.end {
+		t.Errorf("OnWindow at %s and %s; the window is [%s, %s)", opened, closed, w.start, w.end)
+	}
+}
+
 func TestHistogram(t *testing.T) {
 	t.Parallel()
 	var h histogram

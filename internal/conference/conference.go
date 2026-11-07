@@ -123,8 +123,9 @@ type Config struct {
 	// JoinTimeout bounds one participant's dial, setup and subscribes
 	// (default 15 s).
 	JoinTimeout time.Duration
-	// Settle is the wait between the last join and the window (default one
-	// GOP plus 500 ms), so every participant has reached a Group boundary.
+	// Settle is the wait between the last join and the window's publication
+	// (default one GOP plus 500 ms), so every participant has reached a Group
+	// boundary; the window starts windowLead after that.
 	Settle time.Duration
 	// Window is how long delivery is measured.
 	Window time.Duration
@@ -268,21 +269,9 @@ func Run(ctx context.Context, cfg Config) (*Report, error) {
 	if err := sleep(ctx, cfg.Settle); err != nil {
 		return nil, err
 	}
-	w := r.openWindow(cfg.Window)
-	if err := sleep(ctx, w.start-r.now()); err != nil {
+	cpu, err := r.measure(ctx)
+	if err != nil {
 		return nil, err
-	}
-	cpu0 := processCPU()
-	if cfg.OnWindow != nil {
-		cfg.OnWindow(true)
-	}
-	cfg.Logger.InfoContext(ctx, "window open", "window", cfg.Window)
-	if err := sleep(ctx, cfg.Window); err != nil {
-		return nil, err
-	}
-	cpu := processCPU() - cpu0
-	if cfg.OnWindow != nil {
-		cfg.OnWindow(false)
 	}
 	cfg.Logger.InfoContext(ctx, "window closed; waiting out the grace period", "grace", cfg.Grace)
 	if err := sleep(ctx, cfg.Grace); err != nil {
@@ -291,6 +280,30 @@ func Run(ctx context.Context, cfg Config) (*Report, error) {
 
 	r.teardown(cancel)
 	return r.report(cpu), nil
+}
+
+// measure opens the window and waits it out, calling OnWindow as it opens and
+// closes, and returns the CPU this process used in between. Both calls, and
+// the CPU baseline, fall inside the window, not at its publication.
+func (r *run) measure(ctx context.Context) (time.Duration, error) {
+	cfg := r.cfg
+	w := r.openWindow(cfg.Window)
+	if err := sleep(ctx, w.start-r.now()); err != nil {
+		return 0, err
+	}
+	cpu0 := processCPU()
+	if cfg.OnWindow != nil {
+		cfg.OnWindow(true)
+	}
+	cfg.Logger.InfoContext(ctx, "window open", "window", cfg.Window)
+	if err := sleep(ctx, w.end-r.now()); err != nil {
+		return 0, err
+	}
+	cpu := processCPU() - cpu0
+	if cfg.OnWindow != nil {
+		cfg.OnWindow(false)
+	}
+	return cpu, nil
 }
 
 // join brings every participant in, at cfg.JoinRate, bounded by
