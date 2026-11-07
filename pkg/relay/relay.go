@@ -109,7 +109,8 @@ type Config struct {
 	// Metrics receives relay lifecycle and hot-path event notifications for
 	// telemetry. nil (the default) installs [NopMetrics]. See [Metrics] for
 	// the contract; implementations MUST be non-blocking and safe for
-	// concurrent use.
+	// concurrent use. An implementation may also implement
+	// [ObjectQueueMetrics] for per-object fanout queue timing.
 	Metrics Metrics
 
 	// MaxFilterRanges is the MAX_FILTER_RANGES (§9.1.6) budget this relay

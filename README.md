@@ -46,49 +46,8 @@ For the simpler raw-MOQT case (no MSF/CMSF), swap `video` for `clock`.
 `cmd/relay` is one instance. Several instances routing across each other need a
 distributed [`DiscoveryStore`](pkg/relay/discovery).
 
-On Linux, the relay can opt into batching ready UDP writes across connections:
-
-```sh
-go run ./cmd/relay -udp-send-batch-size 32
-```
-
-The default `0` retains the ordinary socket. Values `1`–`64` set the maximum
-batch size; the writer never waits to fill a batch. Other operating systems
-retain the ordinary socket. Library callers pass
-`relaynet.WithUDPSendBatchSize(32)` to `relaynet.Listen`. This option affects
-only that listener, including its raw-QUIC and WebTransport connections.
-The queue holds at most 256 pending writes and applies backpressure when full.
-Writes retain their GSO/ECN/source-address metadata and wait for their send
-result before returning. Listener shutdown still allows accepted connections
-to drain before releasing the socket. Treat this as an experimental option:
-measure playback quality and CPU under your workload before enabling it.
-
-For two parallel writers, also pass `-udp-send-writers 2` (or
-`relaynet.WithUDPSendWriters(2)`). This is opt-in and requires batching.
-Destinations stay on a fixed writer; both Go handles share the source socket
-and port. The total queue remains 256 writes, divided between the writers.
-The default is one writer. With two writers an observer can be called
-concurrently, and summed socket-call durations can exceed elapsed time.
-
-Subgroup fanout reuses empty inbox storage after each writer has finished.
-The relay-wide cache retains at most 1024 queues, only for queue capacities up
-to 256 objects; larger queues use the ordinary allocation path. Closing a
-subgroup still drains its queued objects before completing.
-
-For send-path diagnostics, pass `relaynet.WithUDPSendMetrics(observer, 128)`
-alongside batching. `UDPSendMetrics` observes sampled queue/admission wait and
-every socket call's requested/sent message counts, duration and error. Partial
-batches and fallback calls are separate events; GSO segments are not counted as
-separate messages. Callbacks must not block and receive no packet contents or
-peer addresses. Nil disables the hooks; ordinary sockets and outbound dials
-are not instrumented. Compare diagnostics off/on when measuring capacity.
-
-A `Config.Metrics` implementation may also implement the optional
-`relay.ObjectQueueMetrics` interface. Its `ObjectDequeued` hook receives stream
-or datagram admission/header timestamps before lag, expiry and write checks,
-including objects later discarded. Implementations can sample before reading
-the clock. FETCH and shutdown queue drains are not reported. `TrackRef.Name`
-comes from the publisher and must be folded into bounded labels.
+The relay's flags — certificates, health and Prometheus endpoints, Linux UDP
+send batching — are documented in [`cmd/relay/README.md`](cmd/relay/README.md).
 
 ## Using the library
 

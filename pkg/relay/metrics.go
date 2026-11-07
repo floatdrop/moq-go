@@ -303,7 +303,8 @@ type ReceivedObject struct {
 // subscriber's inbox; headerAt is receipt of the last inbound header byte.
 // Zero timestamps mean unavailable. Hooks must not block and can run
 // concurrently. Implementations may sample before reading their clock.
-// datagram identifies the forwarding queue; FETCH is not reported.
+// datagram identifies the forwarding queue; FETCH is not reported. Datagrams
+// still queued when their session's writer stops go to ObjectDropped instead.
 type ObjectQueueMetrics interface {
 	ObjectDequeued(t TrackRef, datagram bool, enqueuedAt, headerAt time.Time)
 }
