@@ -81,8 +81,8 @@ func run() error {
 	joinConcurrency := flag.Int("join-concurrency", 64, "joins in progress at once")
 	joinTimeout := flag.Duration(
 		"join-timeout",
-		15*time.Second,
-		"bound on one participant's dial, setup and subscribes",
+		0,
+		"bound on one participant's dial, setup and subscribes (default 15s)",
 	)
 	settle := flag.Duration("settle", 0, "wait between the last join and the window (default one GOP + 500ms)")
 	window := flag.Duration("window", 30*time.Second, "measured window")

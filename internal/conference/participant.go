@@ -50,10 +50,12 @@ type participant struct {
 	// before the run did.
 	ended int
 	// malformed counts tracks found malformed (§12.1), whose subscriptions
-	// this side cancelled (listed in cancelled), and Objects delivered
-	// without the send time they were published with.
+	// this side cancelled; cancelled lists their aliases.
 	malformed int
 	cancelled map[uint64]bool
+	// unstamped counts Objects delivered without the send time they were
+	// published with.
+	unstamped int
 }
 
 func (p *participant) connect(ctx context.Context) error {
@@ -126,6 +128,14 @@ func (p *participant) serve(ctx context.Context, sub *session.Subscription) {
 	}
 }
 
+// isCancelled reports whether this side cancelled alias's subscription.
+// §3.1.3: Objects can still arrive after, and are discarded.
+func (p *participant) isCancelled(alias uint64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cancelled[alias]
+}
+
 // malformedTrack cancels the subscription whose Track Alias is alias, once:
 // §12.1, "When a subscriber detects a Malformed Track, it MUST cancel any
 // corresponding subscription".
@@ -159,7 +169,7 @@ func (p *participant) receiveDatagrams(ctx context.Context) {
 		case err != nil:
 			return
 		}
-		if t, ok := p.tracks[d.TrackAlias]; ok && t.kind == kindAudio {
+		if t, ok := p.tracks[d.TrackAlias]; ok && t.kind == kindAudio && !p.isCancelled(d.TrackAlias) {
 			p.record(kindAudio, d.ObjectPayload)
 		}
 	}
@@ -179,7 +189,7 @@ func (p *participant) acceptStreams(ctx context.Context) {
 			ds.Cancel(moqt.StreamResetCancelled) // no FETCH was sent
 			continue
 		}
-		if t, ok := p.tracks[sg.Header.TrackAlias]; !ok || t.kind != kindVideo {
+		if t, ok := p.tracks[sg.Header.TrackAlias]; !ok || t.kind != kindVideo || p.isCancelled(sg.Header.TrackAlias) {
 			sg.Cancel(moqt.StreamResetCancelled)
 			continue
 		}
@@ -192,10 +202,12 @@ func (p *participant) readVideo(sg *session.IncomingSubgroupStream) {
 		obj, err := sg.ReadObject()
 		if errors.Is(err, session.ErrMalformedTrack) {
 			p.malformedTrack(sg.Header.TrackAlias)
+			sg.Cancel(moqt.StreamResetCancelled) // nothing more on it is wanted (§11.3.2)
 			return
 		}
 		if err != nil {
-			if !errors.Is(err, io.EOF) && !p.run.stopping.Load() {
+			// A reset that follows this side's own cancel is not the relay's.
+			if !errors.Is(err, io.EOF) && !p.run.stopping.Load() && !p.isCancelled(sg.Header.TrackAlias) {
 				p.mu.Lock()
 				p.videoResets++
 				p.mu.Unlock()
@@ -217,7 +229,7 @@ func (p *participant) record(kind mediaKind, payload []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if !ok {
-		p.malformed++
+		p.unstamped++
 		return
 	}
 	p.received[kind]++

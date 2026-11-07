@@ -18,7 +18,8 @@ const (
 	ReasonVideoReset = "video-reset" // a video stream was reset
 	ReasonLatency    = "latency"     // audio or video p99 above SLO.MaxLatency
 	ReasonEnded      = "ended"       // the relay ended a subscription
-	ReasonMalformed  = "malformed"   // a track was malformed (§12.1), or an Object lost its send time
+	ReasonMalformed  = "malformed"   // a track was malformed, and its subscription cancelled (§12.1)
+	ReasonUnstamped  = "unstamped"   // an Object arrived without its send time
 )
 
 // Report is the outcome of one [Run], over its measured window.
@@ -34,9 +35,8 @@ type Report struct {
 	Unserved map[string]int
 
 	Audio, Video Media
-	// VideoResets, Ended and Malformed total [Participant.VideoResets],
-	// [Participant.Ended] and [Participant.Malformed].
-	VideoResets, Ended, Malformed int
+	// VideoResets, Ended, Malformed and Unstamped total the participants'.
+	VideoResets, Ended, Malformed, Unstamped int
 	// Join is the time from a participant's dial to its last SUBSCRIBE_OK.
 	Join Latency
 	// Pacing is how late speakers' Objects left against their schedule, in
@@ -78,8 +78,8 @@ type Participant struct {
 	AudioP99, VideoP99           time.Duration
 	VideoResets, Ended           int
 	// Malformed counts tracks found malformed, whose subscriptions it
-	// cancelled (§12.1), and Objects that arrived without their send time.
-	Malformed int
+	// cancelled (§12.1); Unstamped, Objects without their send time.
+	Malformed, Unstamped int
 	// Reasons it was not served; empty when it was.
 	Reasons []string
 }
@@ -125,7 +125,8 @@ func (r *run) report(cpu time.Duration) *Report {
 		}
 		res.AudioReceived, res.VideoReceived = p.received[kindAudio], p.received[kindVideo]
 		res.AudioP99, res.VideoP99 = p.latency[kindAudio].quantile(0.99), p.latency[kindVideo].quantile(0.99)
-		res.VideoResets, res.Ended, res.Malformed = p.videoResets, p.ended, p.malformed
+		res.VideoResets, res.Ended = p.videoResets, p.ended
+		res.Malformed, res.Unstamped = p.malformed, p.unstamped
 		lat[kindAudio].merge(&p.latency[kindAudio])
 		lat[kindVideo].merge(&p.latency[kindVideo])
 		bytes += p.bytes
@@ -149,6 +150,7 @@ func (r *run) report(cpu time.Duration) *Report {
 		rep.VideoResets += res.VideoResets
 		rep.Ended += res.Ended
 		rep.Malformed += res.Malformed
+		rep.Unstamped += res.Unstamped
 
 		if audioLoss > cfg.SLO.MaxAudioLoss {
 			res.Reasons = append(res.Reasons, ReasonAudioLoss)
@@ -167,6 +169,9 @@ func (r *run) report(cpu time.Duration) *Report {
 		}
 		if res.Malformed > 0 {
 			res.Reasons = append(res.Reasons, ReasonMalformed)
+		}
+		if res.Unstamped > 0 {
+			res.Reasons = append(res.Reasons, ReasonUnstamped)
 		}
 		for _, reason := range res.Reasons {
 			rep.Unserved[reason]++
@@ -235,8 +240,9 @@ func (r *Report) WriteText(w io.Writer) error {
 	if r.Ended > 0 {
 		fmt.Fprintf(&b, "ended         %d subscriptions ended by the relay\n", r.Ended)
 	}
-	if r.Malformed > 0 {
-		fmt.Fprintf(&b, "malformed     %d malformed tracks or unstamped Objects\n", r.Malformed)
+	if r.Malformed > 0 || r.Unstamped > 0 {
+		fmt.Fprintf(&b, "malformed     %d tracks cancelled as malformed, %d Objects without a send time\n",
+			r.Malformed, r.Unstamped)
 	}
 	fmt.Fprintf(&b, "goodput       %s to participants\n", bitrate(r.Goodput))
 	fmt.Fprintf(&b, "pacing        %s late; write errors %d\n", r.Pacing.short(), r.WriteErrors)

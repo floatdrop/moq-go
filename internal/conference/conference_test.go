@@ -1,8 +1,10 @@
 package conference
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"math"
 	"strings"
@@ -317,41 +319,142 @@ func (c *malformAudio) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	return w.Bytes(), nil
 }
 
-// A participant that finds a track malformed cancels its subscription
-// (§12.1), so the relay stops sending it; that is its own doing, not the
-// relay ending the subscription, and the participant's other tracks go on.
+// malformVideo re-encodes every subgroup stream a participant receives with
+// Object Properties on (§11.3.1), giving each stream's first Object a Prior
+// Object ID Gap beyond its Object ID (§10.9) — a malformed track (§12.1) —
+// and counts the uni streams it accepts, the control stream included.
+type malformVideo struct {
+	session.Conn
+
+	accepted atomic.Int64
+}
+
+func (c *malformVideo) AcceptUniStream(ctx context.Context) (session.ReceiveStream, error) {
+	s, err := c.Conn.AcceptUniStream(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if c.accepted.Add(1) == 1 {
+		return s, nil // the control stream
+	}
+	pr, pw := io.Pipe()
+	go func() { _ = pw.CloseWithError(malformSubgroup(s, pw)) }()
+	return &rewrittenStream{ReceiveStream: s, r: pr}, nil
+}
+
+type rewrittenStream struct {
+	session.ReceiveStream
+
+	r *io.PipeReader
+}
+
+func (s *rewrittenStream) Read(p []byte) (int, error) { return s.r.Read(p) }
+
+func (s *rewrittenStream) CancelRead(code uint64) {
+	s.ReceiveStream.CancelRead(code)
+	_ = s.r.CloseWithError(errReset)
+}
+
+func malformSubgroup(src io.Reader, dst io.Writer) error {
+	br := bufio.NewReader(src)
+	sr := wire.NewStreamReader(br)
+	typ, err := sr.Varint()
+	if err != nil {
+		return err
+	}
+	hdr, err := message.ReadSubgroupHeader(br, typ)
+	if err != nil {
+		return err
+	}
+	hadProps := hdr.Properties
+	hdr.Properties = true
+	if err := message.WriteSubgroupHeader(dst, hdr); err != nil {
+		return err
+	}
+	gap := message.AppendTrackProperties([]wire.KVPair{{Type: message.PropertyPriorObjectIDGap, IntVal: 5}})
+	for first := true; ; first = false {
+		var o message.SubgroupObject
+		if err := o.Parse(sr, hadProps); err != nil {
+			return err
+		}
+		if first {
+			o.Properties = gap
+		}
+		var w wire.Writer
+		o.Append(&w, true)
+		if _, err := dst.Write(w.Bytes()); err != nil {
+			return err
+		}
+	}
+}
+
+// A participant that finds a track malformed, on either path, cancels its
+// subscription (§12.1), so the relay stops sending it; that is its own
+// doing — neither the relay ending the subscription nor a reset to blame
+// on it — and the participant's other track goes on.
 func TestRunCancelsMalformedTracks(t *testing.T) {
 	t.Parallel()
-	p := testProfile
-	p.Speakers = 1
-	var listeners []*malformAudio
-	var mu sync.Mutex
-	rep := runInProcess(t, Config{Profile: p, Participants: 3}, func(i int, c session.Conn) session.Conn {
-		if i == 0 {
-			return c // the speaker subscribes to nobody
-		}
-		m := &malformAudio{Conn: c}
-		mu.Lock()
-		listeners = append(listeners, m)
-		mu.Unlock()
-		return m
-	})
+	for _, tc := range []struct {
+		name  string
+		wrap  func(session.Conn) (session.Conn, func() int64)
+		other func(*Report) Media
+		// limit bounds what reaches a listener once it cancelled; uncancelled,
+		// audio arrives at 50 datagrams a second and video on a stream per
+		// 500 ms GOP for the whole run.
+		limit int64
+	}{
+		{"audio", func(c session.Conn) (session.Conn, func() int64) {
+			m := &malformAudio{Conn: c}
+			return m, m.seen.Load
+		}, func(r *Report) Media { return r.Video }, 10},
+		{"video", func(c session.Conn) (session.Conn, func() int64) {
+			m := &malformVideo{Conn: c}
+			return m, m.accepted.Load // control + video streams
+		}, func(r *Report) Media { return r.Audio }, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			p := testProfile
+			p.Speakers = 1
+			var (
+				mu     sync.Mutex
+				counts []func() int64
+			)
+			rep := runInProcess(t, Config{Profile: p, Participants: 3}, func(i int, c session.Conn) session.Conn {
+				if i == 0 {
+					return c // the speaker subscribes to nobody
+				}
+				wrapped, count := tc.wrap(c)
+				mu.Lock()
+				counts = append(counts, count)
+				mu.Unlock()
+				return wrapped
+			})
 
-	if rep.Malformed != 2 || rep.Unserved[ReasonMalformed] != 2 {
-		t.Errorf("malformed %d, unserved %v; want one malformed track per listener", rep.Malformed, rep.Unserved)
-	}
-	if rep.Ended != 0 {
-		t.Errorf("ended %d; a subscription this side cancelled is not one the relay ended", rep.Ended)
-	}
-	if rep.Video.Received != rep.Video.Expected {
-		t.Errorf("video %d/%d; only the audio track was malformed", rep.Video.Received, rep.Video.Expected)
-	}
-	// Uncancelled, audio would keep arriving at 50 datagrams a second for the
-	// whole run; cancelled, only what was in flight follows the first.
-	for i, l := range listeners {
-		if n := l.seen.Load(); n > 10 {
-			t.Errorf("listener %d received %d datagrams; the subscription was not cancelled", i, n)
-		}
+			if rep.Malformed != 2 || rep.Unserved[ReasonMalformed] != 2 {
+				t.Errorf(
+					"malformed %d, unserved %v; want one malformed track per listener",
+					rep.Malformed,
+					rep.Unserved,
+				)
+			}
+			if rep.Ended != 0 || rep.VideoResets != 0 {
+				t.Errorf("ended %d, video resets %d; this side's own cancel is neither", rep.Ended, rep.VideoResets)
+			}
+			if o := tc.other(rep); o.Received != o.Expected {
+				t.Errorf("other track %d/%d; only one track was malformed", o.Received, o.Expected)
+			}
+			for i, count := range counts {
+				if n := count(); n > tc.limit {
+					t.Errorf(
+						"listener %d: %d arrived, want at most %d; the subscription was not cancelled",
+						i,
+						n,
+						tc.limit,
+					)
+				}
+			}
+		})
 	}
 }
 
