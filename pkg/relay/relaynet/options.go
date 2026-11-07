@@ -25,8 +25,9 @@ type config struct {
 // default, for 0 or 1 — a listener has a single goroutine in sendmsg at a
 // time however many connections are waiting, and past about a thousand
 // participants in a call that queue is the relay's bottleneck (see "Parallel
-// UDP sends" in cmd/relay's README). The handles share the kernel socket, so address,
-// port and socket options are the listener's, and a write's error is its own.
+// UDP sends" in cmd/relay's README). The handles share the kernel socket, so
+// address, port and socket options are the listener's, and a write's error is
+// its own.
 // More handles spend CPU on contention for that socket in the kernel.
 //
 // Linux only: other operating systems keep one handle, as parallel sends on
