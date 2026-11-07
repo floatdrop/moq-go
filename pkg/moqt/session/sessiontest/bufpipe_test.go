@@ -6,11 +6,12 @@ import (
 	"testing"
 )
 
-// bufPipe had no test of its own. It is reached only by BenchmarkFanoutBuffered
-// via NewConnPairBuffered, which `make bench` excludes with -skip, so the sole
-// thing that ever ran this mutex/cond code was the bench-smoke job at
-// -benchtime=1x — and `go test -race ./...` does not run benchmarks, so the
-// race detector never saw it at all. These tests put it under both.
+// bufPipe had no test of its own. It was reached only by the (since removed)
+// BenchmarkFanoutBuffered via NewConnPairBuffered, which `make bench` excluded
+// with -skip, so the sole thing that ever ran this mutex/cond code was the
+// bench-smoke job at -benchtime=1x — and `go test -race ./...` does not run
+// benchmarks, so the race detector never saw it at all. These tests put it
+// under both.
 
 // These use the package's own errCancelled — the error sessiontest actually
 // delivers on CancelRead/CancelWrite — so the tests pin real behaviour rather

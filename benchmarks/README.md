@@ -44,7 +44,7 @@ cheapest to notice.
 |---|---|---|---|
 | Quick | `make bench-quick` | ~5s | `allocs/op`, `B/op` |
 | Full | `make bench` | ~4m30s | `allocs/op`, `B/op`, **`ns/op`** |
-| Smoke | `make bench-smoke` | ~7s | compiles and runs, no numbers |
+| Smoke | `make bench-smoke` | ~15s | compiles and runs, no numbers (`-short`) |
 
 **Run the quick tier after every change to a hot path.** Run the full tier
 before claiming a timing result, before refreshing the baseline, and when the
@@ -75,8 +75,8 @@ clock.
 #### The flags, if you run it by hand
 
 - `-run='^$'` skips the normal tests (no name matches), so only benchmarks run.
-- `-skip='FanoutBuffered|FanoutQUIC'` excludes the throughput probes (below),
-  which are noisy and not regression signals.
+- `-skip='Conference'` excludes the conference capacity run (below), which is
+  real-time paced and not a regression signal.
 - `-benchmem` reports `B/op` and `allocs/op` — the primary regression signal.
 - `-count=10` gives `benchstat` enough samples for a stable mean and variance.
 - `2>/dev/null` drops the relay's per-session shutdown/GOAWAY log lines (the
@@ -91,27 +91,67 @@ make bench-quick BENCH_PKGS=./pkg/moqt/wire/
 make bench BENCH_PKGS='./pkg/relay/ ./pkg/relay/cache/'
 ```
 
-## Throughput probes (non-regression)
+## Conference capacity (non-regression)
 
-Two extra relay benchmarks in `pkg/relay/relay_throughput_bench_test.go` answer
-"how fast can it actually go", each a different question. They are **excluded
-from the regression suite and the baseline** — run them on demand.
+The regression suite says what one object costs; it cannot say how many people
+a relay serves. That is a scenario question, answered by `internal/conference`:
+a teleconference where a few **speakers** each publish a video track (one
+subgroup stream per GOP, keyframe first) and an audio track (one datagram per
+frame, each its own Group), and every other **participant** subscribes to all
+of them. Media is paced at its real rate and every Object carries its send
+time, so each participant measures its own delivery and one-way latency, and
+counts as **served** when, over the measured window:
 
-| Benchmark | Transport | Answers |
+- it lost at most 1% of its audio (`-slo-audio-loss`),
+- it missed no video Object and saw no video stream reset, and
+- its p99 latency, audio and video each, stayed under 200 ms (`-slo-latency`).
+
+The default profile is two 720p speakers: 1.5 Mbps / 30 fps video with a 2 s
+GOP (keyframes 10× a delta frame) and 48 kbps audio in 20 ms frames. Relay
+egress is speakers × bitrate × participants, ~3.1 Gbps at 1000 participants,
+which can hit a NIC or VM bandwidth cap before any CPU limit.
+
+It runs two ways, over the same driver:
+
+| | Transport | Answers |
 |---|---|---|
-| `BenchmarkFanoutBuffered` | buffered in-memory pipe (`sessiontest.NewConnPairBuffered`) | the **relay's own** forwarding ceiling, with the synchronous-pipe scheduler ping-pong removed but no quic-go/kernel noise |
-| `BenchmarkFanoutQUIC` | real loopback QUIC on `127.0.0.1` | the end-to-end **CPU-bound loopback ceiling**, dominated by quic-go (packetisation, ACKs, TLS, UDP syscalls) |
+| `BenchmarkConference` (`pkg/relay`) | in-process `memconn`, relay with production defaults | the **relay's own** cost at scale: no QUIC, TLS or kernel on the CPU, and the profile splits by pprof label (`role=relay` / `role=participant`) |
+| `cmd/confbench` | real QUIC (`moqt://`) or WebTransport (`https://`) to a running `cmd/relay` | **how many participants** a relay serves, with its CPU, memory and goroutines read off `-relay-metrics` and a CPU profile of the window from `-relay-pprof` |
 
 ```sh
-go test -run='^$' -bench='FanoutBuffered|FanoutQUIC' -benchmem -count=6 ./pkg/relay/ 2>/dev/null
+make bench-conference                                   # in-process, 1000 participants, relay hotspots
+make bench-conference CONFERENCE_FLAGS='-conference.participants=2000 -conference.window=10s'
+
+go run ./cmd/relay -health-addr 127.0.0.1:8080 -pprof-addr 127.0.0.1:6060
+go run ./cmd/confbench -relay moqt://127.0.0.1:4433 -ramp 250,500,750,1000 \
+    -relay-metrics http://127.0.0.1:8080/healthz/metrics -relay-pprof http://127.0.0.1:6060
 ```
 
-`BenchmarkFanoutQUIC` is **not** network throughput: there is no loss, RTT, or
-congestion, and the number reflects quic-go's per-packet work far more than the
-relay's. Treat `allocs/op`, not `ns/op`, as the stable signal (kernel UDP
-scheduling makes loopback timing noisy). The QUIC matrix is intentionally small
-(`subs=1,8`) — each subscriber is a separate loopback connection, and `subs=1`
-is the headline per-stream ceiling.
+`-ramp` runs each count on fresh connections and stops after the first that
+leaves someone unserved (`-ramp-all` runs them all); every run publishes under
+a room of its own, so a relay that still caches the previous run's tracks is
+not handed a changed Group 0. Run `cmd/confbench -h` for the profile, join and
+SLO flags.
+
+What the numbers are and are not:
+
+- **Every participant lives in the harness process**, so the harness needs
+  about as much CPU as the relay. On one machine they compete; pin them apart
+  (`taskset`, or `docker run --cpuset-cpus`) or use two machines. The
+  `pacing` line is the check: speakers far behind their schedule mean the
+  harness ran out of CPU or the relay pushed back on its publishers, and
+  confbench warns; `process cpu` against the core count tells which.
+- **Loopback is not a network**: no loss, sub-millisecond RTT. Latency here is
+  the relay and transport queueing, a floor on what a real path adds to.
+- **The OS matters more than the relay.** quic-go sends one packet per
+  syscall where it has no GSO (macOS), through the listener's single UDP
+  socket, whose writes Go serializes; on Linux it batches with GSO, and
+  `cmd/relay -udp-send-batch-size` adds cross-connection batching. Compare
+  Linux numbers to Linux numbers.
+- `BenchmarkConference` reports per-run custom metrics (`served`,
+  `audio-p99-ms`, `cpu-cores`, `allocs/delivered`, …), not `ns/op`. Its CPU
+  includes the participants' session code; split it with
+  `go tool pprof -tagfocus=role=relay`.
 
 ## Comparing with benchstat
 

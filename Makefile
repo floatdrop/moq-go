@@ -5,7 +5,7 @@
 # exercising both raw QUIC (moqt://) and WebTransport (https://) transports.
 
 .PHONY: build test test-race lint \
-        bench bench-quick bench-smoke bench-baseline \
+        bench bench-quick bench-smoke bench-baseline bench-conference \
         cover cover-gaps cover-html cover-total cover-site \
         interop interop-quic interop-webtransport interop-matrix interop-build interop-certs interop-clean \
         interop-client interop-client-build
@@ -36,9 +36,10 @@ lint:
 #   bench-quick  ~5s    allocs/op and B/op only — the per-change guard
 #   bench        ~4m30s allocs/op, B/op AND ns/op — feeds benchstat
 #
-# The throughput probes are excluded from both: they are "how fast can it go"
-# measurements, not regression signals.
-BENCH_SKIP  := FanoutBuffered|FanoutQUIC
+# BenchmarkConference is excluded from both: it is a fixed-duration,
+# real-time-paced capacity run ("how many participants"), not a regression
+# signal. `make bench-conference` runs it.
+BENCH_SKIP  := Conference
 BENCH_PKGS  ?= ./pkg/...
 # Fixed iteration counts, not a duration. allocs/op is deterministic per
 # iteration, so a short fixed run reproduces it exactly while costing ~1s per
@@ -61,10 +62,21 @@ bench:
 		-count=10 $(BENCH_PKGS) 2>/dev/null
 
 # Compile-and-run check only, one iteration each — catches a benchmark that no
-# longer builds or panics. Includes the throughput probes deliberately; they
-# bit-rot too. This is the CI job.
+# longer builds or panics. Includes BenchmarkConference deliberately; it
+# bit-rots too. -short cuts its measured window to a second. This is the CI job.
 bench-smoke:
-	go test -run='^$$' -bench=. -benchtime=1x -count=1 ./... >/dev/null
+	go test -run='^$$' -bench=. -benchtime=1x -count=1 -short ./... >/dev/null
+
+# The teleconference capacity scenario, in-process: its report, then the
+# relay's own CPU hotspots (the profile's role=relay goroutines). Scale it with
+# CONFERENCE_FLAGS='-conference.participants=2000 -conference.window=10s'.
+# Over a real network it is cmd/confbench; see benchmarks/README.md.
+CONFERENCE_PROFILE ?= conference-cpu.out
+bench-conference:
+	go test -run='^$$' -bench='^BenchmarkConference$$' -benchtime=1x -count=1 \
+		-cpuprofile=$(CURDIR)/$(CONFERENCE_PROFILE) -o $(CURDIR)/relay.test \
+		./pkg/relay/ $(CONFERENCE_FLAGS) 2>/dev/null
+	go tool pprof -tagfocus=role=relay -top -nodecount=25 relay.test $(CONFERENCE_PROFILE)
 
 # Refresh the committed reference run. Deliberate, never silent: do this only
 # when an intentional performance change lands, and say so in the commit.

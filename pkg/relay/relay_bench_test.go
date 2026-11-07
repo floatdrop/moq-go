@@ -8,9 +8,9 @@ package relay_test
 // synchronous in-process pipe transport, NOT real QUIC, so they measure the
 // *relative* CPU and allocation cost of the relay's forwarding code (ReadObject,
 // filter eval, cache Put, delta re-encode, per-subscriber WriteObject), not wire
-// throughput. Use benchstat to compare across commits. For actual throughput
-// numbers, see the BenchmarkFanout{Buffered,QUIC} probes in
-// relay_throughput_bench_test.go.
+// throughput. Use benchstat to compare across commits. For how many
+// participants the relay serves, see BenchmarkConference
+// (relay_conference_bench_test.go) and cmd/confbench.
 //
 // Run:
 //
@@ -69,8 +69,8 @@ func BenchmarkFanout1to1(b *testing.B) {
 // is per *published* object; the relay does 64 downstream WriteObjects per
 // published object, so divide by 64 for the per-subscriber cost. Paired with
 // BenchmarkFanout1to1 this gives the fixed + per-subscriber split that is the
-// relay's core regression metric. (The full 1→N scaling curve lives in the
-// throughput probes; see relay_throughput_bench_test.go.)
+// relay's core regression metric. (Scale is BenchmarkConference's question;
+// see relay_conference_bench_test.go.)
 func BenchmarkFanout1toN(b *testing.B) {
 	benchFanout(b, 64, 1200)
 }
@@ -385,23 +385,4 @@ func drainStream(stream io.Reader) {
 			return
 		}
 	}
-}
-
-// subsName builds a stable sub-benchmark name like "subs=8".
-func subsName(n int) string {
-	return "subs=" + itoaBench(n)
-}
-
-func itoaBench(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[pos:])
 }

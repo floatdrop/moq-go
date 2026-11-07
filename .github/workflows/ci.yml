@@ -133,17 +133,18 @@ jobs:
   bench:
     name: Benchmarks (smoke)
     runs-on: ubuntu-latest
-    # This job is the only thing that runs the sessiontest bufPipe (via
-    # BenchmarkFanoutBuffered, which the -skip in `make bench` excludes but this
-    # target deliberately keeps). That is mutex/cond code, so a deadlock here
-    # would otherwise hang for GitHub's 6h default instead of failing fast.
+    # This job is the only thing that runs BenchmarkConference (a thousand
+    # in-process participants over memconn's buffered pipes, which the -skip in
+    # `make bench` excludes but this target deliberately keeps). That is
+    # mutex/cond code under heavy concurrency, so a deadlock here would
+    # otherwise hang for GitHub's 6h default instead of failing fast.
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      # Compile-and-run only, one iteration each (~7s). CI runners are far too
+      # Compile-and-run only, one iteration each (~15s). CI runners are far too
       # noisy for timing or allocation assertions, so this asserts nothing about
       # the numbers — it only keeps a benchmark from silently rotting into
       # something that no longer builds or panics. Regression comparison is the

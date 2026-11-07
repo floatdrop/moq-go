@@ -90,9 +90,8 @@ func NewConnPairWithLimits(aBidiLimit, bBidiLimit int) (a, b session.Conn) {
 // NewConnPairBuffered is [NewConnPair] but with each stream backed by a
 // buffered [bufPipe] of bufSize bytes instead of a synchronous io.Pipe. The
 // writer can run ahead by up to bufSize bytes before blocking, which decouples
-// the producer and consumer goroutines so a relay/session throughput benchmark
-// measures forwarding work rather than per-object goroutine scheduling. Both
-// endpoints have unlimited outbound bidi-stream credit.
+// the producer and consumer goroutines, for a test that should not lock-step on
+// every write. Both endpoints have unlimited outbound bidi-stream credit.
 func NewConnPairBuffered(bufSize int) (a, b session.Conn) {
 	return newConnPair(-1, -1, bufSize)
 }
