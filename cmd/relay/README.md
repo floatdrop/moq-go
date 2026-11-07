@@ -122,7 +122,7 @@ Two readings worth knowing:
 
 ```sh
 relay -pprof-addr 127.0.0.1:6060
-go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+go tool pprof 'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'
 ```
 
 It does not ride the health port, which is often public: a profile endpoint is
