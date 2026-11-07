@@ -153,32 +153,20 @@ _ = own.SendDatagram(&message.ObjectDatagram{
 
 ### Observing media at the relay
 
-Implement `relay.Metrics.ObjectReceived` and set `relay.Config.Metrics` to observe
-complete objects from both subgroup streams and datagrams. `relay.ReceivedObject`
-includes the full track name, absolute `Group`/`Object` IDs, `Status`, receipt time
-(`HeaderAt`), `Properties`, and `Payload`. `Datagram` distinguishes objects with
-no subgroup; `EndOfGroup` carries a datagram's end bit. The hook runs after
-deduplication, before downstream filtering, including when no subscriber is
-present. Cached FETCH delivery does not trigger it again.
+`relay.Metrics.ObjectReceived` sees every complete object the relay accepts, from
+subgroup streams and datagrams, after deduplication and whether or not anyone is
+subscribed. `relay.ReceivedObject` carries the full track name, absolute location,
+status, receipt time, properties and payload: the raw input for relay-side
+analysis such as audio quality scoring with [gosqa](https://github.com/floatdrop/gosqa),
+once your code has picked the audio track from the MSF catalog, parsed the LOC
+properties and decoded the codec.
+The godoc spells out the concurrency and borrowing rules; in short, return
+promptly, copy before queuing, and decode in a worker.
 
-Callbacks run concurrently and must return promptly. Treat all slices as
-read-only, copy the properties and payload before queuing them, and use a bounded
-queue with a non-blocking send. Perform decoding and analysis in a worker.
-Order packets by their media timestamps; callback order is not a playout order.
-Use the full track identity to separate sources, and retire worker state when a
-source ends or goes idle; subscription lifecycle metrics describe downstream
-subscriptions, not publisher tracks.
-
-For [gosqa](https://github.com/floatdrop/gosqa), consumer code still needs to select
-audio tracks from the MSF catalog, parse LOC properties, decode Opus into
-normalized mono float32 PCM at 48 kHz, and feed a gosqa stream per source. Preserve
-the media timeline through packet reordering, loss concealment, and intentional
-silence suppression. Report analysis queue overflow and reset decoder/analysis
-state after a discontinuity. Run inference outside the callback, share the model
-across workers, and ship the required ONNX Runtime library with the application.
-Gosqa's default frame buffers two seconds of PCM before producing a score.
-Scores at this hook describe audio received by the relay; downstream losses need
-receiver-side measurement.
+Key worker state by the full track name and retire it when a source goes idle:
+the subscription metrics describe downstream subscriptions, not publisher tracks.
+Anything measured here describes media as it reached the relay; losses further
+downstream need measuring at the receiver.
 
 ### Examples
 
