@@ -17,7 +17,7 @@ No authentication — suitable for local development and testing.
 
 ```
 relay [-addr host:port] [-cert file] [-key file] [-webtransport-path /moq]
-      [-health-addr host:port] [-health-path /healthz]
+      [-health-addr host:port] [-health-path /healthz] [-pprof-addr host:port]
 ```
 
 | Flag | Default | Description |
@@ -36,6 +36,7 @@ relay [-addr host:port] [-cert file] [-key file] [-webtransport-path /moq]
 | `-health-path` | `/healthz` | Path on `-health-addr` that answers `200 OK`. |
 | `-metrics` | `true` | Serve Prometheus metrics at `<health-path>/metrics`. Requires `-health-addr`. |
 | `-metrics-tracks` | `catalog` | Comma-separated track names that keep their own `track` label; all others report as `other`. |
+| `-pprof-addr` | — | TCP address serving `net/http/pprof` at `/debug/pprof/`. Empty (the default) disables it. See [Profiling](#profiling). |
 
 ## Health endpoint
 
@@ -76,8 +77,11 @@ The exporter is written against the standard library rather than
 `prometheus/client_golang`, which would cost seven modules and, measured on this
 binary, 5.86 MiB — a 44% increase, most of it a protobuf runtime for an
 exposition format this endpoint never emits. The trade is that promhttp's Go
-runtime and process collectors (`go_goroutines`, `process_resident_memory_bytes`
-and friends) are **not** exposed here; only the relay's own families are.
+runtime and process collectors are **not** exposed here. Three of their figures
+are written by hand instead, under the same names, because a capacity run
+(`cmd/confbench -relay-metrics`) reads them: `process_cpu_seconds_total` (Unix
+only), `go_goroutines` and `go_memstats_sys_bytes`. The rest of those
+collectors, `process_resident_memory_bytes` among them, are not.
 
 | metric | type | labels |
 |--------|------|--------|
@@ -92,6 +96,9 @@ and friends) are **not** exposed here; only the relay's own families are.
 | `moqt_relay_fetch_objects_served_total` | counter | `track`, `leg` |
 | `moqt_relay_upstream_dial_failures_total` | counter | — |
 | `moqt_relay_namespace_lookups_total` | counter | `result` |
+| `process_cpu_seconds_total` | counter | — |
+| `go_goroutines` | gauge | — |
+| `go_memstats_sys_bytes` | gauge | — |
 
 **Label cardinality is bounded on purpose.** Track names and Subgroup IDs both
 come off the wire and are chosen by the publisher, so an unbounded label would
@@ -108,6 +115,21 @@ Two readings worth knowing:
   shed as designed.
 - `fetch_objects_served_total` flat against a rising `fetches_served_total`
   means late joiners are asking for ranges the cache no longer holds.
+
+## Profiling
+
+`-pprof-addr` serves Go's profiles on a port of its own, off by default:
+
+```sh
+relay -pprof-addr 127.0.0.1:6060
+go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+```
+
+It does not ride the health port, which is often public: a profile endpoint is
+unauthenticated, costs CPU on request and shows the binary's internals, so bind
+it to localhost or a private interface. `cmd/confbench -relay-pprof` fetches a
+CPU profile of each measured window from it; see
+[`benchmarks/README.md`](../../benchmarks/README.md#conference-capacity-non-regression).
 
 ## UDP send batching
 

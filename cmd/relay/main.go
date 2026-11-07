@@ -90,6 +90,12 @@ func main() {
 	// keep their own label value; everything else folds into track="other".
 	metricsTracks := flag.String("metrics-tracks", "catalog",
 		"comma-separated track names that keep their own `track` label; all others report as \"other\"")
+	// Profiling is for capacity work (cmd/confbench -relay-pprof fetches a
+	// CPU profile of its measured window), so it gets its own port: the
+	// health port is often public, and a profile endpoint must not be.
+	pprofAddr := flag.String("pprof-addr", "",
+		"TCP address serving net/http/pprof at /debug/pprof/; empty (the default) disables it. "+
+			"Unauthenticated: bind it to localhost or a private interface")
 	maxSubs := flag.Int("max-subscriptions", 0,
 		"per-session cap on concurrent subscriptions (§15.1); 0 = unlimited")
 	maxNamespaceReqs := flag.Int(
@@ -177,15 +183,29 @@ func main() {
 		}
 	}
 
+	var pprofLn net.Listener
+	if *pprofAddr != "" {
+		var lerr error
+		pprofLn, lerr = (&net.ListenConfig{}).Listen(context.Background(), "tcp", *pprofAddr)
+		if lerr != nil {
+			log.Fatalf("listen pprof on %s: %v", *pprofAddr, lerr)
+		}
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	if pprofLn != nil {
+		serveHealth(ctx, pprofLn, pprofHandler(), logger)
+		log.Printf("pprof on http://%s/debug/pprof/", pprofLn.Addr())
+	}
 
 	if healthLn != nil {
 		var metricsHandler http.Handler
 		if *metricsEnabled {
 			exporter := newPromExporter(strings.Split(*metricsTracks, ","))
 			metrics = exporter
-			metricsHandler = exporter
+			metricsHandler = withProcessMetrics(exporter)
 		}
 		serveHealth(ctx, healthLn,
 			healthHandler(*healthPath, metricsPath(*healthPath), metricsHandler), logger)
