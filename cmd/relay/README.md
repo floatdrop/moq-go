@@ -26,8 +26,7 @@ relay [-addr host:port] [-cert file] [-key file] [-webtransport-path /moq]
 | `-cert` | — | PEM certificate file. If omitted, an ephemeral self-signed cert is generated. |
 | `-key` | — | PEM private key file. Required when `-cert` is set. |
 | `-webtransport-path` | `/moq` | HTTP/3 path browsers use for the WebTransport CONNECT. Raw QUIC ignores it. |
-| `-udp-send-batch-size` | `0` | Linux only: batch up to this many ready UDP writes (`1`–`64`); `0` keeps the ordinary socket. See [UDP send batching](#udp-send-batching). |
-| `-udp-send-writers` | `1` | Linux only: number of batch writers, `1` or `2`. `2` without `-udp-send-batch-size` fails at startup on every OS. |
+| `-udp-send-writers` | `1` | Linux only: Go handles of the UDP socket that sends are spread over (`1`–`16`). See [Parallel UDP sends](#parallel-udp-sends). |
 | `-catalog-track-name` | `catalog` | Track name whose object cache uses `-catalog-ttl` instead of the default; empty disables the override. |
 | `-catalog-ttl` | `0` | Per-object TTL for tracks matching `-catalog-track-name`; `0` means infinite retention (FIFO size cap still applies). |
 | `-max-subscriptions` | `0` | Per-session cap on concurrent subscriptions (§15.1); `0` = unlimited. |
@@ -131,26 +130,29 @@ it to localhost or a private interface. `cmd/confbench -relay-pprof` fetches a
 CPU profile of each measured window from it; see
 [`benchmarks/README.md`](../../benchmarks/README.md#conference-capacity-non-regression).
 
-## UDP send batching
+## Parallel UDP sends
 
-Experimental, Linux only, and off by default:
+Linux only, and off by default:
 
 ```sh
-relay -udp-send-batch-size 32                      # one writer
-relay -udp-send-batch-size 32 -udp-send-writers 2  # two writers on the same socket
+relay -udp-send-writers 4
 ```
 
-With batching on, ready packets from every connection on the listener — raw QUIC
-and WebTransport alike — go through a shared writer that sends up to that many
-per `sendmmsg` call, without waiting to fill a batch. At most 256 writes queue;
-beyond that, senders block. `-udp-send-writers 2` splits that budget across two
-writers, each destination pinned to one. On other operating systems the relay
-keeps the ordinary socket, but out-of-range values still fail at startup.
+Every connection on the listener, raw QUIC and WebTransport alike, sends
+through its one UDP socket, and Go lets one goroutine at a time into
+`sendmsg` on a socket handle. Past about a thousand participants in a call that
+queue is the relay's limit: latency climbs while the CPU is far from busy.
+`-udp-send-writers N` gives the socket N handles, and each connection's packets
+are written by its own goroutine on the handle its peer's address hashes to,
+so up to N sends run at once. The handles are duplicates of one socket, so
+address, port and options are unchanged; GSO and ECN work as before.
 
-Measure playback quality and CPU under your own workload before turning it on.
-Library callers set the same knobs on `relaynet.Listen` with
-`relaynet.WithUDPSendBatchSize` and `relaynet.WithUDPSendWriters`, and can
-observe the send path with `relaynet.WithUDPSendMetrics` — see their godoc.
+Measured on Linux loopback ([`cmd/confbench`](../confbench), two 720p speakers,
+1500 participants): one handle served between 212 and 489 of them within the
+objective across runs, three or four served all 1500 at half the p99 latency,
+for about 27% more relay CPU, spent on contention for the socket in the kernel. On macOS the same change was slower, which is why other operating
+systems keep one handle (out-of-range values still fail at startup).
+Library callers set it with `relaynet.WithUDPSendWriters` on `relaynet.Listen`.
 
 ## Quick start
 

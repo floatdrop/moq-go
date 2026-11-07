@@ -43,13 +43,28 @@ func TestQUICConfigAppliesHooksInOrder(t *testing.T) {
 	}
 }
 
-func TestUDPSendBatchSizeValidation(t *testing.T) {
-	for _, size := range []int{-1, 65} {
-		if l, err := Listen("127.0.0.1:0", "/moq", nil, nil, WithUDPSendBatchSize(size)); err == nil {
+// Listen refuses a handle count it would not honor, on every OS, rather than
+// quietly running with one.
+func TestUDPSendWritersValidation(t *testing.T) {
+	t.Parallel()
+	tlsCfg, err := TLSConfig("", "", DualALPNs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, count := range []int{-1, maxUDPSendWriters + 1} {
+		if l, err := Listen("127.0.0.1:0", "/moq", tlsCfg, nil, WithUDPSendWriters(count)); err == nil {
 			l.Close()
-			t.Errorf("batch size %d accepted", size)
-		} else if !strings.Contains(err.Error(), "UDP send batch size") {
-			t.Errorf("wrong validation error: %v", err)
+			t.Errorf("%d UDP send writers accepted", count)
+		} else if !strings.Contains(err.Error(), "UDP send writers") {
+			t.Errorf("%d: wrong validation error: %v", count, err)
 		}
+	}
+	for _, count := range []int{0, 1, 2, maxUDPSendWriters} {
+		l, err := Listen("127.0.0.1:0", "/moq", tlsCfg, nil, WithUDPSendWriters(count))
+		if err != nil {
+			t.Errorf("%d UDP send writers refused: %v", count, err)
+			continue
+		}
+		l.Close()
 	}
 }

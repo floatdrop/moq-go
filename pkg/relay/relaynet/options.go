@@ -13,31 +13,25 @@ type Option func(*config)
 
 // config is what the Options of one entry point build.
 type config struct {
-	quic               *quic.Config
-	wt                 webtransport.Config
-	udpSendBatchSize   int
-	udpSendWriters     int
-	udpSendMetrics     UDPSendMetrics
-	udpSendSampleEvery uint32
+	quic           *quic.Config
+	wt             webtransport.Config
+	udpSendWriters int
 }
 
-// WithUDPSendBatchSize opts Listen into a shared Linux UDP writer that batches
-// at most size ready packets across connections, without waiting to fill a
-// batch. Zero (the default) keeps the ordinary QUIC socket; values 1 through
-// 64 enable batching. Other values make Listen fail. Other operating systems
-// keep the ordinary socket. DialQUIC and DialWebTransport ignore this option.
+// WithUDPSendWriters spreads Listen's UDP sends over count Go handles of its
+// one socket: each connection's packets are written by its own goroutine, on
+// the handle its peer's address hashes to. Go serializes the writes on a
+// handle, holding its lock through the system call, so with one handle — the
+// default, for 0 or 1 — a listener has a single goroutine in sendmsg at a
+// time however many connections are waiting, and past about a thousand
+// participants in a call that queue is the relay's bottleneck (see
+// benchmarks/README.md). The handles share the kernel socket, so address,
+// port and socket options are the listener's, and a write's error is its own.
+// More handles spend CPU on contention for that socket in the kernel.
 //
-// The queue is bounded to 256 pending writes. Each write waits for its own send
-// result, preserving QUIC's buffer lifetime, GSO fallback and pacing contract.
-func WithUDPSendBatchSize(size int) Option {
-	return func(c *config) { c.udpSendBatchSize = size }
-}
-
-// WithUDPSendWriters opts Listen into one or two Linux UDP batch writers.
-// Zero and one select the default single writer. Two requires a positive
-// WithUDPSendBatchSize and uses separate Go handles to the same socket, with
-// stable destination affinity and a shared total budget of 256 queued writes.
-// Other operating systems keep their ordinary socket. Dial options ignore it.
+// Linux only: other operating systems keep one handle, as parallel sends on
+// one socket measured slower on macOS. Values outside 0 through 16 make Listen
+// fail on every OS. DialQUIC and DialWebTransport ignore it.
 func WithUDPSendWriters(count int) Option {
 	return func(c *config) { c.udpSendWriters = count }
 }

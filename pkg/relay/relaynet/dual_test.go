@@ -19,15 +19,12 @@ import (
 // keep dialing raw QUIC directly: the two do not have to agree on a transport.
 func TestDualListenerServesBothTransports(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []struct{ batch, writers int }{{0, 1}, {32, 1}, {32, 2}} {
-		t.Run(
-			fmt.Sprintf("batch-%d-writers-%d", mode.batch, mode.writers),
-			func(t *testing.T) { testDualListenerTransports(t, mode.batch, mode.writers) },
-		)
+	for _, writers := range []int{1, 2, 4} {
+		t.Run(fmt.Sprintf("writers-%d", writers), func(t *testing.T) { testDualListenerTransports(t, writers) })
 	}
 }
 
-func testDualListenerTransports(t *testing.T, batchSize, writers int) {
+func testDualListenerTransports(t *testing.T, writers int) {
 	const wtPath = "/moq"
 
 	tlsCfg, err := relaynet.TLSConfig("", "", relaynet.DualALPNs)
@@ -39,7 +36,6 @@ func testDualListenerTransports(t *testing.T, batchSize, writers int) {
 		wtPath,
 		tlsCfg,
 		nil,
-		relaynet.WithUDPSendBatchSize(batchSize),
 		relaynet.WithUDPSendWriters(writers),
 	)
 	if err != nil {
@@ -112,15 +108,12 @@ func testDualListenerTransports(t *testing.T, batchSize, writers int) {
 // GOAWAY. An earlier version of this listener did exactly that.
 func TestDualListenerCloseKeepsLiveSessions(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []struct{ batch, writers int }{{0, 1}, {32, 1}, {32, 2}} {
-		t.Run(
-			fmt.Sprintf("batch-%d-writers-%d", mode.batch, mode.writers),
-			func(t *testing.T) { testDualListenerDrain(t, mode.batch, mode.writers) },
-		)
+	for _, writers := range []int{1, 2, 4} {
+		t.Run(fmt.Sprintf("writers-%d", writers), func(t *testing.T) { testDualListenerDrain(t, writers) })
 	}
 }
 
-func testDualListenerDrain(t *testing.T, batchSize, writers int) {
+func testDualListenerDrain(t *testing.T, writers int) {
 	tlsCfg, err := relaynet.TLSConfig("", "", relaynet.DualALPNs)
 	if err != nil {
 		t.Fatalf("TLSConfig: %v", err)
@@ -130,7 +123,6 @@ func testDualListenerDrain(t *testing.T, batchSize, writers int) {
 		"/moq",
 		tlsCfg,
 		nil,
-		relaynet.WithUDPSendBatchSize(batchSize),
 		relaynet.WithUDPSendWriters(writers),
 	)
 	if err != nil {

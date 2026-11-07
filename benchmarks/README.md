@@ -146,8 +146,9 @@ What the numbers are and are not:
 - **The OS matters more than the relay.** quic-go sends one packet per
   syscall where it has no GSO (macOS), through the listener's single UDP
   socket, whose writes Go serializes; on Linux it batches with GSO, and
-  `cmd/relay -udp-send-batch-size` adds cross-connection batching. Compare
-  Linux numbers to Linux numbers.
+  `cmd/relay -udp-send-writers N` spreads the writes over N handles of that
+  socket, which is what lifts the single-socket limit. Compare Linux numbers
+  to Linux numbers.
 - `BenchmarkConference` reports per-run custom metrics (`served`,
   `audio-p99-ms`, `cpu-cores`, `allocs/delivered`, …), not `ns/op`. Its CPU
   includes the participants' session code; split it with
