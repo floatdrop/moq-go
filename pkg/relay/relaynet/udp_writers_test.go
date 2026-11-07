@@ -107,9 +107,6 @@ func TestUDPWritersDestinationAffinity(t *testing.T) {
 	if len(used) != len(w.handles) {
 		t.Errorf("200 destinations used handles %v of %d", used, len(w.handles))
 	}
-	if w.shard(nil) != 0 || w.shard(&net.UDPAddr{Port: 1}) != 0 {
-		t.Error("an address without an IP goes to the socket itself, for its native error")
-	}
 }
 
 // Concurrent deadline changes leave the same deadline on every handle, as a

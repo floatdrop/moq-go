@@ -44,7 +44,7 @@ func main() {
 	udpSendWriters := flag.Int(
 		"udp-send-writers",
 		1,
-		"Linux: Go handles of the UDP socket that sends are spread over (1-16); raise it for calls past ~1000 participants",
+		"Linux: Go handles of the UDP socket that sends are spread over (1-16, 0 means 1); raise it for calls past ~1000 participants",
 	)
 	certFile := flag.String("cert", "", "TLS certificate file (PEM); generated if empty")
 	keyFile := flag.String("key", "", "TLS private key file (PEM); generated if empty")

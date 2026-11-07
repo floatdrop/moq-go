@@ -26,7 +26,7 @@ relay [-addr host:port] [-cert file] [-key file] [-webtransport-path /moq]
 | `-cert` | — | PEM certificate file. If omitted, an ephemeral self-signed cert is generated. |
 | `-key` | — | PEM private key file. Required when `-cert` is set. |
 | `-webtransport-path` | `/moq` | HTTP/3 path browsers use for the WebTransport CONNECT. Raw QUIC ignores it. |
-| `-udp-send-writers` | `1` | Linux only: Go handles of the UDP socket that sends are spread over (`1`–`16`). See [Parallel UDP sends](#parallel-udp-sends). |
+| `-udp-send-writers` | `1` | Linux only: Go handles of the UDP socket that sends are spread over (`1`–`16`; `0` also means one). See [Parallel UDP sends](#parallel-udp-sends). |
 | `-catalog-track-name` | `catalog` | Track name whose object cache uses `-catalog-ttl` instead of the default; empty disables the override. |
 | `-catalog-ttl` | `0` | Per-object TTL for tracks matching `-catalog-track-name`; `0` means infinite retention (FIFO size cap still applies). |
 | `-max-subscriptions` | `0` | Per-session cap on concurrent subscriptions (§15.1); `0` = unlimited. |
@@ -150,8 +150,9 @@ address, port and options are unchanged; GSO and ECN work as before.
 Measured on Linux loopback ([`cmd/confbench`](../confbench), two 720p speakers,
 1500 participants): one handle served between 212 and 489 of them within the
 objective across runs, three or four served all 1500 at half the p99 latency,
-for about 27% more relay CPU, spent on contention for the socket in the kernel. On macOS the same change was slower, which is why other operating
-systems keep one handle (out-of-range values still fail at startup).
+for about 27% more relay CPU, spent on contention for the socket in the
+kernel. On macOS the same change was slower, which is why other operating
+systems keep one handle; values outside `0`–`16` still fail at startup there.
 Library callers set it with `relaynet.WithUDPSendWriters` on `relaynet.Listen`.
 
 ## Quick start

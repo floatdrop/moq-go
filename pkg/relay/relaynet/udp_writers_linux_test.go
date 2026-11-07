@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -124,8 +125,11 @@ func TestUDPWritersFailedSendStaysWithItsCaller(t *testing.T) {
 			for host := byte(1); bad == nil || w.shard(bad) != i; host++ {
 				bad = &net.UDPAddr{IP: net.IPv4(127, 0, 0, host), Port: 0}
 			}
-			if _, _, err := w.WriteMsgUDP([]byte("x"), nil, bad); err == nil {
-				t.Fatalf("%d handles: a send to %s succeeded", n, bad)
+			// The kernel's own error, in the form quic-go's GSO fallback
+			// recognizes (an *os.SyscallError), not a wrapped one.
+			_, _, err := w.WriteMsgUDP([]byte("x"), nil, bad)
+			if serr, ok := errors.AsType[*os.SyscallError](err); !ok || !errors.Is(serr.Err, unix.EINVAL) {
+				t.Fatalf("%d handles: a send to %s returned %v, want sendmsg's EINVAL", n, bad, err)
 			}
 		}
 		for i, r := range receivers {

@@ -35,7 +35,10 @@ type udpWriters struct {
 	handles []udpHandle
 	seed    maphash.Seed
 	// deadlineMu orders deadline changes, so concurrent callers cannot leave
-	// different deadlines on different handles.
+	// different deadlines on different handles. quic-go (v0.64) sets only read
+	// deadlines; the write side is spread here so that the promoted
+	// single-handle SetWriteDeadline cannot cover one handle silently if it
+	// ever sets them.
 	deadlineMu sync.Mutex
 }
 
@@ -69,11 +72,9 @@ func duplicateUDP(socket *net.UDPConn) (*net.UDPConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, ok := pc.(*net.UDPConn)
-	if !ok {
-		_ = pc.Close()
-		return nil, errors.New("relaynet: duplicated socket is not UDP")
-	}
+	// FilePacketConn types a socket by its local address, so a duplicate of a
+	// UDP socket always comes back as one.
+	c, _ := pc.(*net.UDPConn)
 	return c, nil
 }
 
@@ -82,16 +83,10 @@ func duplicateUDP(socket *net.UDPConn) (*net.UDPConn, error) {
 // send loop (path probes); an IPv4 address and its IPv4-mapped IPv6 form are
 // one destination.
 func (w *udpWriters) shard(addr *net.UDPAddr) int {
-	if addr == nil {
-		return 0 // the socket's own error
-	}
-	ip, ok := netip.AddrFromSlice(addr.IP)
-	if !ok || addr.Port < 0 || addr.Port > 65535 {
-		return 0
-	}
-	ip = ip.Unmap().WithZone(addr.Zone)
-	//nolint:gosec // G115: the port was range-checked above.
-	return int(maphash.Comparable(w.seed, netip.AddrPortFrom(ip, uint16(addr.Port))) % uint64(len(w.handles)))
+	ap := addr.AddrPort()
+	ap = netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port())
+	//nolint:gosec // G115: the remainder is below len(w.handles).
+	return int(maphash.Comparable(w.seed, ap) % uint64(len(w.handles)))
 }
 
 func (w *udpWriters) WriteMsgUDP(b, oob []byte, addr *net.UDPAddr) (n, oobn int, err error) {
