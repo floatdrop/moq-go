@@ -158,10 +158,10 @@ subgroup streams and datagrams, after deduplication and whether or not anyone is
 subscribed. `relay.ReceivedObject` carries the full track name, absolute location,
 status, receipt time, properties and payload: the raw input for relay-side
 analysis such as audio quality scoring with [gosqa](https://github.com/floatdrop/gosqa),
-once your code has picked the audio track from the MSF catalog, parsed the LOC
-properties and decoded the codec.
-The godoc spells out the concurrency and borrowing rules; in short, return
-promptly, copy before queuing, and decode in a worker.
+once your code has picked the audio track from the MSF catalog, unpacked the LOC
+object (`loc.Decode`) and decoded the codec. The godoc spells out the
+concurrency and borrowing rules; in short, return promptly, copy before queuing,
+and decode in a worker.
 
 Key worker state by the full track name and retire it when a source goes idle:
 the subscription metrics describe downstream subscriptions, not publisher tracks.

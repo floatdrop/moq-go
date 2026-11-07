@@ -304,7 +304,9 @@ type ReceivedObject struct {
 // Zero timestamps mean unavailable. Hooks must not block and can run
 // concurrently. Implementations may sample before reading their clock.
 // datagram identifies the forwarding queue; FETCH is not reported. Datagrams
-// still queued when their session's writer stops go to ObjectDropped instead.
+// discarded from the queue when their session's writer stops are reported only
+// to ObjectDropped. Stream objects queued behind one that exceeded
+// [Config.MaxFanoutLag], which terminates the subscriber, reach neither hook.
 type ObjectQueueMetrics interface {
 	ObjectDequeued(t TrackRef, datagram bool, enqueuedAt, headerAt time.Time)
 }

@@ -5,8 +5,8 @@ import "time"
 // UDPSendMetrics observes the shared Linux UDP writer enabled by
 // WithUDPSendBatchSize. Hooks run synchronously and must not block. They may
 // be called concurrently with two writers or when observing several listeners;
-// with two writers, calls overlap, so summed UDPSendCall durations can exceed
-// wall-clock time. Instrumentation reads the clock on the send path, so compare
+// calls then overlap, so summed UDPSendCall durations can exceed wall-clock
+// time. Instrumentation reads the clock on the send path, so compare
 // with it off when measuring capacity. No peer addresses or packet contents are
 // exposed.
 type UDPSendMetrics interface {
