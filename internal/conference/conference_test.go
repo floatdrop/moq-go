@@ -564,7 +564,7 @@ func TestOnWindowBracketsTheWindow(t *testing.T) {
 	t.Parallel()
 	r := &run{epoch: time.Now()}
 	var opened, closed time.Duration
-	r.cfg = Config{Window: 20 * time.Millisecond, OnWindow: func(open bool) {
+	r.cfg = Config{Window: 200 * time.Millisecond, OnWindow: func(open bool) {
 		if open {
 			opened = r.now()
 		} else {
@@ -575,7 +575,7 @@ func TestOnWindowBracketsTheWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := r.win.Load()
-	if opened < w.start || closed < w.end {
+	if opened < w.start || opened >= w.end || closed < w.end {
 		t.Errorf("OnWindow at %s and %s; the window is [%s, %s)", opened, closed, w.start, w.end)
 	}
 }

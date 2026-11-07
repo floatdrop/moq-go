@@ -283,8 +283,9 @@ func Run(ctx context.Context, cfg Config) (*Report, error) {
 }
 
 // measure opens the window and waits it out, calling OnWindow as it opens and
-// closes, and returns the CPU this process used in between. Both calls, and
-// the CPU baseline, fall inside the window, not at its publication.
+// closes, and returns the CPU this process used in between. OnWindow(true)
+// and the CPU baseline come at the window's start, and OnWindow(false) at its
+// end, not at the window's publication.
 func (r *run) measure(ctx context.Context) (time.Duration, error) {
 	cfg := r.cfg
 	w := r.openWindow(cfg.Window)
